@@ -1780,7 +1780,7 @@ def addable_now(store, db, room, contact_id, now):
     trust. Every other contact takes the code path (_code_path), one owner trust also paired whose own code is current
     among them, whatever that trust's state. The trust's state comes before the hold on the trust path because a
     revocation holds every ship it ends: checked after, a revoked trust would read as only a hold."""
-    from .owner_trust import LABELLED_CONTACT, _owner_contact, latest_grant, plain_name, trust_state
+    from .owner_trust import LABELLED_CONTACT, latest_grant, plain_name, trust_state
     contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
     if contact is None:
         return _refusal('ADD_NOT_REMOTE')
@@ -1797,6 +1797,16 @@ def addable_now(store, db, room, contact_id, now):
     state = trust_state(db, grant, now)['state']
     if state != 'live':
         return _refusal('ADD_TRUST', state=state, **words)
+    return _trust_checks_after_state(store, db, room, contact_id, grant, owner, words)
+
+
+HELD_NAMED = 5  # ships a held-batch notice names before "and k more"
+
+
+def _trust_checks_after_state(store, db, room, contact_id, grant, owner, words):
+    """The trust path's checks that follow the trust's state, in addable_now's order: the grantor, the hold and the
+    owner. Shared with waiting_for_lessons, which asks them of a paused trust's ships as if it were live."""
+    from .owner_trust import _owner_contact, plain_name
     act = db.execute("SELECT owner_trust.by_id, users.name FROM owner_trust LEFT JOIN users ON users.id=owner_trust.by_id "
                      "WHERE owner_trust.grant_id=? AND owner_trust.event IN ('grant','renew') "
                      'ORDER BY owner_trust.seq DESC LIMIT 1', (grant,)).fetchone()
@@ -1811,6 +1821,74 @@ def addable_now(store, db, room, contact_id, now):
                       and _code_path(store, db, room, person, owner) is not None):
         return _refusal('ADD_OWNER_NOT_ADDABLE', name=person['shown'] if person else 'an unknown owner', **words)
     return None
+
+
+def waiting_for_lessons(store, db, grant_id, now):
+    """Spec, the pause notice: how many of this grant's ships (trust-made contacts whose latest trust is this grant)
+    wait for the lessons room only because the trust is paused: the grant is paused, and the ship isn't a member and
+    would be addable if it were live (addable_now's refusal is ADD_TRUST, and the checks after the state pass: its
+    grantor, no hold, its owner). 0 where no lessons room is recorded here. A pure read."""
+    from .owner_trust import latest_grant, trust_state
+    if trust_state(db, grant_id, now)['state'] != 'paused':
+        return 0
+    chain = store._lessons_chain(db)
+    if not chain or ':' in chain[-1]:
+        return 0
+    owner_id = db.execute('SELECT owner_id FROM rooms WHERE id=?', (chain[-1],)).fetchone()['owner_id']
+    room = store._room(db, owner_id, chain[-1])
+    count = 0
+    for (contact_id,) in db.execute('SELECT DISTINCT contact_id FROM trust_confirmations ORDER BY contact_id').fetchall():
+        if latest_grant(db, contact_id) != grant_id or not trust_made(db, contact_id) or _held(db, contact_id):
+            continue
+        refused = addable_now(store, db, room, contact_id, now)
+        if refused is None or refused[0] != 'ADD_TRUST':
+            continue
+        contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
+        if contact is None:
+            continue
+        account = db.execute('SELECT name FROM users WHERE id=?', (room['owner_id'],)).fetchone()
+        if _trust_checks_after_state(store, db, room, contact_id, grant_id, account['name'] if account else room['owner_id'],
+                                     {'label': '', 'peer12': contact['peer_id'][:12], 'owner': ''}) is None:
+            count += 1
+    return count
+
+
+def lessons_notices(db):
+    """Spec item 3: the Ops notices for the lessons room's changes, one-off ids keyed by a member_changes row so Odo
+    posts each once. An add by anyone but the room's owner (the recorded ship) in a room of the lessons chain gets
+    `lessons-add-<row id>`; each batch of held removals sharing one `created` gets `lessons-held-<first row id>`, one
+    notice for all its ships. Every value through plain_name then safe_line. A pure read, from tables alone."""
+    from .owner_trust import plain_name
+    from .ships import safe_line
+    chain = origin_chain(db)
+    if not chain or not _table(db, 'member_changes'):
+        return []
+    marks = ','.join('?' * len(chain))
+
+    def line(value, limit=80):
+        return safe_line(plain_name(value), limit)
+    notices = [{'id': f'lessons-add-{r["id"]}', 'text': f'{line(r["label"])} ({line(r["user_id"][:8])}) on {line(r["peer_id"][:12])} '
+                                                         f'joined the lessons room, added by {line(r["ship"])}.'}
+               for r in db.execute(
+                   'SELECT m.id, l.label, c.user_id, c.peer_id, COALESCE(u.username, substr(m.actor_id, 1, 6)) AS ship '
+                   'FROM member_changes m JOIN remote_contacts c ON c.id=m.member_id JOIN contact_labels l ON l.id=c.id '
+                   'JOIN rooms ON rooms.id=m.room_id LEFT JOIN users u ON u.id=m.actor_id '
+                   f"WHERE m.change='add' AND m.room_id IN ({marks}) AND m.actor_id IS NOT NULL AND m.actor_id!=rooms.owner_id "
+                   'ORDER BY m.created, m.rowid', chain)]
+    if 'reason' not in {r[1] for r in db.execute('PRAGMA table_info(member_changes)')}:
+        return notices
+    batches = {}
+    for r in db.execute(
+            'SELECT m.id, m.created, COALESCE(l.label, substr(m.member_id, 1, 6)) AS label FROM member_changes m '
+            'LEFT JOIN contact_labels l ON l.id=m.member_id '
+            f"WHERE m.change='remove' AND m.reason='held' AND m.room_id IN ({marks}) ORDER BY m.created, m.rowid", chain):
+        batches.setdefault(r['created'], []).append(r)
+    for rows in batches.values():
+        names = [line(r['label'], 40) for r in rows]
+        shown = ', '.join(names[:HELD_NAMED]) + (f', and {len(names) - HELD_NAMED} more' if len(names) > HELD_NAMED else '')
+        notices.append({'id': f'lessons-held-{rows[0]["id"]}',
+                        'text': safe_line(f'{len(rows)} ships left the lessons room when a hold took them out: {shown}.', 400)})
+    return notices
 
 
 def describe_lessons_add(result):

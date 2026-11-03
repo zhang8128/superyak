@@ -807,7 +807,7 @@ def _shown(db, old, peer):
     return peer if sum(other[:12] == peer[:12] for other in ids | {peer}) > 1 else peer[:12]
 
 
-def _unpair(db, old, peer, report):
+def _unpair(db, old, peer, now, report):
     """Exactly Federation.unpair on the staged copy: every contact of the peer held and its confirmation gone, so
     pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
     contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
@@ -817,7 +817,7 @@ def _unpair(db, old, peer, report):
     from .lessons import drop_held_from_lessons
     names = [row[0] for row in db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE peer_id=? ORDER BY label', (peer,))]
     db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
-    held = time.time()
+    held = now  # the restore's one time, so every hold of a restore shares one `created` and posts one notice
     db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (held, peer))
     retired = _has(db, 'retired_peers.peer_id') and db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone()
     drop_held_from_lessons(db, [row[0] for row in db.execute('SELECT id FROM remote_contacts WHERE peer_id=?', (peer,))],
@@ -844,7 +844,7 @@ def _unpair_like_replaced(db, old, now, report):
     there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
     for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
         if paired and peer in there and not there[peer]:
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
 
 
 def _hold_like_replaced(db, old, now, report):
@@ -993,7 +993,7 @@ def _keep_trust_like_replaced(db, old, now, report):
             continue
         _revoke_trust(db, grant, *values)
         report['trusts'].append(_trust_line(db, old, grant, how))
-    _keep_retirements(db, old, report)
+    _keep_retirements(db, old, now, report)
 
 
 # The pause notice's own advice (owner_trust.PAUSE_TEXT), for a pause whose alarm the restore has lost
@@ -1001,7 +1001,7 @@ PAUSE_LOST = "its pairings since the copy are lost; if you didn't expect them, u
 RETIRED_NEEDS = ('retired_peers.peer_id', 'retired_peers.retired', 'retired_peers.by_id')
 
 
-def _keep_retirements(db, old, report):
+def _keep_retirements(db, old, now, report):
     """Each retirement in the replaced file that the copy lacks is added, and its peer unpaired as Federation.unpair does
     when the copy has it paired. Reached with a usable replaced file, and also (Task 5's parked item) with one treated as
     absent because it lacks some other trust table, so a retirement it holds is never silently lost: retired_peers is
@@ -1023,7 +1023,7 @@ def _keep_retirements(db, old, report):
         kept += 1
         if _has(db, *PEER_NEEDS) and peer not in report['unpaired_full'] \
                 and db.execute('SELECT 1 FROM peers WHERE peer_id=? AND paired', (peer,)).fetchone():
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
     report['counts']['peer retirements kept'] = kept
 
 
@@ -1356,7 +1356,7 @@ def _revoke_every_connection(db, old, now, report):
     report['counts']['connections revoked'] = len(rows)
 
 
-def _unpair_named(db, old, named, report):
+def _unpair_named(db, old, named, now, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
         return
@@ -1364,7 +1364,7 @@ def _unpair_named(db, old, named, report):
         raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
     for peer in named:
         if peer not in report['unpaired_full']:
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
     # a peer named here is no longer one the report calls left paired (N3)
     report['lacked'] = [item for item in report['lacked'] if item[2] not in report['unpaired_full']]
 
@@ -1767,7 +1767,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 _revoke_every_token(db, old, now, report)
                 _revoke_every_trust(db, old, now, report)
                 if salvage is not None:
-                    _keep_retirements(db, salvage, report)
+                    _keep_retirements(db, salvage, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
@@ -1778,7 +1778,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                              _report_differences):
                     step(db, old, now, report)
             _settle_trust(db, old, now, report)
-            _unpair_named(db, old, named, report)
+            _unpair_named(db, old, named, now, report)
             _settle_trust(db, old, now, report)  # again: an owner UNPAIR= held gets its dated revocation (S10, N13)
             _name_trusts(db, old, report)
             _write_mark(db, old, now, db_path)

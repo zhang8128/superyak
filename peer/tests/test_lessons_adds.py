@@ -1098,3 +1098,136 @@ def test_a_code_confirmed_author_keeps_its_own_cap(adds_trusted):
     with pytest.raises(Problem) as refused:
         reply(a, 'ship-voyager', 'Over its own cap.', 'c2')
     assert refused.value.message == lessons.CAP
+
+
+# Task 7: Ops notices, the pause notice's line, and one `created` for a restore's or a pair's holds.
+def lessons_notices_of(a, kind):
+    return [n for n in a.pi.station_notices() if n['id'].startswith(f'lessons-{kind}-')]
+
+
+def test_an_add_posts_its_notice_once_keyed_by_its_row(adds):
+    relist(adds, adds.tardis_fed.identity.peer_id)
+    contact = adds.pair_new('serenity', lessons_line_shown=True)
+    assert lessons_notices_of(adds, 'add') == []
+    adds.pi.station_lessons_add(short(contact))
+    with adds.pi.transaction() as db:
+        row = db.execute("SELECT id FROM member_changes WHERE member_id=? AND change='add'", (contact,)).fetchone()['id']
+        user = db.execute('SELECT user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()['user_id']
+    expected = [{'id': f'lessons-add-{row}', 'text': f'Serenity ({user[:8]}) on {adds.tardis_fed.identity.peer_id[:12]} '
+                                                      'joined the lessons room, added by rio-grande.'}]
+    assert lessons_notices_of(adds, 'add') == expected
+    adds.clock[0] += 3600
+    assert lessons_notices_of(adds, 'add') == expected      # the same id and text each cycle: Odo posts it once
+
+
+def test_the_owners_own_add_posts_no_notice(adds):
+    contact = adds.pair_new('serenity', lessons_line_shown=True)
+    adds.pi.add_participants(adds.ids['andy'], adds.pi.lessons_room_key(), [contact])
+    with adds.pi.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM member_changes WHERE member_id=? AND change='add'", (contact,)).fetchone()[0] == 1
+    assert lessons_notices_of(adds, 'add') == []
+
+
+def test_a_hold_batch_posts_one_notice_for_all_its_ships(adds_trusted):
+    a = adds_trusted
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=20, password='a-long-password')
+    ships = [a.ship] + [a.trusted_ship(f'ship{n}') for n in range(6)]
+    for ship in ships:
+        a.clock[0] += 1
+        a.pi.station_lessons_add(short(ship))
+    assert lessons_notices_of(a, 'held') == []
+    a.clock[0] += 60
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    (notice,) = lessons_notices_of(a, 'held')
+    with a.pi.transaction() as db:
+        first = db.execute("SELECT id FROM member_changes WHERE reason='held' ORDER BY rowid LIMIT 1").fetchone()['id']
+    assert notice['id'] == f'lessons-held-{first}'
+    assert notice['text'].startswith('7 ships left the lessons room when a hold took them out: ')
+    assert notice['text'].endswith(', and 2 more.') and notice['text'].count(',') == 5
+    a.clock[0] += 3600
+    assert lessons_notices_of(a, 'held') == [notice]
+
+
+def test_two_batches_post_two_notices(adds_trusted):
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    a.clock[0] += 60
+    a.pi_fed.unpair(a.ids['andy'], a.ship)
+    (one,) = lessons_notices_of(a, 'held')
+    assert 'ships left' in one['text'] and VOYAGER in one['text']
+
+
+def test_a_paused_trust_says_how_many_ships_wait_for_the_lessons_room(adds_trusted):
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))               # a member: doesn't wait
+    assert [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')] == []
+    a.trusted_ship('defiant')                             # the second pairing fills the window: paused
+    (notice,) = [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')]
+    assert notice['text'].endswith(' 1 of its ships wait for the lessons room until you renew.')
+    with a.pi.transaction() as db:                        # a held ship waits for nothing
+        db.execute('INSERT INTO contact_holds SELECT id, ? FROM remote_contacts WHERE name=?', (a.clock[0], 'defiant'))
+    (notice,) = [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')]
+    assert 'wait for the lessons room' not in notice['text']
+
+
+def test_a_pause_with_no_waiting_ship_keeps_its_old_text(adds_trusted):
+    from superyak_peer.owner_trust import PAUSE_TEXT
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    other = a.trusted_ship('defiant')
+    with a.pi.transaction() as db:
+        db.execute('INSERT INTO contact_holds SELECT id, ? FROM remote_contacts WHERE id=?', (a.clock[0], other))
+    (notice,) = [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')]
+    assert notice['text'] == PAUSE_TEXT.format(owner='Andy Example', peer=a.tardis_fed.identity.peer_id[:12], n=2)
+
+
+def test_notice_names_carrying_bidi_controls_are_plain(adds):
+    ship = adds.tardis.lessons_ship('defiant', 'andy')['id']
+    with adds.tardis.transaction() as db:
+        db.execute("UPDATE users SET name=? WHERE id=?", ('Def‮iant @serenity', ship))
+    card = adds.tardis_fed.card(ship)
+    contact = adds.pi_fed.pair(adds.ids['andy'], card, code=pairing_code(card), lessons_line_shown=True)['id']
+    relist(adds)
+    adds.pi.station_lessons_add(short(contact))
+    (notice,) = lessons_notices_of(adds, 'add')
+    assert '‮' not in notice['text'] and '@' not in notice['text'] and notice['text'].startswith('Defiant (at)serenity (')
+
+
+def held_created(path):
+    with closing(sqlite3.connect(path)) as db:
+        return [r[0] for r in db.execute("SELECT created FROM member_changes WHERE reason='held' ORDER BY rowid")]
+
+
+def test_one_restore_with_several_held_contacts_gives_one_created(adds_trusted, tmp_path):
+    a = adds_trusted
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=20, password='a-long-password')
+    ships = [a.ship, a.trusted_ship('defiant'), a.trusted_ship('ship-c')]
+    for ship in ships:
+        a.pi.station_lessons_add(short(ship))
+    copy = staged(tmp_path, a.pi)
+    with a.pi.transaction() as db:                        # the replaced file has the peer unpaired
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (a.tardis_fed.identity.peer_id,))
+    a.clock[0] += 500
+    backups.reconcile(copy, replaced=a.pi.db_path, clock=lambda: a.clock[0])
+    assert held_created(copy) == [a.clock[0]] * 3
+    with closing(sqlite3.connect(copy)) as db:
+        db.row_factory = sqlite3.Row
+        assert len([n for n in lessons.lessons_notices(db) if n['id'].startswith('lessons-held-')]) == 1
+
+
+def test_one_pair_that_holds_several_gives_one_created(adds_trusted):
+    a = adds_trusted
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=20, password='a-long-password')
+    for ship in (a.ship, a.trusted_ship('defiant')):
+        a.pi.station_lessons_add(short(ship))
+    with a.pi.transaction() as db:                        # unpaired with no holds, as main's unpair left a peer
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (a.tardis_fed.identity.peer_id,))
+    ticks = iter(range(1000, 2000))
+    a.pi.clock = lambda: next(ticks)                      # a fresh time at every call: pair must read the clock once
+    card = a.tardis_fed.card(a.ids['tardis-andy'])
+    a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card))
+    assert len(held_created(a.pi.db_path)) == 2 and len(set(held_created(a.pi.db_path))) == 1
+    assert len([n for n in a.pi.station_notices() if n['id'].startswith('lessons-held-')]) == 1

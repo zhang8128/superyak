@@ -101,12 +101,14 @@ def plan(data_dir, peer, run=subprocess.run):
                       for c in contacts) or 'none')),
         ('done' if listed else 'left', SHIP, HERE, 'the lessons room lists that peer',
          'Rio Grande: make station-lessons-room ID=<short id> PEERS="<every listed peer>", then CONFIRM='),
-        ('done' if live and room != LOOPS and all(c[0] in members for c in live) else 'left', PERSON, HERE,
+        ('done' if live and room != LOOPS and all(c[0] in members for c in live) else 'left', SHIP, HERE,
          "that peer's accounts are members of the lessons room",
          "the lessons room's chain loops back on itself, so its current room can't be told; check the store's rooms"
          if room == LOOPS else
-         f'in the browser, add {", ".join(safe_line(c[1]) for c in live if c[0] not in members) or "them"} to the room '
-         f'{(room or "?")[:6]}; that makes the chain\'s next room'),
+         'Rio Grande: ' + (', '.join(f'make station-lessons-add CONTACT={safe_line(c[0].removeprefix("remote_")[:8])} ({safe_line(c[1])})'
+                                     for c in live if c[0] not in members) or 'make station-lessons-add CONTACT=<short id>')
+         + f' (room {(room or "?")[:6]}; each add makes the chain\'s next room and needs Andy\'s vouching: his typed code with '
+         'the lessons line shown, or the listing he confirmed)'),
         ('check there', SHIP, THERE, 'the room recorded there, the hook docked, the lessons laid',
          "that machine's ship: make lessons-room ID=<full id>, CONFIRM=; make dock … --lessons; lay its lessons"),
     ]

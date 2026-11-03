@@ -46,7 +46,7 @@ def test_a_fresh_machine_shows_every_step_left_with_the_persons_together(station
     assert steps['this station listens for peers'] == ('left', 'Andy')
     assert steps['each account there paired here, with its own code'] == ('left', 'Andy')
     assert steps['the lessons room lists that peer'] == ('left', 'a ship')
-    assert steps["that peer's accounts are members of the lessons room"] == ('left', 'Andy')
+    assert steps["that peer's accounts are members of the lessons room"] == ('left', 'a ship')
     text = describe(plan(data, PEER, run=host(listening=False, served=False)), PEER)
     assert text.index('Left for Andy, in one sitting') < text.index('Left for ships') < text.index('To check on that machine')
 
@@ -76,7 +76,7 @@ def test_members_missing_from_the_current_room_are_named_and_a_held_contact_isnt
     db.commit()
     steps = plan(data, PEER, run=host())
     members = next(s for s in steps if s[3] == "that peer's accounts are members of the lessons room")
-    assert members[0] == 'left' and 'add Andy to the room r1' in members[4]
+    assert members[0] == 'left' and 'station-lessons-add CONTACT=c-andy (Andy)' in members[4] and 'room r1' in members[4]
     accounts = next(s for s in steps if s[3].startswith('each account there'))
     assert 'Tardis (held)' in accounts[4] and 'Andy (confirmed)' in accounts[4]
 
@@ -120,7 +120,7 @@ def test_members_of_a_room_the_chain_replaced_dont_count(station):
     db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
     db.commit()
     members = next(s for s in plan(data, PEER, run=host()) if s[3] == "that peer's accounts are members of the lessons room")
-    assert members[0] == 'left' and 'add Andy, Tardis to the room r2' in members[4]
+    assert members[0] == 'left' and 'CONTACT=c-andy (Andy), make station-lessons-add CONTACT=c-tardis (Tardis) (room r2' in members[4]
 
 
 def test_names_from_the_other_machine_are_safe_lines(station):   # Tardis's read: contact names are that machine's text

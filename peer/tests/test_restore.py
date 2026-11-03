@@ -2676,7 +2676,7 @@ def test_the_reconcile_s_unpair_holds_every_contact_as_federation_unpair_does(tm
         if old_copy:
             db.execute('DROP TABLE contact_holds')
         report = {'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0]}
-        backups._unpair(db, None, remote.identity.peer_id, report)
+        backups._unpair(db, None, remote.identity.peer_id, 1.0, report)
         db.commit()
         held = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
         contacts = {row[0] for row in db.execute('SELECT id FROM remote_contacts')}

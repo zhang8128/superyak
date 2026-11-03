@@ -453,6 +453,10 @@ its own sessions' queries; nothing is asked of another peer. The command is
 - `room` (`make lessons-room ID=<origin peer id>:<room id> [CONFIRM=…]`), on another peer: shows the same room's title,
   its owner, its members as this peer sees them, and a confirm code; run again with the code, it records the room.
   `where` (`make lessons-where`) prints the current room's full id on any peer.
+- `station-add` (`make station-lessons-add CONTACT=<contact short id>`), on the origin only: Rio Grande, the recorded
+  ship, adds a remote account Andy vouched for (his typed code with the lessons line shown, or the listing he
+  confirmed), or a ship an owner trust paired while that trust is live, to the chain's next room. Odo posts a notice in
+  Ops for each add, and one for the ships a hold takes out. Removing a member, and adding back one Andy removed, stay his.
 - `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
 - `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
 - `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts

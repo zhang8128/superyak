@@ -172,6 +172,7 @@ class Federation:
             raise Problem(400, 'Cannot pair this peer with itself')
         with self.store.transaction() as db:
             self.store._admin(db, actor)
+            now = self.store.clock()  # one time for the whole pair, so its holds share one `created` and post one notice
             if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (card['peer_id'],)).fetchone():
                 raise Problem(409, RETIRED)  # before the code, so no code, even one shown on that machine, trusts its key (S11)
             expected, typed = pairing_code(card), typed_code(code)
@@ -202,7 +203,6 @@ class Federation:
                 # rollback, or in a copy restored from before holds) gets every contact held and unconfirmed first, so
                 # "unpaired" means "every contact held" whatever made it, and this pair releases the typed one only.
                 # Its trust-made members leave the lessons room (lessons room adds, item 1).
-                now = self.store.clock()
                 db.execute('INSERT OR IGNORE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
                            (now, card['peer_id']))
                 drop_held_from_lessons(db, [r[0] for r in db.execute('SELECT id FROM remote_contacts WHERE peer_id=?',
@@ -224,12 +224,12 @@ class Federation:
             db.execute('INSERT INTO pairing_confirmations(contact_id, code, confirmed, typed_by, lessons_line) VALUES(?,?,?,?,?) '
                        'ON CONFLICT(contact_id) DO UPDATE SET code=excluded.code, confirmed=excluded.confirmed, '
                        'typed_by=excluded.typed_by, lessons_line=excluded.lessons_line',
-                       (contact['id'], expected, self.store.clock(), actor, line))
+                       (contact['id'], expected, now, actor, line))
             # Any hold of an owner ends its trust (N13), whatever made the hold: the MF2 holds just above, or a hold
             # with no revocation beside it (a restore's), so typing a held owner's code can't bring its trust back.
-            settle_owner_trust(db, self.store.clock())
+            settle_owner_trust(db, now)
             db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
-            settle_owner_trust(db, self.store.clock())  # a ship whose own code was just typed stays: that is the proof
+            settle_owner_trust(db, now)  # a ship whose own code was just typed stays: that is the proof
             self.store._emit_held(db, epochs)
             return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}
 
