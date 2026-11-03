@@ -486,7 +486,6 @@ def test_an_optional_unit_that_fails_after_its_restart_puts_main_back_and_is_res
     assert 'superyak-embedder is failed' in lines[-1] and head(station) == station['old']
 
 
-
 def test_the_optional_set_is_chosen_before_anything_moves_so_a_unit_the_train_crashes_is_still_checked(station):
     host = Host(station['repo'])
     host.loaded = {'superyak-federation-listen'}
@@ -525,6 +524,9 @@ def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_em
     git(repo, 'checkout', '-q', 'main')
     host = Host(repo)
     host.loaded = {'superyak-embedder'}
+    dry, _, dry_lines = sitting(station, Host(repo), train=train, dry_run=True)
+    dry._run.loaded = {'superyak-embedder'}
+    assert dry.sit() == 0 and any("syncs engram before the embedder restarts" in line for line in dry_lines)
     made, _, _ = sitting(station, host, train=train)
     assert made.sit() == 0
     synced = [argv for argv in host.ran('uv')]

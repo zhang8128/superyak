@@ -180,7 +180,8 @@ class Sitting:
             if code or 'LoadState' not in state:
                 raise Stopped(f"can't read {name}'s state ({(err or out)[-120:] or 'no answer'})")
             if state['LoadState'] != 'loaded':
-                self.left_alone.append(f'{name.removeprefix("superyak-")} not installed')
+                said = 'not installed' if state['LoadState'] == 'not-found' else f'{state["LoadState"]}, left as it is'
+                self.left_alone.append(f'{name.removeprefix("superyak-")} {said}')
             elif state.get('ActiveState') != 'active':
                 self.left_alone.append(f'{name.removeprefix("superyak-")} {state.get("ActiveState", "?")}, left as it is')
             else:
@@ -283,6 +284,8 @@ class Sitting:
             self.note(f'  {line[:110]}')
         if self.locked_inputs_changed(old, commit):
             self.note('  the train changes peer\'s lock inputs: the sitting runs uv sync before the restart')
+        if self.engram_inputs_changed(old, commit):
+            self.note('  the train changes engram\'s lock inputs: the sitting syncs engram before the embedder restarts')
         if self.dry_run:
             self.note('SITTING: dry run, nothing changed')
             return 0
