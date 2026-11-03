@@ -345,11 +345,16 @@ sides, and stage 2 grants it. Two things are forbidden across peers, and each is
        (server.py:3451-3461, 3503-3507, 4094-4105, 4260-4265, 4573-4576; compress.py:551, 567), and the wake hook
        injects task contexts, reminders and residues (hooks/wake.py:349-358, 370-384, 391-393). Raw arguments matter
        because `challenge_instinct` and `retire_instinct` prefix their text ("Evidence: ", "Reason: ") before storing it.
-   - **What it doesn't catch, said plainly:**
+     - **R5 (plan re-check, item 2):** four more free-text fields are guarded the same way: `log_outcome`'s note,
+       `instinct_feedback`'s context, `share`'s reason and `assessment_report`'s text fields. `share`'s reason goes
+       into the published house, so a remote passage could otherwise be republished.
+   - **What it doesn't catch, said plainly** (R5, plan re-check item 3, the general rule): it catches verbatim whole
+     items, and verbatim sentences of 12 words or more, and nothing else. So it misses:
      - a paraphrase, since a model that restates remote text in its own words is making its own memory, and the
        receipt records that it saw the source;
      - a copy made more than 90 days after delivery;
-     - **R5:** a delivered item under 12 words copied inside a longer text.
+     - any delivered sentence under 12 words, however long its item;
+     - a 12-word sentence carried with other words on the same line ("Note: …").
 
 ## 3. Stages
 

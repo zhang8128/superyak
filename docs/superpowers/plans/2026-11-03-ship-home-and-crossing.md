@@ -1052,3 +1052,46 @@ Stage 3 deploys under its own plan revision, once its three dependencies exist.
   second origin asks.
 - **Rio Grande's stage 1** rewrites the files Tasks 11 and 12 touch. A late rebase can move the guard; Task 12's
   parametrized test and its mutant catch a tool left out.
+
+## Plan re-check: decided items (approved)
+
+The same fresh reviewer re-read revision 2 and gave **APPROVE WITH CHANGES**
+([re-check](../reviews/2026-11-03-ship-home-and-crossing-plan-recheck.md)). M1 and M2 are closed. Its four remaining
+items are decided here, and it said none needs another re-read.
+
+1. **The S4 test gains a tie case.** A `*`-publisher deny with an exact purpose, against an exact-ref allow with
+   `purposes: ["*"]`: the deny wins with `EXPLICIT_DENY`. The S4 mutant must fail this case. That's Task 8.
+2. **Four more free-text tools are guarded,** so spec 2.5's "every tool that stores text at the home" holds:
+   - `log_outcome`'s note (server.py:3255);
+   - `instinct_feedback`'s context (:3380);
+   - `share`'s reason (:2383), which goes into the published house, so a remote passage could otherwise be
+     republished;
+   - `assessment_report`'s text fields.
+
+   They're guarded on raw arguments before the write, as M1's eleven are. Task 12's parametrized test gains a case
+   for each, and a mutant for `share`.
+3. **The guard's limit, stated as the general rule** in spec 2.5 and Risks:
+   - only items and sentences of 12 words or more are recorded and checked;
+   - a delivered sentence under 12 words is never caught, however long its item;
+   - nor is a 12-word sentence carried with other words on the same line ("Note: …").
+
+   The guard catches verbatim whole items, and verbatim sentences of 12 words or more, and nothing else.
+4. **Build details:**
+   - **The guard opens `remote-deliveries.db` read-write,** in WAL, as the record does. A read-only open of a WAL
+     file without `-wal` and `-shm` would read as unreadable and refuse every write. The file is local and the
+     same user's.
+   - **When `crossing.lock` is held,** `federation-listen` and `federate` start **without** the socket, log it, and
+     report it in their status. Exiting would stop events and pulls. Task 7 tests that events and pulls keep flowing.
+   - **`grant-remote`** names each rule `remote:<origin peer 12>:<instance_id>`, sets `validFrom` to now, and holds an
+     flock on the policy file for its whole edit, so two runs can't interleave. Task 10 tests a second concurrent run
+     refused.
+
+**Deploy gains a ship-side step before Andy's sitting** (Rio Grande, all hands d91dddb5). The Pi's publishing ship is
+`rio-grande`, its only instance. It publishes nothing yet: no `lighthouse-policy.json`, no `lighthouse-receiver.toml`,
+0 `shared_memories`, and 7 work-lane episodes. So before step (b):
+- rio-grande migrates its file memories into its store;
+- it runs the publisher daemon for its instance;
+- it shares a first set of its own work-lane memories to the `tardis` store's exact ref through `share`.
+
+That's the ship's own act on its own memories, and before the gate is raised `share` answers the ship. Otherwise the
+first crossing would answer "absent", and teach nothing about receipts or lighthouse_sheaf.
