@@ -540,6 +540,10 @@ def main(argv=None):
     listing.add_argument('--awaiting-admission', action='store_true', help='Print the full ids of approved imprints whose admission never began')
     listing.add_argument('--resolve', metavar='PREFIX', help='Print the one full imprint id this short id starts, or exit 2')
     commands.add_parser('station-imprint-unit-env', help='Trusted local: print, shell-quoted, the use unit\'s socket option from $HOME/.config/superyak/runtime.json (make evals it)')
+    join = commands.add_parser('join-plan', help="Trusted local, read-only: every step of bringing another machine's "
+                               'peer into the lessons room, done or left, and whose (make join-machine-plan)')
+    join.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    join.add_argument('--peer', required=True, help="That peer's full id (64 hex characters)")
     rooms = commands.add_parser('station-rooms', help='Trusted local: list the rooms a person owns by short id, and which are bridged to the wormhole')
     rooms.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     rooms.add_argument('--as', dest='person', required=True, help='The room owner')
@@ -725,6 +729,12 @@ def main(argv=None):
                 print(' '.join(shlex.quote(option) for option in imprint_unit_env(Path.home())))
             except Problem as bad:
                 parser.exit(2, f'station-imprint-unit-env: {safe_line(bad.message, 200)}\n')
+        elif args.command == 'join-plan':
+            import re
+            from .join_plan import describe, plan
+            if not re.fullmatch(r'[0-9a-f]{64}', args.peer):
+                parser.exit(2, 'join-plan: --peer takes a full peer id, 64 lowercase hex characters\n')
+            print(describe(plan(args.data_dir, args.peer), args.peer))
         elif args.command == 'station-rooms':
             print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
         elif args.command in ('station-bridge', 'station-unbridge'):
