@@ -85,6 +85,19 @@ def test_a_check_that_fails_unmutated_counts_nothing(repo, tmp_path):
     assert code == 1 and verdicts(out) == {'times three': 'baseline fails'}, out
 
 
+def test_a_kill_shows_the_assert_it_died_on(repo, tmp_path):
+    """A failed run shows its first pytest failure line beside the verdict, so a reader sees which check a mutant died
+    on, not only that it died (the carry's reader caught two mutants dying on another check than their test named).
+    Mutation: the failure line left out (the table shows only the summary)."""
+    (repo / 'explain.py').write_text('import calc\nif calc.double(2) != 4:\n    print("E       assert (6 == 4)")\n'
+                                     '    raise SystemExit(1)\n')
+    git(repo, 'add', 'explain.py')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'explain')
+    code, out = mutants(repo, tmp_path, mutant('times three', 'x * 2', 'x * 3', run=('explain.py',)))
+    assert code == 0 and verdicts(out) == {'times three': 'killed'}, out
+    assert 'E assert (6 == 4)' in next(line for line in out.splitlines() if line.startswith('times three')), out
+
+
 def test_a_stray_worktree_from_an_earlier_run_is_named(repo, tmp_path):
     """A run killed before it cleaned up leaves its worktree; the next run says where, and how to remove it."""
     stray = tmp_path / 'superyak-mutants-old' / 'tree'

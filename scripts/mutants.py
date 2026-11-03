@@ -25,7 +25,10 @@ venv, so a subprocess run with `python -I` imports the mutated code too. `sync` 
 distinct command first runs on the unmutated head: one that fails there counts nothing ("baseline fails").
 
 Prints one line per mutant: killed, SURVIVED, killed (timeout), not run, or baseline fails, each with the command's
-last line of output. Exit 0 when every mutant was killed, 1 otherwise, 2 for a bad spec or a head git can't find."""
+last line of output. A failed run also shows its first pytest failure line (the first that starts with "E "), so a
+reader sees which assert a mutant died on: a mutant that dies on another check than the one its test names is a test
+that pins less than it claims (Tardis, 2026-11-02, caught twice by the carry's reader). Exit 0 when every mutant was
+killed, 1 otherwise, 2 for a bad spec or a head git can't find."""
 import argparse
 import json
 import os
@@ -113,7 +116,13 @@ def run(argv, cwd, timeout):
         return None, f'no result in {timeout} s'
     except OSError as error:
         return False, f'{type(error).__name__}: {error}'
-    return done.returncode == 0, last_line(done.stdout + '\n' + done.stderr)
+    output = done.stdout + '\n' + done.stderr
+    line = last_line(output)
+    if done.returncode != 0:
+        why = next((text.strip() for text in output.splitlines() if text.startswith('E ')), '')
+        if why:
+            line = f'{line}; {" ".join(why.split())[:160]}'
+    return done.returncode == 0, line
 
 
 def sync(tree, projects, extra):
