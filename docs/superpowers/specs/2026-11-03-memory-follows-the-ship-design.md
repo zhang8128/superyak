@@ -5,9 +5,12 @@ least parts of it". Tardis takes the station half: a session key resolves to its
 "lighthouse crossing between peers", a spec of its own. This page is the Engram half: what follows the ship, who
 writes it, and how a session far from home uses it.
 
-Revision 2. Revision 1 (5e80abaa) got REVISE from a fresh reviewer: the core held, with four gaps (exactly-once across
-files, away mode for state-dependent calls, per-session state, numbering across processes) and a list of missing files
-and failure modes. Each is answered below.
+Revision 3. A fresh Pi reviewer approved revision 2 with changes (station law section 3), and its changes are folded
+in here. Revision 1 (5e80abaa) got REVISE: the core held,
+with four gaps (exactly-once across files, away mode for state-dependent calls, per-session state, numbering across
+processes). Revision 2 (cf6cbf68) got APPROVE WITH CHANGES, with five bounded edits, folded in here: an outbox epoch
+and AUTOINCREMENT (3.3), expired operations and replayed refusals (3.3), the delivered-content guard at replay (3.4),
+the operation kinds' edges (3.5), and cluster outboxes as files (3.9).
 
 ## 1. Why
 
@@ -75,15 +78,33 @@ compress the same clusters into different semantics, and count the same recalls 
 
 - **Every operation goes into a local outbox before it's sent,** away or not. The outbox is one SQLite file per
   session: `<outbox_dir>/<ship>/<session_id>.db`. The MCP client and the hooks share it.
-- **The outbox numbers operations.** `seq` is the outbox's own row id, assigned inside the insert's transaction, so
-  two processes can't take the same number, and a killed process leaves no gap.
+- **The outbox numbers operations.** `seq` is the outbox's `INTEGER PRIMARY KEY AUTOINCREMENT`, assigned inside the
+  insert's transaction, so two processes can't take the same number, a killed process leaves no gap, and deleting
+  acknowledged rows never lets a number come back.
+- **Each outbox file has a random `outbox_id`,** made when the file is created and sent with every operation. A resumed
+  session on another machine, a cleaned outbox directory or a replaced corrupt file gets a new `outbox_id`, so its
+  numbers start a new epoch instead of matching old ones.
 - **One sender at a time** drains the outbox in `seq` order, under a file lock. A hook that can't take the lock leaves
   its operation for the holder or the next sender. An operation leaves the outbox only after the home acknowledges it.
-- **Exactly once by a high-water mark.** The home keeps one row per session: the highest `seq` applied and its client
-  time. It applies `seq = high + 1` and nothing else. A replayed `seq <= high` is acknowledged and changes nothing.
-  A `seq > high + 1` is refused with `gap` and the expected number, and the sender resends from there. The row is
-  updated in the same `graph.db` transaction as the operation's writes. This needs no retention rule: one small row
-  per session, kept as long as the store.
+- **Exactly once by a high-water mark.** The home keeps one row per `(session_id, outbox_id)`: the highest `seq`
+  applied and its client time. It applies `seq = high + 1` and nothing else. An `outbox_id` it hasn't seen starts at
+  `high = 0`. A replayed `seq <= high` changes nothing and returns that operation's recorded refusal if it had one,
+  otherwise `already applied`. A `seq > high + 1` is refused with `gap` and the expected number, and the sender
+  resends from there. The row is updated in the same `graph.db` transaction as the operation's writes. This needs no
+  retention rule: one small row per outbox, kept as long as the store.
+- **Reads aren't answered twice.** A replayed read returns `already applied`, not its answer. The client re-issues a
+  read it still wants as a new operation.
+- **Expired operations.** An operation applied after its deadline (3.7) is recorded as `expired`: the high advances,
+  and nothing else is written. This holds for Live-only operations, Touches and a hook's whole operation. So an
+  agent told `unreachable` that retries a `share` can't end with two shares, and a nudge applied late writes no
+  capture, bias or co-firing rows from a read nobody saw.
+- **What it can't prevent.** A sender killed after the home applied an operation but before the acknowledgement leaves
+  touches nobody read. That's rare, and the trail then has a step the session didn't see. It's recorded as a
+  `sender lost` step on the session.
+- **After a reconnect, live work waits.** The session's operations apply in `seq` order, so a live recall or nudge
+  waits behind the backlog and may expire. That's expected. It lasts about the backlog's apply time: milliseconds per
+  operation, and 0.1 to 0.5 s for each `remember` the Pi has to embed, so a thousand away remembers take a few
+  minutes. During it, the client says `home catching up`.
 - **A lost outbox** (a corrupt file) is the only source of a real gap. The client then sends an explicit `skip to n`
   operation, which the home records as a gap with its reason. Nothing is applied twice, and nothing stalls silently.
 - **Ids are minted by the client:** `op_id` (a UUID, for cross-checking and logs), an episode's id in `remember`, and
@@ -102,8 +123,14 @@ compress the same clusters into different semantics, and count the same recalls 
 - **`auto_compress` leaves `remember`.** Compression runs only in scheduled maintenance.
 - **The permission ledger and receipts are the exception.** A delivered copy's record has to exist before the copy.
   Each record carries the operation's `op_id`, and the writer refuses a second record with the same `op_id`. A replay
-  after a crash between the record and the episode then skips the record and commits the episode. This is the one
-  change to the permissions code, and it's safety code, so its review follows station law section 2.
+  after a crash between the record and the episode finds the record and **honours its decision**: it doesn't decide
+  again, so the ledger never keeps a copy that didn't happen. This is the one change to the permissions code, and
+  it's safety code, so its review follows station law section 2.
+- **The delivered-content guard at replay.** `remember` treats content as delivered when it matches one of the agent's
+  delivery receipts from the last 24 hours (`_keep_decision`). At replay, that window is measured at the operation's
+  clamped client time, not at the time it's applied. The client also keeps digests of what was delivered to it, and
+  sends a `remember` that matches one as Live only. So a delivered memory remembered while away can't come back 25
+  hours later as a plain episode, with no copy record and no imprint check. This is safety code too (section 2).
 
 ### 3.5 Away from home
 
@@ -111,11 +138,15 @@ Every operation is one of four kinds. The plan's first task checks this table ag
 
 | Kind | Live | Away | Operations |
 |---|---|---|---|
-| **Sent** | Applied at once | Kept in the outbox, applied on reconnect. Its answer is marked `provisional`. | `remember` (except delivered content and `genome=True`), `log_outcome`, `instinct_feedback`, `challenge_instinct`, `mark_core`, `unmark_core`, `unmark_core_batch`, `add_anchor`, `task_focus`, `task_update`, `task_done`, `dream_capture`, `dream_react`, `assessment_schedule`, `assessment_report`, `jot`, `erase`, `clipboard_pin`, `clipboard_unpin`, `clipboard_remind`, `clipboard_dismiss`; nudge's capture, residue, bias and co-firing writes; sleep's residues and `auto_capture_outcomes` |
-| **Touch** | The read runs at home and records what it touched | The read runs on the session's snapshot. The outbox records a touch: the ids seen, in order, with the `recall_id` and the client time. On reconnect the home records the touch. It never re-runs the read. A touched memory that's gone since is logged as gone. | `recall`, `look`, `wander`, `dream_surface`, `clipboard_view`; nudge's recall |
-| **Snapshot** | Read at home | Read on the snapshot, marked `degraded: ["home"]` | `core_memories`, `introspect`, `status` (it also says the home is unreachable), wake's orientation |
-| **Live only** | Applied at home | Refused: `home unreachable` | `share`, `unshare`, `permit`, `permissions`, `shares`, `compress`, `compress_commit`, `retire_instinct`, `propose_retirement`, `revive`, `recall_cold`, `dream_verify`, `reflect`, `graph_view`, `remember` of delivered content or with `genome=True` |
-| **Machine** | No home involved | Same | `search_code`, `reindex` (the code index is per checkout) |
+| **Sent** | Applied at once | Kept in the outbox, applied on reconnect. Its answer is marked `provisional`; `task_focus`'s resumed context comes from the snapshot and says so. | `remember` (except delivered content and `genome=True`), `log_outcome`, `instinct_feedback`, `challenge_instinct`, `mark_core`, `unmark_core`, `unmark_core_batch`, `add_anchor` (its `anchor_id` minted by the client), `task_focus`, `task_update`, `task_done`, `dream_capture`, `dream_react`, `assessment_schedule`, `assessment_report`, `jot` and `erase` with `scope="global"`, `clipboard_pin`, `clipboard_unpin`, `clipboard_remind`, `clipboard_dismiss`; nudge's capture, residue, bias and co-firing writes; wake's writes (clearing its own session's bias, priming rows); sleep's residues and `auto_capture_outcomes` |
+| **Touch** | The read runs at home and records what it touched | The read runs on the session's snapshot. The outbox records a touch: the ids seen, in order, with the `recall_id` and the client time. On reconnect the home records the touch. It never re-runs the read. A touched memory that's gone since is logged as gone. | `recall`, `look` of the ship's notepad, `wander`, `dream_surface`; nudge's recall |
+| **Snapshot** | Read at home | Read on the snapshot, marked `degraded: ["home"]` | `core_memories`, `introspect`, `status` (it also says the home is unreachable), wake's orientation, `clipboard_view` (away it fires no reminders; reminders fire only at home, once) |
+| **Live only** | Applied at home | Refused: `home unreachable` | `share`, `unshare`, `permit`, `permissions`, `shares`, `compress`, `compress_commit`, `retire_instinct`, `propose_retirement`, `revive`, `recall_cold`, `dream_verify`, `reflect`, `graph_view`, `remember` of delivered content or with `genome=True`, wake's assessment claim (an away session runs no assessment) |
+| **Machine** | No home involved | Same | `search_code`, `reindex` (the code index is per checkout), `jot`, `erase` and `look` with `scope="project"` (the checkout's notepad). A `look` with no scope reads the checkout's notepad here and the ship's at home (or its snapshot), as it merges both today. |
+
+- **Wake's deep pass** becomes home maintenance (3.8). It's no longer part of wake.
+- **Codex sessions** get their session id from `session_bindings` at the home today. A Codex client that starts away
+  mints its session id and sends the binding as a Sent operation, so its outbox and its trail stay one session.
 
 - **Paired operations work by client-minted ids.** An away recall's touch carries its `recall_id`, so a later
   `log_outcome` naming it lands after it in `seq` order and finds it. `compress` and `compress_commit` are live only,
@@ -178,9 +209,14 @@ Every operation is one of four kinds. The plan's first task checks this table ag
 - **Out of memory.** The host runs under a memory cap and restarts. On a cluster, hosts are sharded by ship, so one
   kill takes down a share of them, not all. Clients see `unreachable` and keep their outboxes.
 - **Disk full:** writes get `retry`, and outboxes hold.
-- **A dead cluster node.** On a cluster, outboxes live on the shared filesystem, not node scratch. The station, or
-  the ship's next job, drains a dead node's outbox. Each outbox is one session's, so drains don't collide. Stop isn't
-  relied on: it has 5 s and doesn't run when the scheduler kills a job.
+- **A dead cluster node.** On a cluster, outboxes live on the shared filesystem, not node scratch. Stop isn't relied
+  on: it has 5 s and doesn't run when the scheduler kills a job. SQLite's locks aren't reliable on NFS or on Lustre
+  mounted `localflock`, and WAL can't run there, so a cluster outbox isn't a SQLite file:
+  - each operation is one file, written and then renamed into place, with its `seq` minted under a node-local lock;
+  - only the job's own node writes;
+  - a drainer deletes only files with `seq` at or below the home's high;
+  - the station drains a job's outbox only after the scheduler reports the job ended;
+  - files are mode 0600, in the ship's own directory, since they hold content.
 
 ### 3.10 Migration and moving a home
 
@@ -225,13 +261,27 @@ Each is small, reversible and measured, in the commons' order.
 ## 5. Tests that prove it
 
 - **Parity:** every MCP tool's existing tests, run through the client against a host, give the same answers, and wake's
-  orientation text is identical.
+  orientation text is identical, except where this spec changes an answer on purpose:
+  - `log_outcome` no longer returns `category_cells`;
+  - `remember` no longer returns `auto_compressed`;
+  - a recall at a host doesn't search the knowledge graph;
+  - away answers carry `provisional` or `degraded`.
 - **Hooks in time:** nudge, wake and Stop through the client finish within their timeouts while another store is
   mid-compress, and a missed deadline skips and says so.
 - **Exactly once:** an operation sent twice, or replayed after a crash at each step (including between the ledger
   record and the episode), changes the store once.
 - **Numbering:** the MCP client and a hook in one session never take the same `seq`, a hook killed mid-send leaves no
-  gap, and a real gap is refused, resent and never stalls.
+  gap, and a real gap is refused, resent and never stalls. A session resumed with a new outbox, and an outbox whose
+  acknowledged rows were all deleted before an insert, lose nothing.
+- **Deadlines:** a `share` sent, unacknowledged and retried after `unreachable` applies once; a nudge applied after
+  its deadline writes nothing; a replay of a refused operation returns its refusal.
+- **The guard at replay:** a delivered memory remembered away and replayed 25 hours later is still treated as
+  delivered; a remember that matches a delivery digest is Live only; a replayed copy record honours its first
+  decision.
+- **Kinds at their edges:** an away `clipboard_view` fires no reminder, and the reminder fires once at home; two away
+  sessions don't both run the assessment; a client-minted `anchor_id` survives replay.
+- **Cluster outbox** (stage 4): a drain while the job runs is refused, and a drain after it ends deletes only what
+  the home applied.
 - **Concurrent sessions:** two sessions of one ship writing at once lose nothing, land in their own order, and share no
   per-session state (bias, topic shift, co-firing, task context).
 - **Away:** each operation behaves as its kind says, including a `log_outcome` of an away recall, a refused
