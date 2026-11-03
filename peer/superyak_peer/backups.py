@@ -807,10 +807,17 @@ def _unpair(db, old, peer, report):
     """Exactly Federation.unpair on the staged copy: every contact of the peer held and its confirmation gone, so
     pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
     contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
-    copy from before contact holds gains the table here, so the hold isn't lost on restore."""
+    copy from before contact holds gains the table here, so the hold isn't lost on restore. Its trust-made members leave
+    the lessons room (drop_held_from_lessons), read before their codes go; for a retired peer (a retirement
+    _keep_retirements keeps is a retire) every contact of it does."""
+    from .lessons import drop_held_from_lessons
     names = [row[0] for row in db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE peer_id=? ORDER BY label', (peer,))]
     db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
-    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (time.time(), peer))
+    held = time.time()
+    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (held, peer))
+    retired = _has(db, 'retired_peers.peer_id') and db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone()
+    drop_held_from_lessons(db, [row[0] for row in db.execute('SELECT id FROM remote_contacts WHERE peer_id=?', (peer,))],
+                           held, every_contact=bool(retired))
     if _has(db, 'pairing_confirmations.contact_id'):
         db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)',
                    (peer,))
@@ -841,8 +848,10 @@ def _hold_like_replaced(db, old, now, report):
     Copying the older copy's holds as they are would replace the newer live ones: cut a peer off, pair one participant
     again, restore an older copy, and every sibling would be active again with no code typed. So each is held as
     Federation.unpair holds it: its confirmation gone, its pending and failed outbox rows withdrawn, and the received
-    payloads it authored cleared. It runs after _unpair_like_replaced, whose peers are already held whole. A replaced file
-    from before holds has none to compare. Only takes away."""
+    payloads it authored cleared, and, a trust-made member of the lessons room, out of its chain (drop_held_from_lessons,
+    read before its confirmation goes). It runs after _unpair_like_replaced, whose peers are already held whole. A
+    replaced file from before holds has none to compare. Only takes away."""
+    from .lessons import drop_held_from_lessons
     if not _usable(db, old, report, *PEER_NEEDS, 'remote_contacts.user_id', 'inbox.actor') \
             or not _has(old, 'contact_holds.contact_id'):
         return
@@ -853,6 +862,7 @@ def _hold_like_replaced(db, old, now, report):
         if contact['id'] not in held_there or contact['id'] in held_here:
             continue
         db.execute('INSERT INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+        drop_held_from_lessons(db, [contact['id']], now)
         if _has(db, 'pairing_confirmations.contact_id'):
             db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
         withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')",

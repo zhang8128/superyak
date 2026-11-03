@@ -928,21 +928,7 @@ class Lessons:
             return []
         key = record['room_key']
         if ':' not in key:
-            if db.execute('SELECT 1 FROM rooms WHERE id=?', (key,)).fetchone() is None:
-                return []  # room_key has no foreign key (elsewhere it names a remote room), so a hand edit can orphan it
-            seen = {key}
-            while True:
-                row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
-                if row is None or row['id'] in seen:
-                    break
-                key = row['id']
-                seen.add(key)
-            chain = []
-            for room in self._rooms_back(db, key):
-                if db.execute('SELECT 1 FROM rooms WHERE id=?', (room,)).fetchone() is None:
-                    break  # a linked_room_id with no room (a hand edit with foreign keys off): the chain ends here
-                chain.append(room)
-            return chain[::-1]
+            return _local_chain(db, key)
         origin, _, current = key.partition(':')
         rooms = self._remote_rooms_from(db, origin)
         if current not in rooms:
@@ -957,6 +943,19 @@ class Lessons:
 
     def _in_lessons_chain(self, db, key):
         return key in self._lessons_chain(db)
+
+    def _chain_epochs(self, db):
+        """{room id: epoch} for each room of the lessons chain at its origin (origin_chain), read by a hold before it
+        holds, so _emit_held can tell which rooms drop_held_from_lessons changed."""
+        return {key: db.execute('SELECT epoch FROM rooms WHERE id=?', (key,)).fetchone()[0] for key in origin_chain(db)}
+
+    def _emit_held(self, db, before):
+        """chat.membership, in the hold's transaction, for each room of the lessons chain whose epoch rose since `before`
+        (_chain_epochs): the holds since then took members out of it (drop_held_from_lessons). Federation sends each
+        paired member the room's roster without them, so every index drops their lessons on its next run."""
+        for key, epoch in self._chain_epochs(db).items():
+            if key in before and epoch != before[key]:
+                self.emit(db, 'chat.membership', key, epoch, {'held': True})
 
     def _lessons_snapshot(self, db):
         """Section 4 step 1, inside the caller's transaction: everything the checks and the index read. None when no room
@@ -1539,6 +1538,87 @@ def trust_made(db, contact_id):
     from .owner_trust import code_current
     return (db.execute('SELECT 1 FROM trust_confirmations WHERE contact_id=?', (contact_id,)).fetchone() is not None
             and not code_current(db, contact_id))
+
+
+def _local_chain(db, key):
+    """Lessons._lessons_chain at the origin, where the recorded room `key` is a local room: the chain oldest first,
+    ending with the current room. It follows linked_room_id forward from the recorded room, then back to the first room
+    it doesn't hold. [] when the recorded room is gone (room_key has no foreign key, since elsewhere it names a remote
+    room, so a hand edit can orphan it). SQL only."""
+    from .grants import rooms_back
+    if db.execute('SELECT 1 FROM rooms WHERE id=?', (key,)).fetchone() is None:
+        return []
+    seen = {key}
+    while True:
+        row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
+        if row is None or row[0] in seen:
+            break
+        key = row[0]
+        seen.add(key)
+    chain = []
+    for room in rooms_back(db, key):
+        if db.execute('SELECT 1 FROM rooms WHERE id=?', (room,)).fetchone() is None:
+            break  # a linked_room_id with no room (a hand edit with foreign keys off): the chain ends here
+        chain.append(room)
+    return chain[::-1]
+
+
+def _table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def origin_chain(db):
+    """The lessons chain at its origin, from tables alone (the lessons_room record and the rooms' linked_room_id), as
+    Lessons._lessons_chain walks it there: [] where no room is recorded, where the record names a room elsewhere
+    (`<origin>:<room id>`: only the origin changes the room's members), or on a copy from before the lessons tables.
+    SQL only, so a restore's raw connection reads it too."""
+    if not _table(db, 'lessons_room'):
+        return []
+    record = db.execute('SELECT room_key FROM lessons_room WHERE id=1').fetchone()
+    if record is None or ':' in record[0]:
+        return []
+    return _local_chain(db, record[0])
+
+
+def drop_held_from_lessons(db, contact_ids, now, *, every_contact=False):
+    """Lessons room adds, item 1, "a hold removes it": every hold calls this in its own transaction, right after its
+    contact_holds insert, while the contact's typed code still reads as it did before the hold took it away. Each
+    contact given that is in a room of the lessons chain at its origin (origin_chain) and that owner trust made
+    (trust_made), or each one with `every_contact` (a retire: a stolen host key speaks as its code-confirmed accounts
+    too, and a retired peer never pairs again), leaves the chain as _remove_member takes a member out: its
+    remote_room_members rows go from every chain room it is in, and each room it left gets its epoch raised once. One
+    member_changes row per contact records it: a removal, reason 'held' (so _owner_removed doesn't read it as Andy's),
+    no actor, no grant, in the chain's current room, with how many earlier rooms it left, dated `now`, so a batch's
+    rows share one `created`. A remote contact holds no moderate grant, claim or deferral (their tables reference
+    users), so nothing else is undone. Returns the new rows' ids.
+
+    SQL only, so a restore's raw connection works, on a copy from before this build too: one from before owner trust
+    has no trust-made contact, and one from before the reason column gains it, as the store's migration adds it. It
+    posts nothing and emits nothing; a Store caller emits chat.membership for the rooms it changed (_emit_held)."""
+    contact_ids = list(dict.fromkeys(contact_ids))
+    chain = origin_chain(db) if contact_ids else []
+    if not chain or (not every_contact and not _table(db, 'trust_confirmations')):
+        return []
+    marks, current = ','.join('?' * len(chain)), chain[-1]
+    changes, touched = [], set()
+    for contact in contact_ids:
+        places = {r[0] for r in db.execute(f'SELECT room_id FROM remote_room_members WHERE contact_id=? AND room_id IN ({marks})',
+                                           (contact, *chain))}
+        if not places or not (every_contact or trust_made(db, contact)):
+            continue
+        if not changes and 'reason' not in {r[1] for r in db.execute('PRAGMA table_info(member_changes)')}:
+            db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
+        db.execute(f'DELETE FROM remote_room_members WHERE contact_id=? AND room_id IN ({marks})', (contact, *chain))
+        touched |= places
+        key = uid()
+        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,'
+                   "claims_released,created,reason) VALUES(?,NULL,NULL,?,'remove',?,NULL,?,0,?,'held')",
+                   (key, contact, current, len(places - {current}), now))
+        changes.append(key)
+    for room in chain:
+        if room in touched:
+            db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (room,))
+    return changes
 
 
 def _unaddable(store, db, room, contact_id, peer_ids=None, *, trust_path=False):

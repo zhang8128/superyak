@@ -694,3 +694,254 @@ def test_the_station_add_verb_adds_and_a_refusal_exits_1(adds):
     assert done.stdout.startswith('Added Defiant (') and done.stdout.endswith('; 0 lessons carried.\n')
     again = run_lessons('station-add', '--data-dir', adds.pi.data_dir, '--contact', short(contact))
     assert again.returncode == 1 and 'Defiant is already in the lessons room.' in again.stderr
+
+
+# ---- Task 5: a hold takes trust-made members out of the chain ----------------------------------------------------------
+from pathlib import Path
+import re
+from superyak_peer.common import uid
+from test_owner_trust import strings_of
+
+
+def chain_of(path):
+    """The lessons chain in a database file, walked as the origin walks it, on a raw connection (as a restore has)."""
+    with closing(sqlite3.connect(path)) as db:
+        return lessons.origin_chain(db)
+
+
+def rooms_with(path, contact):
+    """The rooms of the chain this remote contact is a member of."""
+    chain = chain_of(path)
+    with closing(sqlite3.connect(path)) as db:
+        return [r for r in chain if db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?',
+                                               (r, contact)).fetchone()]
+
+
+def changes_of(path, contact):
+    """(change, reason, actor, grant, room, earlier rooms, created) for each member_changes row of the contact."""
+    with closing(sqlite3.connect(path)) as db:
+        return [tuple(r) for r in db.execute('SELECT change, reason, actor_id, grant_id, room_id, earlier_rooms, created FROM '
+                                             'member_changes WHERE member_id=? ORDER BY created, rowid', (contact,))]
+
+
+def epochs_of(path, rooms):
+    with closing(sqlite3.connect(path)) as db:
+        return {r: db.execute('SELECT epoch FROM rooms WHERE id=?', (r,)).fetchone()[0] for r in rooms}
+
+
+def tardis_ship(a):
+    """The Tardis ship account's contact here: a member of the lessons room since the fixture, its code typed."""
+    with a.pi.transaction() as db:
+        return db.execute("SELECT id FROM remote_contacts WHERE peer_id=? AND name='Tardis'",
+                          (a.tardis_fed.identity.peer_id,)).fetchone()['id']
+
+
+def voyager_in_two_rooms(a):
+    """voyager joins the lessons room, then Defiant after it, so voyager is in the chain's last two rooms."""
+    a.pi.station_lessons_add(short(a.ship))
+    a.pi.station_lessons_add(short(a.pair_new('defiant', lessons_line_shown=True)))
+    chain = chain_of(a.pi.db_path)
+    assert rooms_with(a.pi.db_path, a.ship) == chain[-2:] and len(chain) == 3
+    return chain
+
+
+def hold_voyager(a, how, tmp_path):
+    """Holds voyager as `how` does; returns the database file that holds the result."""
+    pi, andy = a.pi, a.ids['andy']
+    if how == 'revoke':
+        pi.revoke_owner_trust(andy, a.trust['grant_id'])
+    elif how == 'unpair':
+        a.pi_fed.unpair(andy, a.ship)
+    elif how == 'pair_of_unpaired_peer':      # unpaired with no holds, as main's unpair left a peer: pair holds them all first
+        with pi.transaction() as db:
+            db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (a.tardis_fed.identity.peer_id,))
+        card = a.tardis_fed.card(a.ids['tardis-andy'])
+        a.pi_fed.pair(andy, card, code=pairing_code(card))
+    else:                                     # restore: the replaced file holds voyager (by hand, as an older build did)
+        copy = staged(tmp_path, pi)
+        with pi.transaction() as db:
+            db.execute('INSERT INTO contact_holds VALUES(?,?)', (a.ship, a.clock[0]))
+        backups.reconcile(copy, replaced=pi.db_path, clock=lambda: a.clock[0])
+        return copy
+    return pi.db_path
+
+
+@pytest.mark.parametrize('how', ['revoke', 'unpair', 'pair_of_unpaired_peer', 'restore'])
+def test_a_hold_of_a_trust_made_member_takes_it_out_with_reason_held(adds_trusted, how, tmp_path):
+    """Spec item 1, "a hold removes it": every hold of a trust-made member takes it out of every chain room it is in,
+    in the hold's own transaction, with one member_changes row (a removal, reason 'held', no actor, no grant, in the
+    current room, dated by the hold) and each room's epoch raised. The code-confirmed members stay. A Store's hold
+    emits chat.membership for the rooms it changed and posts nothing."""
+    a = adds_trusted
+    chain = voyager_in_two_rooms(a)
+    before = epochs_of(a.pi.db_path, chain)
+    with a.pi.transaction() as db:
+        posts = db.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
+        last_event = db.execute('SELECT MAX(id) FROM events').fetchone()[0]
+    path = hold_voyager(a, how, tmp_path)
+    assert rooms_with(path, a.ship) == []
+    assert changes_of(path, a.ship)[-1] == ('remove', 'held', None, None, chain[-1], 1, a.clock[0])
+    assert [c for c in changes_of(path, a.ship) if c[1] == 'held'] == [changes_of(path, a.ship)[-1]]
+    after = epochs_of(path, chain)
+    assert after[chain[0]] == before[chain[0]] and all(after[r] > before[r] for r in chain[1:])
+    for kept in (a.owner, tardis_ship(a)):    # code-confirmed: held too (but restore), still members
+        assert rooms_with(path, kept) == chain and not [c for c in changes_of(path, kept) if c[1] == 'held']
+    if how != 'restore':
+        with a.pi.transaction() as db:
+            assert db.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == posts
+            events = {(r['resource_id'], r['resource_version']) for r in db.execute(
+                "SELECT resource_id, resource_version FROM events WHERE id>? AND kind='chat.membership'", (last_event,))}
+        assert events == {(r, after[r]) for r in chain[1:]}
+
+
+def lay(a, contact, ship, claim):
+    """A lesson by a remote member in the chain's current room, as the origin's reply door stores one (peer_messages,
+    by its full id)."""
+    with a.pi.transaction() as db:
+        room = a.pi._lessons_chain(db)[-1]
+        who = db.execute('SELECT peer_id, user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()
+        epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (room,)).fetchone()[0]
+        db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (uid(), room, f"{who['peer_id']}:{who['user_id']}",
+                                                                        f'c-{ship}', lesson_body(ship=ship, claim=claim), epoch, a.clock[0]))
+
+
+def indexed(store):
+    return sorted(item['claim'] for item in lessons.read_index(store.data_dir / lessons.INDEX_FILE)['lessons'])
+
+
+def tardis_members(a):
+    with a.tardis.transaction() as db:
+        return a.tardis._lessons_snapshot(db).members
+
+
+def test_its_lessons_leave_the_index_on_the_next_run(adds_trusted):
+    """The origin's index drops a held member's lessons on its next run (the watermark changes with the members), and
+    the roster the hold emitted reaches Tardis, whose index changes too: voyager is no member there either."""
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    lay(a, a.ship, 'voyager', 'Pin the toolchain.')
+    lay(a, tardis_ship(a), 'tardis', 'Quote a glob in zsh.')
+    assert a.pi.lessons_index()['status'] == 'written' and indexed(a.pi) == ['Pin the toolchain.', 'Quote a glob in zsh.']
+    a.deliver('pi', 'tardis')
+    voyager = f'{a.tardis_fed.identity.peer_id}:ship-voyager'
+    assert voyager in tardis_members(a)
+    a.tardis.lessons_index()
+    assert a.tardis.lessons_index()['status'] == 'unchanged'
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    assert a.pi.lessons_index()['status'] == 'written' and indexed(a.pi) == ['Quote a glob in zsh.']
+    a.deliver('pi', 'tardis')
+    assert voyager not in tardis_members(a) and a.tardis.lessons_index()['status'] == 'written'
+
+
+def test_a_hold_leaves_a_code_confirmed_member_in(adds_trusted):
+    """The ruling: trust-made is trust_made's rule. voyager, owner trust paired but its own code typed since, is
+    code-confirmed, so unpairing its peer (which holds it) leaves it in, as it leaves Andy's Tardis account and the
+    Tardis ship. Its code is read before the unpair takes it away."""
+    a = adds_trusted
+    type_voyagers_code(a, line=True)
+    a.pi.station_lessons_add(short(a.ship))
+    chain = chain_of(a.pi.db_path)
+    a.pi_fed.unpair(a.ids['andy'], a.ship)
+    for kept in (a.ship, a.owner, tardis_ship(a)):
+        assert rooms_with(a.pi.db_path, kept) and not [c for c in changes_of(a.pi.db_path, kept) if c[1] == 'held']
+    assert chain_of(a.pi.db_path) == chain
+
+
+def test_a_retire_takes_out_every_contact_of_the_peer(adds_trusted):
+    """A retire removes every contact of the retired peer from the chain, its code-confirmed members too (the stolen
+    key speaks as them, and a retired peer never pairs again): one held row each, all with one `created`."""
+    a = adds_trusted
+    type_voyagers_code(a, line=True)
+    a.pi.station_lessons_add(short(a.ship))
+    first, current = chain_of(a.pi.db_path)
+    a.clock[0] += 5
+    a.pi_fed.unpair(a.ids['andy'], a.ship, retire=True)
+    assert members_of(a.pi, current) == members_of(a.pi, first) == set()
+    for contact, earlier in ((a.ship, 0), (a.owner, 1), (tardis_ship(a), 1)):   # voyager joined in the current room
+        assert rooms_with(a.pi.db_path, contact) == []
+        assert [c for c in changes_of(a.pi.db_path, contact) if c[1] == 'held'] == \
+            [('remove', 'held', None, None, current, earlier, a.clock[0])]
+
+
+def repair_voyager(a):
+    """A later trust of Andy's for his Tardis account, and voyager paired again under it from a fresh assertion."""
+    a.clock[0] += 60
+    grant((a.pi, {'id': a.ids['andy']}, {'id': a.owner}, None), password='a-long-password', expect=2)
+    a.clock[0] += 60
+    assert a.trusted_ship('voyager') == a.ship and is_trust_made(a, a.ship)
+
+
+def test_a_ship_recovered_under_a_later_trust_rejoins_by_rio_grandes_add(adds_trusted):
+    """A held removal isn't Andy's: once a later trust and a fresh assertion bring voyager back, Rio Grande adds it."""
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    assert rooms_with(a.pi.db_path, a.ship) == []
+    repair_voyager(a)
+    done = a.pi.station_lessons_add(short(a.ship))
+    assert a.ship in members_of(a.pi, done['new_room'])
+    assert changes_of(a.pi.db_path, a.ship)[-1][:4] == ('add', None, a.ids['rio-grande'], None)
+
+
+def test_andy_can_remove_a_held_contact_and_then_it_stays_out(adds_trusted):
+    """Andy's removal accepts a contact a hold took out of the chain and records his own removal for it (no membership
+    change: the hold made it). Then only he adds it back: Rio Grande's add refuses ADD_OWNER_REMOVED, even under a
+    later trust, and a second removal finds no member."""
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    current = a.pi.lessons_room_key()
+    epochs, members = epochs_of(a.pi.db_path, [current]), members_of(a.pi, current)
+    a.clock[0] += 1
+    view = a.pi.remove_participant(a.ids['andy'], current, a.ship)
+    assert view['id'] == current and view['removed'] == {'id': a.ship, 'username': None, 'name': VOYAGER}
+    assert (view['earlier_rooms'], view['claims_released'], view['grant_revoked']) == (0, 0, False)
+    assert changes_of(a.pi.db_path, a.ship)[-1] == ('remove', None, a.ids['andy'], None, current, 0, a.clock[0])
+    assert epochs_of(a.pi.db_path, [current]) == epochs and members_of(a.pi, current) == members
+    with pytest.raises(Problem) as again:
+        a.pi.remove_participant(a.ids['andy'], current, a.ship)
+    assert again.value.status == 404
+    repair_voyager(a)
+    before = snapshot(a.pi)
+    with pytest.raises(Problem) as refused:
+        a.pi.station_lessons_add(short(a.ship))
+    assert (refused.value.status, refused.value.message) == \
+        (403, f'Andy Example removed {VOYAGER} from the lessons room; adding it back is his act.')
+    assert snapshot(a.pi) == before
+
+
+def held_sites(source):
+    """{function: whether it calls drop_held_from_lessons} for each function (qualified as strings_of names it) whose
+    strings insert INTO contact_holds."""
+    import ast
+    inserting = {where for where, _, text in strings_of(source) if re.search(r'\bINTO\s+contact_holds\b', text, re.IGNORECASE)}
+    calling = set()
+
+    def visit(node, where):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            where = f'{where}.{node.name}' if where else node.name
+        if isinstance(node, ast.Call):
+            called = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', None)
+            if called == 'drop_held_from_lessons':
+                calling.add(where)
+        for child in ast.iter_child_nodes(node):
+            visit(child, where)
+    visit(ast.parse(source), '')
+    return {where: where in calling for where in inserting}
+
+
+def test_every_contact_holds_insert_calls_drop_held_from_lessons():
+    """Architecture: each function in superyak_peer whose source inserts INTO contact_holds also calls
+    drop_held_from_lessons, so no hold leaves a trust-made member in the lessons chain. Read with ast, as owner
+    trust's Task 6 test reads display queries (strings_of); a planted hold without the call is found."""
+    import superyak_peer
+    root = Path(superyak_peer.__file__).parent
+    found = {(path.relative_to(root).as_posix(), where): calls
+             for path in sorted(root.rglob('*.py')) for where, calls in held_sites(path.read_text()).items()}
+    assert {('owner_trust.py', 'hold_contact'), ('federation.py', 'Federation.pair'), ('federation.py', 'Federation.unpair'),
+            ('backups.py', '_unpair'), ('backups.py', '_hold_like_replaced')} <= set(found)
+    assert [site for site, calls in found.items() if not calls] == []
+    assert held_sites("class S:\n    def hold(self, db):\n        db.execute(f'INSERT OR IGNORE INTO contact_holds VALUES(?, ?)', ('c', 1))\n") \
+        == {'S.hold': False}
+    assert held_sites("def hold(db):\n    db.execute('INSERT INTO contact_holds VALUES(?, ?)', ('c', 1))\n"
+                      "    drop_held_from_lessons(db, ['c'], 1)\n") == {'hold': True}

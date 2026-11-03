@@ -139,8 +139,12 @@ def ships_to_hold(db, grant_ids=None):
 def hold_contact(db, contact, now):
     """Holds one contact as Federation.unpair holds each of a peer's (backups._hold_like_replaced, for one): its
     confirmation gone, its pending and failed outbox rows withdrawn, and the received payloads it authored cleared.
-    A contact already held keeps the date of its first hold."""
+    A contact already held keeps the date of its first hold. A trust-made member of the lessons room leaves its chain
+    (drop_held_from_lessons), read before its confirmation goes; a Store caller of settle_owner_trust emits for the
+    rooms that changed (_emit_held)."""
+    from .lessons import drop_held_from_lessons
     db.execute('INSERT OR IGNORE INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+    drop_held_from_lessons(db, [contact['id']], now)
     db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
     db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')", (contact['id'],))
     db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
@@ -537,7 +541,9 @@ class OwnerTrust:
                                                f"AND event='grant' AND grant_id NOT IN ({REVOKED}) ORDER BY seq",
                                                (peer_id, owner))]
             ships = ships_to_hold(db, grants)
+            epochs = self._chain_epochs(db)
             db.executemany("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
                            "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", [(g, peer_id, owner, actor, now) for g in grants])
             settle_owner_trust(db, now)
+            self._emit_held(db, epochs)  # the ships it held left the lessons room: their peers get the roster
         return {'grant_id': grant_id, 'held': len(ships)}

@@ -155,6 +155,26 @@ class Members:
         return (last is not None and last['change'] == 'remove' and not last['grant_id']
                 and (not last['actor_id'] or last['actor_id'] == owner_id))
 
+    def _held_out(self, db, room_id, member_id):
+        """Lessons room adds, item 1: a hold took the member out of this room's chain (drop_held_from_lessons) and nothing
+        has changed them since: their latest row in the chain, held rows included, is a removal with reason 'held'."""
+        chain = self._rooms_back(db, room_id)
+        last = db.execute(f'SELECT change, reason FROM member_changes WHERE member_id=? AND room_id IN ({",".join("?" * len(chain))})'
+                          ' ORDER BY created DESC, rowid DESC LIMIT 1', (member_id, *chain)).fetchone()
+        return last is not None and last['change'] == 'remove' and last['reason'] == 'held'
+
+    def _remove_held(self, db, room, member_id, actor_id):
+        """The owner keeps out a member a hold took out of the chain: one owner removal in the act log, so _owner_removed
+        finds it and only he adds them back. The hold already took them out, so no membership, epoch, event or notice
+        changes. Returns what _remove_member returns, with nothing left in any room and nothing released."""
+        self._record_change(db, 'remove', room['id'], member_id, actor_id, None)
+        user = db.execute('SELECT username,name FROM users WHERE id=?', (member_id,)).fetchone()
+        view = self._room(db, room['owner_id'], room['id'])
+        view.update(removed={'id': member_id, 'username': user['username'] if user else None,
+                             'name': user['name'] if user else self._account_name(db, member_id)},
+                    earlier_rooms=0, claims_released=0, grant_revoked=False, bridged=self._bridged(db, room['id']))
+        return view
+
     def _moderator_add(self, db, actor, room, grant, typed, by_username):
         """M7 in its order, in the caller's transaction (ruling 1): the typed member (a username on the ship route, an id on
         the person route), the refusals, then the owner's own add, charged to the grant. The brief comes at the revision
@@ -275,5 +295,7 @@ class Members:
             if user_id == actor:
                 raise Problem(400, 'Cannot remove the room owner')
             if user_id not in room['member_ids'] and not self._earlier_with(db, actor, room, user_id):
+                if self._held_out(db, room['id'], user_id):  # a hold took them out; Andy keeps them out for good
+                    return self._remove_held(db, room, user_id, actor)
                 raise Problem(404, NOT_A_MEMBER.format(x=safe_line(user_id)))
             return self._remove_member(db, room, user_id, actor)
