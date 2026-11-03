@@ -2798,14 +2798,10 @@ def _make_end_grant(state, actor, args, auth, now):
 
 _GATE = "12.3 the gate"
 GATE_MODES = ("off", "shadow", "enforce")
-# Serenity's pre-merge item 5: the gate act refuses `enforce`, with this reason, until the ledger's projection digest
-# lands (R48's follow-up); then this is None. `off` and `shadow` are unchanged, and a gate already at `enforce` reads
-# as it is.
-ENFORCE_WAITS: str | None = (
-    "enforce waits for the ledger's projection digest, a follow-up to this branch. The ledger's tail checks catch a "
-    "copy of the file torn in one row per column, but one torn across several rows of one column, or a torn index "
-    "page, can still read whole, so a removal or revocation the log holds could read as never made and what it took "
-    "away be served. off and shadow are unchanged")
+# Serenity's pre-merge item 5: the gate act refused `enforce`, with a reason held here, until the ledger's projection
+# digest landed (R48's follow-up). It has, so this is None, and `enforce` needs the digest instead: `check_gate_digest`
+# refuses it on a ledger made before it (D6). A reason set here refuses `enforce` again, for every ledger.
+ENFORCE_WAITS: str | None = None
 PUBLISHED_HOUSE = Path(".engram") / "instances" / "lighthouse" / "graph.db"
 # the cause a gate at enforce reads closed with on a ledger made before the projection digest (D5)
 UNSTAMPED = "no projection digest; run `engram-permissions rebuild`, then the move step it prints"

@@ -112,20 +112,6 @@ def _deterministic_rng():
         np.random.seed(1729)
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _enforce_raised_as_before():
-    """The gate act refuses `enforce` until the ledger's projection digest lands
-    (`permission_ledger.ENFORCE_WAITS`, Serenity's pre-merge item 5). The tests
-    of what `enforce` does raise it as before, so that code stays tested for
-    the day the digest lands; tests/test_permissions_premerge_fixes.py puts the
-    refusal back to test it. Session-wide, so module and session fixtures that
-    raise the gate (the U24 reference house) see it too."""
-    import permission_ledger
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(permission_ledger, "ENFORCE_WAITS", None)
-        yield
-
-
 # The suite-wide check runs on ledgers under this many projected rows (the plan's re-check, S8): U24's reference
 # ledger, rebuilt by 811,000 appends, would be recomputed per append.
 PROJECTION_CHECK_ROWS = 5000

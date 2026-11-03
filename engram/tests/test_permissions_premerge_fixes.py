@@ -218,51 +218,71 @@ def test_claims_a_tear_across_two_rows_of_one_column_reads_unreadable_naming_its
         _state(tmp_path)
 
 
-# ---------------------------------------------------------------- item 5: `gate enforce` waits for the digest
+# ---------------------------------------------------------------- item 5: `gate enforce` needs the projection digest
 
-@pytest.fixture
-def enforce_waits(monkeypatch):
-    """The refusal as shipped, read when this module was imported (tests/conftest.py lifts it for each test)."""
-    import permission_ledger
-    assert SHIPPED_ENFORCE_WAITS and "projection digest" in SHIPPED_ENFORCE_WAITS
-    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
-    return SHIPPED_ENFORCE_WAITS
+UNSTAMPED_GATE = "enforce needs the ledger's projection digest"
 
 
-def test_item5_the_gate_act_refuses_enforce_until_the_digest_with_the_reason(tmp_path, enforce_waits):
+def _unstamp(home):
+    """The ledger as code before the digest left one: version 1, no projection keys, no marker."""
+    _sql(home, "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+         "DELETE FROM meta WHERE key IN ('projection', 'projection_parts')")
+    ledger_path(home).with_name("permissions.verified").unlink(missing_ok=True)
+
+
+def test_item5_enforce_ships_open_now_that_the_projection_digest_has_landed():
+    """Serenity's pre-merge item 5 closed: the digest landed, so ENFORCE_WAITS ships empty and no test lifts it."""
+    assert SHIPPED_ENFORCE_WAITS is None
+
+
+def test_item5_the_gate_act_raises_enforce_on_a_stamped_ledger_and_refuses_it_on_an_unstamped_one(tmp_path):
+    """The refusal moved from ENFORCE_WAITS to the digest (D6): a ledger made before the digest is refused, with the
+    reason, and nothing is written; off and shadow are unchanged."""
     led = raised_ledger(tmp_path, mode="shadow")
     try:
+        raise_gate(led, "enforce", now="2026-11-03")
+        assert led.meta()["gate"] == "enforce"
+        raise_gate(led, "shadow", now="2026-11-04")
+    finally:
+        led.close()
+    _unstamp(tmp_path)
+    led = Ledger.open(tmp_path)
+    try:
         before = led.seq()
-        with pytest.raises(RuleError, match="projection digest") as e:
-            raise_gate(led, "enforce", now="2026-11-03")
-        assert enforce_waits in str(e.value) and led.seq() == before          # nothing written
-        assert led.meta()["gate"] == "shadow"
-        for mode in ("off", "shadow"):                                         # unchanged
-            raise_gate(led, mode, now="2026-11-04")
+        with pytest.raises(RuleError, match=UNSTAMPED_GATE):
+            raise_gate(led, "enforce", now="2026-11-05")
+        assert led.seq() == before and led.meta()["gate"] == "shadow"
+        for mode in ("off", "shadow"):
+            raise_gate(led, mode, now="2026-11-06")
             assert led.meta()["gate"] == mode
     finally:
         led.close()
 
 
-def test_item5_gate_enforce_refuses_before_it_asks_for_a_yes(cli_home_with_house, fake_tty, capsys, enforce_waits):
+def test_item5_gate_enforce_asks_for_its_yes_on_a_stamped_ledger_and_is_refused_before_it_on_an_unstamped_one(
+        cli_home_with_house, fake_tty, capsys):
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "enforce"]) == 0
+    assert "enforce" in fake_tty.shown()
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "shadow"]) == 0
+    _unstamp(cli_home_with_house)
     shown = fake_tty.shown()
     assert cli_main(["gate", "enforce"]) == 1
-    assert "refused: 12.3 the gate: enforce waits for the ledger's projection digest" in capsys.readouterr().err
+    assert f"refused: 12.3 the gate: {UNSTAMPED_GATE}" in capsys.readouterr().err
     assert fake_tty.shown() == shown                                           # no yes was asked
-    fake_tty.answer_the_printed_code()
-    assert cli_main(["gate", "shadow"]) == 0                                   # shadow is as before
 
 
-def test_item5_a_gate_already_at_enforce_reads_as_it_is_and_can_be_lowered(tmp_path, monkeypatch):
-    import permission_ledger
-    from permission_ledger import Gate, effective_gate, houses
-    led = raised_ledger(tmp_path, mode="enforce")                 # raised before the refusal (conftest lifts it)
-    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
+def test_item5_a_gate_at_enforce_reads_as_it_is_on_a_stamped_ledger_and_closed_on_an_unstamped_one(tmp_path):
+    from permission_ledger import UNSTAMPED, Gate, effective_gate, houses
+    led = raised_ledger(tmp_path, mode="enforce")
+    led.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
+    _unstamp(tmp_path)
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("closed", UNSTAMPED)
+    led = Ledger.open(tmp_path)
     try:
-        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
-        with pytest.raises(RuleError, match="projection digest"):
-            raise_gate(led, "enforce", now="2026-11-03")
-        raise_gate(led, "shadow", now="2026-11-03")
-        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)
+        raise_gate(led, "shadow", now="2026-11-03")                             # and it can be lowered
     finally:
         led.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)
