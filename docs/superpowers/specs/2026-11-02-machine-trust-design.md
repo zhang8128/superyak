@@ -81,7 +81,10 @@ person whose own account a person confirmed with a code.
      posts once.
    - **Restore:** a restore doesn't bring back the pairings made after the copy, so a trust paused in the replaced file
      would come back live, and its notice id is already used. So a restore revokes every trust that is paused in the
-     replaced file (reason `paused at restore`), as it re-applies holds (item 7), and item 7 then keeps the revocation.
+     replaced file and whose window there the copy doesn't hold whole (reason `paused at restore`), as it re-applies
+     holds (item 7), and item 7 then keeps the revocation. A trust paused in both, with nothing lost since the copy, is
+     paused here too: it stays as it is and the report names it (from the Task 5 review: the natural end of "expect 5"
+     after five machines must not cost a re-grant on a recovery night).
      The other way round fails closed but silently: a renewal made after the copy is lost, so the trust is paused again
      under a window whose notice was already posted. So the restore report names each trust whose grant or renewal
      after the copy was lost, and the admin renews it again.
