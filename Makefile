@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting join-machine-plan imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
+.PHONY: merge-sitting join-machine-plan imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats mutants
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -128,6 +128,7 @@ help:
 	@echo "make check-atlas        Run the Atlas research workbench suite"
 	@echo "make check-research-tasks Run portable task tests in a separate process"
 	@echo "make check-integration  Compare schemas and validate real-socket receipts"
+	@echo "make mutants SPEC=… [HEAD=…]  Run a reader's mutants against a reviewed head in a scratch worktree (scripts/mutants.py)"
 	@echo "make chat / make serve  Start Engram chat / its local web interface"
 	@echo "make sessions           List Codex sessions; SESSION_ARGS accepts ask/result"
 	@echo "make adna               Inspect aDNA projects without a model; set ADNA_ARGS"
@@ -243,6 +244,12 @@ kick:
 
 check-agent:
 	cd agent && uv run --locked --extra dev python -m pytest -q -ra --tb=short
+
+MUTANTS_SCRATCH ?= /var/tmp
+
+mutants:
+	@test -n "$(SPEC)" || { echo 'Usage: make mutants SPEC=<spec.json> [HEAD=<reviewed head>] [MUTANTS_SCRATCH=/var/tmp] (scripts/mutants.py says what a spec holds)'; exit 2; }
+	python3 -I scripts/mutants.py "$(SPEC)" --scratch "$(MUTANTS_SCRATCH)"$(if $(HEAD), --head "$(HEAD)")
 
 setup-peer:
 	cd peer && uv sync --locked --python "$(PYTHON_VERSION)"
