@@ -27,6 +27,15 @@ BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TABLE IF NOT EXISTS trust_cap_refusals(grant_id TEXT NOT NULL, day TEXT NOT NULL,
   refused INTEGER NOT NULL, PRIMARY KEY(grant_id, day))''',
     '''CREATE TABLE IF NOT EXISTS retired_peers(peer_id TEXT PRIMARY KEY, retired REAL NOT NULL, by_id TEXT)''',
+    # Ruling (after Tardis's plan review): remote_contacts.name stays the card's participant name, so a typed-code pair
+    # that rewrites it can't make a ship read as a person. A contact with any trust confirmation, revoked or held too,
+    # reads "ship of <owner>: <name>", its owner taken from its latest confirmation's grant as (peer, participant id),
+    # never an id alone, and that owner's name read live. Every other contact reads as its own name.
+    '''CREATE VIEW IF NOT EXISTS contact_labels(id, label) AS SELECT c.id, CASE WHEN t.grant_id IS NULL THEN c.name
+  ELSE 'ship of ' || COALESCE((SELECT o.name FROM owner_trust g JOIN remote_contacts o ON o.peer_id=g.peer_id
+    AND o.user_id=g.owner_user_id WHERE g.grant_id=t.grant_id ORDER BY g.seq LIMIT 1), 'an unknown owner') || ': ' || c.name
+  END FROM remote_contacts c LEFT JOIN trust_confirmations t ON t.rowid=(SELECT rowid FROM trust_confirmations
+    WHERE contact_id=c.id ORDER BY confirmed DESC, rowid DESC LIMIT 1)''',
 )
 OWNER_TRUST_SCHEMA = ';\n'.join(OWNER_TRUST_STATEMENTS) + ';'
 

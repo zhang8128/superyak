@@ -398,6 +398,32 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
         os.close(fd)
 
 
+def pair_trusted_command(data_dir, card_path, assertion_path, username):
+    """Owner trust: a ship pairs another peer's ship within a trust a person granted, with no terminal and no code. The
+    exit status: 0 paired, 1 refused. Each file is read strictly (identity.parse, MAX_ENVELOPE), and an unreadable file
+    and a refusal alike are one safe line on stderr; nothing is written before every check holds."""
+    from .identity import parse
+    try:
+        card, assertion = (parse(Path(path).read_bytes()) for path in (card_path, assertion_path))
+        if not (Path(data_dir) / 'peer.sqlite3').is_file():
+            raise Problem(404, f'No peer database at {Path(data_dir) / "peer.sqlite3"}')
+        store = Store(data_dir)
+        with store.transaction() as db:
+            ship = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if ship is None:
+            from .federation import NOT_A_TRUSTED_SHIP
+            raise Problem(403, NOT_A_TRUSTED_SHIP)
+        contact = federation_here(store).pair_trusted(ship['id'], card, assertion)
+        with store.transaction() as db:  # the label, from the view every display reads (the ruling after plan review)
+            label = db.execute('SELECT label FROM contact_labels WHERE id=?', (contact['id'],)).fetchone()['label']
+    except (OSError, Problem) as refused:
+        print(f'pair-trusted: {safe_line(refused.message if isinstance(refused, Problem) else refused, 200)}',
+              file=sys.stderr)
+        return 1
+    print(f'Paired {safe_line(label)}, confirmed by owner trust.')
+    return 0
+
+
 def contact_state(contact):
     """One contact's standing, in the CLI's and the browser's words: held, confirmed, or neither."""
     if contact['held']:
@@ -499,6 +525,12 @@ def main(argv=None):
     pair.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     pair.add_argument('--card', type=Path, required=True, help='the card file the other machine exported')
     pair.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
+    pair_trusted = commands.add_parser('pair-trusted', help="A ship pairs another peer's ship within an owner trust: no "
+                                       'terminal and no code; it prints no pairing code')
+    pair_trusted.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    pair_trusted.add_argument('--card', type=Path, required=True, help="the ship's card file (export-ship)")
+    pair_trusted.add_argument('--assertion', type=Path, required=True, help="the ship's assertion file (export-ship)")
+    pair_trusted.add_argument('--as', dest='as_user', required=True, help='a ship username on this peer, with an owner')
     connections = commands.add_parser('connections', help='The paired peers, with their codes')
     connections.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     connections.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
@@ -939,6 +971,10 @@ def main(argv=None):
             print('Retrying: it goes with the next delivery pass.')
         elif args.command == 'pair':
             status = pair_command(args.data_dir, args.card, args.as_user)
+            if status:
+                parser.exit(status)
+        elif args.command == 'pair-trusted':
+            status = pair_trusted_command(args.data_dir, args.card, args.assertion, args.as_user)
             if status:
                 parser.exit(status)
         elif args.command == 'connections':

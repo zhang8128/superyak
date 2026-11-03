@@ -8,9 +8,12 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
-                       pairing_code, show_code, typed_code, HEX32)
+                       pairing_code, show_code, typed_code, HEX32, check_ship_assertion)
 from .common import Problem, require, uid, encode, text, linked_room_ok
+from .owner_trust import _eligible, live_trust
+from .ships import SHIP_NAME
 
 class Obsolete(Exception):
     pass
@@ -77,6 +80,26 @@ NO_IDENTITY = _NoIdentity()
 TRUST_KEYS = ('signing_key', 'certificate', 'fingerprint', 'endpoint')  # a known peer's, never replaced
 HELD = 'SELECT 1 FROM contact_holds WHERE contact_id=remote_contacts.id'  # a contact waiting for its own code (SF3)
 THEIRS = 'contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)'  # an outbox row for this peer's contacts
+TRUST_CAP = 200  # owner trust spec, "The change" item 4: contacts per owner trust per UTC day, from trust_confirmations
+NOT_A_TRUSTED_SHIP = 'Only a ship of this station with an owner pairs within an owner trust'
+
+
+class _AtCap(Problem):
+    """Check 8 of pair_trusted, raised inside its transaction so everything rolls back; pair_trusted then counts the
+    refusal in a transaction of its own."""
+    def __init__(self, grant_id, day):
+        super().__init__(429, f'This owner trust has paired its {TRUST_CAP} ships for today (UTC); try again tomorrow')
+        self.grant_id, self.day = grant_id, day
+
+
+def _name_taken(db, name):
+    """Owner trust (S6): a ship's name may not be, by casefold, a local user's name or username, or the name of a remote
+    contact with no trust confirmation (a person). Ships of the same name on other hosts are left out: each shows with
+    its owner. casefold, not SQLite's ASCII lower(), so the scan is here."""
+    folded = name.casefold()
+    rows = db.execute('SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts '
+                      'WHERE id NOT IN (SELECT contact_id FROM trust_confirmations)')  # once, not per contact
+    return any(folded in (row[0].casefold(), row[1].casefold()) for row in rows)
 
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
@@ -147,6 +170,80 @@ class Federation:
                        'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
             db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
             return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}
+
+    def pair_trusted(self, actor, card, assertion):
+        """Owner trust (spec "The change" items 3 and 4): one of this station's ships pairs another peer's ship with no
+        typed code, only within an owner trust a person granted and only when every check holds. A refusal writes
+        nothing, except at the cap: that refusal is counted in trust_cap_refusals, in its own transaction once the
+        pairing's has rolled back, and then raised."""
+        try:
+            return self._pair_trusted(actor, card, assertion)
+        except _AtCap as cap:
+            with self.store.transaction() as db:
+                db.execute('INSERT INTO trust_cap_refusals(grant_id, day, refused) VALUES (?,?,1) '
+                           'ON CONFLICT(grant_id, day) DO UPDATE SET refused=refused+1', (cap.grant_id, cap.day))
+            raise Problem(cap.status, cap.message) from None
+
+    def _pair_trusted(self, actor, card, assertion):
+        """The checks in the plan's order, in one BEGIN IMMEDIATE transaction, each a Problem raised before any write."""
+        with self.store.transaction() as db:
+            ship = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (actor,)).fetchone()
+            if ship is None or ship['kind'] != 'ship' or ship['owner_id'] is None:
+                raise Problem(403, NOT_A_TRUSTED_SHIP)
+            now = self.store.clock()
+            # 1. A valid card of a peer paired here and never retired.
+            card = validate_card(card)
+            peer = card['peer_id']
+            known = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (peer,)).fetchone()
+            if known is None:
+                raise Problem(409, 'That peer is not paired here: a person pairs it with its code first')
+            if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone():
+                raise Problem(409, 'This peer was retired; it comes back only as a new identity')
+            stored = json.loads(known['card'])
+            # 2. The paired card in every field but its participant.
+            if canonical({**stored, 'participant': card['participant']}) != canonical(card):
+                raise Problem(409, "This card differs from the peer's paired card")
+            # 3. Signed by the paired card's key, in time, for exactly this card's participant.
+            record = check_ship_assertion(stored, assertion, now)
+            if record['ship_id'] != card['participant']['id'] or record['ship_name'] != card['participant']['name']:
+                raise Problem(400, "The card's participant is not the ship its assertion names")
+            # 4. The owner is the contact (the assertion's station, its owner id), on the peer that signed it (M3):
+            # paired, not held, its typed code still current, and not itself made by a trust.
+            station, owner_id = record['station'], record['owner_id']
+            owner = db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (station, owner_id)).fetchone()
+            try:
+                _eligible(db, owner)
+            except Problem as problem:
+                raise Problem(problem.status, f"The ship's owner: {problem.message}") from None
+            # 5. A live trust for that owner, and an assertion issued after every revocation of it (S8).
+            trust = live_trust(db, station, owner_id, now)
+            if trust is None:
+                raise Problem(403, 'No live owner trust covers that owner')
+            revoked = db.execute("SELECT MAX(at) FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='revoke'",
+                                 (station, owner_id)).fetchone()[0]
+            if revoked is not None and record['issued'] <= revoked:
+                raise Problem(403, "The assertion was issued before this owner's trust was last revoked; export a fresh one")
+            # 6. A ship's name, and no person's or local account's.
+            name = record['ship_name']
+            if not SHIP_NAME.fullmatch(name):
+                raise Problem(400, "A ship's name is 2 to 32 lowercase letters, digits and dashes, starting with a letter")
+            if _name_taken(db, name):
+                raise Problem(409, 'That name is a local account or a person contact here')
+            # 7. Not a contact already.
+            if db.execute('SELECT 1 FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, record['ship_id'])).fetchone():
+                raise Problem(409, 'That ship is already a contact here')
+            # 8. Under the day's cap, counted in this same transaction, so two pairings at once can't both pass it.
+            day = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d')
+            if db.execute('SELECT COUNT(*) FROM trust_confirmations WHERE grant_id=? AND day=?',
+                          (trust['grant_id'], day)).fetchone()[0] >= TRUST_CAP:
+                raise _AtCap(trust['grant_id'], day)
+            contact_id = 'remote_' + uid()
+            db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?)', (contact_id, peer, record['ship_id'], name))
+            db.execute('INSERT INTO trust_confirmations(id, contact_id, grant_id, assertion, acting_ship_id, confirmed, day) '
+                       'VALUES (?,?,?,?,?,?,?)',
+                       (uid(), contact_id, trust['grant_id'], canonical(assertion).decode(), actor, now, day))
+            contact = dict(db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,)).fetchone())
+        return {**contact, 'confirmed_by': 'owner trust', 'grant_id': trust['grant_id']}
 
     def unpair(self, actor, contact_id):
         """Disconnects the whole peer. Every contact of it is held, and loses its confirmation, so pairing one

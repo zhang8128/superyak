@@ -1,14 +1,18 @@
+import base64
+from datetime import datetime, timezone
 import json
 import re
 import sqlite3
 import subprocess
 import sys
+import threading
+from types import SimpleNamespace
 
 import pytest
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
-from superyak_peer.identity import canonical, check_ship_assertion, make_ship_assertion, pairing_code
+from superyak_peer.identity import PeerIdentity, canonical, check_ship_assertion, make_ship_assertion, pairing_code
 from superyak_peer.owner_trust import OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, live_trust
 
 NOW = 1_800_000_000
@@ -330,3 +334,332 @@ def test_live_trust_excludes_a_revoked_grant_and_ends_at_until(paired):
     revoke_row(station, done['grant_id'], peer, owner)
     with station.transaction() as db:
         assert live_trust(db, peer, owner, NOW) is None
+
+
+# Task 3: pair-trusted, every check in one transaction, and the cap of 200 a day
+
+COUNTED = ('remote_contacts', 'trust_confirmations', 'owner_trust', 'contact_holds', 'pairing_confirmations',
+           'trust_cap_refusals', 'peers')
+
+
+@pytest.fixture
+def trusted(tmp_path, machine, paired):
+    """Task 2's pairing plus a live 90-day trust for Andy B, B's export-ship output for tardis, and the station's ship
+    rio-grande (owned by andy) to act. The station's clock stands at the moment B exported, so the real assertion holds
+    whatever today's date is."""
+    station, admin, owner, _ = paired
+    done = export(machine, tmp_path, 'tardis', out='export')
+    assert done.returncode == 0, done.stderr
+    files = (tmp_path / 'export' / 'tardis.card.json', tmp_path / 'export' / 'tardis.assertion.json')
+    card, assertion = (json.loads(path.read_text()) for path in files)
+    clock = [assertion['record']['issued']]
+    station.clock = lambda: clock[0]
+    with station.transaction() as db:
+        ship = station._new_ship(db, 'rio-grande', 'Rio Grande', admin['id'])
+    return SimpleNamespace(station=station, admin=admin, owner=owner, machine=machine, card=card, assertion=assertion,
+                           files=files, clock=clock, ship=ship['id'], trust=grant(paired), tmp=tmp_path,
+                           fed=Federation(station, endpoint='https://localhost:7436'))
+
+
+def counts(station):
+    with station.transaction() as db:
+        return {table: db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0] for table in COUNTED}
+
+
+def utc_day(at):
+    return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d')
+
+
+def refuses(t, status, word, card=None, assertion=None, actor=None):
+    """One refusal: its status, a word of its message, and nothing written."""
+    before = counts(t.station)
+    with pytest.raises(Problem) as caught:
+        t.fed.pair_trusted(t.ship if actor is None else actor, t.card if card is None else card,
+                           t.assertion if assertion is None else assertion)
+    assert caught.value.status == status and word in caught.value.message, (caught.value.status, caught.value.message)
+    assert counts(t.station) == before
+    return caught.value
+
+
+def pairs(t, card=None, assertion=None):
+    return t.fed.pair_trusted(t.ship, t.card if card is None else card, t.assertion if assertion is None else assertion)
+
+
+def b_ship(t, name, ship_id=None, *, now=None, owner=None):
+    """The card and the assertion B signs for a ship of its own: all station A ever sees of it."""
+    _, person, _, fed = t.machine
+    ship_id = ship_id or f'ship-{name}'
+    card = fed.identity.card('https://localhost:7435', {'id': ship_id, 'name': name})
+    return card, make_ship_assertion(fed.identity, ship_id=ship_id, ship_name=name, owner_id=owner or person['id'],
+                                     now=t.clock[0] if now is None else now)
+
+
+def third_peer(t, name='Andy C'):
+    """Peer C, paired at A with its code, whose person contact shares andy-b's user id (M3), and a maker of its ships."""
+    identity = PeerIdentity.load_or_create(t.tmp / 'c')
+    person_card = identity.card('https://localhost:7437', {'id': t.owner['user_id'], 'name': name})
+    contact = t.fed.pair(t.admin['id'], person_card, code=pairing_code(person_card))
+
+    def ship(ship_name, ship_id):
+        card = identity.card('https://localhost:7437', {'id': ship_id, 'name': ship_name})
+        return card, make_ship_assertion(identity, ship_id=ship_id, ship_name=ship_name, owner_id=t.owner['user_id'],
+                                         now=t.clock[0])
+    return contact, ship
+
+
+def label_of(station, contact_id):
+    with station.transaction() as db:
+        return db.execute('SELECT label FROM contact_labels WHERE id=?', (contact_id,)).fetchone()[0]
+
+
+def test_a_ship_pairs_and_shows_its_owner_first(trusted):
+    t = trusted
+    before = counts(t.station)
+    done = pairs(t)
+    assert done['confirmed_by'] == 'owner trust' and done['grant_id'] == t.trust['grant_id']
+    assert (done['peer_id'], done['user_id'], done['name']) == (t.owner['peer_id'], t.card['participant']['id'], 'tardis')
+    assert counts(t.station) == {**before, 'remote_contacts': before['remote_contacts'] + 1,
+                                 'trust_confirmations': before['trust_confirmations'] + 1}
+    with t.station.transaction() as db:
+        assert db.execute('SELECT name FROM remote_contacts WHERE id=?', (done['id'],)).fetchone()[0] == 'tardis'
+        row = dict(db.execute('SELECT * FROM trust_confirmations WHERE contact_id=?', (done['id'],)).fetchone())
+        assert db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (done['id'],)).fetchone() is None
+    assert row['grant_id'] == t.trust['grant_id'] and row['acting_ship_id'] == t.ship
+    assert row['assertion'] == canonical(t.assertion).decode()  # the signed assertion itself, as canonical JSON
+    assert row['confirmed'] == t.clock[0] and row['day'] == utc_day(t.clock[0])
+    assert label_of(t.station, done['id']) == 'ship of Andy B: tardis'
+    assert label_of(t.station, t.owner['id']) == 'Andy B'  # a person contact reads as its own name
+    revoke_row(t.station, t.trust['grant_id'], t.owner['peer_id'], t.owner['user_id'])
+    assert label_of(t.station, done['id']) == 'ship of Andy B: tardis'  # still a ship after a revoke, never a person
+    with t.station.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name='Andy Bee' WHERE id=?", (t.owner['id'],))
+    assert label_of(t.station, done['id']) == 'ship of Andy Bee: tardis'  # the owner's name is read live
+
+
+def test_only_a_ship_with_an_owner_pairs(trusted):
+    t = trusted
+    odo = t.station.create_station_ship('odo', 'Odo')
+    for actor in (t.admin['id'], odo['id'], 'nobody'):
+        refuses(t, 403, 'ship', actor=actor)
+        refuses(t, 403, 'ship', card={'not': 'a card'}, assertion={}, actor=actor)  # before any other check
+
+
+def test_no_trust(trusted):
+    t = trusted
+    store, _, _, fed = t.machine
+    sam = store.create_user('sam', 'Sam', 'a-long-password')
+    sam_card = fed.card(sam['id'])
+    t.fed.pair(t.admin['id'], sam_card, code=pairing_code(sam_card))  # Sam's code was typed, but no trust was granted
+    refuses(t, 403, 'trust', *b_ship(t, 'sams-ship', owner=sam['id']))
+    revoke_row(t.station, t.trust['grant_id'], t.owner['peer_id'], t.owner['user_id'])
+    refuses(t, 403, 'trust')
+
+
+def test_an_expired_trust(trusted):
+    t = trusted
+    tardis = pairs(t)
+    t.clock[0] = t.trust['until'] - 1
+    serenity = pairs(t, *b_ship(t, 'serenity'))
+    t.clock[0] = t.trust['until']
+    refuses(t, 403, 'trust', *b_ship(t, 'defiant'))
+    with t.station.transaction() as db:
+        assert db.execute('SELECT paired FROM peers WHERE peer_id=?', (tardis['peer_id'],)).fetchone()[0] == 1
+        for contact in (tardis, serenity):
+            assert db.execute('SELECT 1 FROM remote_contacts WHERE id=?', (contact['id'],)).fetchone()
+            assert db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact['id'],)).fetchone() is None
+
+
+def test_a_trust_whose_owners_code_was_never_typed(trusted):
+    t = trusted
+    with t.station.transaction() as db:
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (t.owner['id'],))
+    refuses(t, 409, 'code')
+
+
+def test_a_held_owner(trusted):
+    t = trusted
+    with t.station.transaction() as db:
+        db.execute('INSERT INTO contact_holds VALUES (?,?)', (t.owner['id'], t.clock[0]))
+    refuses(t, 409, 'held')
+
+
+def test_a_card_of_a_peer_not_paired_here(trusted):
+    t = trusted
+    stranger = PeerIdentity.load_or_create(t.tmp / 'stranger')
+    card = stranger.card('https://localhost:7438', {'id': 'ship-x', 'name': 'x-ship'})
+    assertion = make_ship_assertion(stranger, ship_id='ship-x', ship_name='x-ship', owner_id=t.owner['user_id'], now=t.clock[0])
+    refuses(t, 409, 'paired', card, assertion)
+    refuses(t, 400, 'card', {**t.card, 'extra': 1})
+    with t.station.transaction() as db:
+        db.execute('INSERT INTO retired_peers VALUES (?,?,?)', (t.owner['peer_id'], t.clock[0], t.admin['id']))
+    refuses(t, 409, 'retired')
+    with t.station.transaction() as db:
+        db.execute('DELETE FROM retired_peers')
+        db.execute('UPDATE peers SET paired=0')
+    refuses(t, 409, 'paired')
+
+
+def test_a_card_whose_other_fields_differ(trusted):
+    t = trusted
+    refuses(t, 409, 'differs', {**t.card, 'endpoint': 'https://elsewhere.example:7435'})
+    refuses(t, 409, 'differs', {**t.card, 'version': 2, 'delivery': 'pull', 'endpoint': None})
+
+
+def test_a_participant_that_differs_from_the_assertions(trusted):
+    t = trusted
+    refuses(t, 400, 'participant', {**t.card, 'participant': {**t.card['participant'], 'name': 'serenity'}})
+    refuses(t, 400, 'participant', {**t.card, 'participant': {**t.card['participant'], 'id': 'someone-else'}})
+
+
+def test_a_forged_card_from_a_public_card(trusted, paired):
+    t = trusted
+    public = paired[3]  # B's person card, the one Andy paired: its key, certificate and endpoint are public
+    forged = {**public, 'participant': {'id': 'forged-ship', 'name': 'forged'}}
+    refuses(t, 400, 'participant', forged)  # tardis's real assertion names another ship
+    refuses(t, 400, 'participant', public)
+    record = {**t.assertion['record'], 'ship_id': 'forged-ship', 'ship_name': 'forged'}
+    refuses(t, 400, 'verify', forged, {'record': record, 'signature': t.assertion['signature']})
+    attacker = PeerIdentity.load_or_create(t.tmp / 'attacker')
+    own_key = base64.b64encode(attacker.key.sign(canonical(record))).decode()
+    refuses(t, 400, 'verify', forged, {'record': record, 'signature': own_key})
+
+
+def test_an_owner_on_another_peer(trusted):
+    t = trusted
+    contact, c_ship = third_peer(t)
+    assert contact['user_id'] == t.owner['user_id'] and contact['peer_id'] != t.owner['peer_id']
+    refuses(t, 403, 'trust', *c_ship('tardis', 'c-tardis'))  # B's owner is trusted; C's owner of the same id isn't
+
+
+def test_an_assertion_issued_before_a_revocation(trusted):
+    t = trusted
+    revoke_row(t.station, t.trust['grant_id'], t.owner['peer_id'], t.owner['user_id'])  # at NOW
+    t.clock[0] = max(t.clock[0], NOW) + 60
+    later = grant((t.station, t.admin, t.owner, None))  # a new trust, granted after the revocation (S8)
+    refuses(t, 403, 'revoked', *b_ship(t, 'serenity', now=NOW))  # issued at the revocation's own second
+    pairs(t, *b_ship(t, 'serenity', now=NOW + 1))
+    assert later['grant_id'] != t.trust['grant_id']
+
+
+def test_names_that_fail_ship_name_or_collide(trusted):
+    t = trusted
+    store, _, _, fed = t.machine
+    refuses(t, 400, 'name', *b_ship(t, 'Tardis'))
+    refuses(t, 409, 'name', *b_ship(t, 'andy'))  # the station's own username
+    refuses(t, 409, 'name', *b_ship(t, 'rio-grande'))  # a local ship's username
+    t.station.create_user('deckie', 'Dock-Hand', 'a-long-password')
+    refuses(t, 409, 'name', *b_ship(t, 'dock-hand'))  # a local name, by casefold
+    sam = store.create_user('sam', 'Sam', 'a-long-password')
+    sam_card = fed.card(sam['id'])
+    t.fed.pair(t.admin['id'], sam_card, code=pairing_code(sam_card))
+    refuses(t, 409, 'name', *b_ship(t, 'sam'))  # a remote person contact's name
+
+
+def test_a_ships_name_may_repeat_on_another_host(trusted):
+    t = trusted
+    first = pairs(t)
+    contact, c_ship = third_peer(t)
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    second = pairs(t, *c_ship('tardis', 'c-tardis'))
+    assert first['name'] == second['name'] == 'tardis' and first['peer_id'] != second['peer_id']
+    assert label_of(t.station, first['id']) == 'ship of Andy B: tardis'
+    assert label_of(t.station, second['id']) == 'ship of Andy C: tardis'  # the owner is (peer, id), never an id alone
+
+
+def test_a_contact_that_already_exists(trusted):
+    t = trusted
+    pairs(t)
+    refuses(t, 409, 'already')
+    refuses(t, 409, 'already', *b_ship(t, 'andy-bee', ship_id=t.owner['user_id']))  # no trust relabels a person
+
+
+def test_the_cap(trusted):
+    from superyak_peer.federation import TRUST_CAP
+    t = trusted
+    assert TRUST_CAP == 200
+    for i in range(TRUST_CAP):
+        pairs(t, *b_ship(t, f'ship-{i}'))
+    before = counts(t.station)
+    card, assertion = b_ship(t, 'one-too-many')
+    for refused in (1, 2):
+        with pytest.raises(Problem) as caught:
+            pairs(t, card, assertion)
+        assert caught.value.status == 429 and '200' in caught.value.message
+        assert counts(t.station) == {**before, 'trust_cap_refusals': 1}
+        with t.station.transaction() as db:
+            assert [tuple(r) for r in db.execute('SELECT grant_id, day, refused FROM trust_cap_refusals')] == \
+                [(t.trust['grant_id'], utc_day(t.clock[0]), refused)]
+    t.clock[0] += 86400  # the next UTC day counts afresh
+    pairs(t, card, assertion)
+
+
+def test_two_pairings_at_the_cap_pair_one(trusted):
+    t = trusted
+    with t.station.transaction() as db:
+        db.executemany('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?)',
+                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]))
+                        for i in range(199)])
+    feds = [Federation(Store(t.station.data_dir, clock=lambda: t.clock[0]), endpoint='https://localhost:7436')
+            for _ in range(2)]
+    ships = [b_ship(t, name) for name in ('serenity', 'defiant')]
+    start, results = threading.Barrier(2), [None, None]
+
+    def attempt(i):
+        start.wait()
+        try:
+            results[i] = feds[i].pair_trusted(t.ship, *ships[i])
+        except Problem as problem:
+            results[i] = problem
+    threads = [threading.Thread(target=attempt, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    assert sorted(type(r).__name__ for r in results) == ['Problem', 'dict']
+    assert next(r for r in results if isinstance(r, Problem)).status == 429
+    with t.station.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM trust_confirmations WHERE grant_id=?', (t.trust['grant_id'],)).fetchone()[0] == 200
+        assert db.execute('SELECT refused FROM trust_cap_refusals').fetchone()[0] == 1
+
+
+def pair_trusted_cli(t, card, assertion, as_user='rio-grande'):
+    """The CLI as a ship runs it: a new session, so no controlling terminal, and nothing on stdin."""
+    return subprocess.run([sys.executable, '-m', 'superyak_peer', 'pair-trusted', '--data-dir', str(t.station.data_dir),
+                           '--card', str(card), '--assertion', str(assertion), '--as', as_user],
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def no_code(text):
+    return not re.search(r'[0-9a-f]{32}', text) and not re.search(r'[0-9a-f]{4}( [0-9a-f]{4}){7}', text)
+
+
+def test_pair_trusted_cli_refuses_bad_files(trusted):
+    t = trusted
+    card, assertion = t.files
+    bad = t.tmp / 'bad'
+    bad.mkdir()
+    (bad / 'not.json').write_text('not json')
+    (bad / 'big.json').write_bytes(b'{"x":"' + b'a' * (7 * 1024 * 1024) + b'"}')
+    (bad / 'extra.json').write_text(json.dumps({**t.assertion, 'extra': 1}))
+    before = counts(t.station)
+    for files, word in [((bad / 'missing.json', assertion), 'No such file'), ((bad, assertion), 'directory'),
+                        ((card, bad / 'not.json'), 'JSON'), ((card, bad / 'big.json'), 'too large'),
+                        ((card, bad / 'extra.json'), 'ship assertion')]:
+        done = pair_trusted_cli(t, *files)
+        assert done.returncode == 1 and done.stdout == '', (files, done.stdout, done.stderr)
+        assert done.stderr.count('\n') == 1 and word in done.stderr and no_code(done.stderr), done.stderr
+        assert counts(t.station) == before
+
+
+def test_pair_trusted_cli_pairs_with_no_terminal_and_no_code(trusted):
+    t = trusted
+    before = counts(t.station)
+    for as_user in ('andy', 'nobody'):  # a person, and no such account
+        refused = pair_trusted_cli(t, *t.files, as_user=as_user)
+        assert refused.returncode == 1 and refused.stdout == '' and refused.stderr.count('\n') == 1
+        assert 'ship' in refused.stderr and no_code(refused.stderr)
+    assert counts(t.station) == before
+    done = pair_trusted_cli(t, *t.files)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == 'Paired ship of Andy B: tardis, confirmed by owner trust.\n' and done.stderr == ''
+    assert counts(t.station)['remote_contacts'] == before['remote_contacts'] + 1
