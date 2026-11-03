@@ -41,8 +41,8 @@ def adds(lessons_peers, tmp_path):
         return fed.card(store.lessons_ship(username, 'andy')['id'])
 
     ids = {**pi_ids, 'tardis-andy': tardis_ids['andy']}
-    return SimpleNamespace(pi=pi, pi_fed=pi_fed, tardis=tardis, tardis_fed=tardis_fed, ids=ids, room=lp['room'], key=lp['key'],
-                           clock=clock, deliver=lp['deliver'], pair_new=pair_new, card_of=card_of)
+    return SimpleNamespace(pi=pi, pi_fed=pi_fed, tardis=tardis, tardis_fed=tardis_fed, other_fed=other_fed, ids=ids,
+                           room=lp['room'], key=lp['key'], clock=clock, deliver=lp['deliver'], pair_new=pair_new, card_of=card_of)
 
 
 def confirmation(store, contact):
@@ -291,3 +291,315 @@ def test_the_listing_shows_a_bidi_name_plainly(adds):
             'ship': 'rio\u202e-grande'}
     text = describe_station_room(view)
     assert '‮' not in text and 'Defiant (abcd1234) addable by rio-grande' in text
+
+
+# ---- Task 4: make station-lessons-add CONTACT= -------------------------------------------------------------------------
+from superyak_peer.common import Problem
+from superyak_peer import lessons
+from conftest import lesson_body, run_lessons
+from test_owner_trust import b_ship, grant, pairs
+
+
+def short(contact_id):
+    """A contact's short id as Rio Grande types it: the start of its id after remote_."""
+    return contact_id.removeprefix('remote_')[:8]
+
+
+def snapshot(store):
+    """Every table's rows, so a refusal can be shown to write nothing."""
+    with closing(sqlite3.connect(store.db_path)) as db:
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        return {t: sorted(repr(tuple(r)) for r in db.execute(f'SELECT * FROM "{t}"')) for t in tables}
+
+
+def card_again(a, contact):
+    """The card of an account pair_new already made on Tardis, for typing its code again."""
+    with a.pi.transaction() as db:
+        user = db.execute('SELECT user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()['user_id']
+    return a.tardis_fed.card(user)
+
+
+def relist(a, *peers):
+    """make station-lessons-room's two runs, PEERS= these peers (Tardis's when none is given)."""
+    peers = list(peers) or [a.tardis_fed.identity.peer_id]
+    room = a.pi.lessons_room_key()
+    shown = a.pi.station_lessons_room('andy', room[:6], 'rio-grande', peers)
+    return a.pi.station_lessons_room('andy', room[:6], 'rio-grande', peers, shown['confirm'])
+
+
+def members_of(store, room):
+    with store.transaction() as db:
+        return {r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (room,))}
+
+
+@pytest.fixture
+def adds_trusted(adds):
+    """adds, plus a live owner trust (expect 2) for Andy's contact on Tardis, a member of the lessons room, granted with
+    Andy's password, and one ship of his there, voyager, that Rio Grande paired under it as make station-pair-trusted
+    does (Federation.pair_trusted). trusted_ship(name, owner_user=None) pairs another (owner_user: a person on Tardis)."""
+    with adds.pi.transaction() as db:
+        owner = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?',
+                           (adds.tardis_fed.identity.peer_id, adds.ids['tardis-andy'])).fetchone()['id']
+    trust = grant((adds.pi, {'id': adds.ids['andy']}, {'id': owner}, None), password='a-long-password', expect=2)
+    t = SimpleNamespace(machine=(adds.tardis, {'id': adds.ids['tardis-andy']}, None, adds.tardis_fed), clock=adds.clock,
+                        fed=adds.pi_fed, ship=adds.ids['rio-grande'])
+
+    def trusted_ship(name, owner_user=None):
+        return pairs(t, *b_ship(t, name, now=int(adds.clock[0]), owner=owner_user))['id']
+    return SimpleNamespace(**vars(adds), owner=owner, trust=trust, ship=trusted_ship('voyager'), trusted_ship=trusted_ship)
+
+
+def refusal_case(a, case):
+    """Sets up one refusal; returns what Rio Grande types for it."""
+    pi, andy = a.pi, a.ids['andy']
+    if case == 'unlisted':
+        return short(a.pair_new('elsewhere', on='other', lessons_line_shown=True))
+    if case == 'not_remote':
+        return a.ids['rio-grande'][:8]
+    if case == 'ambiguous':                      # a twin of Tardis's Andy, by participant id, on the other peer
+        card = a.other_fed.identity.card(a.other_fed.endpoint, {'id': a.ids['tardis-andy'], 'name': 'Andy Twin'})
+        a.pi_fed.pair(andy, card, code=pairing_code(card))
+        return a.ids['tardis-andy'][:8]
+    if case == 'ambiguous_id':
+        return 'remote_'                         # the start of every contact's id
+    if case.startswith('trust_') or case == 'owner_not_addable':
+        if case == 'trust_revoked':
+            pi.revoke_owner_trust(andy, a.trust['grant_id'])
+        elif case == 'trust_expired':
+            a.clock[0] += 91 * 86400
+        elif case == 'trust_paused':
+            a.trusted_ship('serenity')           # expect 2: the second pairing fills the window
+        elif case == 'trust_held':
+            with pi.transaction() as db:
+                db.execute('INSERT INTO contact_holds VALUES(?,?)', (a.ship, 1.0))
+        elif case == 'trust_member':
+            pi.station_lessons_add(short(a.ship))
+        elif case == 'owner_not_addable':
+            pi.remove_participant(andy, a.room, a.owner)   # Andy took his Tardis account out: not a member, not addable
+        return short(a.ship)
+    if case in ('member', 'owner_removed'):
+        contact = a.pair_new('defiant', lessons_line_shown=True)
+        added = pi.station_lessons_add(short(contact))
+        if case == 'owner_removed':
+            pi.remove_participant(andy, added['new_room'], contact)
+        return short(contact)
+    if case == 'other_admin':                    # named by Andy's confirmed listing, then typed again by Bob, line shown
+        bob = pi.create_user('bob', 'Bob', 'a-long-password', is_admin=True)['id']
+        contact = a.pair_new('defiant')
+        relist(a)
+        card = card_again(a, contact)
+        a.pi_fed.pair(bob, card, code=pairing_code(card), lessons_line_shown=True)
+        return short(contact)
+    contact = a.pair_new('defiant', lessons_line_shown=case != 'no_typed_by_not_listed')
+    with pi.transaction() as db:
+        if case == 'no_code':
+            db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact,))
+        elif case == 'stale':
+            db.execute("UPDATE remote_contacts SET name='Renamed' WHERE id=?", (contact,))
+        elif case == 'held':
+            db.execute('INSERT INTO contact_holds VALUES(?,?)', (contact, 1.0))
+        elif case == 'no_typed_by_not_listed':   # as a restore from before the build leaves it
+            db.execute('UPDATE pairing_confirmations SET typed_by=NULL, lessons_line=0 WHERE contact_id=?', (contact,))
+    return short(contact)
+
+
+NO_CODE = (403, "Defiant has no current typed code here, or it's held.")
+NOT_VOUCHED = (403, "Defiant's code wasn't typed by Andy Example with the lessons line shown, and the listing Andy Example "
+                    "confirmed didn't name it.")
+VOYAGER = 'ship of Andy Example: voyager'
+REASON = {
+    'unlisted': (403, "Elsewhere is on {other12}, which isn't listed for the lessons room."),
+    'no_code': NO_CODE, 'stale': (403, "Renamed has no current typed code here, or it's held."), 'held': NO_CODE,
+    'member': (409, 'Defiant is already in the lessons room.'),
+    'owner_removed': (403, 'Andy Example removed Defiant from the lessons room; adding it back is his act.'),
+    'other_admin': NOT_VOUCHED, 'no_typed_by_not_listed': NOT_VOUCHED,
+    'not_remote': (404, "{typed} isn't a remote contact here."),
+    'ambiguous': (400, '{typed} matches more than one contact; give more of its id.'),
+    'ambiguous_id': (400, 'remote_ matches more than one contact; give more of its id.'),
+    'trust_revoked': (403, f'{VOYAGER} was paired by owner trust, and that trust is revoked.'),
+    'trust_expired': (403, f'{VOYAGER} was paired by owner trust, and that trust is expired.'),
+    'trust_paused': (403, f'{VOYAGER} was paired by owner trust, and that trust is paused.'),
+    'trust_held': (403, f"{VOYAGER} has no current typed code here, or it's held."),
+    'trust_member': (409, f'{VOYAGER} is already in the lessons room.'),
+    'owner_not_addable': (403, f"{VOYAGER}'s owner, Andy Example, isn't in the lessons room or addable to it."),
+}
+
+
+@pytest.mark.parametrize('case', list(REASON))
+def test_each_refusal_writes_nothing(adds_trusted, case):
+    a = adds_trusted
+    typed = refusal_case(a, case)
+    before = snapshot(a.pi)
+    with pytest.raises(Problem) as refused:
+        a.pi.station_lessons_add(typed)
+    status, text = REASON[case]
+    assert (refused.value.status, refused.value.message) == (status, text.format(typed=typed, other12=a.other_fed.identity.peer_id[:12]))
+    assert snapshot(a.pi) == before
+
+
+def test_the_refusal_names_match_their_texts(adds_trusted):
+    """Ruling 3: addable_now gives the refusal's name with its text, so a caller (Task 7's pause count) needn't read text."""
+    a = adds_trusted
+    a.trusted_ship('serenity')
+    with a.pi.transaction() as db:
+        room = a.pi._room(db, a.ids['andy'], a.pi._lessons_chain(db)[-1])
+        name, text = lessons.addable_now(a.pi, db, room, a.ship, a.clock[0])
+        assert name == 'ADD_TRUST' and text.endswith('that trust is paused.')
+        assert lessons.addable_now(a.pi, db, room, a.owner, a.clock[0])[0] == 'ADD_MEMBER'
+
+
+def test_a_code_typed_with_the_line_shown_is_added(adds):
+    contact = adds.pair_new('defiant', lessons_line_shown=True)
+    done = adds.pi.station_lessons_add(short(contact))
+    assert done['old_room'] == adds.room and adds.pi.lessons_room_key() == done['new_room']
+    assert contact in members_of(adds.pi, done['new_room']) and contact not in members_of(adds.pi, adds.room)
+
+
+def test_an_account_the_confirmed_listing_named_is_added(adds):
+    contact = adds.pair_new('defiant')                   # Andy typed it, but with no line shown
+    with pytest.raises(Problem) as refused:
+        adds.pi.station_lessons_add(short(contact))
+    assert refused.value.message == NOT_VOUCHED[1]
+    shown = relist(adds)['addable']
+    assert [a['id'] for a in shown] == [contact]
+    done = adds.pi.station_lessons_add(shown[0]['user_short'])   # typed as the listing shows it
+    assert contact in members_of(adds.pi, done['new_room'])
+
+
+def test_a_listing_row_counts_only_while_the_code_and_typist_are_the_ones_shown(adds):
+    contact = adds.pair_new('defiant')
+    relist(adds)
+    with adds.pi.transaction() as db:                    # the digest no longer fits (as a re-pair under a new name)
+        db.execute("UPDATE lessons_addable SET code_digest=? WHERE contact_id=?", ('0' * 64, contact))
+    with pytest.raises(Problem, match="wasn't typed by"):
+        adds.pi.station_lessons_add(short(contact))
+
+
+def test_the_add_goes_to_the_chains_newest_room(adds):
+    pi, andy = adds.pi, adds.ids['andy']
+    first, second, third = (adds.pair_new(n, lessons_line_shown=True) for n in ('defiant', 'voyager', 'enterprise'))
+    by_andy = pi.add_participants(andy, adds.room, [first])['id']     # Andy's own add moved the chain
+    done = pi.station_lessons_add(short(second))
+    assert done['old_room'] == by_andy
+    again = pi.station_lessons_add(short(third))
+    assert again['old_room'] == done['new_room']
+    with pi.transaction() as db:
+        assert pi._lessons_chain(db) == [adds.room, by_andy, done['new_room'], again['new_room']]
+    assert {first, second, third} <= members_of(pi, again['new_room'])
+
+
+def test_success_makes_the_next_room_carries_once_and_names_the_ship(adds):
+    pi, ids = adds.pi, adds.ids
+    relist(adds, adds.tardis_fed.identity.peer_id, adds.other_fed.identity.peer_id)
+    pi.send_message(ids['rio-grande'], adds.room, 'p1', lesson_body(ship='rio-grande', claim='Kept.', command=('make check',)))
+    contact = adds.pair_new('serenity', on='other', lessons_line_shown=True)
+    done = pi.station_lessons_add(short(contact))
+    assert done['lessons_carried'] == 1
+    with pi.transaction() as db:
+        user = db.execute('SELECT user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()['user_id']
+        rows = [dict(r) for r in db.execute('SELECT * FROM member_changes WHERE member_id=?', (contact,))]
+        assert [(r['change'], r['actor_id'], r['grant_id'], r['room_id'], r['new_room_id'], r['reason']) for r in rows] == \
+            [('add', ids['rio-grande'], None, adds.room, done['new_room'], None)]
+        said = [r[0] for r in db.execute('SELECT body FROM messages WHERE room_id=? AND author_id=?',
+                                         (done['new_room'], pi.system_author_id(db)))]
+        carried = db.execute("SELECT COUNT(*) FROM messages WHERE room_id=? AND client_message_id LIKE 'lesson-carry-%'",
+                             (done['new_room'],)).fetchone()[0]
+    assert said == [f'Rio-Grande added Serenity to this room. It continues room {adds.room[:6]}.'] and carried == 1
+    assert done == {'label': 'Serenity', 'user_short': user[:8], 'peer12': adds.other_fed.identity.peer_id[:12],
+                    'old_room': adds.room, 'new_room': done['new_room'], 'lessons_carried': 1}
+    assert lessons.describe_lessons_add(done) == (
+        f"Added Serenity ({user[:8]}) on {adds.other_fed.identity.peer_id[:12]} to the lessons room: room {adds.room[:6]} "
+        f"became {done['new_room'][:6]}; 1 lessons carried.")
+    later = adds.pair_new('defiant', on='other', lessons_line_shown=True)
+    assert pi.station_lessons_add(short(later))['lessons_carried'] == 0   # the other peer has them already: carried once
+
+
+def test_a_trust_made_ship_is_added_under_a_live_trust_with_its_owner_addable(adds_trusted):
+    a = adds_trusted
+    done = a.pi.station_lessons_add(short(a.ship))       # its owner, Andy's Tardis account, is a member
+    assert done['label'] == VOYAGER and a.ship in members_of(a.pi, done['new_room'])
+    # An owner who isn't a member but is addable: Bea on Tardis, her code typed by Andy with the line shown.
+    bea = a.tardis.create_user('bea', 'Bea', 'a-long-password')['id']
+    card = a.tardis_fed.card(bea)
+    owner = a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=True)['id']
+    grant((a.pi, {'id': a.ids['andy']}, {'id': owner}, None), password='a-long-password', expect=2)
+    ship = a.trusted_ship('defiant', owner_user=bea)
+    again = a.pi.station_lessons_add(short(ship))
+    assert ship in members_of(a.pi, again['new_room']) and owner not in members_of(a.pi, again['new_room'])
+
+
+def test_a_ship_whose_own_code_was_typed_stays_off_the_code_path_while_trust_made(adds_trusted):
+    """The trust path is for a trust-made contact with no current code of its own; with one, it takes the code path,
+    where listable never names a trust-made contact (Ruling 2), so it is refused, writing nothing."""
+    a = adds_trusted
+    card = b_ship(SimpleNamespace(machine=(a.tardis, {'id': a.ids['tardis-andy']}, None, a.tardis_fed), clock=a.clock),
+                  'voyager', now=int(a.clock[0]))[0]
+    a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=True)
+    before = snapshot(a.pi)
+    with pytest.raises(Problem) as refused:
+        a.pi.station_lessons_add(short(a.ship))
+    assert refused.value.message == f'{VOYAGER} was paired by owner trust, and that trust is live.'
+    assert snapshot(a.pi) == before
+
+
+def test_a_contact_key_with_a_colon_or_an_empty_chain_is_refused(adds):
+    contact = adds.pair_new('defiant', lessons_line_shown=True)
+    with pytest.raises(Problem) as elsewhere:            # Tardis records the room by its full id: not the origin
+        adds.tardis.station_lessons_add(short(contact))
+    with adds.pi.transaction() as db:
+        db.execute('DELETE FROM lessons_peers')
+        db.execute('DELETE FROM lessons_room')
+    with pytest.raises(Problem) as empty:
+        adds.pi.station_lessons_add(short(contact))
+    for refused in (elsewhere, empty):
+        assert (refused.value.status, refused.value.message) == (409, 'No lessons room is recorded at this origin.')
+
+
+def test_a_typed_value_shaped_like_a_pairing_code_is_refused_and_not_echoed(adds):
+    """32 hex, as a code is shown or typed: refused before the database is read, and never echoed. No real code is read
+    here: the shape is enough."""
+    shaped = 'c0de' * 8
+    before = snapshot(adds.pi)
+    for typed in (shaped, ' '.join(shaped[i:i + 4] for i in range(0, 32, 4)), shaped.upper().replace('C0', 'C-0')):
+        with pytest.raises(Problem) as refused:
+            adds.pi.station_lessons_add(typed)
+        assert refused.value.status == 400 and 'c0de' not in refused.value.message.lower()
+    assert snapshot(adds.pi) == before
+
+
+def test_a_confirm_rerun_that_drops_a_contact_before_the_add_makes_the_add_refuse(adds):
+    contact = adds.pair_new('defiant')
+    relist(adds)                                         # the listing named it
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name='Renamed' WHERE id=?", (contact,))
+    assert contact not in [a['id'] for a in relist(adds)['addable']]   # stale: the rerun no longer names it
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name='Defiant' WHERE id=?", (contact,))   # its code is current again
+    with pytest.raises(Problem) as refused:
+        adds.pi.station_lessons_add(short(contact))
+    assert refused.value.message == NOT_VOUCHED[1]
+
+
+def test_the_adds_output_shows_a_bidi_label_plainly(adds):
+    ship = adds.tardis.lessons_ship('defiant', 'andy')['id']
+    with adds.tardis.transaction() as db:
+        db.execute("UPDATE users SET name=? WHERE id=?", ('Def‮iant', ship))
+    card = adds.tardis_fed.card(ship)
+    contact = adds.pi_fed.pair(adds.ids['andy'], card, code=pairing_code(card))['id']
+    with pytest.raises(Problem) as refused:
+        adds.pi.station_lessons_add(short(contact))
+    assert refused.value.message.startswith("Defiant's code wasn't typed")
+    relist(adds)
+    said = lessons.describe_lessons_add(adds.pi.station_lessons_add(short(contact)))
+    assert '‮' not in said and said.startswith('Added Defiant (')
+    assert lessons.describe_lessons_add({'label': 'A⁦b', 'user_short': 'c‮d', 'peer12': 'p' * 12, 'old_room': 'o' * 32,
+                                         'new_room': 'n' * 32, 'lessons_carried': 0}).startswith('Added Ab (cd) on ')
+
+
+def test_the_station_add_verb_adds_and_a_refusal_exits_1(adds):
+    contact = adds.pair_new('defiant', lessons_line_shown=True)
+    done = run_lessons('station-add', '--data-dir', adds.pi.data_dir, '--contact', short(contact))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith('Added Defiant (') and done.stdout.endswith('; 0 lessons carried.\n')
+    again = run_lessons('station-add', '--data-dir', adds.pi.data_dir, '--contact', short(contact))
+    assert again.returncode == 1 and 'Defiant is already in the lessons room.' in again.stderr

@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-roomlessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -109,6 +109,7 @@ help:
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
+	@echo "make station-lessons-add CONTACT=…  On the Pi: Rio Grande adds a remote contact Andy vouched for to the lessons room"
 	@echo "make lessons-room ID=… [CONFIRM=…]  On another peer: show, then record, the lessons room by its full id (LESSONS_DATA=this peer)"
 	@echo "make lessons-where      This peer's lessons room, by its full id"
 	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
@@ -479,6 +480,11 @@ station-lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [PEERS="<paired peer id> …"] [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
 	@for p in $(PEERS); do case "$$p" in *[!0-9a-f]*) echo "PEERS takes full peer ids (64 hex characters); one word of $${#p} characters isn't (not shown, in case it was a code)"; exit 2;; esac; test "$${#p}" -eq 64 || { echo "PEERS takes full peer ids (64 hex characters); one word of $${#p} characters isn't (not shown, in case it was a code)"; exit 2; }; done
 	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(foreach p,$(PEERS), --peer $(p))$(if $(CONFIRM), --confirm "$(CONFIRM)")
+
+station-lessons-add:
+	@test -n "$(CONTACT)" || { echo 'Usage: make station-lessons-add CONTACT=<contact short id, as make station-lessons-room shows it in parentheses>'; exit 2; }
+	@c=$$(printf '%s' "$(CONTACT)" | tr -d '[:space:]-'); case "$$c" in *[!0-9a-fA-F]*) ;; *) test "$${#c}" -ne 32 || { echo "CONTACT takes a contact's short id; this one has a pairing code's shape (32 hex), so it isn't taken (not shown, in case it was a code)"; exit 2; };; esac
+	$(LESSONS) station-add --data-dir "$(STATION_DATA)" --contact "$(CONTACT)"
 
 lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [CONFIRM=<the code it showed>] [LESSONS_DATA=<this peer data dir>]'; exit 2; }

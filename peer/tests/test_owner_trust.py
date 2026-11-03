@@ -400,10 +400,11 @@ def pairs(t, card=None, assertion=None):
 
 
 def b_ship(t, name, ship_id=None, *, now=None, owner=None):
-    """The card and the assertion B signs for a ship of its own: all station A ever sees of it."""
+    """The card and the assertion B signs for a ship of its own: all station A ever sees of it. The card is at B's own
+    endpoint (machine's is https://localhost:7435), so another peer's machine works too (lessons room adds, Task 4)."""
     _, person, _, fed = t.machine
     ship_id = ship_id or f'ship-{name}'
-    card = fed.identity.card('https://localhost:7435', {'id': ship_id, 'name': name})
+    card = fed.identity.card(fed.endpoint, {'id': ship_id, 'name': name})
     return card, make_ship_assertion(fed.identity, ship_id=ship_id, ship_name=name, owner_id=owner or person['id'],
                                      now=t.clock[0] if now is None else now)
 
