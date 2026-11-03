@@ -177,6 +177,14 @@ def trust_window(db, grant_id):
     return row['seq'], row['expect'], paired
 
 
+def _unchanged_since(db, grant_id, seen):
+    """Refuses (409) when the grant's window or its paired count is not what the renewal page showed. Run before the
+    password and again in the writing transaction, so a ship paired in between can't close its window unseen."""
+    if db.execute('SELECT 1 FROM owner_trust WHERE grant_id=?', (grant_id,)).fetchone() and \
+            trust_window(db, grant_id)[::2] != seen:
+        raise Problem(409, 'the trust paired more ships since you looked; read the page again')
+
+
 def _text(name, peer_id, until):
     date = datetime.fromtimestamp(until, timezone.utc).strftime('%Y-%m-%d')
     return GRANT_TEXT.format(name=safe_line(name), peer=peer_id[:12], date=date)
@@ -230,12 +238,11 @@ class OwnerTrust:
             raise Problem(400, 'seen is the (window_seq, paired) the renewal page showed')
         with self.transaction() as db:  # before the password, so a stale page spends no attempt
             self._admin(db, actor)
-            if db.execute('SELECT 1 FROM owner_trust WHERE grant_id=?', (grant_id,)).fetchone() and \
-                    trust_window(db, grant_id)[::2] != seen:
-                raise Problem(409, 'the trust paired more ships since you looked; read the page again')
+            _unchanged_since(db, grant_id, seen)
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)
+            _unchanged_since(db, grant_id, seen)  # again: a ship may have paired while the password was checked
             now = self.clock()
             rows = db.execute('SELECT event,peer_id,owner_user_id,until FROM owner_trust WHERE grant_id=?', (grant_id,)).fetchall()
             if not rows:

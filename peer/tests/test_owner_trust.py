@@ -1226,3 +1226,20 @@ def test_trust_confirmations_are_append_only_and_expect_is_checked_by_the_table(
                        ('x', event, 'p', 'o', 0, expect))
     with t.station.transaction() as db:
         db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,at) VALUES ('x','revoke','p','o',0)")
+
+
+def test_a_ship_paired_during_the_password_check_stales_the_renewal(trusted, monkeypatch):
+    t = trusted
+    seen = window_of(t.station, t.trust['grant_id'])
+    real = type(t.station)._trust_password
+
+    def pair_then_check(self, *args):
+        pairs(t)  # lands after the first check, before the write
+        return real(self, *args)
+    monkeypatch.setattr(type(t.station), '_trust_password', pair_then_check)
+    t.clock[0] += 60
+    before = rows(t.station)
+    with pytest.raises(Problem) as caught:
+        renew((t.station, t.admin), t.trust['grant_id'], days=90, seen=seen)
+    assert caught.value.status == 409 and 'read the page again' in caught.value.message
+    assert rows(t.station) == before and len(window_rows(t.station)) == 1
