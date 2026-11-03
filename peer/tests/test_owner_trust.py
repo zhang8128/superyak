@@ -169,3 +169,94 @@ def test_export_ship_refuses_a_peer_with_no_mode(tmp_path):
     Federation(store, endpoint='https://localhost:7435')
     done = export(type('M', (), {'__getitem__': lambda self, i: store})(), tmp_path, 'tardis')
     assert done.returncode == 1 and 'no federation mode' in done.stderr and not (tmp_path / 'out').exists()
+
+
+# Task 2: the owner trust table, granting and renewing
+
+import sqlite3
+from superyak_peer.identity import pairing_code
+
+PASSWORD = 'station-password'
+
+
+@pytest.fixture
+def paired(tmp_path, machine):
+    station = Store(tmp_path / 'station', clock=lambda: NOW)
+    admin = station.create_user('andy', 'Andy', PASSWORD, is_admin=True)
+    fed = Federation(station, endpoint='https://localhost:7436')
+    card = machine[3].card(machine[1]['id'])
+    contact = fed.pair(admin['id'], card, code=pairing_code(card))
+    return station, admin, contact, card
+
+
+def grant(paired, days=90, password=PASSWORD):
+    station, admin, contact, card = paired
+    return station.grant_owner_trust(admin['id'], contact['id'], days=days, password=password, source='127.0.0.1')
+
+
+def rows(station):
+    with station.transaction() as db:
+        return [dict(r) for r in db.execute('SELECT * FROM owner_trust ORDER BY seq')]
+
+
+def test_a_grant_reads_as_the_spec_says(paired):
+    done = grant(paired)
+    peer = paired[2]['peer_id']
+    assert done['text'] == f"ships owned by Andy B on {peer[:12]} may be paired by this station's ships, until 2027-04-15"
+    assert done['until'] == NOW + 90 * 86400 and rows(paired[0])[0]['event'] == 'grant'
+
+
+def test_a_grant_needs_the_admins_password_and_whole_days_1_to_90(paired):
+    with pytest.raises(Problem) as caught:
+        grant(paired, password='not-the-password')
+    assert caught.value.status == 401
+    for days in (0, 91, '90', True):
+        with pytest.raises(Problem) as caught:
+            grant(paired, days=days)
+        assert caught.value.status == 400
+    assert rows(paired[0]) == []
+
+
+def test_a_grant_needs_a_code_typed_for_that_contact(paired):
+    station, admin, contact, card = paired
+    with station.transaction() as db:
+        db.execute('INSERT INTO contact_holds VALUES (?,?)', (contact['id'], NOW))
+    with pytest.raises(Problem) as caught:
+        grant(paired)
+    assert caught.value.status == 409
+    with station.transaction() as db:
+        db.execute('DELETE FROM contact_holds')
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
+    with pytest.raises(Problem) as caught:
+        grant(paired)
+    assert caught.value.status == 409 and rows(station) == []
+
+
+def test_a_second_grant_while_one_is_live_is_refused(paired):
+    grant(paired)
+    with pytest.raises(Problem) as caught:
+        grant(paired, days=5)
+    assert caught.value.status == 409 and 'renew' in caught.value.message and len(rows(paired[0])) == 1
+
+
+def test_renewing_extends_and_owner_trust_is_append_only(paired):
+    station, admin, contact, card = paired
+    done = grant(paired, days=10)
+    renewed = station.renew_owner_trust(admin['id'], done['grant_id'], days=60, password=PASSWORD, source='127.0.0.1')
+    assert renewed['grant_id'] == done['grant_id'] and renewed['until'] == NOW + 60 * 86400 > done['until']
+    assert [r['event'] for r in rows(station)] == ['grant', 'renew']
+    with pytest.raises(Problem) as caught:
+        station.renew_owner_trust(admin['id'], done['grant_id'], days=5, password=PASSWORD, source='127.0.0.1')
+    assert caught.value.status == 409
+    for sql in ('UPDATE owner_trust SET until=0', 'DELETE FROM owner_trust'):
+        with station.transaction() as db, pytest.raises(sqlite3.IntegrityError):
+            db.execute(sql)
+    assert len(rows(station)) == 2
+
+
+def test_the_schema_statements_each_run_alone():
+    from superyak_peer.owner_trust import OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA
+    db = sqlite3.connect(':memory:')
+    for statement in OWNER_TRUST_STATEMENTS:
+        db.execute(statement)
+    assert OWNER_TRUST_SCHEMA.endswith(';') and OWNER_TRUST_SCHEMA.count('CREATE') == len(OWNER_TRUST_STATEMENTS)
