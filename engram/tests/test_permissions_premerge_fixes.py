@@ -124,7 +124,8 @@ def test_n2_verify_fails_on_any_answer_of_sqlites_check_but_ok(tmp_path, monkeyp
     assert any("records_layer" in p for p in problems)
     assert cli_main(["verify"]) == 1
     out = capsys.readouterr().out
-    assert "does not verify" in out and "records_layer" in out and "No reader runs SQLite's integrity check" in out
+    assert "does not verify" in out and "records_layer" in out
+    assert "A reader runs SQLite's integrity check only when it checks the ledger whole" in out
 
 
 # ---------------------------------------------------------------- N5: the last row's parse is kept by its head

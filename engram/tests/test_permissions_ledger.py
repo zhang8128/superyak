@@ -39,7 +39,7 @@ def flip_one_byte_in_log_body(path, seq):
 def test_init_writes_meta_owner_and_home(tmp_path):
     led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
     meta = led.meta()
-    assert meta["schema_version"] == "1" and meta["owner"] == "person:andy" and uuid.UUID(meta["ledger_id"])
+    assert meta["schema_version"] == "2" and meta["owner"] == "person:andy" and uuid.UUID(meta["ledger_id"])
     assert meta["admins"] == "person:andy"
     st = led.state()
     assert st.persons["person:andy"].home == "place:home/andy"
@@ -323,7 +323,7 @@ def test_a_rebuild_replays_unsynced_with_its_journal_in_memory_and_the_copy_open
     copy = Ledger.open(dest)
     assert pragmas(copy) == pragmas(Ledger.open(tmp_path))  # the modes were the build's connection's, not the file's
     assert copy.tables() == led.tables() and copy.verify() is None
-    assert [p.name for p in ledger_path(dest).parent.iterdir()] == ["permissions.db"]
+    assert sorted(p.name for p in ledger_path(dest).parent.iterdir()) == ["permissions.db", "permissions.verified"]
 
 
 def test_a_torn_rebuilding_file_left_by_a_power_loss_is_removed_before_the_next_rebuild(tmp_path):
@@ -337,13 +337,14 @@ def test_a_torn_rebuilding_file_left_by_a_power_loss_is_removed_before_the_next_
     final.with_name("permissions.db.rebuilding-journal").write_bytes(os.urandom(4096))
     copy = Ledger.open(led.rebuild(tmp_path / "copy"))
     assert copy.tables() == led.tables() and copy.verify() is None
-    assert [p.name for p in final.parent.iterdir()] == ["permissions.db"]
+    assert sorted(p.name for p in final.parent.iterdir()) == ["permissions.db", "permissions.verified"]
 
 
 @pytest.mark.parametrize("fresh", [True, False])
 def test_a_rebuild_syncs_its_file_then_renames_it_then_syncs_the_folders(tmp_path, monkeypatch, fresh):
     """The ledger's folder after the rename, and, when the rebuild made the folders, their own entries too (the fresh
-    Pi reviewer's nit), so a power loss can neither tear the copy nor drop it."""
+    Pi reviewer's nit), so a power loss can neither tear the copy nor drop it. Then the projection digest's marker,
+    which arrives after the replace (D7), under its own temporary name."""
     led = small_ledger(tmp_path)
     dest = tmp_path / "copy"
     if not fresh:
@@ -355,8 +356,10 @@ def test_a_rebuild_syncs_its_file_then_renames_it_then_syncs_the_folders(tmp_pat
                                                      real_replace(a, b))[1])
     led.rebuild(dest)
     folders = [ledger_path(dest).parent] + ([dest, dest.parent] if fresh else [])
-    assert calls == [("file", "permissions.db.rebuilding"), ("rename", "permissions.db.rebuilding", "permissions.db"),
-                     *[("folder", folder) for folder in folders]]
+    *rest, marker = calls
+    assert rest == [("file", "permissions.db.rebuilding"), ("rename", "permissions.db.rebuilding", "permissions.db"),
+                    *[("folder", folder) for folder in folders]]
+    assert marker[0] == "rename" and marker[1].startswith("permissions.verified.") and marker[2] == "permissions.verified"
 
 
 def test_the_sync_helpers_fsync_the_file_and_the_folders(tmp_path, monkeypatch):

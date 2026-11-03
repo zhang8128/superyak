@@ -42,7 +42,11 @@ from permissions import (
     parse_copy_ref, parse_object_ref, parse_selector, person_of_home, proposal_words, selector_json, subjects_of,
     _COLUMNS, _NULLABLE, _acts_for_person, _date, _is_steward, _live, _layer_steward, _own_subjects, _principals)
 
-SCHEMA_VERSION = "1"
+# A ledger stamped with the projection digest is version 2, so code before the digest refuses it rather than write
+# it and leave the projection behind head (D8). This code opens both: version 1, unstamped, is `off` and `shadow`
+# only (D5). scripts/unstamp_ledger.py is the way back.
+SCHEMA_VERSION = "2"
+SCHEMA_VERSIONS = ("1", "2")
 ZERO = "0" * 64
 _RULE = "5.5 storage"
 BUSY_MS = 5000
@@ -125,8 +129,7 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
 # journal (a torn restore) can keep a log row's projection and lose the row: that seq is then past the log's last.
 # Or it can keep the row and lose its projection: a column the last row sets then does not hold the row's seq, unless
 # the row set that column on several rows and the tear kept one of them, which then reads whole (Serenity's
-# re-check, N1): these columns catch a tear of one row per column, and the projection digest, a follow-up before any
-# house runs `enforce`, closes the class.
+# re-check, N1): these columns catch a tear of one row per column, and the projection digest closes the class.
 _SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c.endswith("_seq")))
                                     for t, cols in _COLUMNS.items()) if cs}
 # the seq columns an update sets on an older row; every other one is set only when its row is inserted
@@ -657,6 +660,37 @@ full_checks = 0
 _FULL_CHECKS_LOCK = threading.Lock()
 
 
+def _projection_problems(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
+    """(the parts recomputed, each way `meta`'s digest is not them, in words), inside the caller's read transaction:
+    the projection's seq against the log's last, each part, the whole when every part matches, and the log's row
+    count against its last seq. SQLite errors are the caller's."""
+    whole, parts = projection_now(conn)
+    meta = dict(conn.execute("SELECT key, value FROM meta NOT INDEXED").fetchall())
+    top = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
+    stored, stored_parts = meta.get("projection"), meta.get("projection_parts")
+    if stored is None or stored_parts is None:
+        return parts, ["the projection digest: meta holds none"]
+    problems = []
+    seq_text, _, stored_whole = stored.partition(":")
+    if seq_text != str(top):
+        behind = seq_text.isdigit() and int(seq_text) < top
+        problems.append(f"the projection digest: projection seq {seq_text} {'behind' if behind else 'past'} head "
+                        f"{top}")
+    try:
+        held = _read_parts(stored_parts)
+    except ValueError as e:
+        return parts, problems + [f"the projection digest: projection_parts cannot be read ({e})"]
+    differs = [p for p in _PARTS if held[p] != parts[p]]
+    if differs:
+        problems.append(f"the projection digest: {', '.join(differs)} differ{'s' * (len(differs) == 1)}")
+    elif stored_whole != whole:
+        problems.append("the projection digest: the whole differs")
+    rows = conn.execute("SELECT COUNT(*) FROM ledger_log NOT INDEXED").fetchone()[0]
+    if rows != top:
+        problems.append(f"the projection digest: the log holds {rows} rows, but its last seq is {top}")
+    return parts, problems
+
+
 def _full_check(conn: sqlite3.Connection) -> None:
     """D4's full check, inside the caller's read transaction: every part recomputed and compared with
     `meta.projection_parts`, then the whole with `meta.projection`, whose seq must be the log's last; the log's row
@@ -666,29 +700,9 @@ def _full_check(conn: sqlite3.Connection) -> None:
     with _FULL_CHECKS_LOCK:
         full_checks += 1
     try:
-        whole, parts = projection_now(conn)
-        meta = dict(conn.execute("SELECT key, value FROM meta NOT INDEXED").fetchall())
-        top = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
-        stored, stored_parts = meta.get("projection"), meta.get("projection_parts")
-        if stored is None or stored_parts is None:
-            raise LedgerUnreadable("the projection digest: meta holds none")
-        seq_text, _, stored_whole = stored.partition(":")
-        if seq_text != str(top):
-            behind = seq_text.isdigit() and int(seq_text) < top
-            raise LedgerUnreadable(f"the projection digest: projection seq {seq_text} "
-                                   f"{'behind' if behind else 'past'} head {top}")
-        try:
-            held = _read_parts(stored_parts)
-        except ValueError as e:
-            raise LedgerUnreadable(f"the projection digest: projection_parts cannot be read ({e})") from e
-        differs = [p for p in _PARTS if held[p] != parts[p]]
-        if differs:
-            raise LedgerUnreadable(f"the projection digest: {', '.join(differs)} differ{'s' * (len(differs) == 1)}")
-        if stored_whole != whole:
-            raise LedgerUnreadable("the projection digest: the whole differs")
-        rows = conn.execute("SELECT COUNT(*) FROM ledger_log NOT INDEXED").fetchone()[0]
-        if rows != top:
-            raise LedgerUnreadable(f"the projection digest: the log holds {rows} rows, but its last seq is {top}")
+        _parts_now, problems = _projection_problems(conn)
+        if problems:
+            raise LedgerUnreadable(problems[0])
         checked = [str(r[0]) for r in conn.execute("PRAGMA integrity_check")]
         if checked != ["ok"]:
             raise LedgerUnreadable(f"the projection digest: SQLite's integrity check of the file: "
@@ -891,6 +905,30 @@ def _write_marker(path: Path, key: _Key) -> None:
             tmp.unlink()
 
 
+def _mark_moved(path: Path, checked: _Key) -> None:
+    """A fresh file checked whole at `checked` and then renamed to `path` (rebuild, migrate): marked verified when it
+    is still that file at that state, the same inode, counter and head; a rename changes only its ctime. Otherwise
+    no marker, and its first reader runs one full check."""
+    try:
+        conn = Ledger._connect(path, read_only=True)
+    except LedgerUnreadable:
+        return
+    try:
+        conn.execute("BEGIN")
+        try:
+            key, pinned = _read_key(conn, path)
+        finally:
+            conn.execute("COMMIT")
+    except (LedgerUnreadable, sqlite3.Error, OSError):
+        return
+    finally:
+        conn.close()
+    if pinned and (key.dev, key.ino, key.counter, key.head) == (checked.dev, checked.ino, checked.counter,
+                                                                checked.head):
+        _remember(key)
+        _write_marker(path, key)
+
+
 def _verified(path: Path, key: _Key, pinned: bool) -> bool:
     """Whether `key` is a state some process verified: this process's memo, or the marker (D4 step 5). A key read
     out of the rollback journal is never trusted."""
@@ -920,8 +958,9 @@ def _read_key(conn: sqlite3.Connection, path: Path) -> tuple[_Key, bool]:
 
 
 def _keeps_digest(meta: Mapping) -> bool:
-    """Whether a ledger keeps the projection digest (D5): one stamped when it was made or rebuilt."""
-    return "projection_parts" in meta
+    """Whether a ledger keeps the projection digest (D5): one stamped when it was made or rebuilt, version 2. Stamped
+    is the version, not the keys: a version 2 ledger that lost them is torn, not old."""
+    return meta.get("schema_version") == "2"
 
 
 def _back_to_the_rollback_journal(conn: sqlite3.Connection) -> None:
@@ -1010,9 +1049,9 @@ class Ledger:
         conn = cls._connect(path, read_only=read_only, busy_ms=busy_ms)
         try:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None or row["value"] != SCHEMA_VERSION:
+            if row is None or row["value"] not in SCHEMA_VERSIONS:
                 conn.close()
-                raise LedgerUnreadable(f"{path}: not a version {SCHEMA_VERSION} permission ledger")
+                raise LedgerUnreadable(f"{path}: not a version {' or '.join(SCHEMA_VERSIONS)} permission ledger")
         except sqlite3.Error as e:
             conn.close()
             hot = path.with_name(path.name + "-journal").exists()
@@ -1342,8 +1381,9 @@ class Ledger:
 
         An empty list is not proof of a whole tail. These checks catch a tear of one row per column; a tear across
         several rows of one column (an act that set the column on several rows, the tear keeping one) or a torn
-        index page that a partial-index or newest-row read trusts can still read whole. The projection digest, a
-        follow-up before any house runs `enforce`, closes the class (Serenity's re-check, N1)."""
+        index page that a partial-index or newest-row read trusts can still read whole here. The projection digest
+        closes the class (Serenity's re-check, N1): a reader checks it after these (`state`), and on a ledger made
+        before it these checks are all there is."""
         out = []
         cut = self._head_problem(top, meta)
         if cut:
@@ -1366,8 +1406,9 @@ class Ledger:
         in words). SQLite's own check of the file (`PRAGMA integrity_check`, which also holds every index against
         its table), the hash chain from the first row, `meta.head`, and every seq column of every row. Each table
         is read past its indexes (`NOT INDEXED`; `ledger_log` has none, its seq is the rowid), so a torn index page
-        can neither hide a row nor invent one. No problem is not proof of a whole tail: a tear across several rows
-        of one column can still read whole (`_tail_problems`) until the projection digest lands."""
+        can neither hide a row nor invent one. On a ledger that keeps the projection digest, every part recomputed
+        against `meta` too (D7), the parts kept in `checked_parts` for the report; None on one made before it."""
+        self.checked_parts = None
         self.conn.execute("BEGIN")
         try:
             checked = [str(r[0]) for r in self.conn.execute("PRAGMA integrity_check")]
@@ -1378,6 +1419,9 @@ class Ledger:
             problems += [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
             meta = {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta NOT INDEXED")}
             problems += self._tail_problems(top, meta)
+            if _keeps_digest(meta):
+                self.checked_parts, more = _projection_problems(self.conn)
+                problems += more
         finally:
             self.conn.execute("COMMIT")
         return top, problems
@@ -1518,13 +1562,47 @@ class Ledger:
     def _parts(self) -> dict | None:
         """The parts `meta.projection_parts` holds, read inside the writer's transaction; None for a ledger that
         keeps no digest (D5)."""
-        row = self.conn.execute("SELECT value FROM meta WHERE key = 'projection_parts'").fetchone()
-        if row is None:
+        held = {r[0]: r[1] for r in self.conn.execute(
+            "SELECT key, value FROM meta WHERE key IN ('schema_version', 'projection_parts')")}
+        if not _keeps_digest(held):
             return None
         try:
-            return _read_parts(row[0])
-        except ValueError as e:
+            return _read_parts(held["projection_parts"])
+        except (KeyError, ValueError) as e:
             raise LedgerUnreadable(f"{self.path}: the projection digest: projection_parts cannot be read ({e})") from e
+
+    def _parts_held(self) -> dict:
+        """`meta.projection_parts`, read now."""
+        return _read_parts(self.conn.execute("SELECT value FROM meta WHERE key = 'projection_parts'").fetchone()[0])
+
+    def _differs_from_replay_later(self) -> Callable[[dict], list[str]]:
+        """This ledger's tables recomputed now, read in one transaction, as a function of the replay's parts that
+        returns the parts that differ. Its meta part is counted with the version the replay writes, so a ledger made
+        before the digest differs only where its tables do."""
+        self.conn.execute("BEGIN")
+        try:
+            _whole, mine = projection_now(self.conn)
+            version = self.conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        finally:
+            self.conn.execute("COMMIT")
+        if version is not None and version[0] != SCHEMA_VERSION:
+            _fold(mine, "meta", ("schema_version", version[0]), -1)
+            _fold(mine, "meta", ("schema_version", SCHEMA_VERSION))
+        return lambda replay: [p for p in _PARTS if mine[p] != replay[p]]
+
+    def _finish_fresh(self) -> _Key:
+        """A fresh file built (rebuild, migrate): checked whole once, in one read transaction (the re-check's S4).
+        Returns the key it was checked at, for `_mark_moved` once the file is in place."""
+        self.conn.execute("BEGIN")
+        try:
+            key, _pinned = self._read_key()
+            try:
+                _full_check(self.conn)
+            except LedgerUnreadable as e:
+                raise LedgerUnreadable(f"{self.path}: {e}") from e
+        finally:
+            self.conn.execute("COMMIT")
+        return key
 
     def _rows_at(self, table: str, rowids: Sequence[int]) -> list[tuple]:
         """The rows of `table` with these rowids, as SQLite holds them."""
@@ -1941,13 +2019,20 @@ class Ledger:
         The `.rebuilding` file is deleted on any failure and again at the next rebuild's start, so its build needs no
         crash safety: each replayed row commits with its journal in memory and no fsync. The finished file is synced
         once before its rename, and its folder after (fix:ledger-rebuild-writes: a U24 rebuild wrote about 21 times
-        the fixture's size and took 36 minutes)."""
+        the fixture's size and took 36 minutes).
+
+        The new file keeps the projection digest (D5), whatever this ledger's version. It is built fresh, with no key,
+        memo or marker per append, checked whole once at the end and marked after its rename (the re-check's S4).
+        Rebuild is the recovery path, so it never refuses for a projection that does not match: `rebuilt_differs`
+        names the parts in which this ledger's tables differ from the replay (D7), its version left aside."""
         final = ledger_path(dest)
         if final.exists():
             raise FileExistsError(str(final))
         broken = self.verify()
         if broken is not None:
             raise _bad(f"the log does not verify from seq {broken}; it cannot be rebuilt")
+        self.rebuilt_differs = None
+        differs_from = self._differs_from_replay_later()
         made_dir = not final.parent.exists()
         tmp = final.with_name(final.name + ".rebuilding")
         for stale in (tmp, tmp.with_name(tmp.name + "-journal")):
@@ -1963,6 +2048,8 @@ class Ledger:
                 again = new.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (got,)).fetchone()[0]
                 if got != r["seq"] or again != r["digest"]:
                     raise _bad(f"the replay does not match the log at seq {r['seq']}; it cannot be rebuilt")
+            checked = new._finish_fresh()
+            self.rebuilt_differs = differs_from(new._parts_held())
             new.close()
             new = None
             _fsync_file(tmp)
@@ -1973,6 +2060,7 @@ class Ledger:
             if made_dir:  # the new folders' own entries, so a power loss can't drop the whole copy either
                 _fsync_directory(Path(dest))
                 _fsync_directory(Path(dest).parent)
+            _mark_moved(final, checked)
         except BaseException:
             if new is not None:
                 new.close()
@@ -2702,6 +2790,8 @@ ENFORCE_WAITS: str | None = (
     "page, can still read whole, so a removal or revocation the log holds could read as never made and what it took "
     "away be served. off and shadow are unchanged")
 PUBLISHED_HOUSE = Path(".engram") / "instances" / "lighthouse" / "graph.db"
+# the cause a gate at enforce reads closed with on a ledger made before the projection digest (D5)
+UNSTAMPED = "no projection digest; run `engram-permissions rebuild`, then the move step it prints"
 
 
 @dataclass(frozen=True)
@@ -2816,6 +2906,8 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
         return _closed("gate_raised is set but the gate is missing") if raised else Gate("off", None)
     if mode not in GATE_MODES:
         return _closed(f"the gate holds {mode!r}, which is not one of {', '.join(GATE_MODES)}")
+    if mode == "enforce" and not _keeps_digest(meta):
+        return _closed(UNSTAMPED)
     return Gate(mode, None)
 
 
@@ -2860,7 +2952,16 @@ def _prep_gate(state, actor, args):
         raise RuleError(_GATE, "the gate act takes only mode: the houses are those on disk at the yes")
     mode = args.get("mode")
     check_gate_mode(mode)
+    check_gate_digest(mode, state.meta)
     return {"mode": mode}
+
+
+def check_gate_digest(mode, meta: Mapping) -> None:
+    """D6: `enforce` needs the projection digest, so it is refused on a ledger made before it. Checked where the
+    ledger is open: the gate act (`_prep_gate`) and the CLI before it asks for a yes."""
+    if mode == "enforce" and not _keeps_digest(meta):
+        raise RuleError(_GATE, "enforce needs the ledger's projection digest, which this ledger, made before it, does "
+                               "not keep: run `engram-permissions rebuild --out <dir>`, then the move step it prints")
 
 
 def check_gate_mode(mode) -> None:

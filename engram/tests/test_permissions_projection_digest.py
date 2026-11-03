@@ -19,9 +19,12 @@ import pytest
 import permission_ledger
 from lighthouse_protocol import canonical_json
 from permission_cli import main as cli_main
-from permission_ledger import SCHEMA_VERSION, Ledger, LedgerUnreadable, ledger_path, projection_now
+from permission_ledger import (SCHEMA_VERSION, Gate, Ledger, LedgerUnreadable, effective_gate, houses, ledger_path,
+                               projection_now)
 from permissions import _COLUMNS, RuleError
-from tests.permissions_support import ANDY, M2, M3, MEDICAL, T, do, e1_county_ledger
+from tests.permissions_support import (  # noqa: F401
+    ANDY, M2, M3, MEDICAL, T, cli_home, cli_home_with_house, do, e1_county_ledger, fake_tty, raise_gate,
+    raised_ledger)
 from tests.test_permissions_premerge_fixes import _tear_index
 
 
@@ -801,3 +804,208 @@ def test_4_an_append_waits_12_seconds_for_the_lock_and_gives_the_connection_its_
     led._append("note", "x", ANDY, "terminal", {}, at=T("2026-11-02"))
     assert seen == [12000] and led.conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     led.close()
+
+
+# ---------------------------------------------------------------- Task 5: old ledgers, the gate, verify, rebuild, skew (D5-D8)
+
+def _unstamp(home):
+    """The ledger under `home` as code before the digest left one: version 1, no projection keys, no marker."""
+    _sql(home, "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+         "DELETE FROM meta WHERE key IN ('projection', 'projection_parts')")
+    _marker(home).unlink(missing_ok=True)
+
+
+def _live(state):
+    return {r.object for r in state.collection_members.get(MEDICAL) if r.removed_seq is None}
+
+
+def test_5_a_new_ledger_is_version_2_which_code_before_the_digest_refuses(tmp_path, monkeypatch):
+    """D8: an Engram process still on old code refuses a stamped ledger instead of writing it and leaving the
+    projection behind head. New code opens both versions."""
+    _created(tmp_path)
+    led = Ledger.open_read_only(tmp_path)
+    assert led.meta()["schema_version"] == permission_ledger.SCHEMA_VERSION == "2"
+    led.close()
+    assert permission_ledger.SCHEMA_VERSIONS == ("1", "2")
+    monkeypatch.setattr(permission_ledger, "SCHEMA_VERSIONS", ("1",))         # old code's one version
+    with pytest.raises(LedgerUnreadable, match="not a version 1 permission ledger"):
+        Ledger.open(tmp_path)
+
+
+def test_5_an_unstamped_ledger_reads_and_writes_as_before_and_keeps_no_digest(tmp_path):
+    """D5: a ledger made before the digest is never stamped by a writing open, which would bless a tear it holds;
+    under off and shadow it works as today, and an append keeps no digest and marks nothing (N8)."""
+    _created(tmp_path)
+    _unstamp(tmp_path)
+    led = Ledger.open(tmp_path)
+    seq = led._append("group", "group:g", ANDY, "terminal", {"insert": [
+        {"table": "groups", "row": {"id": "group:g", "owner": ANDY, "created_seq": "@seq"}}]}, at=T("2026-11-02"))
+    meta = led.meta()
+    assert meta["schema_version"] == "1" and "projection" not in meta and "projection_parts" not in meta
+    assert led.state().seq == seq and "group:g" in led.state().groups
+    led.close()
+    assert not _marker(tmp_path).exists()
+
+
+def test_5_a_version_2_ledger_that_lost_its_digest_reads_unreadable(tmp_path):
+    """Stamped is the version, not the keys: a ledger of version 2 whose projection keys are gone is not read as one
+    made before the digest."""
+    _created(tmp_path)
+    _sql(tmp_path, "DELETE FROM meta WHERE key IN ('projection', 'projection_parts')")
+    with pytest.raises(LedgerUnreadable, match="the projection digest: meta holds none"):
+        _state(tmp_path)
+
+
+UNSTAMPED = "no projection digest; run `engram-permissions rebuild`, then the move step it prints"
+
+
+def test_5_under_enforce_an_unstamped_ledger_reads_closed_and_enforce_is_refused_on_it(tmp_path):
+    """D5 and D6: enforce requires the digest. The rule is in `_prep_gate`, where the State is, because
+    `check_gate_mode` sees no ledger; off and shadow are as before."""
+    led = raised_ledger(tmp_path, mode="enforce")
+    led.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
+    _unstamp(tmp_path)
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("closed", UNSTAMPED)
+    led = Ledger.open(tmp_path)
+    try:
+        before = led.seq()
+        with pytest.raises(RuleError, match="enforce needs the ledger's projection digest"):
+            raise_gate(led, "enforce", now="2026-11-03")
+        assert led.seq() == before
+        raise_gate(led, "shadow", now="2026-11-03")
+        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)
+    finally:
+        led.close()
+
+
+def test_5_gate_enforce_on_an_unstamped_ledger_is_refused_before_the_yes(cli_home_with_house, fake_tty, capsys):
+    _unstamp(cli_home_with_house)
+    shown = fake_tty.shown()
+    assert cli_main(["gate", "enforce"]) == 1
+    assert "enforce needs the ledger's projection digest" in capsys.readouterr().err
+    assert fake_tty.shown() == shown                                          # no yes was asked
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "shadow"]) == 0
+
+
+def test_5_a_projection_behind_head_names_both_seqs(tmp_path):
+    """D8: an append by code that keeps no digest (a server not restarted) leaves the projection behind head, and
+    every reader names the cause."""
+    _created(tmp_path)
+    con = sqlite3.connect(ledger_path(tmp_path))
+    prev = con.execute("SELECT digest FROM ledger_log WHERE seq = 1").fetchone()[0]
+    entry = {"seq": 2, "at": T("2026-11-02"), "kind": "note", "ref": "x", "actor": ANDY, "channel": "terminal",
+             "under_grant": None, "proposal_id": None, "body": "{}"}
+    digest = permission_ledger._digest(prev, entry)
+    con.execute("INSERT INTO ledger_log VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (2, entry["at"], "note", "x", ANDY, "terminal", None, None, "{}", prev, digest))
+    con.execute("UPDATE meta SET value = ? WHERE key = 'head'", (f"2:{digest}",))
+    con.commit()
+    con.close()
+    with pytest.raises(LedgerUnreadable, match="the projection digest: projection seq 1 behind head 2"):
+        _state(tmp_path)
+
+
+def test_5_rebuild_stamps_reports_a_mismatch_without_refusing_and_marks_once_after_the_replace(tmp_path, monkeypatch):
+    """D7 and the re-check's S4: rebuild is the recovery path, so it reports whether the old tables matched and never
+    refuses; it builds its file with no key, memo or marker per append, checks it whole once at the end, and marks
+    it after the replace."""
+    seq = _uncollected(tmp_path)
+    _tear_m2(tmp_path, seq)
+    marks, checks, real = [], _checks(), permission_ledger._write_marker
+    monkeypatch.setattr(permission_ledger, "_write_marker", lambda path, key: (marks.append(path), real(path, key)))
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        dest = led.rebuild(tmp_path / "copy")
+        assert led.rebuilt_differs == ["collection_members"]
+    finally:
+        led.close()
+    assert marks == [ledger_path(dest)] and _checks() == checks + 1
+    meta = Ledger.open_read_only(dest).meta()
+    assert meta["schema_version"] == "2" and meta["projection"].startswith(f"{seq}:")
+    permission_ledger._forget_verified()
+    assert M2 not in _live(_state(dest)) and _checks() == checks + 1       # the replay's removal, served by the marker
+
+
+def test_5_rebuild_of_a_whole_or_an_unstamped_ledger_reports_a_match_and_stamps_it(tmp_path):
+    _uncollected(tmp_path)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        led.rebuild(tmp_path / "copy")
+        assert led.rebuilt_differs == []
+    finally:
+        led.close()
+    _unstamp(tmp_path)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        dest = led.rebuild(tmp_path / "copy2")
+        assert led.rebuilt_differs == []                       # the version is the one difference, and expected
+    finally:
+        led.close()
+    assert Ledger.open_read_only(dest).meta()["schema_version"] == "2"
+
+
+def test_5_the_rebuild_command_reports_the_match_and_prints_the_move_step(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    seq = _uncollected(tmp_path)
+    assert cli_main(["rebuild", "--out", str(tmp_path / "copy")]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "The old tables matched the replay." in out
+    assert f"stop every Engram process, then move {ledger_path(tmp_path / 'copy')} to {ledger_path(tmp_path)}" in out
+    _tear_m2(tmp_path, seq)
+    assert cli_main(["rebuild", "--out", str(tmp_path / "copy2")]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "The old tables differ from the replay in collection_members" in out
+
+
+def test_5_verify_reports_the_parts_and_names_a_torn_part(tmp_path, monkeypatch, capsys):
+    """D7: verify stays read-only and reports the parts."""
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    seq = _uncollected(tmp_path)
+    con = sqlite3.connect(ledger_path(tmp_path))
+    _whole, parts = projection_now(con)
+    con.close()
+    assert cli_main(["verify"]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert f"collection_members {parts['collection_members'][0]}" in out and f"at seq {seq}" in out
+    _tear_m2(tmp_path, seq)
+    assert cli_main(["verify"]) == 1
+    assert "the projection digest: collection_members differs" in capsys.readouterr().out
+    assert sorted(p.name for p in (tmp_path / ".engram").iterdir()) == ["permissions.db", "permissions.verified"]
+
+
+def test_5_verify_says_an_unstamped_ledger_keeps_no_digest(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    _created(tmp_path)
+    _unstamp(tmp_path)
+    assert cli_main(["verify"]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "keeps no projection digest" in out and "under enforce it reads closed" in out
+
+
+def test_5_unstamp_is_the_way_back_and_asks_the_persons_yes(tmp_path, monkeypatch, fake_tty, capsys):
+    """The re-check's should-fix: if this branch is ever reverted, scripts/unstamp_ledger.py sets the version to 1 and
+    deletes the projection keys and the marker, a writing act on the ledger that the person says yes to."""
+    sys.path.insert(0, str(Path(ENGRAM_DIR) / "scripts"))
+    try:
+        import unstamp_ledger
+    finally:
+        sys.path.remove(str(Path(ENGRAM_DIR) / "scripts"))
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    _created(tmp_path)
+    before = ledger_path(tmp_path).read_bytes()
+    fake_tty.answer("not the code")
+    assert unstamp_ledger.main([]) == 3
+    assert ledger_path(tmp_path).read_bytes() == before and _marker(tmp_path).exists()
+    shown = " ".join(fake_tty.shown().split())
+    assert "set schema_version to 1" in shown and "delete meta.projection and meta.projection_parts" in shown
+    fake_tty.answer_the_printed_code()
+    assert unstamp_ledger.main([]) == 0
+    led = Ledger.open_read_only(tmp_path)
+    meta = led.meta()
+    led.close()
+    assert meta["schema_version"] == "1" and not {"projection", "projection_parts"} & set(meta)
+    assert not _marker(tmp_path).exists()
+    monkeypatch.setattr(permission_ledger, "SCHEMA_VERSIONS", ("1",))         # old code reads it again
+    assert _state(tmp_path).seq == 1

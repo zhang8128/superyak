@@ -412,3 +412,25 @@ def test_migrate_whose_house_update_fails_makes_no_ledger_and_runs_again_once_th
     con = sqlite3.connect(house)
     con.execute("DROP TRIGGER no_fill"); con.commit(); con.close()
     fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+
+
+def test_migrate_builds_a_stamped_ledger_checked_whole_once_and_marked(legacy_home, fake_tty):
+    """The projection digest plan (D5, the re-check's S4): migrate owns a fresh file, so it skips the key protocol
+    for each act, checks the file whole once at the end, and marks it after it is renamed into place."""
+    import permission_ledger
+    checks = permission_ledger.full_checks
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    assert permission_ledger.full_checks == checks + 1
+    path = legacy_home / ".engram" / "permissions.db"
+    led = Ledger.open_read_only(legacy_home)
+    try:
+        assert led.meta()["schema_version"] == "2"
+        led.conn.execute("BEGIN")
+        key, _ = led._read_key()
+        led.conn.execute("COMMIT")
+    finally:
+        led.close()
+    assert json.loads(path.with_name("permissions.verified").read_text()) == {
+        "counter": key.counter, "ctime_ns": key.ctime_ns, "dev": key.dev, "head": key.head, "ino": key.ino,
+        "size": key.size}
+    assert not list(path.parent.glob("permissions.db.migrating*"))
