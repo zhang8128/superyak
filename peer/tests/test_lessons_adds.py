@@ -298,7 +298,7 @@ def test_the_listing_shows_a_bidi_name_plainly(adds):
 from superyak_peer.common import Problem
 from superyak_peer import lessons
 from conftest import lesson_body, run_lessons
-from test_owner_trust import b_ship, grant, pairs
+from test_owner_trust import b_ship, grant, pairs, renew
 
 
 def short(contact_id):
@@ -350,6 +350,17 @@ def adds_trusted(adds):
     return SimpleNamespace(**vars(adds), owner=owner, trust=trust, ship=trusted_ship('voyager'), trusted_ship=trusted_ship)
 
 
+def bea_with_a_trust(a, *, line, grantor=None):
+    """Bea, a person on Tardis who isn't in the lessons room, paired here by Andy's typed code (the lessons line shown or
+    not), and a live owner trust (expect 2) for her, granted by `grantor` (default Andy; every admin's password here is
+    a-long-password). Returns her user id there and her contact id here."""
+    bea = a.tardis.create_user('bea', 'Bea', 'a-long-password')['id']
+    card = a.tardis_fed.card(bea)
+    owner = a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=line)['id']
+    grant((a.pi, {'id': grantor or a.ids['andy']}, {'id': owner}, None), password='a-long-password', expect=2)
+    return bea, owner
+
+
 def refusal_case(a, case):
     """Sets up one refusal; returns what Rio Grande types for it."""
     pi, andy = a.pi, a.ids['andy']
@@ -363,6 +374,9 @@ def refusal_case(a, case):
         return a.ids['tardis-andy'][:8]
     if case == 'ambiguous_id':
         return 'remote_'                         # the start of every contact's id
+    if case == 'owner_not_vouched':              # Bea's code typed by Andy, current, but with no line and never listed
+        bea, _ = bea_with_a_trust(a, line=False)
+        return short(a.trusted_ship('defiant', owner_user=bea))
     if case.startswith('trust_') or case == 'owner_not_addable':
         if case == 'trust_revoked':
             pi.revoke_owner_trust(andy, a.trust['grant_id'])
@@ -414,15 +428,16 @@ REASON = {
     'member': (409, 'Defiant is already in the lessons room.'),
     'owner_removed': (403, 'Andy Example removed Defiant from the lessons room; adding it back is his act.'),
     'other_admin': NOT_VOUCHED, 'no_typed_by_not_listed': NOT_VOUCHED,
-    'not_remote': (404, "{typed} isn't a remote contact here."),
-    'ambiguous': (400, '{typed} matches more than one contact; give more of its id.'),
-    'ambiguous_id': (400, 'remote_ matches more than one contact; give more of its id.'),
+    'not_remote': (404, "The contact you named isn't a remote contact here."),            # never what was typed
+    'ambiguous': (400, 'The contact you named matches more than one contact; give more of its id.'),
+    'ambiguous_id': (400, 'The contact you named matches more than one contact; give more of its id.'),
     'trust_revoked': (403, f'{VOYAGER} was paired by owner trust, and that trust is revoked.'),
     'trust_expired': (403, f'{VOYAGER} was paired by owner trust, and that trust is expired.'),
     'trust_paused': (403, f'{VOYAGER} was paired by owner trust, and that trust is paused.'),
     'trust_held': (403, f"{VOYAGER} has no current typed code here, or it's held."),
     'trust_member': (409, f'{VOYAGER} is already in the lessons room.'),
     'owner_not_addable': (403, f"{VOYAGER}'s owner, Andy Example, isn't in the lessons room or addable to it."),
+    'owner_not_vouched': (403, "ship of Bea: defiant's owner, Bea, isn't in the lessons room or addable to it."),
 }
 
 
@@ -467,13 +482,62 @@ def test_an_account_the_confirmed_listing_named_is_added(adds):
     assert contact in members_of(adds.pi, done['new_room'])
 
 
-def test_a_listing_row_counts_only_while_the_code_and_typist_are_the_ones_shown(adds):
-    contact = adds.pair_new('defiant')
-    relist(adds)
-    with adds.pi.transaction() as db:                    # the digest no longer fits (as a re-pair under a new name)
-        db.execute("UPDATE lessons_addable SET code_digest=? WHERE contact_id=?", ('0' * 64, contact))
+def test_a_listing_row_stops_counting_once_the_contact_is_paired_again_under_a_new_name(adds):
+    """Spec 2a: a lessons_addable row counts only while the contact's current code is the one shown. A real re-pair,
+    through pair, of the same account under a new name gives it a new code, so the listing Andy confirmed no longer
+    vouches for it."""
+    contact = adds.pair_new('defiant')                   # typed with no line
+    relist(adds)                                         # the confirmed listing names it, with this code
+    with adds.pi.transaction() as db:
+        user = db.execute('SELECT user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()['user_id']
+    with adds.tardis.transaction() as db:
+        db.execute("UPDATE users SET name='Defiant Two' WHERE id=?", (user,))
+    card = card_again(adds, contact)
+    adds.pi_fed.pair(adds.ids['andy'], card, code=pairing_code(card))   # its new code, typed with no line shown
+    before = snapshot(adds.pi)
+    with pytest.raises(Problem) as refused:
+        adds.pi.station_lessons_add(short(contact))
+    assert (refused.value.status, refused.value.message) == (403, "Defiant Two's code wasn't typed by Andy Example with the "
+                                                                  "lessons line shown, and the listing Andy Example confirmed "
+                                                                  "didn't name it.")
+    assert snapshot(adds.pi) == before
+
+
+def test_a_contact_with_no_typist_comes_in_through_the_confirmed_listing(adds):
+    """A confirmation as a restore from before the build leaves it (typed_by NULL, lessons_line 0) is refused until a
+    listing Andy confirmed names it, then added: it "comes in only through 2a" (the spec's Tests)."""
+    contact = adds.pair_new('defiant', lessons_line_shown=True)
+    with adds.pi.transaction() as db:
+        db.execute('UPDATE pairing_confirmations SET typed_by=NULL, lessons_line=0 WHERE contact_id=?', (contact,))
     with pytest.raises(Problem, match="wasn't typed by"):
         adds.pi.station_lessons_add(short(contact))
+    assert [x['typed_by'] for x in relist(adds)['addable'] if x['id'] == contact] == [None]
+    done = adds.pi.station_lessons_add(short(contact))
+    assert contact in members_of(adds.pi, done['new_room'])
+
+
+@pytest.mark.parametrize('how', ['granted', 'renewed'])
+def test_a_trust_granted_or_renewed_by_another_admin_doesnt_reach_the_lessons_room(adds_trusted, how):
+    """Any admin may grant an owner trust; only one the room's owner granted or last renewed brings a ship in."""
+    a = adds_trusted
+    bob = a.pi.create_user('bob', 'Bob', 'a-long-password', is_admin=True)['id']
+    if how == 'granted':      # Bob's trust for Bea, whom Andy vouched for: with Andy's grant, her ship would join
+        bea, _ = bea_with_a_trust(a, line=True, grantor=bob)
+        ship, label = a.trusted_ship('defiant', owner_user=bea), 'ship of Bea: defiant'
+    else:                     # Andy's trust for his own Tardis account, renewed by Bob
+        a.clock[0] += 60
+        renew((a.pi, {'id': bob}), a.trust['grant_id'], days=90, password='a-long-password', expect=2)
+        ship, label = a.ship, VOYAGER
+    before = snapshot(a.pi)
+    with pytest.raises(Problem) as refused:
+        a.pi.station_lessons_add(short(ship))
+    assert (refused.value.status, refused.value.message) == \
+        (403, f'{label} was paired under an owner trust that Bob granted or renewed, not Andy Example.')
+    assert snapshot(a.pi) == before
+    if how == 'renewed':      # the latest act is what counts: Andy renews it, and the ship joins
+        a.clock[0] += 60
+        renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, password='a-long-password', expect=2)
+        assert ship in members_of(a.pi, a.pi.station_lessons_add(short(ship))['new_room'])
 
 
 def test_the_add_goes_to_the_chains_newest_room(adds):
@@ -520,10 +584,7 @@ def test_a_trust_made_ship_is_added_under_a_live_trust_with_its_owner_addable(ad
     done = a.pi.station_lessons_add(short(a.ship))       # its owner, Andy's Tardis account, is a member
     assert done['label'] == VOYAGER and a.ship in members_of(a.pi, done['new_room'])
     # An owner who isn't a member but is addable: Bea on Tardis, her code typed by Andy with the line shown.
-    bea = a.tardis.create_user('bea', 'Bea', 'a-long-password')['id']
-    card = a.tardis_fed.card(bea)
-    owner = a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=True)['id']
-    grant((a.pi, {'id': a.ids['andy']}, {'id': owner}, None), password='a-long-password', expect=2)
+    bea, owner = bea_with_a_trust(a, line=True)
     ship = a.trusted_ship('defiant', owner_user=bea)
     again = a.pi.station_lessons_add(short(ship))
     assert ship in members_of(a.pi, again['new_room']) and owner not in members_of(a.pi, again['new_room'])
