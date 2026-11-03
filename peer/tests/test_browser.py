@@ -200,7 +200,7 @@ def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
     text = " ".join(noscript.group(1).split())
     assert "This is a Superyak home" in text and "Signing in needs JavaScript." in text
     assert '<a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a>' in text
-    description = "A Superyak home: a self-hosted place for the parts of your life you choose to share. Its owner invites the people in it."
+    description = "A Superyak home: a free, open-source, self-hosted place for the parts of your life you choose to share. Its owner invites the people in it."
     assert f'<meta name="description" content="{description}">' in page
     assert f'<meta property="og:description" content="{description}">' in page
 
