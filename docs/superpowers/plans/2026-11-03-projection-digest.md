@@ -1,6 +1,9 @@
 # Plan: the permission ledger's projection digest
 
-**By:** Tardis, 2026-11-03. **Board item:** `build:permissions-projection-digest`.
+**By:** Tardis, 2026-11-03. **Board item:** `build:permissions-projection-digest`. **Revision 2.**
+- Rio Grande's three drift rules are in D3.
+- Task 0, measured on Tardis, changed D2's encoding and replaced revision 1's mtime-keyed process cache with a verified
+  marker (D4).
 
 **What it closes:** R48's follow-up in docs/superpowers/plans/2026-10-25-permissions-by-place.md (line 167), Serenity's
 re-check N1, and pre-merge item 5. `ENFORCE_WAITS` (permission_ledger.py:2070-2074) blocks `gate enforce` until this
@@ -54,35 +57,73 @@ The log body and the chain format don't change, so no existing ledger's digests 
 - So a torn copy can't pair an old `projection` with a new head.
 
 **D2. The digest.**
-- **A row's hash:** SHA-256 of `canonical_json([table, [values in _COLUMNS order]])`. A BLOB is written as
-  `{"hex": "…"}`, and `canonical_json` gains that case.
+- **A row's hash:** BLAKE2b-256 of an explicit encoding. That's the table name, then each value in `_COLUMNS` order as a
+  type tag (`n`, `i`, `s`, `b`), a decimal length, `:`, and its bytes. This is revision 2's change, measured in Task 0:
+  canonical JSON with SHA-256 took 3.6 s on x86 at the large shape, and this encoding takes 1.0 s. It also needs no
+  BLOB case in `canonical_json`.
 - **A table's part:** its row count, and the sum of its rows' hashes mod 2^256, as an additive multiset hash. Order
   doesn't matter, and an insert or update changes it by a delta.
 - **The whole:** SHA-256 of `canonical_json([[table, count, sum_hex] …])`, in `_COLUMNS` order.
 - **Why additive:** it detects accidental tears. Anyone who can write the file can rewrite anything anyway, so this
   isn't an adversarial MAC, and the plan says so.
 
-**D3. The writer keeps it incrementally.**
-- `_project` reads, before each update, the rows its `WHERE` matches, and subtracts their hashes. After the update it
-  adds their new hashes. Each insert adds its row's hash.
-- Only changed tables' parts change, and the new `projection` is written in the same transaction.
-- **Cost:** one extra read per update, of the rows it touches. That's measured in Task 6.
+**D3. The writer keeps it incrementally, hashing only what SQLite holds** (Rio Grande, all hands a5598b76). Any drift
+from the reader's recompute reads as a tear and closes the ledger, so:
+- **Hash what SQLite returns, not what Python bound.** Column affinity converts values on the way in: an int bound to
+  a TEXT column comes back as `'1'`. So after each insert, `_project` re-reads the new row by `lastrowid`, in the same
+  transaction, and hashes that.
+- **Updates go by rowid.** `_project` captures the rowids its `WHERE` matches before an update, subtracts those rows'
+  hashes, applies the update, then re-reads **those rowids** and adds their hashes. It never re-evaluates the
+  `WHERE`, since an update that changes a column its own `WHERE` tests would lose rows.
+- **Deletes:** no projection table loses a row today. A test fails when a `DELETE` reaches a projection table outside
+  `_project`, and `_project` subtracts any row it deletes, so that stays true.
+- Only changed tables' parts change. The new `projection` and parts are written in the same transaction.
+- **Cost:** one re-read per inserted or updated row. That's measured in Task 6.
 
-**D4. The reader checks it fully, once per file state per process.**
-- **The full check,** in `state()`, before any row is served:
-  - recompute every table's part by a `NOT INDEXED` scan;
-  - compare the parts and the whole with `meta`;
-  - run `PRAGMA integrity_check`, which catches a torn index page that the partial-index reads would trust.
-- Any mismatch, or any answer but `ok`, raises `LedgerUnreadable("the projection digest …")`, so the ledger fails
-  closed.
-- **The cache:** one process cache, keyed by (path, `st_dev`, `st_ino`, `st_size`, `st_mtime_ns`, `head`). A hit skips
-  the full check. A writer that commits from a verified base updates the cache with its new stat and head, since it
-  computed the digest incrementally.
-- **Why the stat is in the key:** any write changes the mtime. The xfail test tampers with the file in place, in the
-  same process, and the check must still catch it. So does a `cp` over a live file.
-- **The residual limit, said plainly:** on a filesystem with coarse mtimes, a same-size in-place change within one
-  tick could hit the cache. Ext4 and APFS keep nanoseconds. The runbook's restore stops every process that opens the
-  ledger, so a restored file always meets an empty cache.
+**D4. The reader checks fully only when the file changed in a way no verified writer recorded.**
+
+Task 0 measured, on x86 at the large shape (236,389 rows, 28.7 MB):
+
+| Step | Time |
+|---|---|
+| `state()` | 0.35 s |
+| the full recompute | 1.0 s |
+| `integrity_check` | 0.15 s |
+
+The Pi will be several times slower. Every caller opens per call, and the daemon calls `state()` on every frame. So a
+full check after every write, which revision 1's per-process cache keyed on mtime amounted to, is far over budget.
+(Hooks never open the ledger.)
+
+**The full check,** before any row is served:
+- recompute every table's part by a `NOT INDEXED` scan;
+- compare the parts and the whole with `meta`;
+- run `PRAGMA integrity_check`, which catches a torn index page that the partial-index reads would trust.
+
+Any mismatch, or any answer but `ok`, raises `LedgerUnreadable("the projection digest …")`, so the ledger fails
+closed.
+
+**A verified marker,** `permissions.verified` beside the ledger, mode 0600, written atomically (temporary file, then
+rename). It records the file state that was last verified, as (`st_dev`, `st_ino`, `st_size`, `st_ctime_ns`, the
+header's file change counter, `head`).
+- **The change counter:** the ledger runs SQLite's rollback journal, so every commit by any connection increments the
+  4-byte counter at header offset 24.
+- **ctime:** a `cp` over the file, or a rename onto it, changes ctime, which user tools can't set.
+
+**How it's used:**
+- **Readers:** `state()` stats the file, reads the header's 4 bytes and `head`, and compares them with the marker. A
+  match serves with no full check. A mismatch or a missing marker runs the full check, and on success writes the
+  marker.
+- **Writers:** `_append` runs only from a verified base. If the marker doesn't match before its write, the full check
+  runs first. After COMMIT, the writer writes the marker for the new state, since it computed the digest incrementally
+  from that verified base. If another commit lands between its COMMIT and its stat, the marker it writes won't match
+  the next reader's view, and that reader runs one full check. That's safe, just slower.
+- **Why this catches the threats:**
+  - **The xfail test,** an in-place SQL tamper in the same process, increments the change counter, so the full check
+    runs and refuses.
+  - **A restored or copied file** has a new inode or ctime.
+  - **A crash** between COMMIT and the marker write leaves a mismatch, which costs one full check.
+- **What the marker isn't:** a security boundary. It sits beside the ledger, under the same user. It guards against
+  accidental tears, as the digest does (D2).
 
 **D5. Ledgers made before this.**
 - **A writing open** computes and writes `projection` and `projection_parts` once, under the write lock, after R48's
@@ -109,31 +150,39 @@ keys. It's used by:
 
 The tear tests never call it, since a tear must stay a tear.
 
-**D9. Budgets, measured, not guessed.**
-- **Append:** at the records bound (16,384), the append median grows by at most 1 ms on the dev machine, and N4's
-  covering-index plan is kept.
-- **Full check:** at the records bound, at most 300 ms on the dev machine, and at most 1.5 s on the Pi, in a Pi-only
-  test like U24 (test_permissions_pi_budget.py).
-- **If `integrity_check` takes the Pi over budget:** it moves to `verify`, to `gate` and to writing opens, and the
-  per-state check keeps the digest alone. That fallback is decided by the measurement and reported to the reviewer,
-  never assumed.
+**D9. Budgets, measured, not guessed.** These are set from Task 0. The Pi's numbers are pending Rio Grande's run of
+scripts/projection_digest_timing.py.
+- **Steady state, a marker match:** the reader's extra cost is at most 2 ms, for a stat, 4 header bytes and a small
+  JSON file.
+- **Append:** the median grows by at most 2 ms at the large shape on the dev machine (the re-reads plus the marker
+  write), and N4's covering-index plan is kept.
+- **The full check, which is rare:** at most 1.5 s on the dev machine (1.15 s measured), and at most 8 s on the Pi, in a
+  Pi-only test like U24 (test_permissions_pi_budget.py). It runs after a restore, a tamper, a crash, or a ledger's first
+  sight. A daemon frame that meets it may miss its deadline once, which reads as `degraded`, never as a wrong answer.
 
 ## Tasks (test-first: each test is seen failing before its code)
 
-0. **Measure first.** Time `state()` and a full `NOT INDEXED` scan, plus `integrity_check`, at the records bound, on
-   the dev machine and on the Pi. Record both, since they set D9.
+0. **Measure first.** The script is scripts/projection_digest_timing.py.
+   - **Tardis, done:** at 20,000 memories and 16,384 records (236,389 rows, 28.7 MB), `state()` took 0.35 s, the full
+     recompute 1.0 s (3.6 s with canonical JSON and SHA-256), and `integrity_check` 0.15 s.
+   - **The Pi:** Rio Grande runs it after E1, and the result sets D9's Pi line.
 1. **The row hash and `canonical_json`'s BLOB case.** Tests: a known row's hash; a BLOB round-trips as hex; a table's
    column order follows `_COLUMNS`.
 2. **The full recompute (`projection_now`),** a pure read with no writes. Tests: an empty ledger's digest is fixed;
    two ledgers holding the same rows in a different insert order give the same digest.
-3. **The incremental writer** (D3). A seeded property test: after each of 200 random acts across every act kind,
-   `meta.projection` equals `projection_now`.
-4. **The reader check and its cache** (D4). Tests:
+3. **The incremental writer** (D3). Tests:
+   - **A seeded property test:** after each of 200 random acts across every act kind, `meta.projection` equals
+     `projection_now`. It includes values that affinity converts, and an update whose own `WHERE` column changes.
+   - A `DELETE` on a projection table outside `_project` fails a test.
+4. **The reader check and its marker** (D4). Tests:
    - **The acceptance test:** the strict xfail at :204-222 passes, and its mark goes.
    - A torn index page made by `_tear_index` (:69-82) reads as unreadable through `state()`.
-   - An in-place tamper in the same process is caught, since the mtime changed.
-   - A file renamed over the ledger is caught, since the inode changed.
-   - A second `state()` with no change does no full check, which a counter proves.
+   - An in-place SQL tamper is caught, since the change counter moved. So is a file renamed over the ledger (new inode)
+     and a `cp -p` over it (new ctime, same mtime).
+   - A second `state()` with no change does no full check, which a counter proves. So does a `state()` in a second
+     process after a verified writer's append.
+   - A writer killed between COMMIT and its marker write leads to exactly one full check, then a match.
+   - A missing or malformed marker leads to a full check, never to a pass.
 5. **Old ledgers, the gate, `verify` and `rebuild`** (D5, D6, D7). Tests:
    - a writing open adds the keys;
    - a read-only open of a ledger with no digest, under enforce, reads `closed`;
@@ -151,7 +200,10 @@ The tear tests never call it, since a tear must stay a tear.
   - the cache ignores `st_mtime_ns`;
   - `_project` forgets to subtract an updated row;
   - `integrity_check` isn't run.
-- Each mutant must die on the assert its test names.
+- Each mutant must die on the assert its test names. Three more mutants:
+  - the marker key drops `st_ctime_ns`;
+  - the marker key drops the change counter;
+  - `_project` hashes bound values instead of re-reading the row.
 - The Pi budget test passes on the Pi.
 
 ## Deploy
@@ -167,4 +219,7 @@ Grande, all hands, ddd4c343). So the live steps are Andy's, in the one sitting t
 - **The full check's cost on the Pi.** It's measured in Task 0, with D9's fallback.
 - **A tear the digest can't see:** two compensating changes whose hash sums cancel. That's negligible for accidental
   tears, as D2 says.
-- **The cache's coarse-mtime limit,** named in D4.
+- **The marker's limits:** it isn't a security boundary (D4). A filesystem with coarse ctime could miss a same-tick
+  `cp` over a file whose change counter and head both match, and the runbook's restore stops every process first.
+- **Writer drift reads as a tear** (D3). The property test and the three drift rules are the guard. If drift ever
+  happens live, `rebuild` restores the tables from the log.
