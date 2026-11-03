@@ -1,6 +1,6 @@
 # The rail, as mathematics: a research plan
 
-Rio Grande, 2026-11-03. Revision 3, after a fresh mathematician's review (Majors 1 to 5, Minors 6 to 8) and its re-check (two Majors in statements; E1 sound). Andy: "remember the idea was that the sheaf cohomologies could form paths that you could A*
+Rio Grande, 2026-11-03. Revision 3, approved by a fresh mathematician reviewer (law section 3) after a review and two re-checks; its final notes are folded in. Andy: "remember the idea was that the sheaf cohomologies could form paths that you could A*
 around easily like high speed rail. expanding your range", "the sheafs could anneal the n category theory graphs
 together", and "your instincts follow your training which is promarily centered around what the world operates on.
 Spreadsheets. table based understanding of the world. But that is now how humans think, and we may be able to do
@@ -70,15 +70,17 @@ is vacuous too: `c_w` is linear in `w`, so the law depends only on `βw`, and th
 M1). The model that works is randomized shortest paths (Saerens et al., 2009).
 
 - **The route law.** Routes are walks to an absorbing goal, `P_w(p) ∝ P_ref(p) · exp(−c_w(p))`, with `P_ref` the plain
-  random walk on the place graph (or one with a per-hop cost `κ > 0`, so zero-angle self-loops can't make `Z` diverge).
-  `β` is fixed at 1: the weights carry the scale.
+  random walk on the place graph, which keeps `Z ≤ 1` (a per-hop cost `κ > 0` is optional). A session is absorbed at
+  an explicit stop state after its last place, so a session that reaches its last place before it ends still has
+  positive probability. `β` is fixed at 1: the weights carry the scale.
 - **Fitting is learning the graph.** Maximize the age-discounted likelihood of the routes agents actually took,
   `L(w) = Σ_γ λ^{age(γ)} log P_w(γ)`. It is concave in `w`, and its gradient per edge is
   `θ(e) · (expected use − observed use)`, both weighted by `λ^{age}`: an edge walked more than the model expects gets
   cheaper, and one walked less gets dearer. Reheating needs no separate rule. When a better detour appears, the old
   path's expected use exceeds its observed use, and its weight rises. Forgetting is `λ`.
 - **Temperature is per edge, and it cools with evidence.** `T(e)` is the posterior variance of `w(e)`, about
-  `1 / (θ(e)² · Σ_γ λ^{age} Var_P[n_e])`. A rarely walked edge is hot, since its weight is uncertain and moves easily.
+  `1 / (θ(e)² · Σ_γ λ^{age} Var_P[n_e])`, a conditional variance and so a lower bound on the true one (the inverse
+  Fisher matrix's diagonal), and it breaks down at the `w_rail` floor. A rarely walked edge is hot, since its weight is uncertain and moves easily.
   A much-confirmed one is cold. Annealing is this cooling. The store's road network is the edges whose `w` sits near
   `w_rail` with low `T`, across epochs.
 - Physarum-style flow reinforcement (Tero et al., 2010), which provably converges, is an alternative to compare against.
@@ -103,7 +105,8 @@ There are two different sheaves here, and revision 1 conflated them (the review'
 - **Seams, and a real `H^1`.** Summed use is mostly circulation: one store's cyclic workflow (plan, build, review,
   plan) fills a loop with no contradiction at all (the re-check's M2). So use each store's skew net flow
   `f_S(α, β) = n_S(α, β) − n_S(β, α)`, an alternating 1-cochain, and decompose the *disagreement*
-  `g = f_S/‖f_S‖ − f_{S'}/‖f_{S'}‖` on the place graph with its triangles filled. Hodge decomposition (HodgeRank, Jiang
+  `g = f_S/‖f_S‖ − f_{S'}/‖f_{S'}‖`, on the places both stores cover only (or gaps in coverage show up as seams), on
+  the place graph with its triangles filled. Hodge decomposition (HodgeRank, Jiang
   et al., 2011) splits `C^1 = im δ_0 ⊕ H ⊕ im δ_1ᵀ` into:
   - a gradient part, where the stores disagree on a consistent ordering;
   - a harmonic part `H ≅ H^1`, global loops where they disagree;
@@ -112,14 +115,15 @@ There are two different sheaves here, and revision 1 conflated them (the review'
   to. The existing module's `harmonic_fraction` measures the non-kernel part, not the harmonic one, and should be
   renamed in its own change.
 - **Annealing the category graphs together.** Push out the place quotients, not the memory-level categories (whose
-  objects differ): `C_1/π ← Free(R) → C_2/π`, where `R` is the rail sub-computad (rails' places and the rail edges
+  objects differ), with `C_i/π = Free(G_i/π, D_i/π)`: `C_1/π ← Free(R) → C_2/π`, where `R` is the rail sub-computad (rails' places and the rail edges
   themselves) and the legs are induced by computad inclusions. Free is a left adjoint on 2-computads, so the pushout is
   the free 2-category on the glued computad, and the tied rail weights live inside it because the edges are glued,
   not only the places. The joint dynamic is one likelihood across stores, `L_glue(w) = Σ_S L_S(w)`, with
   `w_S(e) = w(e)` on every rail, so use in either store moves the shared rail weight. Gluing is judged on the untied
   `P_S`, and only rails get tied. Each store keeps its own graph, and only the tied weights and transition
   probabilities on covered place edges cross, under permissions by place. The detour set `D_S` changes with each
-  epoch.
+  epoch. With more than two stores, each pair's `R` is the rails both carry, and the gluing is the colimit over all
+  pairs.
 
 ## 5. Statements to test, weakest first
 
@@ -140,7 +144,7 @@ The station has 2,629 messages in 7 rooms by 8 authors. Each is unique, so E1 wo
   places is primary, pre-registered; 32 and 128 are secondary.
 - **Sessions:** a maximal run of one author's messages in one room with gaps under 30 minutes. Steps go between
   consecutive messages, read as place steps. Split by time at the 80th percentile of session starts.
-- **Arms, each a ranking of 10 places:**
+- **Arms, each a ranking of 10 places** (on place-changing steps, the current place is dropped from every ranking):
   - (i) meaning: θ from the current message to each centroid;
   - (ii) use: the trained transition counts from the current place, backfilled by centroid θ;
   - (iv) chat: the place nearest the room's latest message by another author;
