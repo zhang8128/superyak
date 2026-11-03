@@ -1,23 +1,33 @@
 # Plan: a ship's own home, and lighthouse crossings between peers
 
-Tardis, 2026-11-03. **Revision 1**, for a fresh reviewer started on the Pi.
-- It implements the approved spec `docs/superpowers/specs/2026-11-03-ship-home-and-crossing-design.md`, **revision 4**
-  (d36fee92, this branch): stage 2 first, then stage 3. Stage 1 (own home on one machine) is Rio Grande's build and
-  isn't planned here. Section numbers below are the spec's.
+Tardis, 2026-11-03. **Revision 2.**
+- Revision 1 (785bdf46) got APPROVE WITH CHANGES from a fresh reviewer
+  ([plan review](../reviews/2026-11-03-ship-home-and-crossing-plan-review.md)). Its verdict says the changed parts need
+  a re-read, not a new round.
+- **Its two Must-fixes and nine Should-fixes are applied here as written,** each marked with its number (M1, M2,
+  S1 to S9). Where it offered two fixes, the one taken is named: S2, S3 and S8.
+- Its nits are numbered here in its order (nit 1 to nit 8), and its "What a builder would still invent" items B1 to
+  B8. Each is applied and marked.
+- It implements the approved spec `docs/superpowers/specs/2026-11-03-ship-home-and-crossing-design.md`, **revision 5**
+  (785bdf46, plus the R5 items this plan revision adds there) (nit 1): stage 2 first, then stage 3. Stage 1 (own home
+  on one machine) is Rio Grande's build and isn't planned here. Section numbers below are the spec's.
 - The interface it meets is Rio Grande's section 3.11 (memory-follows-ship 888a5a2d).
-- Where the spec leaves a choice open, the plan makes it, marks it **P1** to **P23**, and gives the reason. P19, who
+- Where the spec leaves a choice open, the plan makes it, marks it **P1** to **P24**, and gives the reason. P19, who
   asks a crossing before Rio Grande's store host exists, is **decided by Tardis**: today's in-process Engram server
   asks, behind one function the host will call later, under Rio Grande's two conditions (all hands, 4164449a).
-- Every concrete change the spec's three reviews name lands somewhere below; "Where each review change lands" lists
-  them by number.
-- Planning against the code found eleven places where the spec's words and the code differ. They are listed at the
-  end of "What the code looks like today", each with the decision that handles it.
+- Every concrete change the spec's three reviews and this plan's review name lands somewhere below; "Where each review
+  change lands" lists them by number.
+- Planning against the code found eleven places where the spec's words and the code differed. They are listed at the
+  end of "What the code looks like today", each with the decision that handles it, and each is an R5 mark in spec
+  revision 5.
 
 **This is safety code** under law section 2: it decides who may read what leaves a store (the publisher's checks, the
 crossing route, the receiver's records and its guard) and it changes how the permission ledger judges a requester
 (`remote-stores`). So it gets a test-first build, each test written and seen failing before its code; a fresh reviewer
 started on the Pi that took no part in writing it; and each partner's explicit yes before it merges. Nothing in
-"Deploy" runs on a merge alone.
+"Deploy" runs on a merge alone. **(S5)** That yes covers three decisions the spec's revision 5 now records as
+decisions, not corrections: P9 (`federation-listen`'s socket only on request), P10 (the publisher home's whole gate at
+`enforce`) and P19 (the in-process server asks until the host lands).
 
 ## Base and order (P1)
 
@@ -56,12 +66,14 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 - `transport.py`: `_dialable` (:55-63) refuses a card without an endpoint; `_pinned_socket` (:66-97) compares the pin
   before any byte; `pull_pinned` (:171-209) is the model for a capped, deadline-bound POST.
 - `federate.py:1-6` says "It listens on nothing". `Federate.run` (:73-84) loops passes until SIGTERM. The command
-  (`__main__.py:931-951`) takes `federation_lock`, then `keep_open`, then runs. `federation-listen` (:952-982)
-  refuses a non-loopback host and a non-push mode.
+  (`__main__.py:931-951`) takes `federation_lock` (an flock, `dispatch.py:34-45`), then `keep_open`, then runs.
+  `federation-listen` (:952-982) refuses a non-loopback host and a non-push mode, and takes no lock (S3).
+- `join_plan.plan` counts a contact as confirmed when any confirmation row exists (`join_plan.py:66-69`), which is
+  weaker than check 5 (nit 6).
 - `peer_store.py:28-45`, `PEER_SCHEMA`, has no `crossings` table. `test_restore.py:2536-2548` lists every coordination
   table, and `:2551-2566` fails on an unclassified one.
 - `tests/test_federate.py:112-122` fails on any `bind` or `listen` during a pass. `tests/test_listener.py:55-60`
-  expects exactly two routes.
+  lists other methods and paths that must answer 404 (nit 2).
 - The peer never imports Engram (no `engram` or `lighthouse_protocol` import in `superyak_peer/`), so it can't call
   `validate_frame`.
 
@@ -80,22 +92,33 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 - `handle_frame` (:810-850) accepts `recall` and `read` only (:813), reloads the policy per frame (:830) and serves
   nothing under a closed gate. `build_publishers` (:1111-1123) maps a name to `instances/<name>/`.
 - `lighthouse_policy.py:78-83`: a `*`-suffixed pattern matches any value with that prefix, so `urn:engram:*` and `*`
-  match every value.
+  match every value. `_pattern_score` serves allow and deny rules alike, and a deny wins only a specificity tie
+  (:146-152) (S4).
+- `server.py:1351-1355` opens `instances/<name>/graph.db` whenever it exists, so an instance directory can appear
+  without `fork_instance` (nit 4).
 - `lighthouse_protocol.py`: the local frames are `recall` (:213-238) and `read` (:264-284). `validate_frame`
   (:313-327) checks that fields are present, not that the key set is exact (`_required`, :205-206).
 - The agent grammar is `_NAME` (`permissions.py:104`, used at :138-139), with no colon. `_requester_ok` (:2062-2067)
   needs a registered agent placed at the use's place, else `UNKNOWN_REQUESTER` (:2420-2421). `agent_place_at`
   (:908-912) returns the agent's place. A root place dominates only itself (:593-600), so a `self` allow in a home
-  layer never reaches an agent at a root place (:960-974).
+  layer never reaches an agent at a root place (:960-974). That holds only while the place has no parent:
+  `add-parent` (:3928-3931) can give it one later, and `_parents` (:575-576) has no removal (M2).
+- How an allow's audience reaches an agent at a root place that acts for the home (S1): `commons` always (:962-963);
+  `self` fails (above); a group needs its owner's home to dominate the place (:984); a place entry must dominate both
+  the use's place and the agent's (:991). So only `commons` reaches `remote-stores`. Each consent layer passes only
+  on an allow (:2318), and the use's place and the holding place are consent layers (:1443-1449).
 - `permission_cli.py`: `agent add` and `agent place` (:443-452, parser :1413-1420) write `register-agent` and
   `put-agent`; `_perform` (:280-293) prints the change, asks the typed code and writes as the owner. `migrate`
-  registers receivers acting for and placed at the owner's home (:1142-1144).
+  registers receivers acting for and placed at the owner's home (:1142-1144), and finds publisher policies by globbing
+  every `instances/*/lighthouse-policy.json` (:969).
 - Instance creation is `cli.fork_instance` (`cli.py:15-45`), which takes any name. Sharing refuses an imprint source
   (`sharing.py:109-110`); `validate_audience` (:43-48) checks values, not map keys. `policy_gen.build_publisher_policy`
-  (:59-107) writes local receivers only.
+  (:59-107) writes local receivers only, has no caller outside tests, and `policy_gen.py` has no command (S6).
 
 **Engram, the receiver**
-- `neighbors.neighbor_arm` (:25-180): one shared deadline (:47); local publishers only (:79-80, names checked by
+- `neighbors.neighbor_arm` (:25-180): one shared deadline (:47); a `LighthouseClient` built whatever is configured
+  (:48), and `attempted` set only by a local publisher (:78, :87, :108-109) (B5); local publishers only (:79-80, names
+  checked by
   `valid_publishers`, which needs at least one: `lighthouse_receiver_config.py:26-29`); `k=20` per publisher (:91);
   reads with the prefix stripped (:125); a 32 KiB total content budget (:17, :147-155); a content-free receipt written
   before delivery (:160-176), whose failure suppresses everything (:177-178).
@@ -103,6 +126,8 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   receipt holds only the recall traces' ids (`neighbors.py:166`).
 - `load_settings` (`lighthouse_receiver_config.py:32-54`) refuses any extra key (:40) and needs `socket_path`.
   `lighthouse_validation.py:53-58` refuses an `engram:weight` key that isn't `urn:engram:`.
+- `attach_neighbors` needs the session's store to be its named instance's `graph.db` (`neighbors.py:191-197`), so a
+  session that fell back to the default store gets `RECEIVER_CONFIG_INVALID` (B7).
 - The receiver arm runs from `recall` (`server.py:3232-3242`), after the response is built, and from
   `context`'s `LighthouseSource` (`context_cli.py:89-92`, `context_lighthouse.py:126-129`), which re-reads by `turnId`
   later (`context_lighthouse.py:159`, `:171-174`). The wake and nudge hooks (`hooks/wake.py:145`,
@@ -111,11 +136,20 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   `extensions` carry any `prefix:`-named member.
 
 **Engram, the guard**
-- `_keep_decision` (`server.py:2081-2120`) is the only guard, called only from `remember` (:1907). It returns early
-  with the gate off (:2091-2092) and again when `permission-uses.db` is missing (:2104-2105).
+- `_keep_decision` (`server.py:2081-2120`) is the only guard. `remember` calls it (:1907), and so does `_keep_check`
+  (:2179-2181), which tests use (nit 2). It returns early with the gate off (:2091-2092) and again when
+  `permission-uses.db` is missing (:2104-2105).
 - `permission-uses.db` is hash-chained (`permission_uses.py:1-7`) with a checked digest form (:30-32, :202-206).
-- The other tools that store text call no guard: `add_anchor` (:3744-3765), `task_update` (:4113-4127),
-  `dream_capture` (:4151-4168), `jot` (:4306-4326, both pads) and `clipboard_pin` (:4524-4539).
+- Eleven other tools store text and call no guard:
+  - `add_anchor` (:3744-3765), `task_update` (:4113-4127), `dream_capture` (:4151-4168), `jot` (:4306-4326, both
+    pads) and `clipboard_pin` (:4524-4539);
+  - **(M1)** `challenge_instinct` stores `evidence` in an episode as "Evidence: …" (:3451-3461), after it has already
+    weakened the instinct (:3448); `retire_instinct` stores `reason` as "Reason: …" (:3503-3507), after it has retired
+    the instinct (:3500); `compress_commit` (:3645-3654) hands `summaries` to `Compressor.commit`, which stores each
+    `content` as a semantic (`compress.py:551`, :567); `task_focus` stores `name` and `content` (:4094-4105);
+    `dream_react` stores `reaction` (:4260-4265); `clipboard_remind` stores `text` (:4573-4576).
+  - The wake hook injects the active task context, the clipboard's pins and reminders, and residues
+    (`hooks/wake.py:349-358`, :370-384, :391-393). So these tools could break both of 2.5's rules.
 
 **Stage 3's ground**
 - `ship_keys` is `(id, ship_id, key_hash, created, last_used, revoked)` (`ships.py:32`): no scope and no expiry.
@@ -126,7 +160,11 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   (:250-255) guards the imprint routes (:857-866).
 - The dock client deletes its key on a 401 (`agent/superyak_agent/dock.py:67-71`). `peer_meta` has no `station_kind`.
 
-**Found while planning: where the spec's words and the code differ**
+**Found while planning: where the spec's words and the code differed**
+
+Spec revision 5 corrects each, marked R5 (nit 1): 1 in 2.5's guard; 2 in 2.2's ledger; 3 and 7 in 2.3's request
+table; 4, 9 and 11 in 2.4's receiver checks; 5 in 1.2's 401s; 6 in 2.1; 8 under 2.3's answer; 10 in 2.2's audience
+map.
 1. 2.5 places the remote guard "before the existing guard's gate-off early return (server.py:2104-2109)". The gate-off
    return is `server.py:2091-2092`; :2104-2105 is the missing-receipts-file return. The remote check goes before both
    (Task 12).
@@ -163,6 +201,9 @@ started on the Pi that took no part in writing it; and each partner's explicit y
     (S-b).
   - `[[hosted]]`: `ship` and `instance_id`, the stores this home hosts. It serves P19's interim. When the host lands,
     the peer reads the host's own configuration instead (2.4), and this table goes.
+  - **(B2) Both tables name a ship by username,** resolved per request to a `users.id` of kind `ship`. The local hop
+    sends `receiver_ship` as that participant id (P8), and it must equal the resolved id of a `[[hosted]]` row whose
+    `instance_id` equals `receiver_instance`.
   - A `daemon_socket` whose file name is `host.sock` is refused, so federation-listen can't be pointed at a store
     host (1.1's path).
   - **Why a file:** the spec says "in its peer config", and the peer has none. A file read per request takes effect
@@ -217,11 +258,17 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   - The peer refuses a store not listed as hosted for that ship (2.4, with 1.1's same-uid caveat), and a destination
     that isn't a paired push peer with an endpoint.
 - **P9 The socket: one module, opt-in on both commands, on its own supervised thread.**
-  - `crossing.CrossingSocket` binds `crossing.sock` (mode 0600, a stale socket unlinked, a symlink refused) in a
-    `ThreadingUnixStreamServer` run by a supervisor thread. A fault in it is logged, and it restarts after 1 s. It
-    shares only the `Federation` (identity and store reads), and never raises into `federate`.
-  - `federate --crossing-socket` starts it before `run()`, after the lock. `federation-listen --crossing-socket` does
-    the same.
+  - `crossing.CrossingSocket` binds `crossing.sock` (mode 0600, a symlink refused) in a `ThreadingUnixStreamServer`
+    run by a supervisor thread. A fault in it is logged, and it restarts after 1 s. It shares only the `Federation`
+    (identity and store reads), and never raises into `federate`.
+  - **(S3; of the review's two fixes, the first) One owner of the socket.** Before binding, it takes an flock on
+    `<data dir>/crossing.lock`, opened `O_NOFOLLOW` at 0600 and taken `LOCK_NB`, as `federation_lock` does
+    (`dispatch.py:34-45`). It holds the lock for the socket's life. A second process gets "another process already
+    serves crossing.sock" and exits 1. Only the lock's holder unlinks a stale `crossing.sock`, so no process can take
+    over a live one. `federation-listen` takes no `federation_lock` (`__main__.py:952-982`), so the socket needs its own.
+  - **(B3) Where it starts:** in `__main__.py`'s `federate` and `federation-listen` branches, not in `Federate`.
+    `federate --crossing-socket` starts it after `federation_lock` and `keep_open`, before `run()`;
+    `federation-listen --crossing-socket` starts it before `uvicorn.run`. Both stop it in `finally`.
   - **A narrowing, said plainly:** 2.1 says federation-listen "opens it". Here it opens it only when asked. In stage 2
     the Pi only answers, so its socket would have no use, and a listener nobody uses is surface.
 - **P10 The daemon serves a remote frame only under `enforce`.** Under `off`, `shadow` or `closed`, a frame whose
@@ -229,30 +276,56 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   - Two more daemon refusals for remote frames: a receiver that starts `urn:superyak:` but isn't a well-formed store
     ref, and a house that is an imprint (`store_identity.is_imprint`, `store_identity.py:152-153`), which answers
     `PUBLISHER_UNAVAILABLE`. A remote read with more than 5 ids is `MALFORMED_FRAME`.
+  - **(nit 4)** A local frame whose receiver is `remote-stores` is `MALFORMED_FRAME`, before any read. An instance
+    directory of that name can appear without `fork_instance` (`server.py:1351-1355`), and its frames would otherwise
+    be judged as the reserved agent.
   - **Why:** finding 2. The spec's fail-closed claim, and re-check 2's "kept" list (the place is a consent layer;
     an outside-home allow needs finite purposes, at most 366 days and named memories: `permissions.py:3385-3398`),
     hold only when the ledger decides. The imprint refusal is the first review's nit, put where the house is known.
   - **Cost:** stage 2 waits until the Pi's gate is `enforce`, which is Andy's act (Deploy step 3).
 - **P11 `remote-stores`: registered by one informed command, placed at a root place.**
   - `engram-permissions agent remote-stores` prints Rio Grande's words (77dec36f), "Every remote store this home's
-    publisher grants may cross, under these audiences", then each served house's remote refs and their audiences
-    read from its policy at that moment. Under one typed code it writes `register-place place:outside-home` with no
-    parents (only if absent), `register-agent agent:remote-stores` acting for the owner's home, and `put-agent` at
-    `place:outside-home`.
+    publisher grants may cross, under these audiences", then the remote refs and their audiences read at that moment.
+    Under one typed code it writes `register-place place:outside-home` with no parents (only if absent),
+    `register-agent agent:remote-stores` acting for the owner's home, and `put-agent` at `place:outside-home`.
+  - **(B6) Which houses it lists:** every `instances/*/lighthouse-policy.json`, found as `migrate` finds publisher
+    policies (`permission_cli.py:969`), each read with `load_owned_policy`. It lists every rule and audience entry that
+    names a remote ref, by house. A policy it can't read is named as unreadable, so the owner knows the list may be
+    short. It doesn't read the daemon's config, which can change without a ledger act.
   - It refuses when `place:outside-home` exists with a parent, and when the agent exists already.
   - `agent add remote-stores` is refused with "use `agent remote-stores`", so the only way in shows the grants.
   - The daemon judges a remote ref as `agent:remote-stores` at `agent_place_at`'s answer only if that is
     `place:outside-home`; any other place becomes `""`, which `_requester_ok` refuses.
+  - **(M2) And only while `place:outside-home` is a root.** If `_parents(state, "place:outside-home")`
+    (`permissions.py:575-576`) is non-empty in the frame's ledger state, the place becomes `""` too, so every crossing
+    is refused (`UNKNOWN_REQUESTER`). The state is read per frame (`lighthouse_daemon.py:876`), so this holds at use
+    time: a later `add-parent` (`permissions.py:3928-3931`) would make the home dominate the place, and every `self`
+    allow in the home would then reach every remote store (:971-974).
   - **Why it acts for the home:** `migrate` registers local receivers that way (`permission_cli.py:1142-1144`), so
     the home's `self` denies apply to it. A root place dominates only itself (`permissions.py:593-600`), so the
     home's `self` allows don't reach it (:960-974).
+  - **(S1) The records a crossing needs.** Only `commons` reaches `remote-stores` ("What the code looks like today"),
+    and both the home's layer and `place:outside-home`'s are consent layers that need their own allow. So stage 2
+    needs two allows, each:
+    - `layer`: `place:home/<owner>` for the first, `place:outside-home` for the second;
+    - selector: `audience: ["commons"]`, `requesters: ["agent:remote-stores"]`, `kinds: ["memory"]`, `memories`: the
+      shared memories' objects (`mem:<instance>/<layer>/<id>`, `lighthouse_daemon.py:384-388`), `actions:
+      ["recall", "inject_context"]` (the daemon decides a read item as `inject_context`, :618), and `purposes:
+      ["session-recall"]` (`recall`'s default, `server.py:2696`);
+    - `valid_from` now and `valid_until` at most 366 days later, as an outside-home allow in a home layer must be
+      (`permissions.py:3385-3398`).
+
+    Task 8's fixture ledger, Task 13's check and Deploy step 5 write exactly these.
 - **P12 Remote refs, in one place.** `sharing.py` gains `REMOTE_STORE_REF`
   (`urn:superyak:<64 hex>:store:<uuid>`), `REMOTE_SHIP_REF` (`urn:superyak:<64 hex>:ship:<participant id>`),
   `RESERVED_AGENT = "remote-stores"`, `is_remote(value)` and `receiver_ref(name_or_ref)`. The last returns a
   well-formed store ref as it is, `urn:engram:<name>` for a local `NAME`, and raises otherwise.
-  - `_pattern_score` never lets a `*` pattern match a value starting `urn:superyak:` (in every dimension; only the
-    publisher dimension carries one). So `*`, `urn:engram:*`, `urn:superyak:*` and `urn:superyak:<peer>:*` match no
-    remote ref, on either side.
+  - **(S4) Only an allow rule loses its wildcards on a remote ref.** `_rule_score` (`lighthouse_policy.py:95-111`)
+    passes the rule's effect down, and `_pattern_score` refuses a `*` match of a value starting `urn:superyak:` only
+    for an allow rule. So `*`, `urn:engram:*`, `urn:superyak:*` and `urn:superyak:<peer>:*` allow no remote ref, on
+    either side, and the same patterns in a deny still refuse one. A deny wins only a tie (:146-152), so disarming
+    denies too would let any allow through. With an exact allow (score 2) beside a `*` deny (score 1), the exact allow
+    wins, as today.
   - **Why `sharing.py`:** the daemon already imports it, and 2.2 names "sharing's validation" (finding 10).
 - **P13 The `turnId` binding.**
   - After a remote `recall`, the daemon keeps `turn_id → (receiver ref, publisher name, frozenset of the candidate ids
@@ -287,21 +360,39 @@ started on the Pi that took no part in writing it; and each partner's explicit y
     stripped. Sentences are split on the text before it is normalized (so newlines still split): after `.`, `!` or `?`
     followed by whitespace, or at a newline. Each sentence is then normalized, and its words are its
     whitespace-separated runs.
-  - **What's refused:** a text whose normalized digest, or the digest of any of its sentences (of any length), is
-    among the recorded digests of either part. The candidate side isn't limited to 12 words, so one short delivered
-    item copied as one sentence of a longer note is still caught.
+  - **(S8; of the review's two fixes, the first) Leading Markdown markers are stripped** before normalizing: from the
+    whole text and from each sentence, repeatedly, any leading `-`, `*`, `+` or `>`, or a number followed by `.` or `)`,
+    when followed by whitespace. So "- " plus a delivered sentence, or "> " plus a delivered item, still matches.
+    Spec 2.5 says so (R5).
+  - **What's refused:** a text whose normalized digest is among the recorded digests of either part, or one of whose
+    sentences of 12 words or more has a digest among them.
+    - **(nit 8) Both sides count sentences only at 12 words or more.** Revision 1 checked every candidate sentence,
+      which let a short delivered item bar that sentence from local notes for 90 days, a lever for the publisher. Now
+      a short item blocks only a whole-text copy of itself. Spec 2.5 lists the gap among what it doesn't catch (R5).
   - **Order:** in `neighbor_arm`, after the content budget and the final permission recheck, the record is written
     first and the receipt second. A failed record returns nothing, as a failed receipt does. A record left by a
     receipt that then failed guards text nobody received, which is harmless.
-  - **Keeping:** rows older than 90 days are deleted at each write.
-  - **Reading:** a missing file means nothing was ever delivered remotely, since a failed record delivers nothing. An
-    unreadable file refuses, in every gate mode.
+  - **(S7) Two writers, and busy isn't unreadable.**
+    - The file runs in WAL with a 2,000 ms busy timeout, so a guard's read never waits on a writer.
+    - A write that stays busy past the timeout fails, and the delivery is suppressed (`RECORD_BUSY` in `diagnostics`).
+    - A guard read that stays busy answers a distinct refusal with the cause "busy, try again", not the unreadable one.
+      An unreadable file (not SQLite, the wrong table, or `SQLITE_CORRUPT`) refuses with its cause, in every gate mode.
+    - P19's limit names both.
+  - **Keeping:** rows older than 90 days are deleted in the record's own transaction, at most once an hour per file
+    (the last prune's time is a row in a `meta` table), so concurrent writers don't each prune (S7).
+  - **Reading:** a missing file means nothing was ever delivered remotely, since a failed record delivers nothing.
 - **P17 A query too large for the route.** The asking peer measures the canonical signed request. Over 16 KiB, it
   answers `QUERY_TOO_LARGE` on the local hop and dials nothing. The listener's cap stays 16 KiB (finding 7).
+  - **(S5) This whole-request measure is the only size rule.** Revision 5's first wording added "at most 12 KiB as
+    UTF-8" for the query, but the other fields can reach about 5 KiB, so that never guaranteed a fit, and P4 never
+    checked it. Spec 2.3 now states P17's rule instead (R5).
 - **P18 Reconciliation is a command.** `python -m superyak_peer crossings --data-dir D` (trusted local, read-only)
   lists recent `crossings` rows. For each `[[published]]` sidecar, opened read-only, it lists as **unsent** every
   disclosure whose receiver is a remote ref and which has no `crossings` row. This is 2.3's "the peer's
   reconciliation reports it as unsent", and re-check 2's nit ("say it records an attempt").
+  - **(nit 6)** `crossings --contacts PEER_ID` lists that origin's contacts by name and participant id, each with
+    whether check 5 accepts it, by P5's helper. It prints no pairing code. `join_plan` counts any confirmation row
+    (`join_plan.py:66-69`), so Deploy step 2 uses this instead.
 - **P19 Who asks a crossing before Rio Grande's store host exists. Decided by Tardis, 2026-11-03: today's
   in-process Engram MCP server asks,** from `recall`'s existing seam (`server.py:3232-3242`), under Rio Grande's two
   conditions (all hands, 4164449a). 2.4 says only the receiving home's store host asks, and the host is a week or more
@@ -329,6 +420,9 @@ started on the Pi that took no part in writing it; and each partner's explicit y
       (`lighthouse_daemon.py:3-9`, :99-105).
     - With two sessions, SQLite serializes the two writers, and both read one `remote-deliveries.db` beside the store,
       so either session's guard refuses text delivered to the other.
+    - **(S7)** That file runs in WAL with a busy timeout, so one session's guard never waits on the other's write. A
+      record that stays busy suppresses its delivery, and a guard read that stays busy refuses with "busy, try again",
+      told apart from an unreadable file (P16). Pruning runs at most once an hour, not on every write.
   - **What it still costs:**
     - It departs from 2.4's "only the store host" for the interim. This plan's fresh reviewer judges that, and the
       spec's next revision records it.
@@ -336,6 +430,18 @@ started on the Pi that took no part in writing it; and each partner's explicit y
     - When the host lands, the thin client must forward `neighbors`, `degraded` and the guard (Rio Grande 3.4's client
       digest check), and the guard's placement is reviewed again.
   - Rollback: the receiver off.
+- **P24 (S6) A command writes a remote grant into a publisher policy.** Nothing writes a publisher policy in
+  production today: `build_publisher_policy` has no caller outside tests, and `policy_gen.py` has no command.
+  - `python -m policy_gen grant-remote --house NAME --ref REF --context CONTEXT --audience AUDIENCE [--audience …]
+    --purpose PURPOSE --until DATE` loads `instances/NAME/lighthouse-policy.json` with `load_owned_policy`. It adds one
+    allow rule whose `publishers` is exactly `[REF]` (actions `recall` and `read`, that context and purpose, audience
+    `self`, valid until `--until`) and the `engram:audiences` entry keyed by `REF`.
+  - `REF` must match `REMOTE_STORE_REF` (P12), and each audience `validate_audience` (`sharing.py:43-48`). An existing
+    rule or entry for `REF` is refused, not replaced.
+  - It re-digests with `artifact_digest`, validates the result by loading it with `load_owned_policy` from a file
+    beside the policy, keeps the old file as `lighthouse-policy.json.bak`, and renames the new one into place.
+  - `build_publisher_policy` keeps its `remote_receivers` argument for generated policies. Both paths go through one
+    `remote_grant(ref, audiences, …)` helper, so the validator sees every remote grant.
 
 **Stage 3's decisions**
 - **P20 Key expiry comes from the cluster station spec.** The migration adds `scope` only. `ship_for_key`'s reason
@@ -384,6 +490,18 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 - **Re-check 2:** 1 (Task 8's ledger test); 2 (P11, Risks); 3 (P16, Task 12); 4 (P9, Tasks 7, 14, finding 6); 5
   (Deploy 2); 6 (P22, Task 17); 7 (P13, Task 9). Nits: reasons (Task 15); a revoked outbox (P22); an unpartnered
   disclosure (P18); a cluster station (P23).
+- **Plan review (revision 1):**
+  - M1: the eleven-tool guard on raw arguments (server.py's changes, Task 12, its mutants; spec 2.5, R5).
+  - M2: an unplaced `remote-stores` once `place:outside-home` has a parent (P11, Task 8, its mutant; spec 2.2, R5).
+  - S1 the records (P11, Tasks 8, 13, Deploy 5); S2 the interim test moved to Task 12; S3 `crossing.lock` (P9,
+    Task 7); S4 wildcard denies kept (P12, Task 8; spec 2.2, R5); S5 the spec's status line and request size (spec
+    status, 2.3, R5); S6 `grant-remote` (P24, Task 10, Deploy 4); S7 WAL and busy (P16, P19, Task 12; spec 2.4, R5);
+    S8 Markdown markers stripped (P16, Task 12; spec 2.5, R5); S9 what `enforce` changes (Deploy 3).
+  - Nits: 1 the header and the R5 map; 2 the three citations ("What the code looks like today", Task 14); 3 `closed`
+    (Task 8); 4 a local `remote-stores` frame refused (P10, Task 8); 5 the args drop-in removed (Units, Task 14); 6
+    `crossings --contacts` (P18, Deploy 2); 7 the hold's limit (Risks); 8 the 12-word minimum (P16, spec 2.5, R5).
+  - B1 (S1, S6); B2 (P2); B3 (P9); B4 (Task 13); B5 (neighbors.py's changes, Task 11); B6 (P11); B7 (Deploy 6); B8
+    (Deploy 4).
 
 ## What changes
 
@@ -408,7 +526,7 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 
 **crossing.py (new)**
 - `load_settings(data_dir)` (P2); `Limiter` (P6); `daemon_call(socket_path, frame, deadline)`: one line out, one line
-  in, at most 1 MiB, parsed with `parse`; `CrossingSocket` (P9).
+  in, at most 1 MiB, parsed with `parse`; `CrossingSocket` (P9), with `crossing_lock(data_dir)` (S3).
 - `serve(federation, raw)`, the publisher side, in 2.3's order:
   1. `parse(raw, limit=16 KiB)` and `crossing_shape_ok`, else 400 "Invalid crossing request";
   2. destination, else 403 "Not addressed to this peer";
@@ -427,7 +545,7 @@ started on the Pi that took no part in writing it; and each partner's explicit y
   verified before the frame is returned.
 
 **federation.py**
-- `_contact_confirmed` (P5), used by `connections()` and by `crossing.serve`.
+- `_contact_confirmed` (P5), used by `connections()`, by `crossing.serve`, and by `crossings --contacts` (nit 6).
 - `serve_crossing(raw)` delegates to `crossing.serve`, so `create_listener`'s `getattr` finds it.
 
 **transport.py**
@@ -442,16 +560,18 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 **federate.py and \_\_main\_\_.py**
 - `federate.py:5-6` says: it never opens a network listener; with `--crossing-socket` it opens one Unix socket, on its
   own thread.
-- `federate --crossing-socket` and `federation-listen --crossing-socket` (P9). The socket starts after
-  `federation_lock` and `keep_open` and stops in `finally`.
-- `crossings --data-dir D` (P18).
+- `federate --crossing-socket` and `federation-listen --crossing-socket` (P9, B3): each branch takes
+  `crossing_lock`, starts the socket (in `federate`, after `federation_lock` and `keep_open`), and stops it in
+  `finally`. A held `crossing.lock` exits 1 with its message (S3).
+- `crossings --data-dir D [--contacts PEER_ID]` (P18, nit 6).
 - `federation-listen`'s help says events, pulls and crossings.
 
 **Units, Makefile, packaging**
 - `superyak-federate.service`: `Environment=FEDERATE_ARGS=` and `ExecStart=… federate --data-dir ${FEDERATION_DATA}
   $FEDERATE_ARGS` (unbraced, so an empty value adds no argument).
 - `make federation-units FEDERATE_ARGS=--crossing-socket` writes `30-federate-args.conf` for the federate unit only
-  (`Makefile:558-565`), and `federation-units-remove` removes it.
+  (`Makefile:558-565`). **(nit 5)** Run without `FEDERATE_ARGS`, it removes that file, so a rollback that reruns it
+  turns the flag off. `federation-units-remove` removes it too.
 - `pyproject.toml`: `superyak_peer/crossing.py` in the sdist (:92's list) and the wheel (:252's); the new tests beside
   :184. `tests/test_packaging.py:97` imports `superyak_peer.crossing`; :156's set lists the new tests.
 
@@ -459,24 +579,29 @@ started on the Pi that took no part in writing it; and each partner's explicit y
 
 **sharing.py**: P12's refs, `receiver_ref` and `RESERVED_AGENT`.
 
-**lighthouse_policy.py**: `_pattern_score` (:78-83) refuses a prefix match on a `urn:superyak:` value (P12).
+**lighthouse_policy.py**: `_rule_score` (:95-111) passes `allow = rule["effect"] == "allow"` through
+`_selector_score` (:86-92) to `_pattern_score` (:78-83), which refuses a prefix match on a `urn:superyak:` value only
+when `allow` is true (P12, S4).
 
 **lighthouse_daemon.py**
 - `_request` (:785-798) and both `_allowed_audiences` calls (:958, :988-992) use `receiver_ref(frame['receiver'])`.
 - `handle_frame` (:810-850), for remote frames: the malformed-ref refusal first; P10's gate refusal right after the
-  gate is read (:825), before the policy loads; the imprint refusal once the house is checked out (:836).
-- `_LedgerSide.__init__` (:483-496), for a remote ref: the agent is `agent:remote-stores`; the place is P11's;
-  `_load_receiver_policy` isn't called; `legacy` holds the publisher layer only (re-check 2, change 1).
+  gate is read (:825), before the policy loads; the imprint refusal once the house is checked out (:836). A local
+  frame whose receiver is `remote-stores` is `MALFORMED_FRAME` (nit 4).
+- `_LedgerSide.__init__` (:483-496), for a remote ref: the agent is `agent:remote-stores`; the place is P11's, and
+  `""` when `place:outside-home` has any parent in the frame's state (M2); `_load_receiver_policy` isn't called;
+  `legacy` holds the publisher layer only (re-check 2, change 1).
 - `_recall` (:900-937) records P13's binding for a remote ref after its disclosure. `_read` (:978-1035) checks it
   first.
 - `PublisherDaemon.__init__` gains the binding map and its lock.
 
-**permission_cli.py**: `agent remote-stores` and the `agent add` refusal (P11).
+**permission_cli.py**: `agent remote-stores`, listing houses as B6 says, and the `agent add` refusal (P11).
 
 **cli.py**: `fork_instance` (:15-45) refuses `remote-stores` before making the directory.
 
-**policy_gen.py**: `build_publisher_policy` takes `remote_receivers`, a list of `(ref, audiences)` checked by
-`REMOTE_STORE_REF`. Each gets an exact-ref rule and an `engram:audiences` entry keyed by the ref.
+**policy_gen.py**: `remote_grant(ref, audiences, …)`, checked by `REMOTE_STORE_REF` and `validate_audience`, makes
+one exact-ref rule and its `engram:audiences` entry. `build_publisher_policy` takes `remote_receivers` and uses it, and
+the new `grant-remote` command (`main()`, with `python -m policy_gen`) uses it on a live policy (P24, S6).
 
 **lighthouse_receiver_config.py**: `load_settings` (:32-54) and `valid_publishers` (:26-29) per P14; the returned dict
 gains `remote_publishers`, `crossing_socket` and `receiver_ship`.
@@ -491,6 +616,9 @@ gains `remote_publishers`, `crossing_socket` and `receiver_ship`.
 **neighbors.py**
 - `neighbor_arm` takes `remote_publishers=()`, `receiver_ship=None`, `receiver_instance=None` and `ask=None`. With
   remote publishers set and no `ask`, each shows in `diagnostics` as `NO_ASKER` and none is asked.
+- **(B5) With only remote publishers:** the `LighthouseClient` (:48) is built only when there are local publishers,
+  and `attempted` (:78, :87) is set by a remote publisher whose recall grant passed, as by a local one. So the
+  `:108-109` return stays right for both.
 - After the local loop (:79-107), each remote publisher whose `context` matches: the ref
   `urn:superyak:<peer_id>:ship:<ship>`; `authorize` as for a local one; `deadline_ms` from the shared deadline, and
   `TIMEOUT` without a call under 100; `ask(…)` with a `recall` frame of `k=20`; `validate_trace` with the ref.
@@ -503,17 +631,27 @@ gains `remote_publishers`, `crossing_socket` and `receiver_ship`.
 **context_lighthouse.py**: `search` (:126-129) drops `crossing_socket` from the settings and passes
 `remote_publishers=()` and no `ask` (P14).
 
-**remote_deliveries.py (new)**: `path_for`, `normalize`, `sentences`, `digests`, `record(path, items, *, now)`,
-`refused(path, texts, *, now)`.
+**remote_deliveries.py (new)**: `path_for`, `strip_markers` (S8), `normalize`, `sentences`, `digests`,
+`record(path, items, *, now)` and `refused(path, texts, *, now)`, opening the file in WAL with a 2,000 ms busy timeout
+and raising `RecordBusy` and `Unreadable` apart (S7).
 
 **server.py**
 - `_REMOTE_REFUSED = {"error": "this text was delivered from another peer's store and is never kept here",
   "layer": "rejected", "code": "REMOTE_DELIVERY"}` beside `_KEEP_REFUSED` (:2000).
-- `_remote_refusal(*texts)` returns that reply, a fail-closed reply with the cause when the file is unreadable, or
-  `None`.
-- It is the first statement of `_keep_decision` (before :2087, so before :2091-2092 and :2104-2105), and runs at the
-  top of `add_anchor` (`content`, `expected`), `task_update` (`content`), `dream_capture` (`reaction`), `jot` (`key`,
-  `value`) and `clipboard_pin` (`text`), after each one's `_init()`.
+- `_remote_refusal(*texts)` returns that reply; a refusal with the cause "busy, try again" when the file stays busy
+  (S7); a fail-closed refusal with the cause when the file is unreadable; or `None`.
+- It is the first statement of `_keep_decision` (before :2087, so before :2091-2092 and :2104-2105).
+- **(M1) It runs in eleven more tools, on their raw arguments, after each one's `_init()` and before the tool writes
+  anything:**
+  - `add_anchor` (`content`, `expected`), `task_update` (`content`), `dream_capture` (`reaction`), `jot` (`key`,
+    `value`) and `clipboard_pin` (`text`);
+  - `challenge_instinct` (`evidence`), before `_storage.challenge_instinct` (:3448), since the episode wraps it as
+    "Evidence: …" (:3455), which would defeat the sentence digests;
+  - `retire_instinct` (`reason`), before `_storage.retire_instinct` (:3500), for the same reason ("Reason: …", :3506);
+  - `compress_commit` (each summary's `content`), before `_compressor.commit` (:3654);
+  - `task_focus` (`name`, and `content` when given), before `set_task_context` (:4105);
+  - `dream_react` (`reaction`), before `record_reaction` (:4260);
+  - `clipboard_remind` (`text`), before `add_reminder` (:4576).
 - `recall`'s seam (:3232-3242) is unchanged. It calls `attach_neighbors`, which is today's caller of `ask_crossing`
   (P19), after the response is built.
 
@@ -545,7 +683,7 @@ gains `remote_publishers`, `crossing_socket` and `receiver_ship`.
 | Test | Change |
 |---|---|
 | `test_federate_never_listens` (test_federate.py:112-122) | becomes "no network bind; one Unix bind at `crossing.sock` only under `--crossing-socket`": `bind` is recorded, not refused; without the flag the list is empty |
-| `test_only_its_two_routes_are_served` (test_listener.py:55-60) | renamed for three routes; `GET /federation/crossing` and `POST /federation/crossing/x` join the 404 cases |
+| `test_only_its_two_routes_are_served` (test_listener.py:55-60, a list of other methods and paths that answer 404; nit 2) | renamed for three routes; `GET /federation/crossing` and `POST /federation/crossing/x` join the 404 cases |
 | `test_a_body_over_its_cap_is_refused` (test_listener.py:63-66) | gains `('/federation/crossing', 16 * 1024)` |
 | `COORDINATION_TABLES` (test_restore.py:2536-2548) | gains `crossings` |
 | test_packaging.py:97 and :156 | import `superyak_peer.crossing`; list the new tests |
@@ -618,23 +756,36 @@ policy, ledger or sidecar was opened" is "the daemon socket saw nothing":
   keeps running. SIGTERM ends both.
 - A request over the socket from a test client reaches `ask`.
 - `federation-listen --crossing-socket` binds it; without the flag it doesn't.
-- `crossings` lists a row, and lists a sidecar disclosure with no row as unsent (P18).
+- **(S3)** With one process holding `crossing.lock`, a second `federate --crossing-socket` or `federation-listen
+  --crossing-socket` on the same directory exits 1 with the lock's message, and the first one's socket still answers.
+  A stale `crossing.sock` with no lock holder is replaced.
+- `crossings` lists a row, and lists a sidecar disclosure with no row as unsent (P18). `crossings --contacts` shows a
+  held contact and one with a stale confirmation as refused, a current one as accepted, and prints no code (nit 6).
 
 **Task 8: the publisher in Engram** (`engram/tests/test_lighthouse_policy.py`, `engram/tests/test_daemon_remote.py`,
-with `FakeEmbeddings` from `test_lighthouse_daemon.py:25` and a fixture ledger):
-- **Selectors:** `*`, `urn:engram:*`, `urn:superyak:*` and `urn:superyak:<peer>:*` don't match a remote ref; the
-  exact rule does; local prefix matching is unchanged.
+with `FakeEmbeddings` from `test_lighthouse_daemon.py:25` and a fixture ledger holding P11's two allows, S1):
+- **Selectors:** `*`, `urn:engram:*`, `urn:superyak:*` and `urn:superyak:<peer>:*` allow no remote ref; the exact
+  rule does; local prefix matching is unchanged.
+- **(S4) Wildcard denies still refuse:** a `*` deny and a `urn:superyak:<peer>:*` deny each refuse a remote ref
+  when no exact allow names it; with an exact allow beside a `*` deny, the exact allow wins, as today.
 - **Refs:** malformed `urn:superyak:` receivers are refused, and `receiver_ref` maps local names as today.
 - **Ledger, under `enforce`:**
   - with `remote-stores` unregistered, nothing is delivered and the receipt's refusal is `UNKNOWN_REQUESTER`;
-  - registered at `place:outside-home`, an allowed memory is delivered and a memory the ledger keeps at home isn't;
+  - registered at `place:outside-home` with S1's two allows, an allowed memory is delivered and a memory the ledger
+    keeps at home isn't; with either allow missing, nothing is;
   - placed anywhere else, nothing is;
+  - **(M2)** with the home layer holding a `self` allow in place of S1's `commons` one (and S1's
+    `place:outside-home` allow kept): nothing is delivered, because `self` doesn't reach a root place; then, after
+    `add-parent place:outside-home place:home/<owner>`, still nothing, now `UNKNOWN_REQUESTER`. Without M2's check the
+    second case would deliver, since the home would then dominate the place;
   - **with no receiver file anywhere, a remote crossing is still delivered** (re-check 2, change 1).
 - **No local file:** an `instances/<instance_id>/lighthouse-receiver.toml` and an agent named like it contribute
   nothing; `_load_receiver_policy` (patched to raise) is never called.
 - **Audience:** with only `<A>:store:<X>` granted, `<A>:store:<Y>` and `<B>:store:<X>` get nothing.
-- **P10:** under `off` and `shadow` a remote frame is `PUBLISHER_UNAVAILABLE` with no disclosure row; an imprint house
-  refuses it; a remote read of 6 ids is `MALFORMED_FRAME`.
+- **P10:** under `off`, `shadow` and `closed` (nit 3) a remote frame is `PUBLISHER_UNAVAILABLE` with no disclosure
+  row; an imprint house refuses it; a remote read of 6 ids is `MALFORMED_FRAME`.
+- **(nit 4)** A local recall and a local read whose receiver is `remote-stores` are `MALFORMED_FRAME`, with an
+  `instances/remote-stores/` directory present.
 - **Records:** after `unshare`, the memory isn't delivered.
 - The existing daemon, permissions-daemon and audience suites pass unchanged.
 
@@ -649,11 +800,15 @@ with `FakeEmbeddings` from `test_lighthouse_daemon.py:25` and a fixture ledger):
 `engram/tests/test_policy_gen.py`):
 - `fork_instance('remote-stores')` exits 1 and creates nothing.
 - `agent add remote-stores` is refused.
-- `agent remote-stores` prints the words, then each served house's remote refs and audiences; with the code it writes
-  the place (with no parent), the agent (acting for the owner's home) and its place; run again, it is refused. A
-  `place:outside-home` that has a parent is refused.
+- `agent remote-stores` prints the words, then the remote refs and audiences of every instance's policy, by house,
+  and names an unreadable policy as unreadable (B6); with the code it writes the place (with no parent), the agent
+  (acting for the owner's home) and its place; run again, it is refused. A `place:outside-home` that has a parent is
+  refused.
 - `build_publisher_policy` with a remote receiver writes an exact-ref rule and its audience entry, and refuses a
   malformed ref.
+- **(S6) `python -m policy_gen grant-remote`** on a fixture house's policy adds exactly one rule and one audience
+  entry for the ref, and the result loads with `load_owned_policy` and its digest verifies. It refuses a malformed
+  ref, an invalid audience, and a ref already granted, each leaving the file unchanged. It keeps a `.bak`.
 
 **Task 11: the receiver** (`engram/tests/test_neighbors.py`, `engram/tests/test_lighthouse_client.py`,
 `engram/tests/test_context_lighthouse.py`):
@@ -671,40 +826,68 @@ with `FakeEmbeddings` from `test_lighthouse_daemon.py:25` and a fixture ledger):
   - a refusing remote publisher is in `diagnostics` and `degraded` by its ref;
   - another context's remote publisher is never asked;
   - the receipt's `engram:readDisclosures` holds the read's `disclosureId`.
+- **(B5)** With only remote publishers configured (no local ones, no `socket_path`), `neighbor_arm` builds no
+  `LighthouseClient`, asks the remote publisher, and delivers; with its recall grant denied, it returns `None` as an
+  all-denied local configuration does.
 - `LighthouseSource.search` with remote publishers configured never connects to `crossing.sock`.
 - **The asking seam (P19, condition 1):**
   - `neighbor_arm` given a recording `ask` and no socket delivers through it, so the caller can be swapped. With no
     `ask` it reports `NO_ASKER` and opens no socket.
   - `attach_neighbors` calls `ask` with the store's `instance_id` and `receiver_ship`, and with
     `storage.conn.in_transaction` false.
-- **The interim's limit (P19, condition 2):** two `Storage` connections on one store, as two sessions, each deliver
-  through their own `attach_neighbors` at once. Both receipts and both sets of `remote_deliveries` rows land, and
-  either session's guard refuses the text the other received.
+- Task 11 stubs the remote-deliveries record as a no-op. Its real record, and the interim's two-session test, are
+  Task 12's (S2).
 
 **Task 12: remote deliveries and the guard** (`engram/tests/test_remote_deliveries.py`,
 `engram/tests/test_permissions_keep.py`, `engram/tests/test_wake.py`, `engram/tests/test_nudge.py`):
 - Normalization (NFKC, case, whitespace) and the sentence split, on fixed strings.
-- `record` writes item and sentence digests; rows older than 90 days go at the next write.
+- **(S8)** "- ", "* ", "> ", "1. " and "2) " before a delivered sentence or item still match, nested markers too
+  ("> - "); a marker in mid-sentence is left alone.
+- `record` writes item and sentence digests; rows older than 90 days go at a write an hour after the last prune, and
+  not at an earlier one (S7).
 - `remember` of a delivered item, and of one of its sentences of 12 words or more, is refused with the gate `off`,
   `shadow` and `enforce`, and with no `permission-uses.db` (both early returns).
-- Parametrized over `jot` (project and global), `task_update`, `dream_capture`, `clipboard_pin` and `add_anchor`:
-  each refuses a delivered item, and writes nothing.
-- A paraphrase is kept (the stated limit). An unreadable file refuses; a missing one doesn't.
+- **(nit 8)** A delivered item of 6 words is refused when remembered whole, and is kept when it is one sentence of a
+  longer note (the stated gap).
+- **(M1) Parametrized over every guarded tool,** each refusing a delivered item, or one of its sentences of 12 words
+  or more, and writing nothing:
+  - `jot` (project and global), `task_update`, `dream_capture`, `clipboard_pin` and `add_anchor`;
+  - `challenge_instinct`: the instinct's strength is unchanged and no episode is added, although the stored episode
+    would read "Evidence: …";
+  - `retire_instinct`: the instinct is still active and no episode is added;
+  - `compress_commit`: a summary whose `content` is delivered text adds no semantic and marks no episode compressed;
+  - `task_focus`: no task context is set, by `name` or by `content`;
+  - `dream_react`: no reaction is recorded and no residue stored;
+  - `clipboard_remind`: no reminder is added.
+- A paraphrase is kept (the stated limit).
+- **(S7)** An unreadable file (not SQLite, or the wrong table) refuses with its cause; a missing one doesn't. A file
+  held under an exclusive lock past the busy timeout makes the guard refuse with "busy, try again", and makes a record
+  fail with `RECORD_BUSY`, which suppresses the delivery. A WAL writer in progress doesn't block a guard's read.
 - A failed record (patched) suppresses the delivery in `neighbor_arm`.
-- After a recall that delivered remote text, `wake()` and `nudge()` output none of it (spec section 4, "Inject").
+- **(S2) The interim's limit (P19, condition 2):** two `Storage` connections on one store, as two sessions, each
+  deliver through their own `attach_neighbors` at once. Both receipts and both sets of `remote_deliveries` rows land,
+  and either session's guard refuses the text the other received.
+- After a recall that delivered remote text, `wake()` and `nudge()` output none of it (spec section 4, "Inject"). And
+  since M1's tools refuse it, no later wake shows it as a task context, a pin, a reminder or a residue
+  (`hooks/wake.py:349-358`, :370-384, :391-393).
 
 **Task 13: end to end** (`peer/scripts/crossing_check.py`, run in "Checks before review"):
+- **(B4) Two environments.** The script runs in the peer's venv, as `two_peer_check.py` does. It starts Engram's two
+  halves as subprocesses with `uv run --locked --project engram python -I engram/scripts/crossing_check_engram.py
+  daemon|ask …`. That helper holds a fixed-vector fake embedder of its own, since `FakeEmbeddings` lives in a test
+  module. The two talk only over the daemon socket and `crossing.sock`, as in production.
 - Two throwaway peers on loopback: A, a push peer running `federation-listen` over real HTTPS, and M, a pull peer
   running `federate --crossing-socket`. They pair in process, as the test fixtures do (`test_listener.py:21-26`).
-- A's Engram home runs the daemon with the fake embedder, under `enforce`, with `remote-stores` registered. M's home
-  runs `neighbor_arm` against M's `crossing.sock`.
+- A's Engram home runs the daemon under `enforce`, with `remote-stores` registered and P11's two allows (S1), and its
+  policy written by `grant-remote` (S6). M's home runs `attach_neighbors` against M's `crossing.sock`.
 - A recall on M delivers from A's house, and the read's `disclosureId` is the same in M's receipt, M's
   `remote_deliveries`, A's sidecar and A's `crossings` (spec section 4, "Records").
 - After `unshare` on A, nothing is delivered. After unpairing M on A, check 3 refuses.
 
 **Task 14: docs, units and packaging**: the docs, unit, Makefile and packaging lines above.
-`tests/test_station_units.py` checks that the federate unit carries `$FEDERATE_ARGS`, and that `federation-units`
-writes and removes `30-federate-args.conf`.
+`peer/tests/test_station_units.py` (nit 2) checks that the federate unit carries `$FEDERATE_ARGS`, that
+`federation-units FEDERATE_ARGS=--crossing-socket` writes `30-federate-args.conf`, and that `federation-units` without
+it, and `federation-units-remove`, remove it (nit 5).
 
 ### Stage 3 (after the host, the cluster spec and a serving home)
 
@@ -748,19 +931,29 @@ the Funnel exception reads it.
   - crossing nonces kept out of `pull_nonces`;
   - the frame's `receiver` passed through unchanged; its `publisher` passed through unchanged;
   - the ref built with an unverified origin field;
-  - a `*` pattern matching a `urn:superyak:` value;
+  - a `*` pattern allowing a `urn:superyak:` value;
+  - **(S4)** the wildcard refusal applied to deny rules too, so a `*` deny no longer refuses a remote ref;
   - remote refs judged as `agent:<receiver>`;
   - the receiver legacy layer kept for remote refs;
-  - a remote frame served under `shadow`;
+  - **(M2)** the parent check on `place:outside-home` removed;
+  - a remote frame served under `shadow`; one served under `closed` (nit 3);
+  - **(nit 4)** a local frame with receiver `remote-stores` served;
   - an imprint house served to a remote frame;
   - the binding window at 300 s; the binding applied to local reads; the binding not checked;
   - an answer sent when the `crossings` insert fails; an answer over 128 KiB sent;
   - the asking side skipping the answer's signature, or its `request_digest`;
   - the hosted check removed from the local hop;
   - the remote guard placed after the gate-off return;
-  - the guard missing from `jot`'s global scope (one per tool, by the parametrized test);
+  - **(M1)** the guard missing from each guarded tool in turn, one mutant per tool, each caught by its own case of the
+    parametrized test: `jot` (project and global), `task_update`, `task_focus`, `dream_capture`, `dream_react`,
+    `clipboard_pin`, `clipboard_remind`, `add_anchor`, `challenge_instinct`, `retire_instinct` and `compress_commit`;
+  - **(M1)** `challenge_instinct`'s guard run on the stored "Evidence: …" text instead of the raw `evidence`, and
+    `retire_instinct`'s on "Reason: …"; and `challenge_instinct`'s guard moved after `_storage.challenge_instinct`;
   - a failed remote record that still delivers;
+  - **(S7)** a busy `remote-deliveries.db` read reported as unreadable; the prune run on every write;
+  - **(S8)** the Markdown marker strip removed;
   - a socket fault that ends `federate`; the socket opened without the flag;
+  - **(S3)** `crossing.lock` not taken, so a second process takes over the live socket;
   - `LighthouseSource` asking remote publishers;
   - `neighbor_arm` opening a `CrossingClient` itself instead of calling `ask` (P19, condition 1);
   - the read's `disclosureId` left out of the receipt.
@@ -777,25 +970,39 @@ closed: P10 refuses remote frames outside `enforce`, and `_requester_ok` refuses
 1. **The merge.** Rio Grande merges under law section 2, after the fresh Pi reviewer's verdict and each partner's yes.
    It restarts `superyak-federation-listen` and the lighthouse daemon on the Pi, checks them, and reverts and restarts
    if a check fails. Nothing crosses yet.
-2. **The contact.** Rio Grande runs `make join-machine-plan` on the Pi, read-only, to confirm the tardis ship is a
-   current, confirmed contact (check 5). If it isn't, it's paired as CLAUDE.md says: Andy reads the code of
-   `card --username tardis --pull` on Tardis's terminal himself and types it into the Pi's pair box. No ship sees,
-   relays or types it.
+2. **The contact.** Rio Grande runs `python -m superyak_peer crossings --data-dir <the Pi's> --contacts <Tardis
+   peer_id>` on the Pi, read-only, to confirm check 5 accepts the tardis ship by P5's rule; it prints no code (nit 6).
+   `make join-machine-plan` isn't enough, since it counts any confirmation row (`join_plan.py:66-69`). If check 5
+   refuses, the ship is paired as CLAUDE.md says: Andy reads the code of `card --username tardis --pull` on Tardis's
+   terminal himself and types it into the Pi's pair box. No ship sees, relays or types it.
 3. **The gate.** Rio Grande reads the Pi's effective gate for the published house, read-only. If it isn't `enforce`
-   (P10), moving it is Andy's act at his own terminal (`engram-permissions gate enforce`, `permission_cli.py:1498`),
-   after he weighs what `enforce` changes for the Pi's local frames.
+   (P10), moving it is Andy's act at his own terminal (`engram-permissions gate enforce`, `permission_cli.py:1498`).
+   **(S9) Before he does, Rio Grande lists what `enforce` changes on the Pi, beyond its local frames:**
+   - the gate is the home's (`server.py:2200-2203`), so every Pi session's `remember` guard starts deciding `imprint`
+     for delivered content, and refusing genome keeps of it (`server.py:2081-2120`);
+   - `enforce` needs a ledger: with none, the effective gate is `off`, or `closed` when a house carries a ledger id,
+     never `enforce` (`permission_ledger.py:2139-2151`);
+   - every served house needs migration 029, or `enforce` serves it nothing (`lighthouse_daemon.py:375-381`,
+     :859-863). Rio Grande checks each house read-only first.
 4. **The publisher's settings.** After Andy's yes in the room, Rio Grande writes on the Pi:
-   - the publisher policy's rule for Tardis's exact store ref (`urn:superyak:<Tardis peer_id>:store:<Tardis
-     instance_id>`), for `recall` and `read`, in one context, with the work lane's audience in `engram:audiences`;
+   - **(S6)** with `python -m policy_gen grant-remote` (P24), the house's rule for Tardis's exact store ref
+     (`urn:superyak:<Tardis peer_id>:store:<Tardis instance_id>`), for `recall` and `read`, in one context, with the
+     work lane's audience in `engram:audiences`;
    - `crossings.toml`'s `[[published]]` entry for the publishing ship, its daemon publisher, socket and sidecar.
+     **(B8)** The publishing ship is a `ship` user on the Pi, as P2 requires: Rio Grande names it (rio-grande is
+     expected) and the daemon publisher that serves the house, read from the Pi's daemon config, before Andy's yes.
 
    Tardis posts its `peer_id` and its store's `instance_id`, which aren't secrets. Rio Grande posts the publishing
    ship's participant id.
 5. **The ledger.** On the Pi, Andy runs `engram-permissions agent remote-stores`, reads the grant it lists (step 4's),
-   and types its code. Then he writes the allows `agent:remote-stores` needs at `place:outside-home`, including the
-   outside-home allow in his home layer (finite purposes, at most 366 days, named memories). `engram-permissions
-   place show` prints the result. Ships never sign ledger records.
+   and types its code. **(S1)** Then he writes P11's two allows, each with `audience: ["commons"]`, `requesters:
+   ["agent:remote-stores"]`, the shared memories by name, `actions: ["recall", "inject_context"]`, `purposes:
+   ["session-recall"]` and at most 366 days: one with `--layer place:home/andy`, one with `--layer
+   place:outside-home`. `engram-permissions place show` prints the result. Ships never sign ledger records.
 6. **The receiver** (Tardis, on its own machine, with Andy's yes):
+   - **(B7)** first, a check that Tardis's sessions run on the named instance `tardis`, whose `graph.db` exists, so
+     `attach_neighbors`'s store check passes (`neighbors.py:191-197`) and `server.py:1352-1355` doesn't fall back to
+     the default store;
    - its receiver settings with one `[[remote_publishers]]` (the Pi's `peer_id`, the publishing ship's participant
      id, the context), `crossing_socket` and `receiver_ship`;
    - a receiver policy granting `recall`, `read` and `inject_context` to `urn:superyak:<Pi peer_id>:ship:<id>` in that
@@ -808,8 +1015,8 @@ closed: P10 refuses remote frames outside `enforce`, and `_requester_ok` refuses
    and runs `crossings` to show nothing unsent. Tardis posts the four in the room, then runs `lighthouse_sheaf` on a
    few shared topics. The post says plainly that the link is one-way: the Pi learns nothing from Tardis's store.
 8. **Rollback.**
-   - The receiver off: Tardis sets `enabled = false` in its receiver settings, or drops `FEDERATE_ARGS` and restarts
-     `federate`.
+   - The receiver off: Tardis sets `enabled = false` in its receiver settings, or reruns `make federation-units`
+     without `FEDERATE_ARGS`, which removes the drop-in (nit 5), and restarts `federate`.
    - Or Andy unpairs Tardis's peer on the Pi (an admin act); check 3 and check 5 refuse from the next request.
    - Code: Rio Grande reverts the merge and restarts. The `crossings` table stays, unused, and is copied by restores
      as coordination.
@@ -823,17 +1030,23 @@ Stage 3 deploys under its own plan revision, once its three dependencies exist.
   sees what lives in the policy file and the audience map, which the publisher's ship can edit and which are digested,
   not signed. The `crossings` table and the sidecar still name the store. The owner's cut-off for one store is a hold
   on its ship's contact, or an unpair, which check 5 enforces before any Engram read.
+- **(nit 7) A hold on one ship trusts the origin peer.** The publisher can't bind an `instance_id` to a ship, so a
+  paired origin could name another of its contacts as `receiver_ship` and keep crossing for a held one's store. A
+  hold cuts off an honest origin's ship; an unpair of the whole origin peer is the real cut-off.
 - **P10 may hold stage 2** until Andy moves the Pi's gate to `enforce`.
 - **Same uid.** Any process of the Pi's user can talk to the daemon's socket and claim a remote ref, and any process
   of Tardis's user can talk to `crossing.sock` and claim a hosted store. That's 1.1's caveat; real isolation needs one
   uid per ship, which the spec doesn't require.
 - **Whole answers are refused** over 128 KiB or 32 KiB of text (P7), so a read of several long memories delivers
   nothing from that publisher. The receiver reads at most `k` (1 to 5) items, and the refusal shows in `degraded`.
-- **The guard stops copies, not paraphrases,** and nothing after 90 days (2.5, said plainly).
+- **The guard stops copies, not paraphrases,** nothing after 90 days, and not a delivered item under 12 words copied
+  inside a longer text (2.5, said plainly; nit 8). Leading Markdown markers no longer hide a copy (S8).
 - **P19's interim limit.** Until the host lands, two sessions of one ship asking at once each write receipts and
   `remote-deliveries.db` rows through their own server, as every tool's writes do today. It's safe for P19's stated
   reasons (a crossing writes no memories and no trails, and the publisher writes nothing), and it ends with the host.
-- **The TypeScript kit** still lets a prefix match a `urn:superyak:` value. The Python publisher and receiver decide
+  **(S7)** The file runs in WAL with a busy timeout. A record that stays busy suppresses its delivery, and a guard read
+  that stays busy refuses with "busy, try again", so a busy file costs a retry, never a silent pass.
+- **The TypeScript kit** still lets a prefix allow match a `urn:superyak:` value. The Python publisher and receiver decide
   crossings, and no vendored fixture uses that form (`test_vendored_fixtures_match_typescript_decisions` stays green).
 - **`crossings` rows aren't pruned.** One origin at 60 a minute is at most 86,400 rows a day. That's revisited when a
   second origin asks.

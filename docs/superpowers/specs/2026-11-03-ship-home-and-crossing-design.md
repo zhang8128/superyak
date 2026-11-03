@@ -3,12 +3,17 @@
 **Status:** revision 5, by Tardis. **Approved** at revision 4 (d36fee92): the same fresh reviewer gave APPROVE WITH
 CHANGES on revision 3 ([re-check 2](../reviews/2026-11-03-ship-home-and-crossing-recheck2.md)), and its changes were
 folded in.
-- **Revision 5 changes no decision.** It corrects eleven statements that writing the plan
-  (../plans/2026-11-03-ship-home-and-crossing.md) found false against the code, each marked **R5**.
-- It also records the plan's P19: until Rio Grande's store host exists, today's in-process Engram server asks
-  (2.4, R5).
-- The plan's fresh reviewer checks these with the plan. This is the station half of "memory follows the ship". Rio Grande's Engram half is
-approved (branch memory-follows-ship), and its section 3.11 is the interface this spec meets.
+- **Revision 5 corrects eleven statements** that writing the plan (../plans/2026-11-03-ship-home-and-crossing.md)
+  found false against the code, each marked **R5**.
+- **It also makes three decisions, so each partner's yes must cover them** (the plan review's S5):
+  - **the plan's P9:** `federation-listen` opens `crossing.sock` only under `--crossing-socket`, which narrows 2.1;
+  - **the plan's P10:** the daemon serves a remote frame only under `enforce`, so stage 2 needs the publisher home's
+    whole gate at `enforce`, which also changes the remember guard for every session of that home (2.2);
+  - **the plan's P19:** until Rio Grande's store host exists, today's in-process Engram server asks (2.4).
+- The plan review's corrections are R5 items too: 2.2's wildcard rule, 2.2's root place, 2.3's request size, and 2.5's
+  normalization, tool list and limits.
+- The plan's fresh reviewer checks these with the plan. This is the station half of "memory follows the ship". Rio
+  Grande's Engram half is approved (branch memory-follows-ship), and its section 3.11 is the interface this spec meets.
 
 **History:**
 - **Revision 1** (d0cd0ec2) got REVISE: five Majors and nine should-fix items
@@ -159,8 +164,11 @@ ship, which this spec doesn't require.
 **The publisher's three checks,** each on its own terms:
 1. **Policy** (`lighthouse-policy.json`):
    - a rule must name the exact ref;
-   - selector matching never lets a wildcard or prefix match a `urn:superyak:` ref. That's a code change at
+   - selector matching never lets a wildcard or prefix **allow** match a `urn:superyak:` ref. That's a code change at
      lighthouse_policy.py:78-83 and the rule selector at lighthouse_daemon.py:785-798.
+   - **R5 (the plan review's S4):** wildcard and prefix **deny** rules still match a remote ref, so a `*` deny keeps
+     refusing it. A deny wins only a tie (lighthouse_policy.py:146-152), so disarming denies too would let any allow
+     through.
 2. **Audience map** (`engram:audiences`): it accepts the remote form as a key, read in `_allowed_audiences`
    (lighthouse_daemon.py:208-236; also :958 and :988-992). Sharing validates no audience-map keys today, so the remote
    form's validator is new code in sharing.py (R5, the plan's P12).
@@ -173,6 +181,9 @@ ship, which this spec doesn't require.
      the one act is an informed one.
    - Every crossing is judged in the ledger as `agent:remote-stores` at `place:outside-home`. So every ledger rule that
      keeps a memory inside the home holds for every crossing.
+   - **R5 (the plan review's M2):** `place:outside-home` is a root place. A root dominates only itself
+     (permissions.py:593-600), which is what keeps the home's `self` allows from reaching `remote-stores`
+     (:971-974). If it ever has a parent, the daemon treats `remote-stores` as unplaced, and every crossing is refused.
    - Until the owner registers it, every crossing is refused, so a home fails closed. **R5:** the ledger refuses an
      unregistered requester only under `enforce`. Under `off` the daemon builds no ledger side
      (lighthouse_daemon.py:856-857), and under `shadow` the legacy path delivers (:640-641, :959). So **the daemon
@@ -214,7 +225,7 @@ owner trust and `retired_peers` land, their holds apply through the same check.
 | `receiver_instance` | the receiving store's `instance_id`, which must match the instance id pattern |
 | `receiver_ship` | the receiving ship's participant id on the origin |
 | `publisher_ship` | the asked ship's participant id on this peer |
-| `frame` | the local crossing's own `recall` frame (R5: the kind is `recall`, not `query`) (`purpose`, `context`, query text at most 4,096 characters **and at most 12 KiB as UTF-8**, so the request fits 16 KiB, R5; `k` at most 20) or `read` frame (`purpose`, `context`, `turnId`, at most 5 ids), validated by lighthouse_protocol. The asking side refuses an oversize request locally, before any dial (the plan's P17). The destination **overwrites** its `receiver` with the 2.2 ref, and its `publisher` with the daemon name that `publisher_ship` maps to (below) |
+| `frame` | the local crossing's own `recall` frame (R5: the kind is `recall`, not `query`) (`purpose`, `context`, query text at most 4,096 characters; `k` at most 20) or `read` frame (`purpose`, `context`, `turnId`, at most 5 ids), validated by lighthouse_protocol. **R5, the request's size (the plan review's S5):** 4,096 characters can be 16 KiB of UTF-8 alone, and the other fields can reach about 5 KiB, so no query cap makes the request fit. The rule is the whole request's: the asking side measures the canonical signed request and refuses it over 16 KiB locally, before any dial (the plan's P17). The destination **overwrites** its `receiver` with the 2.2 ref, and its `publisher` with the daemon name that `publisher_ship` maps to (below) |
 | `deadline_ms` | an `int` from 100 to 10,000: the time remaining in the receiver's shared deadline |
 | `nonce` | 32 lowercase hex characters |
 | `at` | an `int` Unix time |
@@ -283,7 +294,9 @@ It's at most 128 KiB, with delivered text at most 32 KiB.
   - **The interim's limit, named:** two sessions of one ship asking at once each write receipts and
     `remote-deliveries.db` rows through their own server. That's today's receiver behaviour: a receipt is one insert
     that the server commits by itself (storage.py:1802-1815). It ends with the host. Both sessions read the same
-    `remote-deliveries.db`, so each one's guard refuses text the other received.
+    `remote-deliveries.db`, so each one's guard refuses text the other received. **R5 (the plan review's S7):** that
+    file runs in WAL with a busy timeout, so a guard's read never waits on the other session's write, and a guard
+    tells a busy file (try again) from an unreadable one (refused).
 - **The local hop** goes over `<peer data dir>/crossing.sock`, mode 0600.
   - One host serves many ships, so the request names its `receiver_instance` and `receiver_ship`. The peer checks
     both against the home's own host configuration, so it's a store this home hosts, for that ship. A store not
@@ -315,18 +328,28 @@ sides, and stage 2 grants it. Two things are forbidden across peers, and each is
      `permission-uses.db`, which is a hash-chained receipts file with schema checks.
      - Each row holds the `disclosureId`, the digest of each delivered item's normalized text, and the digest of each
        of its sentences of 12 words or more.
-     - **Normalized** means Unicode NFKC, casefolded, with whitespace collapsed to single spaces.
+     - **Normalized** means Unicode NFKC, casefolded, with whitespace collapsed to single spaces. **R5 (the plan
+       review's S8):** leading Markdown markers (`- `, `* `, `+ `, `> `, `1. `, `1) `) are stripped from the text and
+       from each sentence first, so a copy pasted as a list item or a quote still matches.
      - **Sentences** split after `.`, `!` or `?` when followed by whitespace, or at a newline.
      - Rows are kept 90 days. A failed record suppresses the delivery, as a failed receipt does.
    - **The guard** refuses text whose digest, or any of whose sentence digests, matches a recorded remote delivery.
+     **R5:** a candidate's sentences count only at 12 words or more, as recorded ones do, so a short delivered item
+     blocks only a whole-text copy of itself, and a publisher can't bar a short phrase from local notes for 90 days.
      - It runs in **every** gate mode, **before** the existing guard's gate-off return (server.py:2091-2092) and its
        return for a missing `permission-uses.db` (:2104-2105). R5: revision 4 cited only :2104-2109.
-     - It covers every tool that stores text at the home: `remember`, `jot` (both scopes), `task_update`,
-       `dream_capture`, `clipboard_pin` and `add_anchor`.
+     - It covers every tool that stores text at the home, and checks each one's raw arguments before the tool writes
+       anything: `remember`, `jot` (both scopes), `task_update`, `task_focus`, `dream_capture`, `dream_react`,
+       `clipboard_pin`, `clipboard_remind`, `add_anchor`, `challenge_instinct`, `retire_instinct` and
+       `compress_commit`. **R5 (the plan review's M1):** revision 4 listed six. The other six store text too
+       (server.py:3451-3461, 3503-3507, 4094-4105, 4260-4265, 4573-4576; compress.py:551, 567), and the wake hook
+       injects task contexts, reminders and residues (hooks/wake.py:349-358, 370-384, 391-393). Raw arguments matter
+       because `challenge_instinct` and `retire_instinct` prefix their text ("Evidence: ", "Reason: ") before storing it.
    - **What it doesn't catch, said plainly:**
      - a paraphrase, since a model that restates remote text in its own words is making its own memory, and the
        receipt records that it saw the source;
-     - a copy made more than 90 days after delivery.
+     - a copy made more than 90 days after delivery;
+     - **R5:** a delivered item under 12 words copied inside a longer text.
 
 ## 3. Stages
 
