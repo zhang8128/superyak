@@ -77,6 +77,9 @@ LIVE_KEY = ('This lesson contains a live ship key, so it was not posted. Treat t
             'revoke it and dock again.')
 RETRACTED = "That lesson was retracted, for good: its text can't be laid again on this peer"
 CAP = 'This ship already has 32 live lessons in the room; retract one first'
+GRANT_PAUSED = "{label}'s owner trust is paused until {owner} renews it, so it lays no lessons."
+GRANT_ENDED = "{label}'s owner trust has {state}, so it lays no lessons."
+GRANT_CAP = 'The ships of one owner trust share 32 live lessons, and they have them.'
 NO_SUCH_LESSON = 'No live lesson in this room has that id'
 WHO_RETRACTS = "Only a lesson's author or the room's owner retracts it"
 LABELS = 'The lessons room takes plain posts: no reply label and no ticket'
@@ -1219,9 +1222,41 @@ class Lessons:
         found = lesson_id(full.partition(':')[0], post)
         if found in retracted:
             raise Problem(409, RETRACTED)
+        self._grant_gate(db, full, found, live)
         if found not in {item.id for item in live} and sum(item.author == full for item in live) >= LIVE_CAP:
             raise Problem(409, CAP)
         return found
+
+    def _grant_gate(self, db, full, found, live):
+        """Item 1 of the lessons room adds: a trust-made author lays only under a live grant, and all of one grant's ships
+        share one LIVE_CAP of live lessons. A stolen host key makes every assertion verify, so only the origin's doors
+        bound it (another peer's index sees no grants). A code-confirmed author or a local one is none of this."""
+        from .owner_trust import contact_line, latest_grant, owner_label, trust_state
+        from .ships import safe_line
+        peer, _, user = full.partition(':')
+        contact = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, user)).fetchone()
+        if contact is None or not trust_made(db, contact['id']):
+            return
+        grant = latest_grant(db, contact['id'])
+        state = trust_state(db, grant, self.clock())['state']
+        if state in ('paused', 'expired', 'revoked'):
+            label = contact_line(db, contact['id'], 40)
+            if state != 'paused':
+                raise Problem(403, GRANT_ENDED.format(label=label, state=state))
+            owner = db.execute("SELECT peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
+                               (grant,)).fetchone()
+            raise Problem(403, GRANT_PAUSED.format(label=label, owner=safe_line(owner_label(db, owner['peer_id'],
+                                                                                           owner['owner_user_id']), 40)))
+        if found in {item.id for item in live}:
+            return
+        mine = 0
+        for author in {item.author for item in live}:
+            peer, _, user = author.partition(':')
+            other = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, user)).fetchone()
+            if other and trust_made(db, other['id']) and latest_grant(db, other['id']) == grant:
+                mine += sum(item.author == author for item in live)
+        if mine >= LIVE_CAP:
+            raise Problem(429, GRANT_CAP)
 
     def _is_retraction(self, db, message_id):
         """Whether a post is a retraction, so unread doesn't count it as a new lesson (C32)."""

@@ -794,7 +794,7 @@ def test_a_hold_of_a_trust_made_member_takes_it_out_with_reason_held(adds_truste
         assert events == {(r, after[r]) for r in chain[1:]}
 
 
-def lay(a, contact, ship, claim):
+def lay(a, contact, ship, claim, cid=None):
     """A lesson by a remote member in the chain's current room, as the origin's reply door stores one (peer_messages,
     by its full id)."""
     with a.pi.transaction() as db:
@@ -802,7 +802,7 @@ def lay(a, contact, ship, claim):
         who = db.execute('SELECT peer_id, user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()
         epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (room,)).fetchone()[0]
         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (uid(), room, f"{who['peer_id']}:{who['user_id']}",
-                                                                        f'c-{ship}', lesson_body(ship=ship, claim=claim), epoch, a.clock[0]))
+                                                                        cid or f'c-{ship}', lesson_body(ship=ship, claim=claim), epoch, a.clock[0]))
 
 
 def indexed(store):
@@ -982,3 +982,119 @@ def test_a_restore_with_no_listing_says_nothing_of_it(adds, tmp_path, capsys):
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', adds.pi.db_path)
     assert code == 0, err
     assert ADDABLE_CLEARED not in out and 'lessons_addable' not in out
+
+
+# Task 6: one grant's ships (a lapsed trust lays nothing, and one cap)
+GRANT_PAUSED = "ship of Andy Example: voyager's owner trust is paused until Andy Example renews it, so it lays no lessons."
+FAR = 90 * 86400 + 86400
+
+
+def reply(a, ship_id, claim, cid):
+    """A lesson through the origin's reply door, as Tardis would send it for its ship account (signed by its identity)."""
+    with a.pi.transaction() as db:
+        room = a.pi._lessons_chain(db)[-1]
+        epoch = db.execute('SELECT epoch, owner_id FROM rooms WHERE id=?', (room,)).fetchone()
+    env = a.tardis_fed.identity.envelope(destination=a.pi_fed.identity.peer_id, actor=ship_id, resource_id=room,
+                                         revision=epoch['epoch'], action='room.reply', recipients=[epoch['owner_id']],
+                                         payload={'body': lesson_body(ship=ship_id.replace('ship-', ''), claim=claim),
+                                                  'client_message_id': cid})
+    a.pi_fed.receive(env)
+
+
+def post(a, contact, claim):
+    """The same checks at the post door: the gate with the contact's full author id (a local door never has one)."""
+    with a.pi.transaction() as db:
+        who = db.execute('SELECT peer_id, user_id FROM remote_contacts WHERE id=?', (contact,)).fetchone()
+    ship = who['user_id'].replace('ship-', '')
+    return a.pi.check_lesson(f"{who['peer_id']}:{who['user_id']}", lesson_body(ship=ship, claim=claim))
+
+
+def stored(a):
+    with a.pi.transaction() as db:
+        return db.execute('SELECT count(*) FROM peer_messages').fetchone()[0], db.execute('SELECT count(*) FROM messages').fetchone()[0]
+
+
+def test_a_paused_grants_ship_lays_no_lesson_at_either_door(adds_trusted):
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    reply(a, 'ship-voyager', 'Before the pause.', 'c0')
+    a.trusted_ship('defiant')                      # the second pairing fills the window (expect 2): paused
+    before = stored(a)
+    for door in (lambda: reply(a, 'ship-voyager', 'After the pause.', 'c1'), lambda: post(a, a.ship, 'After the pause.')):
+        with pytest.raises(Problem) as refused:
+            door()
+        assert (refused.value.status, refused.value.message) == (403, GRANT_PAUSED)
+    assert stored(a) == before
+    # Renewed with a wider window, the grant is live again and the ship lays.
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=10, password='a-long-password')
+    reply(a, 'ship-voyager', 'After the renewal.', 'c2')
+    assert post(a, a.ship, 'Also after.')['kind'] == 'lesson'
+
+
+def test_an_expired_or_revoked_grants_ship_lays_nothing_at_either_door(adds_trusted):
+    a = adds_trusted
+    a.pi.station_lessons_add(short(a.ship))
+    a.clock[0] += FAR
+    before = stored(a)
+    ended = "ship of Andy Example: voyager's owner trust has expired, so it lays no lessons."
+    for door in (lambda: reply(a, 'ship-voyager', 'Late.', 'c1'), lambda: post(a, a.ship, 'Late.')):
+        with pytest.raises(Problem) as refused:
+            door()
+        assert (refused.value.status, refused.value.message) == (403, ended)
+    assert stored(a) == before
+    # A revoked grant: the gate refuses by the grant's state, not by whether the hold took the ship out of the room.
+    revoked = ended.replace('expired', 'revoked')
+    a.clock[0] -= FAR
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    with pytest.raises(Problem) as refused:
+        post(a, a.ship, 'Revoked.')
+    assert (refused.value.status, refused.value.message) == (403, revoked)
+
+
+def fill(a, contact, ship, count, tag):
+    for n in range(count):
+        lay(a, contact, ship, f'{tag} claim {n}.', cid=f'{tag}-{n}')
+
+
+def test_two_ships_of_one_grant_share_one_live_cap(adds_trusted):
+    a = adds_trusted
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=10, password='a-long-password')
+    defiant = a.trusted_ship('defiant')
+    a.pi.station_lessons_add(short(a.ship))
+    a.pi.station_lessons_add(short(defiant))
+    bea, _ = bea_with_a_trust(a, line=True)
+    other = a.trusted_ship('serenity', owner_user=bea)
+    a.pi.station_lessons_add(short(other))
+    fill(a, a.ship, 'voyager', 20, 'v')
+    fill(a, defiant, 'defiant', 11, 'd')
+    reply(a, 'ship-defiant', 'The thirty-second.', 'c32')
+    before = stored(a)
+    cap = 'The ships of one owner trust share 32 live lessons, and they have them.'
+    for door in (lambda: reply(a, 'ship-defiant', 'The thirty-third.', 'c33'), lambda: post(a, defiant, 'The thirty-third.'),
+                 lambda: reply(a, 'ship-voyager', 'Voyager too.', 'c34')):
+        with pytest.raises(Problem) as refused:
+            door()
+        assert (refused.value.status, refused.value.message) == (429, cap)
+    assert stored(a) == before
+    reply(a, 'ship-serenity', 'Another grant.', 'c35')           # another grant's ship is unaffected
+    assert post(a, other, 'Still another.')['kind'] == 'lesson'
+    # A lesson already live (the same text, replayed) isn't a new one and takes no slot.
+    assert post(a, a.ship, 'v claim 0.')['kind'] == 'lesson'
+
+
+def test_a_code_confirmed_author_keeps_its_own_cap(adds_trusted):
+    a = adds_trusted
+    type_voyagers_code(a, line=True)               # voyager is now code-confirmed: its own code is current
+    a.pi.station_lessons_add(short(a.ship))
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    reply(a, 'ship-voyager', 'Lays on, its trust ended.', 'c1')
+    assert post(a, a.ship, 'Again.')['kind'] == 'lesson'
+    fill(a, a.ship, 'voyager', 31, 'v')
+    with pytest.raises(Problem) as refused:
+        post(a, a.ship, 'Over its own cap.')
+    assert (refused.value.status, refused.value.message) == (409, lessons.CAP)
+    with pytest.raises(Problem) as refused:
+        reply(a, 'ship-voyager', 'Over its own cap.', 'c2')
+    assert refused.value.message == lessons.CAP
