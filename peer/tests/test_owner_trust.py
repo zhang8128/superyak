@@ -1640,3 +1640,31 @@ def test_the_display_read_check_finds_a_planted_read(tmp_path):
         lines.index("    db.execute(f'SELECT name FROM {table} WHERE id=?', (contact_id,))")
     assert [(where, line) for _, where, line, _ in contact_name_reads(tmp_path)] == \
         [('shown', n + 1) for n in range(first, last + 1)]
+
+
+def test_the_make_target_refuses_a_missing_value_with_a_usage_line(tmp_path):
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[2]
+    for args in ([], ['CARD=a', 'ASSERTION=b'], ['CARD=a', 'SHIP=c'], ['ASSERTION=b', 'SHIP=c']):
+        done = subprocess.run(['make', '-s', '-C', str(repo), 'station-pair-trusted', f'STATION_DATA={tmp_path}', *args],
+                              capture_output=True, text=True, timeout=120)
+        assert done.returncode != 0 and 'Usage: make station-pair-trusted' in done.stdout + done.stderr
+
+
+def test_the_make_target_never_hands_its_values_to_the_shell(tmp_path):
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[2]
+    for name in ('CARD', 'ASSERTION', 'SHIP'):
+        marker = tmp_path / f'ran-{name}'
+        values = {'CARD': 'a', 'ASSERTION': 'b', 'SHIP': 'c'}
+        values[name] = f'$$(touch {marker})'
+        done = subprocess.run(['make', '-s', '-C', str(repo), 'station-pair-trusted', f'STATION_DATA={tmp_path}',
+                               *[f'{k}={v}' for k, v in values.items()]], capture_output=True, text=True, timeout=120)
+        assert not marker.exists() and done.returncode != 0
+        marker = tmp_path / f'tick-{name}'
+        values[name] = f'`touch {marker}`'
+        subprocess.run(['make', '-s', '-C', str(repo), 'station-pair-trusted', f'STATION_DATA={tmp_path}',
+                        *[f'{k}={v}' for k, v in values.items()]], capture_output=True, text=True, timeout=120)
+        assert not marker.exists()
