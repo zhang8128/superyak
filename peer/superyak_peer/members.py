@@ -5,6 +5,7 @@ make station-add-ship) call `_add_members`; a moderator's add and removal take t
 from .common import REPLACED_ADD, REPLACED_REMOVE, REPLACED_ROOMS, Problem, ids, text, uid
 from .grants import is_moderate
 from .moderators import NOT_A_MODERATOR
+from .owner_trust import contact_line
 from .ships import safe_line
 
 ONE_MEMBER = 'A moderator changes one member at a time'
@@ -47,10 +48,12 @@ class Members:
                                                    (room_id, wormhole)).fetchone() is not None
 
     def _account_name(self, db, member_id):
-        """A member's display name as one safe line: the account's, else the remote contact's label, else the id's start."""
+        """A member's display name as one safe line of about 40 characters: the account's, else the remote contact's
+        label, a ship's keeping its whole name (contact_line), else the id's start."""
         row = db.execute('SELECT name FROM users WHERE id=?', (member_id,)).fetchone()
-        row = row or db.execute('SELECT label AS name FROM contact_labels WHERE id=?', (member_id,)).fetchone()
-        return safe_line(row['name'] if row else member_id[:6], 40)
+        if row:
+            return safe_line(row['name'], 40)
+        return contact_line(db, member_id, 40) or safe_line(member_id[:6], 40)
 
     def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, new_room_id=None, earlier_rooms=0, claims_released=0):
         key = uid()

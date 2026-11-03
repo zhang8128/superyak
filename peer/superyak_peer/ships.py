@@ -43,6 +43,24 @@ def safe_line(value, limit=80):
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
 
 
+SHIP_OF = 'ship of '  # the start of every label owner trust gives a ship (owner_trust.py, contact_labels)
+OWNER_FLOOR = 8  # characters of an owner's name a ship's label line keeps, however long the ship's own name
+
+
+def ship_label_line(label, ship, limit=80):
+    """A trust ship's label ("ship of <owner>: <ship>") as one safe line of at most `limit` characters that always ends
+    with the ship's whole name, so two ships whose names differ only at the end never read the same. Only the owner part,
+    which comes from a person and may hold 200 characters, is shortened, to what the limit leaves; it keeps at least
+    OWNER_FLOOR characters, so the owner always shows, which a ship's name near 32 characters may take past a small
+    limit. Any other label, or one that doesn't end with `ship`, is safe_line(label, limit)."""
+    suffix = f': {ship}'
+    if not (label.startswith(SHIP_OF) and label.endswith(suffix) and len(label) > len(SHIP_OF) + len(suffix)):
+        return safe_line(label, limit)
+    tail = f': {safe_line(ship, limit)}'
+    owner = safe_line(label[len(SHIP_OF):-len(suffix)], max(limit - len(SHIP_OF) - len(tail), OWNER_FLOOR))
+    return f'{SHIP_OF}{owner}{tail}'
+
+
 def wal_notice(db_path, now):
     """Store-wal-mode D2: one notice a day (Odo announces an id once) while peer.sqlite3-wal is past WAL_NOTICE_BYTES,
     its size in MB rounded up. The size is read with stat: neither it nor the -shm, where WAL mode keeps its locks, is

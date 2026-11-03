@@ -1303,23 +1303,30 @@ def test_the_digest_comes_once_the_day_ends(trusted):
     pairs(t, *b_ship(t, 'ship-b'))
     t.fed.pair_trusted(defiant, *b_ship(t, 'ship-c'))
     assert notices(t.station, 'digest') == []  # today hasn't ended
-    t.clock[0] = midnight_after(t.clock[0]) + 60
+    midnight = midnight_after(t.clock[0])
+    t.clock[0] = midnight + 299  # ended, but a pairing begun before midnight may still be committing under it
     second = utc_day(t.clock[0])
     pairs(t, *b_ship(t, 'ship-d'))
     with t.station.transaction() as db:  # as pair_trusted counts a refusal at the cap
         db.execute('INSERT INTO trust_cap_refusals VALUES (?,?,2)', (t.trust['grant_id'], second))
+    assert notices(t.station, 'digest') == []
+    t.clock[0] = midnight + 300  # DIGEST_SETTLE after the day ended
     g12, peer12 = t.trust['grant_id'][:12], t.owner['peer_id'][:12]
     one = {'id': f'trust-digest-{g12}-{first}',
            'text': f'Owner trust, {first}: 3 ship(s) of Andy B on {peer12} paired by defiant, rio-grande{DIGEST_END}'}
     assert notices(t.station, 'digest') == [one]
-    t.clock[0] = midnight_after(t.clock[0]) + 60
+    t.clock[0] = midnight + 86400 + 299
+    assert notices(t.station, 'digest') == [one]
+    t.clock[0] += 1
     two = {'id': f'trust-digest-{g12}-{second}',
            'text': f'Owner trust, {second}: 1 ship(s) of Andy B on {peer12} paired by rio-grande; 2 refused at the cap '
                    f'of 200{DIGEST_END}'}
     assert notices(t.station, 'digest') == [one, two]
-    t.clock[0] = midnight_after(t.clock[0]) + 6 * 86400 - 1  # the first day ended 8 days ago less a second, the second 7
-    assert notices(t.station, 'digest') == [two]
+    t.clock[0] = midnight + 7 * 86400 + 299  # seven days and 299 s after the first day ended: it is still listed
+    assert notices(t.station, 'digest') == [one, two]
     t.clock[0] += 1
+    assert notices(t.station, 'digest') == [two]
+    t.clock[0] += 86400
     assert notices(t.station, 'digest') == []
 
 
@@ -1331,7 +1338,7 @@ def test_the_digest_is_one_safe_line(trusted):
     ship = pairs(t, *b_ship(t, 'ship-a'))
     with t.station.transaction() as db:  # longer than a card holds, so by hand
         db.execute('UPDATE remote_contacts SET name=? WHERE id=?', ('Andy\n@rio-grande ' + 'x' * 300, t.owner['id']))
-    t.clock[0] = midnight_after(t.clock[0]) + 60
+    t.clock[0] = midnight_after(t.clock[0]) + 300
     [digest], [pause] = notices(t.station, 'digest'), notices(t.station, 'paused')
     for text in (digest['text'], pause['text']):
         assert '\n' not in text and '@' not in text and 'Andy (at)rio-grande xxx' in text
@@ -1341,6 +1348,40 @@ def test_the_digest_is_one_safe_line(trusted):
                                   'it in the browser.')
     assert len(digest['text']) < 300 and len(pause['text']) < 360
     assert label_of(t.station, ship['id']).startswith('ship of Andy\n@rio-grande x')  # the view keeps it; lines make it safe
+
+
+def test_two_long_ship_names_stay_distinct_after_a_long_owner(trusted):
+    """The ruling on the fresh review's Minor 1: a ship's label line has a budget, and only its owner part is shortened
+    to fit it, so two ships whose long names differ at the end read apart in room notices, the lessons room's lines, the
+    CLI and the lessons refusals (contact_line); the owner keeps OWNER_FLOOR characters however long the name."""
+    from superyak_peer.__main__ import contact_shown
+    from superyak_peer.lessons import _member_lines
+    from superyak_peer.owner_trust import contact_line
+    from superyak_peer.ships import OWNER_FLOOR, safe_line, ship_label_line
+    t = trusted
+    names = ('tardis-relay-aaaaa1', 'tardis-relay-aaaaa2')
+    ships = [pairs(t, *b_ship(t, name)) for name in names]
+    owner = 'Andy B ' + 'x' * 190
+    with t.station.transaction() as db:  # after the pairings: a renamed owner's code is no longer current
+        db.execute('UPDATE remote_contacts SET name=? WHERE id=?', (owner, t.owner['id']))
+    room = t.station.create_room(t.admin['id'], 'Relays')
+    added = t.station.add_participants(t.admin['id'], room['id'], [ship['id'] for ship in ships])
+    shown = [f'ship of {owner[:11]}: {name}' for name in names]  # 40 = 8 + 11 + 2 + 19
+    assert [a['name'] for a in added['added']] == shown and all(len(line) == 40 for line in shown)
+    with t.station.transaction() as db:
+        notice = db.execute('SELECT body FROM messages WHERE room_id=? ORDER BY created, rowid', (added['id'],)).fetchall()[-1][0]
+        assert all(line in notice for line in shown)
+        assert [contact_line(db, ship['id'], 40) for ship in ships] == shown
+        assert contact_line(db, t.owner['id'], 40) == safe_line(owner, 40)  # a person, as before
+        seen = [t.station._member_as_seen(db, t.fed.identity.peer_id, f"{t.owner['peer_id']}:{ship['user_id']}")
+                for ship in ships]
+    assert [m.get('ship') for m in seen] == [True, True]
+    assert [line.strip().split('  (on peer')[0] for line in _member_lines(seen)] == shown
+    assert [contact_shown(f'ship of {owner}: {name}', name) for name in names] == \
+        [f'ship of {owner[:80 - 8 - 21]}: {name}' for name in names]
+    longest = 'a' + 'b' * 31  # SHIP_NAME's longest: the owner keeps its floor, which takes the line past 40
+    assert ship_label_line(f'ship of {owner}: {longest}', longest, 40) == f'ship of {owner[:OWNER_FLOOR]}: {longest}'
+    assert ship_label_line('Andy\n@b', 'Andy\n@b', 40) == 'Andy (at)b'  # not a ship's label: safe_line
 
 
 def test_a_pause_posts_once_per_window(trusted):
@@ -1404,45 +1445,76 @@ def test_station_trust_list_names_full_ids(trusted):
     assert ship['id'] not in done.stdout  # the local contact id isn't the participant id
 
 
-# The display-read check: every SQL text in superyak_peer that reads remote_contacts.name raw (a column, an alias's
-# .name, a bare name beside the table, or *), apart from these, each by (module, a piece of its text) and why.
+# The display-read check: every SQL text in superyak_peer that may read remote_contacts.name raw, apart from these, each
+# by (module, function, a piece of its statement) and why. Each entry matches exactly one statement.
 RAW_NAME_READS = {
-    ('federation.py', 'SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts'):
-        "_name_taken, the collision check: a ship's name against every person's raw name",
-    ('federation.py', 'ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name'):
+    ('federation.py', '_name_taken', 'SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts'):
+        "the collision check: a ship's name against every person's raw name",
+    ('federation.py', 'Federation.pair', 'ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name'):
         "a write: pair() stores the card's participant name",
-    ('federation.py', 'UPDATE remote_contacts SET name=? WHERE id=?'):
+    ('federation.py', 'Federation._pair_trusted', 'UPDATE remote_contacts SET name=? WHERE id=?'):
         "a write: pair_trusted stores the assertion's ship name",
-    ('federation.py', 'remote_contacts.name AS card_name'):
+    ('federation.py', 'Federation.connections', 'remote_contacts.name AS card_name'):
         "connections() rebuilds the card it was paired with, as code_current does; it shows the label",
-    ('owner_trust.py', 'CREATE VIEW IF NOT EXISTS contact_labels'):
+    ('owner_trust.py', '<module>', 'CREATE VIEW IF NOT EXISTS contact_labels'):
         'the view itself, which makes every label from the raw name',
-    ('owner_trust.py', 'SELECT remote_contacts.user_id,remote_contacts.name,peers.card'):
+    ('owner_trust.py', 'code_current', 'SELECT remote_contacts.user_id,remote_contacts.name,peers.card'):
         "code_current rebuilds the paired card with its participant's name, to check the typed code",
-    ('backups.py', 'SELECT id, peer_id, user_id, name AS label FROM remote_contacts'):
+    ('backups.py', '<module>', 'SELECT id, peer_id, user_id, name AS label FROM remote_contacts'):
         'a restore file from before owner trust: no view and no trust confirmation (one schema batch makes both), '
         'so every contact there is a person, whose name is its label',
+    # Filled-in tables and columns that are never remote_contacts' (the check can't see what a variable holds):
+    ('backups.py', '_remove_members_like_replaced', 'SELECT {}, {} FROM {}'):
+        "a MEMBERSHIPS table's memberships (room, remote-room or space members), as the replaced file has them",
+    ('backups.py', '_remove_members_like_replaced', 'SELECT {}, {} FROM {} ORDER BY {}, {}'):
+        "a MEMBERSHIPS table's memberships, as the copy has them",
+    ('backups.py', '_remove_members_like_replaced', 'SELECT {} FROM {} WHERE id=?'):
+        "the title of a membership's room or space (a MEMBERSHIPS parent)",
+    ('chats.py', 'page_rows_sql', 'SELECT * FROM {} WHERE +room_id=?'):
+        'a page of messages or of peer_messages by id: _messages_of names one of the two',
 }
 SQL_WORD = re.compile(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|WITH)\b', re.IGNORECASE)
+CONTACTS = re.compile(r'\bremote_contacts\b', re.IGNORECASE)
+# A table that is remote_contacts, or one the code fills in ({} for an f-string, a % or a + part), in a FROM or a JOIN.
+# A {} followed by a dot is a schema, and the table named after it is read as written.
+SOURCE = re.compile(r'\b(?:FROM|JOIN)\s+(?:remote_contacts\b|\(?\s*\{\}(?!\s*\.))', re.IGNORECASE)
 NOT_ALIASES = {'join', 'where', 'on', 'using', 'left', 'inner', 'cross', 'outer', 'natural', 'order', 'group', 'having',
                'values', 'set', 'limit', 'as', 'union', 'except', 'intersect', 'and', 'or', 'not', 'returning', 'window'}
+PERCENT = re.compile(r'%(?:\([^)]*\))?[-#0 +]*\d*(?:\.\d+)?[sdirfx]')
 
 
 def strings_of(source):
-    """(qualified function, line, text) for each string the code holds: constants, f-strings (each {...} as '{}') and
-    strings joined by +. Docstrings and other bare string statements are left out."""
+    """(qualified function, line, text) for each string expression the code holds: a constant, an f-string, or strings
+    joined by + or filled by %. A module-level string constant named inside one is read as its text; any other filled-in
+    part reads as '{}', as does a .format field. Docstrings and other bare string statements are left out."""
     import ast
-    found = []
+    tree, constants, found = ast.parse(source), {}, []
 
-    def text_of(node):
+    def text_of(node, nested=False):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
+            return re.sub(r'\{[^{}]*\}', '{}', node.value)
+        if nested and isinstance(node, ast.Name):
+            return constants.get(node.id, '{}')
         if isinstance(node, ast.JoinedStr):
-            return ''.join(part.value if isinstance(part, ast.Constant) else '{}' for part in node.values)
+            return ''.join(text_of(part.value, True) if isinstance(part, ast.FormattedValue) else text_of(part)
+                           for part in node.values)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left, right = text_of(node.left), text_of(node.right)
-            return left + right if left is not None and right is not None else None
-        return None
+            left, right = text_of(node.left, True), text_of(node.right, True)
+            if left == right == '{}':  # no string in it to read: a sum, or text that is all filled in
+                return '{}' if nested else None
+            return left + right
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            left = text_of(node.left, True)
+            if left == '{}':
+                return '{}' if nested else None
+            return PERCENT.sub('{}', left)
+        return '{}' if nested else None
+
+    for statement in tree.body:  # module-level string constants, in order, so a later one can name an earlier one
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
+            text = text_of(statement.value)
+            if text is not None:
+                constants[statement.targets[0].id] = text
 
     def visit(node, where):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1455,61 +1527,109 @@ def strings_of(source):
             return
         for child in ast.iter_child_nodes(node):
             visit(child, where)
-    visit(ast.parse(source), '')
+    visit(tree, '')
     return found
 
 
 def reads_contact_name(sql):
-    """Whether one SQL statement reads remote_contacts' raw name. A table's own definition is not a read."""
-    if not re.search(r'\bremote_contacts\b', sql) or not SQL_WORD.search(sql):
+    """Whether one SQL statement may read remote_contacts' raw name. SQLite's identifiers ignore case, and so does this.
+    A statement that names remote_contacts, or fills in a table, reads it with any of: remote_contacts.name or an
+    alias's .name; a bare name (quoted or not; `AS name` names a result instead); a filled-in part ({}) in a select list;
+    and, where a FROM or JOIN is remote_contacts or filled in, remote_contacts.*, an alias's .*, or an unqualified *
+    (SELECT * or , *). A table's own definition is not a read."""
+    if not SQL_WORD.search(sql) or not (CONTACTS.search(sql) or SOURCE.search(sql)):
         return False
     if re.match(r'\s*CREATE\s+(TABLE|INDEX|UNIQUE)\b', sql, re.IGNORECASE) and not re.search(r'\bSELECT\b', sql, re.IGNORECASE):
         return False
     aliases = {m.group(1) for m in re.finditer(r'\bremote_contacts\s+(?:AS\s+)?([A-Za-z_]\w*)', sql, re.IGNORECASE)
                if m.group(1).lower() not in NOT_ALIASES}
-    if any(re.search(rf'\b{re.escape(alias)}\.(name\b|\*)', sql) for alias in ('remote_contacts', *aliases)):
+    for alias in ('remote_contacts', *aliases):
+        if re.search(rf'\b{re.escape(alias)}\s*\.\s*(name\b|\*)', sql, re.IGNORECASE):
+            return True
+    if re.search(r'(?<![\w.])(?<!AS )name\b', sql, re.IGNORECASE):
         return True
-    if re.search(r'(?<![\w.])(?<!AS )name\b', sql, re.IGNORECASE):  # a bare name; `AS name` names a result instead
+    if any('{}' in columns for columns in re.findall(r'\bSELECT\b(.*?)\bFROM\b', sql, re.IGNORECASE | re.DOTALL)):
         return True
-    return bool(re.search(r'\bSELECT\s+\*\s+FROM\s+remote_contacts\b', sql, re.IGNORECASE))
+    return bool(SOURCE.search(sql) and re.search(r'(?:\bSELECT\s+(?:DISTINCT\s+|ALL\s+)?|,\s*)\*', sql, re.IGNORECASE))
 
 
 def contact_name_reads(root):
-    """(module path under root, function, line, statement) for each statement that reads the raw name."""
+    """(module path under root, function, line, statement) for each statement that may read the raw name."""
     return [(path.relative_to(root).as_posix(), where, line, statement.strip())
             for path in sorted(root.rglob('*.py'))
             for where, line, text in strings_of(path.read_text())
             for statement in text.split(';') if reads_contact_name(statement)]
 
 
-def explained(read):
-    return any(read[0] == module and piece in read[3] for module, piece in RAW_NAME_READS)
+def matches(key, read):
+    module, where, piece = key
+    return read[0] == module and read[1] == where and piece in read[3]
+
+
+def explaining(read):
+    """The RAW_NAME_READS entry that explains a read: of those in its module and function whose piece it holds, the
+    longest (the most specific), or None."""
+    return max((key for key in RAW_NAME_READS if matches(key, read)), key=lambda key: len(key[2]), default=None)
 
 
 def test_display_reads_go_through_contact_labels():
     """Tardis's ruling: every display of a remote contact's name (contacts(), connections(), room members, message
     authors, the notices, trust_list) reads contact_labels.label, so a ship reads "ship of <owner>: <name>" wherever it
-    shows. Only the reads RAW_NAME_READS names, each with its reason, take the raw name; each of those still exists."""
+    shows. Only the reads RAW_NAME_READS names, each with its reason, take the raw name, and each entry names exactly
+    one statement, in its own function."""
     import superyak_peer
     root = Path(superyak_peer.__file__).parent
     found = contact_name_reads(root)
-    assert [read for read in found if not explained(read)] == []
-    assert [key for key in RAW_NAME_READS if not any(read[0] == key[0] and key[1] in read[3] for read in found)] == []
+    assert [read for read in found if explaining(read) is None] == []
+    assert {key: n for key in RAW_NAME_READS if (n := sum(explaining(read) == key for read in found)) != 1} == {}
 
 
-def test_the_display_read_check_finds_a_planted_read(tmp_path):
-    (tmp_path / 'planted.py').write_text('''
-def shown(db, contact_id, table):
+PLANTED = """
+COLUMNS = 'id, peer_id'
+
+
+def shown(db, contact_id, table, col, cols):
     db.execute('SELECT name FROM remote_contacts WHERE id=?', (contact_id,))
     db.execute("SELECT c.name, rooms.title FROM rooms JOIN remote_contacts AS c ON c.id=rooms.owner_id")
     db.execute(f'SELECT remote_contacts.name FROM remote_contacts WHERE id={contact_id}')
     db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,))
     db.execute('SELECT x.* FROM remote_contacts x' + ' WHERE x.id=?', (contact_id,))
     db.execute('SELECT group_concat(name) FROM (SELECT name FROM remote_contacts ORDER BY name)')
+    db.execute('SELECT * FROM peers JOIN remote_contacts USING(peer_id) WHERE id=?', (contact_id,))
+    db.execute('SELECT c.Name FROM remote_contacts c WHERE c.id=?', (contact_id,))
+    db.execute('SELECT NAME FROM REMOTE_CONTACTS WHERE ID=?', (contact_id,))
+    db.execute(f'SELECT {col} FROM remote_contacts WHERE id=?', (contact_id,))
+    db.execute('SELECT name FROM %s WHERE id=?' % table, (contact_id,))
+    db.execute('SELECT remote_contacts.*, peers.card FROM peers JOIN remote_contacts USING(peer_id)')
+    db.execute('SELECT *, peers.card FROM remote_contacts JOIN peers USING(peer_id)')
+    db.execute('SELECT "name" FROM remote_contacts')
+    db.execute('SELECT id, name AS who FROM remote_contacts')
+    db.execute('SELECT ' + cols + ' FROM remote_contacts')
+    db.execute('SELECT json_group_array(c.name) FROM remote_contacts AS c')
+    db.execute("SELECT group_concat(c.name, ', ') FROM remote_contacts\\nc")
+    db.execute('SELECT `name` FROM remote_contacts')
+    db.execute('SELECT [name] FROM remote_contacts')
+    db.execute('SELECT c."name" FROM remote_contacts c')
+    db.execute('SELECT {} FROM remote_contacts'.format(col))
+    db.execute(f'SELECT name FROM {table} WHERE id=?', (contact_id,))
     db.execute('SELECT label FROM contact_labels WHERE id=?', (contact_id,))
     db.execute('SELECT c.id, l.label AS name FROM remote_contacts c JOIN contact_labels l ON l.id=c.id')
     db.execute('SELECT username, name FROM users WHERE id=?', (contact_id,))
+    db.execute('SELECT x.label FROM (SELECT id, peer_id AS label FROM remote_contacts) x')
+    db.execute('SELECT ' + COLUMNS + ' FROM remote_contacts')
+    db.execute(f'SELECT label FROM ({cols}) WHERE id=?', (contact_id,))
+    db.execute('SELECT COUNT(*) FROM remote_contacts')
     _has(db, 'remote_contacts.name')
-    """A docstring may say SELECT name FROM remote_contacts."""
-''')
-    assert [(where, line) for _, where, line, _ in contact_name_reads(tmp_path)] == [('shown', n) for n in range(3, 9)]
+    \"\"\"A docstring may say SELECT name FROM remote_contacts.\"\"\"
+"""
+
+
+def test_the_display_read_check_finds_a_planted_read(tmp_path):
+    """Each read form the Task 6 review planted, and those before it, is found; the last seven, which read no raw name,
+    are not."""
+    (tmp_path / 'planted.py').write_text(PLANTED)
+    lines = PLANTED.splitlines()
+    first, last = lines.index("    db.execute('SELECT name FROM remote_contacts WHERE id=?', (contact_id,))"), \
+        lines.index("    db.execute(f'SELECT name FROM {table} WHERE id=?', (contact_id,))")
+    assert [(where, line) for _, where, line, _ in contact_name_reads(tmp_path)] == \
+        [('shown', n + 1) for n in range(first, last + 1)]

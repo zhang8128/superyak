@@ -737,13 +737,28 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 
+# A remote member as a lessons room view names it (owner trust, Task 6): by its label, and whether a trust paired it.
+SEEN_CONTACT = ('SELECT c.peer_id, l.label, EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=c.id) AS ship '
+                'FROM remote_contacts c JOIN contact_labels l ON l.id=c.id')
+
+
+def _remote_member(contact, peer):
+    """A remote member of a view: its label as its name (None with no card here), and `ship` only for a ship an owner
+    trust paired, whose line keeps its whole name (_member_lines)."""
+    return {'kind': 'remote', 'name': contact and contact['label'], 'peer': peer,
+            **({'ship': True} if contact and contact['ship'] else {})}
+
+
 def _member_lines(members):
-    """Each member of a lessons room view: a local one by username and kind (and owner), a remote one by name and peer."""
-    from .ships import safe_line
+    """Each member of a lessons room view: a local one by username and kind (and owner), a remote one by name and peer;
+    a ship an owner trust paired keeps its whole name after its shortened owner (ship_label_line)."""
+    from .ships import safe_line, ship_label_line
     lines = []
     for m in members:
         if m['kind'] == 'remote':
-            name = 'an account with no card here' if m['name'] is None else safe_line(m['name'], 40)
+            name = ('an account with no card here' if m['name'] is None
+                    else ship_label_line(m['name'], m['name'].rpartition(': ')[2], 40) if m.get('ship')
+                    else safe_line(m['name'], 40))
             lines.append(f'  {name}  (on peer {safe_line(m["peer"][:12])})')
         else:
             lines.append(f'  {m["username"]}  ({m["kind"]}' + (f', owned by {m["owner"]})' if m['owner'] else ')'))
@@ -1027,11 +1042,11 @@ class Lessons:
                     keeper = db.execute('SELECT username FROM users WHERE id=?', (user['owner_id'],)).fetchone()
                     members.append({'kind': user['kind'], 'username': user['username'], 'owner': keeper and keeper['username']})
                     continue
-                contact = db.execute('SELECT c.peer_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id '
-                                     'WHERE c.id=?', (member,)).fetchone()  # by its label (owner trust, Task 6)
+                contact = db.execute(f'{SEEN_CONTACT} WHERE c.id=?', (member,)).fetchone()  # by its label (owner trust)
                 if contact['peer_id'] not in listed:
-                    raise Problem(409, UNLISTED.format(name=safe_line(contact['label'], 40)))
-                members.append({'kind': 'remote', 'name': contact['label'], 'peer': contact['peer_id']})
+                    from .owner_trust import contact_line
+                    raise Problem(409, UNLISTED.format(name=contact_line(db, member, 40)))
+                members.append(_remote_member(contact, contact['peer_id']))
             import hashlib
             code = hashlib.sha256(encode({'room': room['id'], 'members': sorted(room['member_ids']), 'peers': listed,
                                           'ship': vessel['id']}).encode()).hexdigest()[:8]
@@ -1104,9 +1119,8 @@ class Lessons:
                              'ON owners.id=users.owner_id WHERE users.id=?', (user,)).fetchone()
             if row is not None:
                 return {'kind': row['kind'], 'username': row['username'], 'owner': row['owner']}
-        contact = db.execute('SELECT l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id '
-                             'WHERE c.peer_id=? AND c.user_id=?', (member_peer, user)).fetchone()  # by its label
-        return {'kind': 'remote', 'name': contact and contact['label'], 'peer': member_peer}
+        contact = db.execute(f'{SEEN_CONTACT} WHERE c.peer_id=? AND c.user_id=?', (member_peer, user)).fetchone()
+        return _remote_member(contact, member_peer)
 
     def lessons_ship(self, username, owner):
         """`lessons ship`, trusted local (section 11 item 3): a ship account with no key, owned by a person here."""
@@ -1386,11 +1400,10 @@ class Lessons:
         for member in new_ids:
             if db.execute('SELECT 1 FROM users WHERE id=?', (member,)).fetchone():
                 raise Problem(403, NEW_LOCAL)
-            contact = db.execute('SELECT c.peer_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id '
-                                 'WHERE c.id=?', (member,)).fetchone()  # by its label (owner trust, Task 6)
+            contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (member,)).fetchone()
             if contact is not None and contact['peer_id'] not in listed:
-                from .ships import safe_line
-                raise Problem(403, UNLISTED.format(name=safe_line(contact['label'], 40)))
+                from .owner_trust import contact_line
+                raise Problem(403, UNLISTED.format(name=contact_line(db, member, 40)))
 
     def _carry_lessons(self, db, old_key, new_key, new_ids):
         """Section 3's backfill, in the add's own transaction: when the add brings in a member on a listed peer that no

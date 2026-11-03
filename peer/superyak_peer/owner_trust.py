@@ -7,12 +7,15 @@ import json
 
 from .common import Problem, uid
 from .identity import pairing_code
-from .ships import safe_line
+from .ships import safe_line, ship_label_line
 
 TRUST_DAYS = 90
 EXPECT_MAX = 10_000
 TRUST_CAP = 200  # spec "The change" item 4: contacts per owner trust per UTC day, from trust_confirmations
 DIGEST_DAYS = 7  # the ended UTC days the digest lists, so Odo catches up after a week away (spec item 5)
+# A day's digest waits this long after midnight (UTC): pair_trusted dates a pairing when its transaction starts, so one
+# begun just before midnight can commit just after it, and a digest posted at once would be a pairing short for good.
+DIGEST_SETTLE = 300
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
@@ -223,6 +226,19 @@ def owner_label(db, peer_id, owner_user_id):
     return row['label'] if row else 'an unknown owner'
 
 
+def contact_line(db, contact_id, limit):
+    """A remote contact's label as one safe line of about `limit` characters, or None for no such contact. A ship an
+    owner trust paired keeps its whole name after its shortened owner (ship_label_line), its name taken after the
+    label's last ': ', since a ship's name (SHIP_NAME) holds no colon; any other contact is safe_line(label, limit)."""
+    row = db.execute('SELECT label, EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=contact_labels.id) AS ship '
+                     'FROM contact_labels WHERE id=?', (contact_id,)).fetchone()
+    if row is None:
+        return None
+    if not row['ship']:
+        return safe_line(row['label'], limit)
+    return ship_label_line(row['label'], row['label'].rpartition(': ')[2], limit)
+
+
 def contact_trust(db, peer_id, user_id, now):
     """connections()' `owner_trust` for a contact whose code was typed: its live trust, else its latest grant, as
     {'grant_id', 'until', 'live'}; None when no trust was ever granted for it."""
@@ -241,9 +257,11 @@ def contact_trust(db, peer_id, user_id, now):
 def trust_digests(db, now):
     """Spec item 5, the record (the pause notice is the alarm): one Ops line per owner trust per UTC day, for each of
     the DIGEST_DAYS days before today that had a pairing or a refusal at the cap, in day order. Ruling on N12: a day is
-    listed only once it has ended, so its count never changes under its id, which Odo announces once (agent watch.py,
-    `_announce`). Every name goes through safe_line. A pure read: station_notices runs off the gate."""
-    days = [utc_day(now - back * 86400) for back in range(DIGEST_DAYS, 0, -1)]
+    listed only once it ended DIGEST_SETTLE seconds ago, so its count never changes under its id, which Odo announces
+    once (agent watch.py, `_announce`). Every name goes through safe_line. A pure read: station_notices runs off the
+    gate."""
+    settled = now - DIGEST_SETTLE  # "today" is the day this time falls in, so a day lists DIGEST_SETTLE after it ends
+    days = [utc_day(settled - back * 86400) for back in range(DIGEST_DAYS, 0, -1)]
     marks = ','.join('?' * len(days))
     listed = []
     for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():

@@ -36,7 +36,7 @@ DOT = ' \u00b7 '  # a search result's title: room title, author, date
 # search (spec "search is one bounded query"): one statement over local and paired homes' messages, with the membership,
 # room-set and mark filters inside it, never a post-filter and never a loop over rooms. LIKE folds ASCII case only.
 SEARCH_SQL = '''
-SELECT * FROM (
+SELECT id, room_id, created, title, author FROM (
   SELECT m.id, m.room_id, m.created, r.title, coalesce(u.name, 'Someone') AS author FROM messages m
     JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=:person JOIN rooms r ON r.id=m.room_id
     LEFT JOIN users u ON u.id=m.author_id
