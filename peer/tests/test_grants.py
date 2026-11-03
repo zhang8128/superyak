@@ -9,7 +9,7 @@ from superyak_peer.common import uid
 from superyak_peer.grants import short_id
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, verify_record
 from test_instructions import docked, ship_client
-from test_restore import reconcile as run_reconcile, staged
+from test_restore import copied, reconcile as run_reconcile, staged
 from test_signatures import card_of, raw_sign
 
 DAY = 86400
@@ -706,7 +706,7 @@ def test_a_replaced_file_without_the_grants_tables_is_treated_as_absent(tmp_path
     grant = make(store, andy, jenn, [serenity])
     copy = staged(tmp_path, store)
     replaced = copy.parent / 'peer.sqlite3'
-    shutil.copyfile(store.db_path, replaced)
+    copied(store.db_path, replaced)
     with closing(sqlite3.connect(replaced)) as db:
         db.execute('DROP TABLE budget_uses')
         db.execute('DROP TABLE grants')

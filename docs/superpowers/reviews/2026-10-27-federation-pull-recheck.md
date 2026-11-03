@@ -257,7 +257,7 @@ First review's nits:
   Odo all wait while a pull holds it.
 - Rows that yield no envelope (withdrawn, refused or failed) count against neither `limit` nor `budget`.
 - Example: the room's epoch moves during a week away. Hundreds of the Mac's queued rows then turn `Obsolete`.
-  - Each costs a rollback plus a committed mark, in the default rollback journal on the Pi's SD card. No WAL is
+  - Each costs a rollback plus a committed mark, in the default rollback journal on the Pi's NVMe drive. No WAL is
     configured.
   - All of it happens with the station frozen, and past the puller's 20 s.
 - Push takes the gate per row (transport.py:79-83).

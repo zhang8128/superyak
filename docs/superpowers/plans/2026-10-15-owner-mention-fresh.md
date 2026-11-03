@@ -330,7 +330,8 @@ git commit -m "Fresh owner mentions, watcher: a downgraded mention's read-only r
 3. The live check, before the restart, needing no person's login. It runs the merged code against a copy, so a
    failure needs no restart to roll back. In a new scratchpad folder:
    - copy the live database with `superyak_peer.backups._restored_copy(live_db, copy_dir / 'peer.sqlite3')`, which
-     reads through a read-only connection and writes a new 0600 file (never `cp`: the database runs in WAL mode);
+     reads through a read-only connection and writes a new 0600 file (never `cp`: a byte copy of a database being
+     written can be torn, and in WAL mode, which the store didn't run in then, it lacks the commits in the `-wal`);
    - open `Store(copy_dir, clock=lambda: now[0])` with `now = [time.time()]`;
    - in a room that holds Andy and his ship rio-grande, post an owner mention with
      `store.send_message(andy_id, room_id, 'live-check-1', '@rio-grande live check')`, and check that

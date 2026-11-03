@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import pytest
 from superyak_peer import lessons
+from superyak_peer.journal_mode import switch_journal
 from conftest import LESSON_TIME, lesson_body, lesson_ship, paired, run_lessons
 
 
@@ -616,10 +617,10 @@ def test_a_held_dispatch_gate_is_waited_for_only_until_the_budget_ends(lessons_s
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
-@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is the next test
 def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_station, monkeypatch):
-    """The fresh review's S1: the station's database keeps a rollback journal, so step 4's commit waits for every
-    reader's SHARED lock, and a reader outside the dispatch gate (the nightly backup's copy) can hold one past the
+    """The fresh review's S1: in rollback mode (this test pins it), step 4's commit waits for every reader's SHARED
+    lock, and a reader outside the dispatch gate (the nightly backup's copy) can hold one past the
     deadline check. Here a read-only connection takes SHARED while step 4 reads the room, and keeps it. The injected
     clock never reaches the deadline, so only the commit's wait can end this: SQLite waits the 300 ms the budget leaves,
     in real time, refuses the commit, and it is rolled back; the answer is nothing. Once the reader is gone, the same
@@ -652,6 +653,35 @@ def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_statio
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
+def test_in_wal_a_reader_held_beside_step_4_never_delays_its_commit(lessons_station, monkeypatch):
+    """The WAL twin of the test above (plan Task 7): in WAL mode a reader's snapshot never blocks a commit. The same
+    reader, taken while step 4 reads the room and still held, delays nothing: the answer is the lesson, and its receipt
+    and query row are written while the reader still holds its snapshot. On a store left in rollback mode (the switch
+    below dropped) it fails: the commit waits out the budget and answers nothing."""
+    import sqlite3
+    from superyak_peer.db import Store
+    store, clock, ids, room = lessons_station
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True,
+                                               'budget_ms': 300}))
+    reader, read = sqlite3.connect(store.db_path.as_uri() + '?mode=ro', uri=True, isolation_level=None), Store._lessons_snapshot
+
+    def read_beside_a_reader(self, db):
+        reader.execute('BEGIN')
+        reader.execute('SELECT count(*) FROM users').fetchone()   # a snapshot, held until the read transaction ends
+        return read(self, db)
+    monkeypatch.setattr(Store, '_lessons_snapshot', read_beside_a_reader)
+    try:
+        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
+        held = reader.in_transaction   # the commit landed beside the reader's snapshot
+    finally:
+        reader.execute('ROLLBACK') if reader.in_transaction else None
+        reader.close()
+    assert held and note is None and [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
 def held_reader(store):
     """A read-only connection holding SHARED, as the nightly backup's copy does, until it is closed."""
     import sqlite3
@@ -661,7 +691,7 @@ def held_reader(store):
     return reader
 
 
-@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is the next test
 @pytest.mark.parametrize('words_only', [True, False], ids=['words only', 'with Near'])
 def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends(lessons_station, words_only):
     """fix:lessons-query-open-and-budget-bounds: a reader that holds SHARED from before the query starts (the nightly
@@ -690,7 +720,29 @@ def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
-@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
+@pytest.mark.parametrize('words_only', [True, False], ids=['words only', 'with Near'])
+def test_in_wal_a_reader_from_before_the_query_delays_nothing(lessons_station, words_only):
+    """The WAL twin of the test above (plan Task 7): a reader holding its snapshot from before the query starts (the
+    nightly backup's copy) blocks neither opening the store nor step 4's commit in WAL mode, so the query answers the
+    lesson and writes its receipt and query row while the reader is still held, with Near and no embedder too. On a store
+    left in rollback mode (the switch below dropped) it fails: the open waits out the budget and answers nothing."""
+    store, clock, ids, room = lessons_station
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x',
+                                               'words_only': words_only, 'budget_ms': 300}))
+    reader = held_reader(store)
+    try:
+        answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
+        held = reader.in_transaction   # the commit landed beside the reader's snapshot
+    finally:
+        reader.execute('ROLLBACK')
+        reader.close()
+    assert held and [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is the next test
 def test_the_query_verb_answers_nothing_within_its_budget_beside_a_reader(lessons_station, tmp_path):
     """The review's S3, through the process the hook runs: beside a held reader, `query` with budget_ms 3000 exits 0
     with {"lessons": []} inside its budget, and writes no receipt (before the fix: 30 s, then a traceback). The budget
@@ -713,6 +765,29 @@ def test_the_query_verb_answers_nothing_within_its_budget_beside_a_reader(lesson
         reader.close()
     assert (done.returncode, done.stdout) == (0, '{"lessons": []}') and waited < 10, done.stderr   # room for start-up
     assert counts(store) == (0, 0)
+
+
+def test_in_wal_the_query_verb_answers_the_lesson_beside_a_reader(lessons_station, tmp_path):
+    """The WAL twin of the test above (plan Task 7), through the process the hook runs: beside a held reader on a WAL
+    store, `query` exits 0 with the lesson and writes its receipt and query row while the reader is still held. On a
+    store left in rollback mode (the switch below dropped) it fails: the answer is {"lessons": []} and nothing is
+    written."""
+    store, clock, ids, room = lessons_station
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    config = tmp_path / 'runtime.json'
+    config.write_text(json.dumps({'embedder_socket': str(tmp_path / 'none.sock')}))
+    request = json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True, 'budget_ms': 3000})
+    reader = held_reader(store)
+    try:
+        done = run_lessons('query', '--data-dir', store.data_dir, '--runtime-config', config, stdin=request)
+        held = reader.in_transaction   # the commit landed beside the reader's snapshot
+    finally:
+        reader.execute('ROLLBACK')
+        reader.close()
+    assert done.returncode == 0 and [e['claim'] for e in json.loads(done.stdout)['lessons']] == ['Words.'], done.stderr
+    assert held and counts(store) == (1, 1)
 
 
 def test_opening_the_store_fails_loudly_for_anything_but_a_lock(lessons_station, monkeypatch):
