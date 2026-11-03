@@ -2461,7 +2461,8 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'contact_holds', 'pairing_confirmations',  # fix:pairing-code (Serenity's review MF1): held as in the replaced file
     'owner_trust',  # owner trust: every revocation the replaced file has, a trust paused there revoked, its sequence raised
     'retired_peers',  # owner trust: every retirement the replaced file has, its peer unpaired
-    'trust_confirmations'}  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
+    'trust_confirmations',  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
+    'trust_cap_refusals'}  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
@@ -2474,7 +2475,6 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     # (fix:restore-keeps-pull-nonces). The backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
-    'trust_cap_refusals',  # owner trust: refusals at the cap counted for the digest; the cap counts confirmations
     }
 
 

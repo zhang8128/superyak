@@ -4,14 +4,15 @@ person Andy B, paired at the station with his code, a live 90-day trust for him,
 act), the restore helpers test_restore's."""
 from contextlib import closing
 import sqlite3
+import time
 
 import pytest
 from superyak_peer import backups
 from superyak_peer.common import Problem
 from superyak_peer.federation import RETIRED, Federation
-from superyak_peer.identity import pairing_code
-from test_owner_trust import (PASSWORD, b_ship, grant, machine, paired, pairs, queue, renew, revoke,  # noqa: F401 - fixtures
-                              third_peer, trusted)
+from superyak_peer.identity import PeerIdentity, pairing_code
+from test_owner_trust import (PASSWORD, PAUSED, b_ship, grant, machine, paired, pairs, queue, renew,  # noqa: F401 - fixtures
+                              revoke, third_peer, trusted, utc_day)
 from test_restore import go_live, peer_rows, peer_station, reconcile, staged
 
 TRUST_TABLES = ('owner_trust', 'trust_confirmations', 'trust_cap_refusals', 'retired_peers')
@@ -126,7 +127,7 @@ def test_without_a_replaced_file_every_trust_is_revoked(trusted, capsys):
     revoked = revocations_in(copy)
     assert [row[:3] for row in revoked] == [(t.trust['grant_id'], 'restored', None), (second['grant_id'], 'restored', None)]
     assert held_in(copy, tardis['id']) and held_in(copy, serenity['id']) and not held_in(copy, t.owner['id'])
-    assert backups.TRUST_RETIREMENTS_NOT_KEPT in out
+    assert backups.TRUST_RETIREMENTS_NOT_KEPT in out and backups.TRUSTS_RESTORED in out
     line = trusts_line(out)
     for grant_id in (t.trust['grant_id'], second['grant_id']):
         assert named(grant_id, 'Andy (at)B', 'revoked: no usable replaced file') in line
@@ -218,11 +219,13 @@ def test_a_copy_from_before_owner_trust_restores(trusted, capsys, compared):
     go_live(copy, t.tmp / 'live')
 
 
+@pytest.mark.parametrize('failing', ['_unpair_named', '_write_mark'])  # between the settles, and after the second
 @pytest.mark.parametrize('compared', [True, False])
 @pytest.mark.parametrize('old_copy', [False, True])
-def test_a_failure_after_the_trust_steps_changes_no_byte(trusted, capsys, monkeypatch, compared, old_copy):
+def test_a_failure_after_the_trust_steps_changes_no_byte(trusted, capsys, monkeypatch, compared, old_copy, failing):
     """Ruling 4: the owner trust steps run in the reconcile's one transaction, its new tables included, so a step after
-    them that fails leaves the copy byte for byte unchanged. Mutation: a step committing (executescript)."""
+    them that fails, between the two settles or after both, leaves the copy byte for byte unchanged. Mutation: a step
+    committing (executescript)."""
     t = trusted
     pairs(t)
     copy = staged(t.tmp, t.station)
@@ -235,7 +238,7 @@ def test_a_failure_after_the_trust_steps_changes_no_byte(trusted, capsys, monkey
     def fails(*args):
         raise RuntimeError('the step after settling failed')
 
-    monkeypatch.setattr(backups, '_unpair_named', fails)
+    monkeypatch.setattr(backups, failing, fails)
     code, out, err = reconcile(capsys, '--db', copy, *(('--replaced', t.station.db_path) if compared else ()))
     assert code == 1 and 'nothing was changed' in err and 'RuntimeError' in err
     assert copy.read_bytes() == before
@@ -286,7 +289,6 @@ def test_unpair_named_holds_an_owner_with_a_dated_revocation(trusted, capsys):
     contact of it, the owner too, after the first settle has run, so settling runs again after it. The trust gets its
     revocation (reason `owner held`, dated by the reconcile), the report names it, and the copy, once live, pairs
     nothing. Mutation: the settle after _unpair_named left out (no revocation row, though the owner is held)."""
-    import time
     t = trusted
     tardis = pairs(t)
     copy = staged(t.tmp, t.station)
@@ -302,3 +304,107 @@ def test_unpair_named_holds_an_owner_with_a_dated_revocation(trusted, capsys):
     with pytest.raises(Problem) as caught:
         Federation(live, endpoint='https://localhost:7436').pair_trusted(t.ship, *b_ship(t, 'serenity'))
     assert caught.value.status == 409
+
+
+def paused_at_two(t):
+    """Andy B's first trust revoked, a new one expecting 2 ships, and ship-a and ship-b paired under it: paused."""
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), days=30, expect=2)
+    return pairs(t, *b_ship(t, 'ship-a')), pairs(t, *b_ship(t, 'ship-b'))
+
+
+UNCHANGED = 'paused, as in the replaced file: check its ships, then renew or revoke'
+
+
+@pytest.mark.parametrize('expired', [False, True])
+def test_a_trust_paused_in_both_files_stays_paused_and_is_named(trusted, capsys, expired):
+    """The Task 5 review's ruling (spec item 4a, Restore): a trust paused before the copy, with nothing lost since, is
+    paused in the copy too, so the restore revokes nothing and holds no ship (the natural end of "expect 2" after two
+    machines must not cost a re-grant), and the report names it for the admin to check its ships; an expired one the
+    same way. Once live, the copy still refuses the next pairing as paused. Mutation: a trust paused there revoked
+    whatever the copy holds (the reviewer's probe)."""
+    t = trusted
+    ship_a, ship_b = paused_at_two(t)
+    if expired:
+        t.clock[0] = t.trust['until'] + 100
+    copy = staged(t.tmp, t.station)
+    out = against_live(capsys, t, copy)
+    assert revocations_in(copy) == revocations_in(t.station.db_path) and len(revocations_in(copy)) == 1  # the first trust's
+    assert not held_in(copy, ship_a['id']) and not held_in(copy, ship_b['id'])
+    assert named(t.trust['grant_id'], 'Andy B', UNCHANGED) in trusts_line(out) and 'owner trusts revoked (0)' in out
+    if not expired:
+        live = go_live(copy, t.tmp / 'live')
+        with pytest.raises(Problem) as caught:
+            Federation(live, endpoint='https://localhost:7436').pair_trusted(t.ship, *b_ship(t, 'ship-c'))
+        assert (caught.value.status, caught.value.message) == (429, PAUSED.format(2))
+
+
+def test_a_trust_paused_there_under_a_renewal_the_copy_lacks_is_revoked(trusted, capsys):
+    """The ruling's other half: the copy has the trust paused under its grant (2 of 2); since the copy it was renewed
+    (expect 1) and ship-c paired, pausing it under the renewal. That window is lost with the copy and its notice has
+    posted, so the trust is revoked (`paused at restore`), its ships held, and it is not named to renew again.
+    Mutation: only the counts compared, not the window's row."""
+    t = trusted
+    ship_a, ship_b = paused_at_two(t)
+    copy = staged(t.tmp, t.station)
+    t.clock[0] += 60
+    renew((t.station, t.admin), t.trust['grant_id'], days=30, expect=1)
+    pairs(t, *b_ship(t, 'ship-c'))
+    out = against_live(capsys, t, copy)
+    assert revocations_in(copy)[-1][:3] == (t.trust['grant_id'], 'paused at restore', None)
+    assert held_in(copy, ship_a['id']) and held_in(copy, ship_b['id'])
+    line = trusts_line(out)
+    assert named(t.trust['grant_id'], 'Andy B', 'revoked: paused in the replaced file') in line and 'again' not in line
+
+
+def test_a_grant_lost_with_the_copy_says_it_had_paused_there(trusted, capsys):
+    """M1: a grant made since the copy that paused in the replaced file is lost with the copy, and the report says it
+    had paused, so it isn't granted again unthinking. Mutation: the note left out."""
+    t = trusted
+    andy_c, c_ship = third_peer(t)
+    copy = staged(t.tmp, t.station)
+    t.clock[0] += 60
+    lost = t.station.grant_owner_trust(t.admin['id'], andy_c['id'], days=30, expect=2, password=PASSWORD, source='127.0.0.1')
+    for number in (1, 2):
+        pairs(t, *c_ship(f'c-ship-{number}', f'c-{number}'))
+    out = against_live(capsys, t, copy)
+    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 2 pairings'
+    assert named(lost['grant_id'], 'Andy C', how) in trusts_line(out)
+
+
+def test_refusals_at_the_cap_since_the_copy_are_named(trusted, capsys):
+    """M2: a burst of refusals at the cap is a sign of a compromised host, and the copy's counts end where it was
+    taken, so the report names each trust refused at the cap more often in the replaced file than here, day by day,
+    and revokes nothing. A count the copy holds whole isn't named. Mutation: the cap refusals not compared."""
+    t = trusted
+    grant_id, day = t.trust['grant_id'], utc_day(t.clock[0])
+    with t.station.transaction() as db:
+        db.execute('INSERT INTO trust_cap_refusals VALUES (?, ?, 1)', (grant_id, day))
+        db.execute("INSERT INTO trust_cap_refusals VALUES ('unchanged-grant', ?, 2)", (day,))
+    copy = staged(t.tmp, t.station)
+    with t.station.transaction() as db:  # since the copy: 1 more that day, and 2 the next
+        db.execute('UPDATE trust_cap_refusals SET refused=refused+1 WHERE grant_id=? AND day=?', (grant_id, day))
+        db.execute("INSERT INTO trust_cap_refusals VALUES (?, '2099-01-01', 2)", (grant_id,))
+    out = against_live(capsys, t, copy)
+    line = trusts_line(out)
+    assert named(grant_id, 'Andy B', 'refused at the cap since the copy: 3') in line and 'unchan' not in line
+    assert revocations_in(copy) == [] and 'owner trusts revoked (0)' in out
+
+
+def test_a_retirement_of_a_peer_the_copy_lacks_is_kept(trusted, capsys):
+    """M3: a peer paired and retired since the copy isn't in the copy at all; its retirement is kept even so, and once
+    live, pair refuses that peer whatever code is typed. Mutation: retirements kept only for peers the copy has."""
+    t = trusted
+    copy = staged(t.tmp, t.station)
+    andy_c, _ = third_peer(t)
+    t.clock[0] += 60
+    t.fed.unpair(t.admin['id'], andy_c['id'], retire=True)
+    out = against_live(capsys, t, copy)
+    assert rows_in(copy, 'SELECT 1 FROM peers WHERE peer_id=?', andy_c['peer_id']) == []
+    assert rows_in(copy, 'SELECT peer_id FROM retired_peers') == [(andy_c['peer_id'],)] and 'peer retirements kept (1)' in out
+    person_card = PeerIdentity.load_or_create(t.tmp / 'c').card('https://localhost:7437', {'id': t.owner['user_id'], 'name': 'Andy C'})
+    live = go_live(copy, t.tmp / 'live')
+    with pytest.raises(Problem) as caught:
+        Federation(live, endpoint='https://localhost:7436').pair(t.admin['id'], person_card, code=pairing_code(person_card))
+    assert (caught.value.status, caught.value.message) == (409, RETIRED)
