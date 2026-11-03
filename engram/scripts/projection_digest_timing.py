@@ -6,8 +6,8 @@ fresh temporary directory; it never touches ~/.engram.
 
 Prints one JSON object: the ledger's size and row counts, and the median of 5 runs each of
   - state_s:      Ledger.open_read_only + state(), as every caller pays today;
-  - scan_hash_s:  a NOT INDEXED scan of every projected table, hashing each row (SHA-256 of canonical JSON, a BLOB as
-                  hex), summing per table mod 2**256: the reader's full recompute (D4);
+  - scan_hash_s:  a NOT INDEXED scan of every projected table, hashing each row (BLAKE2b-256 of the plan's D2 tagged
+                  encoding), summing per table mod 2**256: the reader's full recompute (D4);
   - integrity_s:  PRAGMA integrity_check, which catches a torn index page.
 """
 import argparse
