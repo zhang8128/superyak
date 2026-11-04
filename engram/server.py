@@ -28,7 +28,7 @@ from resonance import (
 )
 from scoring import score_candidate
 from permissions import selector_json
-from sharing import (list_shares as _list_shares, share as _share_memory,
+from sharing import (list_shares as _list_shares, share_noting as _share_memory,
                      unshare as _unshare_memory)
 from storage import vec0_distance_to_similarity, _pack_embedding
 from transitions import TransitionGraph
@@ -2335,7 +2335,7 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
                 return _needs_allow(state, owner, obj, mapped, reason, now)
             legacy = placement_audience(state, state.records[cover])
         try:
-            record = _share_memory(
+            record, mended = _share_memory(
                 source_storage=_storage, published_storage=house, source_id=memory_id, layer=layer,
                 audience=legacy, reason=reason, source_instance=_instance_name or "default",
                 source_instance_id=sid, record_id=cover)
@@ -2347,7 +2347,7 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
                                     store_id=sid, now=now)
             except Exception:
                 logger.warning("Could not write the first lane note of %s", obj, exc_info=True)
-        return asdict(record)
+        return _share_answer(record, mended)
     finally:
         led.close()
 
@@ -2381,7 +2381,7 @@ def share(
             _after_share()
             return out
         try:
-            record = _share_memory(
+            record, mended = _share_memory(
                 source_storage=_storage,
                 published_storage=published_storage,
                 source_id=memory_id,
@@ -2394,7 +2394,7 @@ def share(
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
         _after_share()
-        return asdict(record)
+        return _share_answer(record, mended)
 
 
 def _acts_for_owner() -> bool | None:
@@ -2646,6 +2646,14 @@ def shares(audience: str | None = None) -> dict:
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
         return {"shares": _listed_shares(records)}
+
+
+def _share_answer(record, mended: str | None) -> dict:
+    """share's answer: the record, and `lane_mended` when a reused copy took its source's lane (never silently)."""
+    out = asdict(record)
+    if mended is not None:
+        out["lane_mended"] = mended
+    return out
 
 
 def _listed_shares(records) -> list[dict]:
