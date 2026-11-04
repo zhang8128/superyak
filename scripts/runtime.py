@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import os
@@ -115,6 +116,70 @@ def _parseable_json(path: Path) -> bool:
         return False
 
 
+EXPIRY_WARNING_DAYS = 14
+
+
+def _rfc3339(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        # Python 3.11 or newer (the venv is 3.14): fromisoformat takes any fractional seconds and "Z".
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _policy_validity(
+    path: Path, label: str, now: datetime
+) -> tuple[list[str], list[str]]:
+    """Errors when no rule of a policy is valid now; warnings for rules ending within 14 days."""
+    try:
+        rules = json.loads(_bounded_text(path)).get("payload", {}).get("rules")
+    except (RuntimeConfigurationError, json.JSONDecodeError, AttributeError):
+        return [], []
+    if not isinstance(rules, list) or not rules:
+        return [], []
+    errors: list[str] = []
+    warnings: list[str] = []
+    valid_now = 0
+    last_end = None
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        start = _rfc3339(rule.get("validFrom"))
+        end = _rfc3339(rule.get("validUntil"))
+        if (rule.get("validFrom") is not None and start is None) or (
+            rule.get("validUntil") is not None and end is None
+        ):
+            errors.append(
+                f"{label} rule {rule.get('id')} has an unreadable validity bound"
+            )
+            continue
+        if end is not None and (last_end is None or end > last_end):
+            last_end = end
+        if end is not None and end <= now:
+            warnings.append(
+                f"{label} rule {rule.get('id')} ended {end.date().isoformat()}"
+            )
+        if (start is None or start <= now) and (end is None or now < end):
+            valid_now += 1
+            if end is not None and end - now <= timedelta(days=EXPIRY_WARNING_DAYS):
+                warnings.append(
+                    f"{label} rule {rule.get('id')} ends {end.date().isoformat()}"
+                )
+    if not valid_now:
+        ended = (
+            f"last ended {last_end.date().isoformat()}"
+            if last_end is not None and last_end <= now
+            else "none has started"
+        )
+        errors.append(
+            f"{label} policy: every rule is outside its validity window ({ended})"
+        )
+    return errors, warnings
+
+
 def _publisher_socket_path(
     config_path: Path, memory_home: Path, socket_value: str | None
 ) -> Path:
@@ -219,7 +284,7 @@ def _database_path(memory_home: Path, instance: str) -> tuple[Path, Path, bool]:
     return requested, requested, False
 
 
-def _receiver_status(instance_dir: Path) -> tuple[dict, Path | None, list[str]]:
+def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | None, list[str]]:
     errors: list[str] = []
     settings_path = instance_dir / "lighthouse-receiver.toml"
     base = {"config": str(settings_path), "publishers": []}
@@ -279,10 +344,17 @@ def _receiver_status(instance_dir: Path) -> tuple[dict, Path | None, list[str]]:
     if not policy_parseable:
         status["error"] = "receiver policy is missing or not parseable"
         errors.append("receiver policy is unavailable")
+    else:
+        validity_errors, validity_warnings = _policy_validity(
+            policy_path, "receiver", now
+        )
+        errors.extend(validity_errors)
+        if validity_warnings:
+            status["warnings"] = validity_warnings
     return status, socket_path, errors
 
 
-def _publisher_status(memory_home: Path) -> tuple[dict, Path | None, list[str]]:
+def _publisher_status(memory_home: Path, now: datetime) -> tuple[dict, Path | None, list[str]]:
     errors: list[str] = []
     config_path = memory_home / ".engram" / "lighthouse-daemon.toml"
     base = {"config": str(config_path), "publishers": []}
@@ -310,6 +382,7 @@ def _publisher_status(memory_home: Path) -> tuple[dict, Path | None, list[str]]:
     socket_path = _publisher_socket_path(config_path, memory_home, socket_value)
     resources = []
     available = True
+    warnings: list[str] = []
     for publisher in publishers:
         directory = memory_home / ".engram" / "instances" / publisher
         database = directory / "graph.db"
@@ -321,6 +394,12 @@ def _publisher_status(memory_home: Path) -> tuple[dict, Path | None, list[str]]:
             "policy": {"path": str(policy), "parseable": parseable},
         }
         resources.append(resource)
+        if parseable:
+            validity_errors, validity_warnings = _policy_validity(
+                policy, f"publisher {publisher}", now
+            )
+            errors.extend(validity_errors)
+            warnings.extend(validity_warnings)
         if not database.is_file() or not parseable:
             available = False
     if not available:
@@ -330,6 +409,7 @@ def _publisher_status(memory_home: Path) -> tuple[dict, Path | None, list[str]]:
         "state": "available" if available else "unavailable",
         "publishers": publishers,
         "resources": resources,
+        **({"warnings": warnings} if warnings else {}),
     }, socket_path, errors
 
 
@@ -441,8 +521,12 @@ def _latest_receipt(database: Path) -> tuple[dict | None, str | None]:
 
 
 def _status(
-    memory_home: Path, default_instance: str, embedder_socket: Path | None = None
+    memory_home: Path,
+    default_instance: str,
+    embedder_socket: Path | None = None,
+    now: datetime | None = None,
 ) -> int:
+    now = now or datetime.now(timezone.utc)
     errors: list[str] = []
     project_root, project_override, instance, project_error = _project_binding(
         default_instance
@@ -466,11 +550,11 @@ def _status(
         receiver_socket = None
         errors.append("receiver is disabled while using the legacy database")
     else:
-        receiver, receiver_socket, receiver_errors = _receiver_status(instance_dir)
+        receiver, receiver_socket, receiver_errors = _receiver_status(instance_dir, now)
         errors.extend(receiver_errors)
         if receiver["state"] == "disabled":
             errors.append("receiver is disabled")
-    publisher, publisher_socket, publisher_errors = _publisher_status(memory_home)
+    publisher, publisher_socket, publisher_errors = _publisher_status(memory_home, now)
     errors.extend(publisher_errors)
     if receiver["state"] == "enabled":
         unavailable_publishers = sorted(
@@ -507,6 +591,10 @@ def _status(
     missing_scripts = [str(path) for path in required_scripts if not path.is_file()]
     if missing_scripts:
         errors.append("one or more configured source scripts are unavailable")
+    warnings = [
+        *receiver.get("warnings", []),
+        *publisher.get("warnings", []),
+    ]
     report = {
         "ok": not errors,
         "source": {
@@ -540,6 +628,7 @@ def _status(
         "embedder": embedder,
         "latest_lighthouse_receipt": receipt,
         "errors": errors,
+        **({"warnings": warnings} if warnings else {}),
     }
     print(json.dumps(report, sort_keys=True))
     return 0 if report["ok"] else 1
