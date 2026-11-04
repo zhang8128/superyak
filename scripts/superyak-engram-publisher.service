@@ -1,0 +1,19 @@
+# Keeps this machine's Engram publisher running, so a lighthouse doesn't die with the session that started it.
+# It serves the publishers named in lighthouse-daemon.toml under memory_home, on a Unix socket and nothing else.
+# Install: cp scripts/superyak-engram-publisher.service ~/.config/systemd/user/
+#          systemctl --user enable --now superyak-engram-publisher
+# With the shared embedder (superyak-embedder.service) and embedder_socket in runtime.json, it holds no model itself.
+[Unit]
+Description=Superyak Engram lighthouse publisher
+After=superyak-embedder.service
+
+[Service]
+ExecStart=%h/.local/bin/superyak-runtime publisher
+Restart=on-failure
+RestartSec=5
+# Without the shared embedder it loads the model in this process, about the embedder's own size.
+MemoryMax=3G
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target
