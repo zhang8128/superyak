@@ -2545,6 +2545,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
     'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
+    'lesson_outcomes',  # lesson outcomes: a local record beside the receipts, never federated
     # federation pull (plan SF9): copied as they are. A copy's nonces end where it was taken, so the listener reads the
     # reconcile's mark in system_meta and counts a request whose `at` is at most the mark plus 300 s as a replay
     # (fix:restore-keeps-pull-nonces). The backfill covers a copy older than peer_delivery.

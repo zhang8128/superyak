@@ -51,16 +51,19 @@ def _episode(src, content="a lived thing"):
 
 def _semantic(src, content="a learned thing", embedding=None):
     sid = str(uuid.uuid4())
+    source = _episode(src, f"the chosen episode behind {content}")   # a semantic built from a chosen episode
     if embedding is None:
+        # share refuses a semantic whose capture mark is unknown (migration 030), so a raw insert sets it
         src.conn.execute(
             "INSERT INTO semantics (id, content, kind, confidence, created_at, "
-            "auto_generated, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (sid, content, "fact", 0.75, "2026-09-02T00:00:00Z", 0, None, "personal"),
+            "auto_generated, content_hash, lane, touched_capture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, content, "fact", 0.75, "2026-09-02T00:00:00Z", 0, None, "personal", 0),
         )
+        src.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", (sid, source))
         src.conn.commit()
     else:
         src.add_semantic(id=sid, content=content, kind="fact", confidence=0.75,
-                         embedding=embedding, source_episode_ids=[])
+                         embedding=embedding, source_episode_ids=[source])
     return sid
 
 

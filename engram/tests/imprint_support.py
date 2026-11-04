@@ -693,7 +693,8 @@ def share_as(store: Storage, published: Path, id: str, audience: str, *, layer: 
              source_instance_id: str | None = None):
     """Record a share as ``sharing.share`` does, with the store's own id unless another is given.
 
-    A semantic share of an id the store holds only as an episode first gives the store a semantic of that id.
+    A semantic share of an id the store holds only as an episode first gives the store a semantic of that id, built
+    from that chosen episode and marked as touching no capture (migration 030), since share refuses any other.
     """
     import sharing
     import store_identity
@@ -701,8 +702,9 @@ def share_as(store: Storage, published: Path, id: str, audience: str, *, layer: 
     if layer == "semantic" and store.get_semantic(id) is None:
         store.conn.execute(
             "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash,"
-            " lane) VALUES (?, ?, 'fact', 0.5, '2026-01-01T00:00:00+00:00', 0, ?, 'work')",
+            " lane, touched_capture) VALUES (?, ?, 'fact', 0.5, '2026-01-01T00:00:00+00:00', 0, ?, 'work', 0)",
             (id, f"semantic {id}", f"hash-{id}"))
+        store.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", (id, id))
         store.conn.commit()
     house = Storage(str(published))
     try:

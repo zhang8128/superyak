@@ -155,6 +155,16 @@ def test_u11_share_with_no_covering_allow_changes_nothing_and_returns_the_permit
     assert out["cli"].startswith("engram-permissions allow") and ledger_bytes() == before
 
 
+def test_a_captured_prompt_is_refused_before_any_allow_is_asked_for(enforce_server):
+    # fix:share-refuses-captured-memories: no needs-allow, no proposal, the ledger untouched.
+    server._storage.conn.execute("UPDATE episodes SET source = 'auto' WHERE id = ?", (M["other"],))
+    server._storage.conn.commit()
+    before = ledger_bytes()
+    out = server.share(memory_id=M["other"], audience="place:la-county/public-health", reason="r")
+    assert "captured prompt" in out["error"] and "status" not in out and "permit" not in out
+    assert ledger_bytes() == before and server.shares()["shares"] == []
+
+
 def test_needs_allow_cli_quotes_an_agent_supplied_reason(enforce_server):
     import shlex
     reason = "x'; touch /tmp/pwned; echo '"
@@ -395,3 +405,12 @@ def test_shadow_keeps_the_legacy_audience_and_links_a_covering_allow_when_there_
     assert placement_row(out["share_id"])["record_id"] == rid
     assert ledger_state().lane_notes[f"mem:{STORE_ID[0]}/episode/{M['local']}"]
     assert "error" in server.share(memory_id=M["local"], audience="place:la-county/public-health", reason="r")
+
+
+def test_permit_on_a_busy_ledger_says_nothing_was_written_and_to_try_again(enforce_server, monkeypatch):
+    """The projection digest's section 2 review, S3: LedgerBusy from the write is the tool's error, not a traceback."""
+    monkeypatch.setattr(Ledger, "_append_on", lambda self, *args, **kwargs: None)   # an unverified change each try
+    before = ledger_bytes()
+    out = server.permit(op="deny", selector=selector(["place:la-county/public-health"]), reason="r")
+    assert out == {"error": "the ledger was busy; nothing was written; try again"}
+    assert ledger_bytes() == before

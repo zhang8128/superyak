@@ -170,6 +170,7 @@ def lazy_state(w, home):
     """The World's tables written into a ledger under `home` by SQL, then read back as a lazy State."""
     from lighthouse_protocol import canonical_json
     from permission_ledger import ZERO, Ledger, _digest
+    from tests.permissions_memory_support import restamp_projection
     shutil.rmtree(home, ignore_errors=True)
     home.mkdir(parents=True)
     led = Ledger._blank(home, "reference-ledger")
@@ -196,6 +197,7 @@ def lazy_state(w, home):
         prev = dg
     conn.execute("COMMIT")
     led.close()
+    restamp_projection(home)
     led = Ledger.open_read_only(home)
     s = led.state()
     led.close()

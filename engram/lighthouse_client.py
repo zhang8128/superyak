@@ -24,6 +24,7 @@ _CANDIDATE_FIELDS = frozenset({
 })
 _REMOTE_CODES = frozenset({
     "PUBLISHER_UNAVAILABLE", "PROTOCOL_VERSION_MISMATCH", "MALFORMED_FRAME",
+    "LEDGER_BUSY",      # the publisher's permission ledger was busy: nothing served, retry (the projection digest's S4)
 })
 
 

@@ -73,9 +73,11 @@ def test_u15_the_check_reruns_after_a_registry_change(tmp_path):
 # ---------------------------------------------------------------- what the brief leaves to the builder
 
 def only_proposal_rows_changed(before, after):
-    """The log, the head that follows it in `meta`, and the proposals changed; nothing else."""
+    """The log, the head that follows it in `meta`, the projection digest that follows the tables there, and the
+    proposals changed; nothing else."""
     def kept(t, rows):
-        return [r for r in rows if r.get("key") != "head"] if t == "meta" else rows
+        return [r for r in rows if r.get("key") not in ("head", "projection", "projection_parts")] \
+            if t == "meta" else rows
     keys = {t for t in after if t not in ("ledger_log", "proposals")}
     return all(kept(t, before[t]) == kept(t, after[t]) for t in keys) and after["proposals"] != before["proposals"]
 

@@ -173,7 +173,7 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
         if lesson['id'] in seen or lesson['match'] != 'words' or not value or not _contained(value, cut) \
                 or len(value.encode('utf-8')) < HOLD_BYTES:
             continue
-        text = lh.hold_reason(lesson, first=not got and limit == hs.HOLDS_PER_SESSION)
+        text = lh.hold_reason(lesson, first=not got and limit == hs.HOLDS_PER_SESSION, data_dir=settings['data_dir'])
         if len(text.encode('utf-8')) > hs.LESSON_BYTES:
             continue  # the entry never cuts a Hold, so one over the provider's cap isn't offered (Ruling 34)
         got.append(hs.Hold(KIND, hold_key(session_id, digest, lesson['id']), text))

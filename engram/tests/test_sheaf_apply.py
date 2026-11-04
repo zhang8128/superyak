@@ -156,6 +156,58 @@ class TestApplySubdivision:
             "SELECT 1 FROM semantic_vectors WHERE id = 'sem-1'").fetchone()
         assert row is None
 
+    @pytest.mark.parametrize("hub_mark", [None, 0, 1])
+    def test_peers_copy_the_hubs_capture_mark(self, tmp_db, fake_embedding, hub_mark):
+        # Migration 030: a peer's text comes from the hub's sources, so it carries the hub's mark, NULL included.
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        tmp_db.conn.execute("UPDATE semantics SET touched_capture = ? WHERE id = 'sem-1'", (hub_mark,))
+        tmp_db.conn.commit()
+        result = sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                         hub_content="the shared residue",
+                                         embed_fn=lambda t: fake_embedding(), site="sleep")
+        for pid in result["peer_ids"]:
+            assert tmp_db.get_semantic(pid)["touched_capture"] == hub_mark
+        assert tmp_db.get_semantic("sem-1")["touched_capture"] == hub_mark
+
+    def test_a_peer_that_links_a_copy_of_a_capture_is_marked(self, tmp_db, fake_embedding):
+        # Round 3, S1: the 030 trigger matches source 'auto' only, so the peer's own links are marked explicitly. A
+        # capture of "episode 0" arrives after the hub was made, so the hub stays 0 and ep-0 is now a copy of it.
+        import hashlib
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        assert tmp_db.get_semantic("sem-1")["touched_capture"] == 0
+        tmp_db.conn.execute(
+            "INSERT INTO episodes (id, content, created_at, source, session_id, content_hash, lane) "
+            "VALUES ('cap', 'episode 0', '2026-11-03T12:00:00Z', 'auto', 's', ?, 'work')",
+            (hashlib.sha256(b"episode 0").hexdigest(),))
+        tmp_db.conn.commit()
+        result = sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                         hub_content="the shared residue",
+                                         embed_fn=lambda t: fake_embedding(), site="sleep")
+        first, second = (tmp_db.get_semantic(pid) for pid in result["peer_ids"])
+        assert "ep-0" in first["source_episode_ids"] and first["touched_capture"] == 1
+        assert second["touched_capture"] == 0
+
+    def test_a_split_reads_the_capture_digests_once(self, tmp_db, fake_embedding, monkeypatch):
+        # Round 4: one read of cold storage per split, not one per peer.
+        import sharing
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        tmp_db.add_episode(id="moved", session_id="s", content="a note that moves", embedding=fake_embedding())
+        assert tmp_db.prune_episode_ids(["moved"]) == 1
+        tmp_db._cold_conn.close()
+        tmp_db._cold_conn = None
+        opened, real = [], sharing.sqlite3.connect
+
+        def counting(database, *args, **kwargs):
+            if "cold.db" in str(database):
+                opened.append(str(database))
+            return real(database, *args, **kwargs)
+
+        monkeypatch.setattr(sharing.sqlite3, "connect", counting)
+        result = sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                         hub_content="the shared residue",
+                                         embed_fn=lambda t: fake_embedding(), site="sleep")
+        assert len(result["peer_ids"]) == 2 and len(opened) == 1
+
     def test_hub_vector_kept_when_content_untouched(self, tmp_db, fake_embedding):
         eps = _seed_semantic(tmp_db, fake_embedding)
         v = _verdict(eps)

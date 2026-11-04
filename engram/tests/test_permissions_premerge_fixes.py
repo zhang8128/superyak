@@ -116,14 +116,16 @@ def test_n2_verify_fails_on_any_answer_of_sqlites_check_but_ok(tmp_path, monkeyp
     led = Ledger.open_read_only(tmp_path)
     try:
         top, problems = led.integrity()
-        assert led.state().seq == top                          # a reader still reads it: it reads records whole
+        with pytest.raises(LedgerUnreadable, match="the projection digest: SQLite's integrity check of the file"):
+            led.state()                       # a reader runs SQLite's check too, in the projection digest's full check
     finally:
         led.close()
     assert problems and all(p.startswith("SQLite's integrity check of the file: ") for p in problems), problems
     assert any("records_layer" in p for p in problems)
     assert cli_main(["verify"]) == 1
     out = capsys.readouterr().out
-    assert "does not verify" in out and "records_layer" in out and "No reader runs SQLite's integrity check" in out
+    assert "does not verify" in out and "records_layer" in out
+    assert "A reader runs SQLite's integrity check only when it checks the ledger whole" in out
 
 
 # ---------------------------------------------------------------- N5: the last row's parse is kept by its head
@@ -201,70 +203,86 @@ def test_claims_verify_says_its_tail_checks_catch_a_tear_of_one_row_per_column(t
     assert "projection digest" in out and "that row's change is in the tables" not in out
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
-                   reason="N1: a tear across several rows of one column reads whole until the projection digest")
-def test_claims_a_tear_across_two_rows_of_one_column_still_reads_whole(tmp_path):
-    """Andy uncollects m2 and m3 in one act; a tear keeps m3's removal and loses m2's. The column's highest is still
-    the act's seq, so the tail checks pass and m2 reads as a member again. Once the projection digest refuses it,
-    this passes and its xfail mark goes."""
+def test_claims_a_tear_across_two_rows_of_one_column_reads_unreadable_naming_its_table(tmp_path):
+    """N1, closed by the projection digest (its plan's acceptance test, M4d): Andy uncollects m2 and m3 in one act; a
+    tear keeps m3's removal and loses m2's. The column's highest is still the act's seq, so the tail checks pass, and
+    the digest names the table the tear is in. The control: without the tear the same read is whole."""
     led = e1_county_ledger(tmp_path)
     seq = do(led, ANDY, "uncollect", collection=MEDICAL, objects=[M2, M3], now="2026-11-02").seq
     led.close()
+    live = {r.object for r in _state(tmp_path).collection_members.get(MEDICAL) if r.removed_seq is None}
+    assert M2 not in live and M3 not in live
     _sql(tmp_path, "UPDATE collection_members SET removed_seq = NULL, removed_by = NULL "
                    f"WHERE removed_seq = {seq} AND object = '{M2}'")
-    try:
-        state = _state(tmp_path)
-    except LedgerUnreadable:
-        return
-    assert M2 in {r.object for r in state.collection_members.get(MEDICAL) if r.removed_seq is None}
-    pytest.fail("a tear across two rows of one column read whole: m2 is a member again")
+    with pytest.raises(LedgerUnreadable, match="the projection digest: collection_members differs"):
+        _state(tmp_path)
 
 
-# ---------------------------------------------------------------- item 5: `gate enforce` waits for the digest
+# ---------------------------------------------------------------- item 5: `gate enforce` needs the projection digest
 
-@pytest.fixture
-def enforce_waits(monkeypatch):
-    """The refusal as shipped, read when this module was imported (tests/conftest.py lifts it for each test)."""
-    import permission_ledger
-    assert SHIPPED_ENFORCE_WAITS and "projection digest" in SHIPPED_ENFORCE_WAITS
-    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
-    return SHIPPED_ENFORCE_WAITS
+UNSTAMPED_GATE = "enforce needs the ledger's projection digest"
 
 
-def test_item5_the_gate_act_refuses_enforce_until_the_digest_with_the_reason(tmp_path, enforce_waits):
+def _unstamp(home):
+    """The ledger as code before the digest left one: version 1, no projection keys, no marker."""
+    _sql(home, "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+         "DELETE FROM meta WHERE key IN ('projection', 'projection_parts')")
+    ledger_path(home).with_name("permissions.verified").unlink(missing_ok=True)
+
+
+def test_item5_enforce_ships_open_now_that_the_projection_digest_has_landed():
+    """Serenity's pre-merge item 5 closed: the digest landed, so ENFORCE_WAITS ships empty and no test lifts it."""
+    assert SHIPPED_ENFORCE_WAITS is None
+
+
+def test_item5_the_gate_act_raises_enforce_on_a_stamped_ledger_and_refuses_it_on_an_unstamped_one(tmp_path):
+    """The refusal moved from ENFORCE_WAITS to the digest (D6): a ledger made before the digest is refused, with the
+    reason, and nothing is written; off and shadow are unchanged."""
     led = raised_ledger(tmp_path, mode="shadow")
     try:
+        raise_gate(led, "enforce", now="2026-11-03")
+        assert led.meta()["gate"] == "enforce"
+        raise_gate(led, "shadow", now="2026-11-04")
+    finally:
+        led.close()
+    _unstamp(tmp_path)
+    led = Ledger.open(tmp_path)
+    try:
         before = led.seq()
-        with pytest.raises(RuleError, match="projection digest") as e:
-            raise_gate(led, "enforce", now="2026-11-03")
-        assert enforce_waits in str(e.value) and led.seq() == before          # nothing written
-        assert led.meta()["gate"] == "shadow"
-        for mode in ("off", "shadow"):                                         # unchanged
-            raise_gate(led, mode, now="2026-11-04")
+        with pytest.raises(RuleError, match=UNSTAMPED_GATE):
+            raise_gate(led, "enforce", now="2026-11-05")
+        assert led.seq() == before and led.meta()["gate"] == "shadow"
+        for mode in ("off", "shadow"):
+            raise_gate(led, mode, now="2026-11-06")
             assert led.meta()["gate"] == mode
     finally:
         led.close()
 
 
-def test_item5_gate_enforce_refuses_before_it_asks_for_a_yes(cli_home_with_house, fake_tty, capsys, enforce_waits):
+def test_item5_gate_enforce_asks_for_its_yes_on_a_stamped_ledger_and_is_refused_before_it_on_an_unstamped_one(
+        cli_home_with_house, fake_tty, capsys):
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "enforce"]) == 0
+    assert "enforce" in fake_tty.shown()
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "shadow"]) == 0
+    _unstamp(cli_home_with_house)
     shown = fake_tty.shown()
     assert cli_main(["gate", "enforce"]) == 1
-    assert "refused: 12.3 the gate: enforce waits for the ledger's projection digest" in capsys.readouterr().err
+    assert f"refused: 12.3 the gate: {UNSTAMPED_GATE}" in capsys.readouterr().err
     assert fake_tty.shown() == shown                                           # no yes was asked
-    fake_tty.answer_the_printed_code()
-    assert cli_main(["gate", "shadow"]) == 0                                   # shadow is as before
 
 
-def test_item5_a_gate_already_at_enforce_reads_as_it_is_and_can_be_lowered(tmp_path, monkeypatch):
-    import permission_ledger
-    from permission_ledger import Gate, effective_gate, houses
-    led = raised_ledger(tmp_path, mode="enforce")                 # raised before the refusal (conftest lifts it)
-    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
+def test_item5_a_gate_at_enforce_reads_as_it_is_on_a_stamped_ledger_and_closed_on_an_unstamped_one(tmp_path):
+    from permission_ledger import UNSTAMPED, Gate, effective_gate, houses
+    led = raised_ledger(tmp_path, mode="enforce")
+    led.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
+    _unstamp(tmp_path)
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("closed", UNSTAMPED)
+    led = Ledger.open(tmp_path)
     try:
-        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
-        with pytest.raises(RuleError, match="projection digest"):
-            raise_gate(led, "enforce", now="2026-11-03")
-        raise_gate(led, "shadow", now="2026-11-03")
-        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)
+        raise_gate(led, "shadow", now="2026-11-03")                             # and it can be lowered
     finally:
         led.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)

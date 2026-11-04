@@ -1,6 +1,7 @@
 """Engram daemon — async local agent that runs as a background service.
 
-Talk to it from anywhere: CLI, scripts, other agents, claw, whatever.
+Talk to it from this machine: CLI, scripts, other agents, claw. It listens on loopback unless --host names another
+address, and it has no authentication.
 It persists between messages, maintains conversation state, and can
 call Claude Code for heavy lifting.
 
@@ -8,6 +9,7 @@ Usage:
     python daemon.py                        # Start daemon (default: nemotron-3-super)
     python daemon.py --model qwen3.5:27b    # Use different model
     python daemon.py --port 7432            # Custom port
+    python daemon.py --host 0.0.0.0         # Listen beyond loopback (no authentication: read the warning)
 
 Client (from another terminal):
     curl -X POST http://localhost:7432/chat -d '{"message": "hello"}'
@@ -161,12 +163,32 @@ class DaemonHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"unknown endpoint: {path}"}, 404)
 
 
-def main():
+LOOPBACK = ("127.0.0.1", "localhost")  # HTTPServer is IPv4 only, so ::1 cannot be bound
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Engram daemon — async local agent")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP port")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="IPv4 address to listen on (default loopback). The daemon has no authentication, so "
+                             "another address lets anyone who reaches it read and write your memories and, unless "
+                             "--no-claude, run Claude Code with --permission-mode auto.")
     parser.add_argument("--no-claude", action="store_true", help="Disable Claude Code")
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def exposure_warning(host: str, port: int) -> str | None:
+    """The words printed when the daemon listens beyond this machine, or None on loopback."""
+    if host in LOOPBACK:
+        return None
+    return (f"warning: this daemon has no authentication. Anyone who can reach {host}:{port} can read and write your "
+            f"memories and, unless --no-claude, run Claude Code with --permission-mode auto. Prefer the default "
+            f"loopback.")
+
+
+def main():
+    args = parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -174,8 +196,7 @@ def main():
 
     DaemonHandler.agent = agent
 
-    bind = "0.0.0.0"  # Accessible on local network (phone, other machines)
-    server = HTTPServer((bind, args.port), DaemonHandler)
+    server = HTTPServer((args.host, args.port), DaemonHandler)
 
     # Detect local network IP for phone access
     import socket
@@ -195,9 +216,12 @@ def main():
           f"{status['semantics']} semantics, {status['instincts']} instincts")
     print(f"  claude:   {'enabled' if status['claude_enabled'] else 'disabled'}")
     print(f"  local:    http://127.0.0.1:{args.port}")
-    print(f"  network:  http://{local_ip}:{args.port}")
-    print()
-    print("Open the network URL on your phone to chat.")
+    warning = exposure_warning(args.host, args.port)
+    if warning:
+        print(f"  network:  http://{local_ip if args.host == '0.0.0.0' else args.host}:{args.port}")
+        print()
+        print(warning)
+        print("Open the network URL on your phone to chat.")
     print()
 
     try:

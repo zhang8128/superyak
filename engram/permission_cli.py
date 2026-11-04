@@ -26,9 +26,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               check_gate_mode, check_retire_person, effective_gate, houses, ledger_path,
-                               make_private)
+from permission_ledger import (MARKER, PUBLISHED_HOUSE, Ledger, LedgerBusy, LedgerUnreadable, _lacks_029, _mark_moved,
+                               _seconds, _words_kind, check_gate_digest, check_gate_mode, check_retire_person,
+                               effective_gate, houses, ledger_path, make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -673,6 +673,7 @@ def _on_proposal(kind: str):
                 notes.append(f"needs: {json.dumps(body['needs'], sort_keys=True)}")
             if kind == "sign" and inner.kind == "gate":
                 check_gate_mode(inner.args.get("mode"))
+                check_gate_digest(inner.args.get("mode"), st.meta)
                 notes += gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(inner.args.get("mode"), st.meta))
             return _perform(led, owner, [Act(kind, {"proposal": p.id})], notes, words=words)
     return run
@@ -707,6 +708,7 @@ def _gate(a) -> int:
     check_gate_mode(a.mode)             # refused before the yes is asked, not after (`enforce` waits, item 5)
     with _ledger() as led:
         meta = led.meta()
+        check_gate_digest(a.mode, meta)  # enforce needs the projection digest (D6), also before the yes
         notes = gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(a.mode, meta))
         return _perform(led, meta["owner"], [Act("gate", {"mode": a.mode})], notes)
 
@@ -718,31 +720,55 @@ def _rebuild(a) -> int:
         except FileExistsError as e:
             raise RuleError("5.6 rebuild", f"a ledger already exists at {e}; --out names a directory with none") \
                 from e
-    print(f"Rebuilt the ledger at {ledger_path(dest)}. Its tables are the log's replay.")
+        differs = led.rebuilt_differs
+    print(f"Rebuilt the ledger at {ledger_path(dest)}. Its tables are the log's replay, and it keeps the projection "
+          f"digest.")
+    if isinstance(differs, str):                    # the old tables could not be read (the review's M2)
+        print(f"{differs[0].upper()}{differs[1:]}, so the replay was not compared with them; it is the ledger the "
+              f"log describes.")
+    elif differs:
+        print(f"The old tables differ from the replay in {', '.join(differs)}: the log holds what they lost or "
+              f"gained, so the replay is the ledger the log describes.")
+    else:
+        print("The old tables matched the replay.")
+    print(f"To put it in place: stop every Engram process, then move {ledger_path(dest)} to {ledger_path(_home())}.")
     return 0
 
 
 def _verify(a) -> int:
     """P 5.6: SQLite's integrity check of the file, the log's hash chain, `meta.head`, every table's seqs against
     the log's last row, and that each seq column the row sets holds its seq, each table read past its indexes
-    (`Ledger.integrity`). It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not.
-    The tail checks catch a tear of one row per column, not every tear, and the output says so."""
+    (`Ledger.integrity`), and every part of the projection digest against the tables, which it reports (D7). It
+    writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
     with _ledger(read_only=True) as led:
         top, problems = led.integrity()
+        parts = led.checked_parts
+    if parts is None:
+        digest = ("This ledger keeps no projection digest (it was made before it): under off and shadow it reads as "
+                  "before, and under enforce it reads closed. Run `engram-permissions rebuild --out <dir>`, then the "
+                  "move step it prints.")
+    else:
+        digest = (f"The projection digest's parts, at seq {top}, in rows: "
+                  + ", ".join(f"{p} {n}" for p, (n, _sum) in parts.items()) + ".")
     if not problems:
         print(f"The ledger verifies: {top} log rows, SQLite's integrity check of the file is ok, the hash chain is "
               f"whole, no table names a seq past the log's last row, and each seq column that row sets holds its "
               f"seq. These tail checks catch a tear of one row per column; a tear across several rows of one "
-              f"column, or, for a reader, a torn index page, can still read whole until the projection digest (a "
-              f"follow-up, before any house runs enforce) closes the class.")
+              f"column, or a torn index page, is caught by the projection digest, and it matches the tables. A "
+              f"reader checks the digest before it serves a State; the gate's own read and some direct reads, such "
+              f"as the imprint filter's, do not.")
+        print(digest)
         return 0
     print(f"The ledger does not verify ({top} log rows):")
     print("\n".join(f"  - {p}" for p in problems))
-    print("Every reader refuses a ledger whose tables name a seq past its log, whose head is not its last row, or "
-          "whose last row's change is not in its tables, so under `enforce` nothing is served. No reader runs "
-          "SQLite's integrity check or follows the hash chain, so a ledger that fails only those still reads as it "
-          "is. Restore the file together with its journal, or replay the log that is left with `engram-permissions "
-          "rebuild --out <dir>` and make the lost acts again.")
+    print(digest)
+    print("Every reader refuses a ledger whose tables name a seq past its log, whose head is not its last row, whose "
+          "last row's change is not in its tables, or whose tables are not its projection digest, so under "
+          "`enforce` nothing is served. A reader runs SQLite's integrity check only when it checks the ledger whole "
+          "(when no writer, and not this process, has verified the file as it is), and no reader follows the hash "
+          "chain, so a ledger that fails only those can still read as it is. Restore the file together with its "
+          "journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` and make the lost "
+          "acts again.")
     return 1
 
 
@@ -1061,9 +1087,10 @@ def _legacy_selector(owner_login: str, audience: str, collection: str) -> str:
 
 
 def _forget_ledger(path: Path) -> None:
-    for suffix in ("", "-journal", "-wal", "-shm"):
+    """A ledger file left from a stopped run, its journal and WAL files, and the marker beside it (N7)."""
+    for name in (path.name, path.name + "-journal", path.name + "-wal", path.name + "-shm", MARKER):
         with contextlib.suppress(OSError):
-            path.with_name(path.name + suffix).unlink()
+            path.with_name(name).unlink()
 
 
 def _migrate(args) -> int:
@@ -1132,7 +1159,8 @@ def _migrate(args) -> int:
                 ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
         led = None
         try:
-            led = Ledger.create(root, login, now=at, channel="migration", path=building)
+            led = Ledger.create(root, login, now=at, channel="migration", path=building,
+                                fresh=True)
 
             def do(kind, **a):
                 out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)
@@ -1159,6 +1187,7 @@ def _migrate(args) -> int:
                 audience = home if collection == "legacy-commons" else "group:" + collection[len("legacy-group-"):]
                 record_of[collection] = do("allow", layer=home, selector=_legacy_selector(login, audience, collection),
                                            valid_from=at, valid_until=None, reason="legacy share").ref
+            checked = led._finish_fresh()       # checked whole once, here, and marked once in place (S4)
             led.close()
             led = None
             # The house's links are written before the ledger is in place: a run stopped between the two leaves
@@ -1177,6 +1206,7 @@ def _migrate(args) -> int:
                 raise RuleError("12.3 migrate", f"a ledger appeared at {path} while migrate ran; this one was not "
                                 "kept")
             os.replace(building, path)
+            _mark_moved(path, checked)
         except BaseException:
             if led is not None:
                 led.close()
@@ -1542,6 +1572,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     except RuleError as e:
         print(f"refused: {e}", file=sys.stderr)
+        return 1
+    except LedgerBusy as e:                  # other writers kept changing the ledger under this one (D4, step 2)
+        print(f"the ledger was busy; nothing was written; try again ({e})", file=sys.stderr)
         return 1
     except (LedgerUnreadable, sqlite3.Error) as e:
         print(f"the ledger cannot be used: {e}", file=sys.stderr)

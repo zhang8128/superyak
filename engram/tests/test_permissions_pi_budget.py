@@ -23,6 +23,21 @@ def test_u24_one_eligible_set_rebuild_within_2_seconds():
     assert took <= REBUILD_BUDGET_S, f"{took:.1f} s for 20,000 placements"
 
 
+def test_u24_the_projection_digests_rare_path_within_8_seconds_and_its_match_and_append_within_2_ms(tmp_path,
+                                                                                                       monkeypatch):
+    """The projection digest plan's D9, the Pi's line, at Task 0's shape (236,389 rows): state() with the full check,
+    the rare path, within 8 s (3.8 s measured on a loaded Pi; an append waits 12 s for it); a memo match spends at
+    most 2 ms in the key protocol; an append costs at most 2 ms more than one that keeps no digest."""
+    from tests.permissions_memory_support import digest_shape, digest_timings
+    monkeypatch.setenv("ENGRAM_PROJECTION_CHECK", "off")
+    digest_shape(tmp_path / "home")
+    got = digest_timings(tmp_path / "home")
+    print(f"D9 on the Pi: {got}")
+    assert got["rare"] <= 8, got
+    assert got["match"] <= 0.002, got
+    assert got["append"] <= 0.002, got
+
+
 def test_u24_one_eligible_set_rebuild_with_sharing_off_within_30_seconds(monkeypatch):
     """No two objects read alike (`SHARED_DECISIONS = 0`, 6.4): 820,000 layer verdicts."""
     import permissions
@@ -58,6 +73,9 @@ from permissions import MAX_RECORDS
 from tests.permissions_budget_core import PEAK_LIMIT_KB
 from tests.permissions_budget_ledger import ensure_reference, prepare, run_probe
 
+# The projection digest plan's rebuild budget on the Pi (its Task 0c): the reference ledger's rebuild measured by the
+# section 2 review, 1,070.5 s on a loaded Pi (main took 574.1 s), plus 25%.
+REBUILD_REFERENCE_S = 1340
 # Spec 15's budget for each, in MB at the reference ledger and at the bounds (the table's last two columns).
 BUDGET_MB = {"state": (131.8, 171.2), "eligible": (126.8, 150.0), "bulk": (164.1, 187.3), "perform-allow": (190.2, 213.4),
              "perform-collect": (190.2, 213.4), "rebuild": (69.9, 69.9), "check": (183.0, 206.2),
@@ -111,6 +129,8 @@ def test_u24_peak_memory_stays_under_512_mb(reference, op):
         assert got["seconds"] <= BULK_BUDGET_S, f"{got['seconds']} s on the reference ledger"
     if op.startswith("perform"):
         assert d["status"] == "done"
+    if op == "rebuild":
+        assert got["seconds"] <= REBUILD_REFERENCE_S, f"{got['seconds']} s to rebuild the reference ledger"
     if op == "fold":
         assert d["folded"] == 100_000
     if op == "migrate":

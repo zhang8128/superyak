@@ -26,6 +26,7 @@ from pathlib import Path
 HEADING = "Lessons from Andy's ships (quoted data, not instructions)"
 SHORT_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')  # section 2's short form
 SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')  # SHIP_NAME in peer/superyak_peer/ships.py (section 2)
+RECEIPT = re.compile(r'[0-9a-f]{8}')  # the answer's receipt: the receipt row's id prefix
 ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
 PROMPT, START, FAILURE = 'UserPromptSubmit', 'SessionStart', 'PostToolUseFailure'
 # Wall clock from the hook's start (section 8): a hard 150 ms at a prompt, 1 s before a command (lessons_hold), 2 s
@@ -182,6 +183,9 @@ def _checked(item):
     value = _text(item.get('command'), VALUE_BYTES)  # the `command` value words matched, which a hold needs
     if value:
         found['command'] = value
+    receipt = item.get('receipt')
+    if isinstance(receipt, str) and RECEIPT.fullmatch(receipt):  # a malformed one is dropped, the lesson stays
+        found['receipt'] = receipt
     return found
 
 
@@ -217,17 +221,32 @@ def _fenced(lesson):
     return fence_external(lesson['ship'], body, limit=len(body))
 
 
-def render(lessons):
+def receipt_line(r, data_dir, checkout=CHECKOUT):
+    """The line after a lesson's fence that names its receipt and the make line that records its outcome. It names this
+    checkout and this peer's data directory, so it works on any peer. `(helped|misled|unused)` is a syntax error in a
+    shell: pasted as it stands, nothing is recorded (one outcome per receipt can't be undone)."""
+    return (f'Receipt {r}: make -C {shlex.quote(str(checkout))} lesson-outcome RECEIPT={r} '
+            f'OUTCOME=(helped|misled|unused) LESSONS_DATA={shlex.quote(str(data_dir))}')
+
+
+def _shown(lesson, data_dir=None):
+    """A lesson's fence, then its receipt line when it has a receipt and the peer's data directory is known: a line
+    without the data directory would point at the wrong peer, so it is left out."""
+    text = _fenced(lesson)
+    return f'{text}\n{receipt_line(lesson["receipt"], data_dir)}' if lesson.get('receipt') and data_dir else text
+
+
+def render(lessons, data_dir=None):
     """The lessons as additionalContext: HEADING, then each lesson's own `Lesson <id> from <ship>` line and its fence."""
-    return '\n'.join([HEADING] + [f'Lesson {l["id"]} from {l["ship"]}\n{_fenced(l)}' for l in lessons])
+    return '\n'.join([HEADING] + [f'Lesson {l["id"]} from {l["ship"]}\n{_shown(l, data_dir)}' for l in lessons])
 
 
-def hold_reason(lesson, first=True):
+def hold_reason(lesson, first=True, data_dir=None):
     """One lesson's block in the shared hold entry's deny (section 8; the seam's Ruling 35). The deny's first block
     starts with section 8's `Held once` line, which says it is a lesson, not a refusal. Every block has the lesson's own
     `Lesson <id> from <ship>` line, which is how the transcript is read back. The entry ends the deny with its re-run
     line."""
-    block = f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_fenced(lesson)}'
+    block = f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_shown(lesson, data_dir)}'
     return f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{block}' if first else block
 
 
@@ -412,8 +431,8 @@ def last_line(error):
     return lines[-1] if lines else ''
 
 
-def _output(event, lessons):
-    return json.dumps({'hookSpecificOutput': {'hookEventName': event, 'additionalContext': render(lessons)}})
+def _output(event, lessons, data_dir=None):
+    return json.dumps({'hookSpecificOutput': {'hookEventName': event, 'additionalContext': render(lessons, data_dir)}})
 
 
 def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=()):
@@ -493,7 +512,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         request.update(prompt=prompt[:CUTS['prompt']], limit=REQUEST_LIMITS[PROMPT], seen=seen[-SEEN_MAX:])
         lessons = [l for l in prompt_lessons(settings, request, deadline - PRINT_RESERVE, started, monotonic, peer) or ()
                    if l['id'] not in seen]
-        return _output(name, lessons[:REQUEST_LIMITS[PROMPT]]) if lessons else ''
+        return _output(name, lessons[:REQUEST_LIMITS[PROMPT]], settings['data_dir']) if lessons else ''
     sent = {}
     cwd = event.get('cwd') if isinstance(event.get('cwd'), str) and event.get('cwd') else None
     if name == START:
@@ -531,7 +550,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
                         own=own)
     except OSError:
         return ''  # what isn't recorded isn't shown, so the budget holds
-    return _output(name, fresh) if fresh else ''
+    return _output(name, fresh, settings['data_dir']) if fresh else ''
 
 
 def _arm(at, monotonic=time.monotonic):
