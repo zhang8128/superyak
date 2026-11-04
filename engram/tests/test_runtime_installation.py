@@ -922,3 +922,61 @@ def test_team_launcher_missing_fails_before_exec(tmp_path):
 
     assert result.returncode == 2 and "source script is unavailable" in result.stderr
     assert not record.exists()
+
+
+def _rule_window(days_from, days_to):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    return {
+        "id": "window-rule",
+        "validFrom": (now + timedelta(days=days_from)).isoformat(),
+        "validUntil": (now + timedelta(days=days_to)).isoformat(),
+    }
+
+
+def _status_with_rule(tmp_path, policy_name, rule):
+    _, launcher, memory_home, config, socket_path = _healthy_status_tree(tmp_path)
+    instances = memory_home / ".engram" / "instances"
+    path = (
+        instances / "engram" / "lighthouse-receiver-policy.json"
+        if policy_name == "receiver"
+        else instances / "lighthouse" / "lighthouse-policy.json"
+    )
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    artifact["payload"]["rules"] = [rule]
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    try:
+        result = _run_launcher(launcher, config, "status")
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+    return result, json.loads(result.stdout)
+
+
+def test_status_is_not_ok_when_every_receiver_rule_has_expired(tmp_path):
+    result, status = _status_with_rule(tmp_path, "receiver", _rule_window(-60, -19))
+    assert result.returncode != 0
+    assert status["ok"] is False
+    assert any(
+        message.startswith("receiver policy: every rule is outside its validity window (last ended ")
+        for message in status["errors"]
+    )
+
+
+def test_status_warns_of_a_publisher_rule_ending_within_14_days(tmp_path):
+    result, status = _status_with_rule(tmp_path, "publisher", _rule_window(-30, 10))
+    assert result.returncode == 0
+    assert status["ok"] is True
+    assert len(status["warnings"]) == 1
+    assert "window-rule" in status["warnings"][0]
+    assert status["warnings"][0].startswith("publisher lighthouse rule window-rule ends 20")
+
+
+def test_status_has_no_warning_for_a_rule_ending_in_30_days(tmp_path):
+    result, status = _status_with_rule(tmp_path, "publisher", _rule_window(-30, 30))
+    assert result.returncode == 0
+    assert status["ok"] is True
+    assert "warnings" not in status

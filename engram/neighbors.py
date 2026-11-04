@@ -34,7 +34,8 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
     """Consult only explicit peers and persist a content-free receipt before delivery.
 
     ``now`` is an injectable clock, never a wire-supplied authorization time.
-    Missing matching recall grants return None; other failures return diagnostics.
+    A recall grant denied for every publisher returns an empty result naming each publisher's decision code
+    (the top code when they share one, else RECEIVER_RULES_DENIED); other failures return diagnostics.
     """
     import math
     if (not isinstance(receiver, str) or not NAME.fullmatch(receiver)
@@ -83,6 +84,7 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
         return _empty("RECEIVER_POLICY_INVALID")
 
     attempted = False
+    denied = []
     for name in publishers:
         publisher = f"urn:engram:{name}"
         decision, weight = None, 0
@@ -90,6 +92,7 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
             policy, grants = authorize(publisher, ["recall"], "query")
             decision = grants["recall"]
             if not permits(grants):
+                denied.append(dict(publisher=publisher, code=decision.code or "NO_MATCHING_ALLOW"))
                 continue
             attempted = True
             weight = policy.artifact.get("extensions", {}).get("engram:weight", {}).get(publisher, 1)
@@ -113,7 +116,14 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                 unavailable.append(dict(publisher=publisher, weight=weight,
                                         policyDecision=decision.to_json(), code=code))
     if not attempted:
-        return _empty("RECEIVER_POLICY_INVALID") if diagnostics else None
+        if diagnostics:
+            return _empty("RECEIVER_POLICY_INVALID")
+        if denied:
+            codes = {d["code"] for d in denied}
+            result = _empty(denied[0]["code"] if len(codes) == 1 else "RECEIVER_RULES_DENIED")
+            result["diagnostics"].extend(denied)
+            return result
+        return None
 
     try:
         selected = fuse_traces(traces, k=k)
