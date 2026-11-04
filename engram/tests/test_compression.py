@@ -2306,7 +2306,7 @@ def test_a_chosen_episode_gone_at_commit_whose_source_the_state_records_leaves_t
 # Round 3, S1: share refuses an episode holding a capture's text word for word (remember's copy of a prompt), so the
 # mark counts such a copy as a capture too, by its digest in the store or in cold storage.
 
-COPIED = "Andy typed this about a friend's surgery on Tuesday"
+COPIED = "a person typed this about moving the team meeting to Tuesday"
 
 
 def _raw_capture(storage, text=COPIED):
@@ -2329,7 +2329,7 @@ def test_a_compressed_copy_of_a_captures_text_gives_a_semantic_marked_1(tmp_db, 
     assert [ep["id"] for ep in cluster["episodes"]] == [copy] and cluster["episodes"][0]["source"] is None
 
     compressor.commit(result["compress_id"],
-                      [{"content": "what a friend's surgery means for the week", "kind": "fact", "action": "new"}])
+                      [{"content": "what moving the meeting means for the week", "kind": "fact", "action": "new"}])
 
     (sem,) = tmp_db.get_active_semantics()
     assert tmp_db.get_semantic(sem["id"])["auto_generated"] == 0 and _mark(tmp_db, sem["id"]) == 1

@@ -25,7 +25,7 @@ def _stores(tmp_path):
     return src, pub
 
 
-def _capture(src, content="Andy typed this about a friend's surgery on Tuesday"):
+def _capture(src, content="a person typed this about moving the team meeting to Tuesday"):
     """A prompt capture exactly as hooks/nudge.py inserts one."""
     eid = str(uuid.uuid4())
     src.conn.execute(
@@ -183,7 +183,7 @@ def test_a_copy_linked_by_old_code_to_a_semantic_marked_clean_is_refused_at_shar
     # Round 4, probe P5: old code links remember's copy of a capture without marking, and 030's trigger matches
     # source 'auto' only, so the mark stays 0. Share's link check refuses it while the link exists.
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     captured = _capture(src, text)
     sid = _semantic(src, "a week of appointments", [_chosen(src)])
     copy = _chosen(src, text)
@@ -242,11 +242,11 @@ def test_030_runs_again_harmlessly(tmp_path):
 def test_a_copy_of_a_captures_text_counts_as_a_capture_for_the_mark(tmp_path):
     # Round 3, S1: share refuses remember's copy of a capture's text, so the mark counts the copy as a capture too.
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     _capture(src, text)
     copy, chosen = _chosen(src, text), _chosen(src)
     assert src.get_episode(copy)["source"] is None
-    sid = _semantic(src, "what a friend's surgery means for the week", [chosen, copy])
+    sid = _semantic(src, "what moving the meeting means for the week", [chosen, copy])
     assert _mark(src, sid) == 1
     assert src.mark_touched_capture(_semantic(src, "a clean fact", [chosen]), [copy]) is True
     clean = _semantic(src, "a fact reinforced by a copy", [chosen])
@@ -256,7 +256,7 @@ def test_a_copy_of_a_captures_text_counts_as_a_capture_for_the_mark(tmp_path):
 
 def test_a_copy_of_the_text_of_a_capture_in_cold_storage_counts_as_a_capture(tmp_path):
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     assert src.prune_episode_ids([_capture(src, text)]) == 1
     src.close()                                       # a fresh open has no cold connection, so the file is read
     src = Storage(str(tmp_path / "src" / "graph.db"), migrations_dir=MIGRATIONS)
@@ -284,7 +284,7 @@ def test_with_unreadable_cold_storage_an_episode_with_no_source_of_its_own_gives
 def test_with_unreadable_cold_storage_a_copy_of_a_capture_in_the_store_still_marks_1(tmp_path):
     # 1 over NULL: the store alone shows the copy, whatever cold storage would have said.
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     _capture(src, text)
     Path(src.db_path).with_name("cold.db").write_bytes(b"not a database, just bytes " * 100)
     copy = _chosen(src, text)
@@ -360,7 +360,7 @@ def test_a_semantic_whose_auto_generated_is_null_is_refused(tmp_path):
 
 def test_a_verbatim_copy_of_a_capture_is_refused_whatever_its_links_say(tmp_path):
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     _capture(src, text)
     sid = _semantic(src, text, [_chosen(src)])
     with pytest.raises(CapturedRefused, match="word for word"):
@@ -370,7 +370,7 @@ def test_a_verbatim_copy_of_a_capture_is_refused_whatever_its_links_say(tmp_path
 
 def test_a_verbatim_copy_of_a_capture_in_cold_storage_is_refused(tmp_path):
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     captured = _capture(src, text)
     assert src.prune_episode_ids([captured]) == 1
     src.close()                                       # a fresh open has no cold connection, so the file is read
@@ -383,7 +383,7 @@ def test_a_verbatim_copy_of_a_capture_in_cold_storage_is_refused(tmp_path):
 def test_an_open_cold_connection_is_read_for_a_capture_without_reopening_cold_storage(tmp_path, monkeypatch):
     # Note 7: the `_cold_conn` reuse branch, with a capture in cold storage and the store never reopened.
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     captured = _capture(src, text)
     assert src.prune_episode_ids([captured]) == 1
     assert src._cold_conn is not None
@@ -401,7 +401,7 @@ def test_an_open_cold_connection_is_read_for_a_capture_without_reopening_cold_st
 def test_an_episode_holding_a_captures_text_is_refused(tmp_path):
     # Finding 4: `remember(content=<a capture's text>)` strips it as the nudge does, so the digest matches.
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     _capture(src, text)
     eid = _chosen(src, text)
     assert src.get_episode(eid)["source"] is None
@@ -414,7 +414,7 @@ def test_an_episode_holding_a_captures_text_is_refused(tmp_path):
 
 def test_an_episode_holding_the_text_of_a_capture_in_cold_storage_is_refused(tmp_path):
     src, pub = _stores(tmp_path)
-    text = "Andy typed this about a friend's surgery on Tuesday"
+    text = "a person typed this about moving the team meeting to Tuesday"
     assert src.prune_episode_ids([_capture(src, text)]) == 1
     src.close()                                       # a fresh open has no cold connection, so the file is read
     src = Storage(str(tmp_path / "src" / "graph.db"), migrations_dir=MIGRATIONS)
