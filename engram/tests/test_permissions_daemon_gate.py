@@ -69,7 +69,61 @@ def test_rf2_locked_ledger_reads_closed(tmp_path, monkeypatch):
     with hold_ledger_lock(tmp_path, "IMMEDIATE"):        # RESERVED: readers still read the last commit
         assert daemon.handle_frame(recall(pub))["candidates"]
     with hold_ledger_lock(tmp_path, "EXCLUSIVE"):        # what a commit or a cache spill holds
-        assert daemon.handle_frame(recall(pub))["candidates"] == []
+        assert daemon.handle_frame(recall(pub)) == LEDGER_BUSY        # nothing served, and it says so
+    assert daemon.handle_frame(recall(pub))["candidates"]
+
+
+LEDGER_BUSY = {"protocolVersion": "0.1", "kind": "error", "code": "LEDGER_BUSY",
+               "detail": "ledger busy, nothing served, retry"}
+
+
+def test_s4_a_recall_whose_ledger_read_times_out_carries_ledger_busy_into_the_recalls_neighbors(tmp_path,
+                                                                                                 monkeypatch):
+    """The projection digest's section 2 review, S4's reader side (Rio Grande, all hands 973f3aa1): a frame that
+    times out behind a writer's lock (a writer that waits out a rare full check holds it) serves nothing under
+    enforce, which fails closed; its answer says so with LEDGER_BUSY, and the receiver puts the code in
+    `neighbors.diagnostics` and marks `neighbors` degraded, so no ship takes an empty result for an answer."""
+    import lighthouse_client
+    import neighbors
+    from lighthouse_protocol import encode
+    from tests.test_neighbors import CONTEXT, NOW, Log, policy
+    monkeypatch.setattr("lighthouse_daemon.LEDGER_BUSY_MS", 50)       # put back after the test
+    daemon, pub = raised_daemon(tmp_path, mode="enforce")
+    policy(tmp_path / "receiver-policy.json")
+
+    def call(self, frame, *, deadline=None):         # the receiver's client, reaching this daemon in this process
+        expected = {"recall": "recall_result", "read": "read_result"}[frame["kind"]]
+        return lighthouse_client._decode_reply(encode(daemon.handle_frame(frame)), expected)
+
+    monkeypatch.setattr(neighbors.LighthouseClient, "call", call)
+    args = dict(query="shared: rivers need bridges", context=CONTEXT, purpose="session-recall", k=1, storage=Log(),
+                session_id="s", recall_id="t1", receiver="engram", publishers=[pub], socket_path=tmp_path / "s.sock",
+                policy_path=tmp_path / "receiver-policy.json", now=lambda: NOW)
+    served = neighbors.neighbor_arm(**args)
+    assert served["sources"][0]["traceOutcome"] == "matched" and not served["degraded"]   # the control
+    with hold_ledger_lock(tmp_path, "EXCLUSIVE"):
+        busy = neighbors.neighbor_arm(**{**args, "recall_id": "t2"})
+    assert {"publisher": f"urn:engram:{pub}", "code": "LEDGER_BUSY"} in busy["diagnostics"]
+    assert busy["degraded"] is True and busy["delivered"] == [] and busy["selected"] == []
+
+
+def test_s4_a_frame_whose_own_state_times_out_after_the_gate_read_says_ledger_busy_too(tmp_path, monkeypatch):
+    """The gate read can pass and the frame's own State then wait out the lock: the same answer, under enforce, for a
+    recall and a read; under shadow the legacy path serves, as before."""
+    import sqlite3
+
+    from permission_ledger import Ledger
+    daemon, pub = raised_daemon(tmp_path, mode="enforce")
+    memory_id = daemon.handle_frame(recall(pub))["candidates"][0]["memoryId"]
+    real = Ledger.state
+
+    def locked(self, *args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(Ledger, "state", locked)
+    assert daemon.handle_frame(recall(pub)) == LEDGER_BUSY
+    assert daemon.handle_frame(read(pub, memory_id)) == LEDGER_BUSY
+    monkeypatch.setattr(Ledger, "state", real)
     assert daemon.handle_frame(recall(pub))["candidates"]
 
 

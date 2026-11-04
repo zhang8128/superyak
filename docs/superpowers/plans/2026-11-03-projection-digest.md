@@ -393,6 +393,13 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
   U24's 274 MB (1.21 million projected rows), about 0.08 s per MB, past the fixed 12 s it had: a writer behind a rare
   check failed at COMMIT with nothing written. 0.16 s per MB is twice the measured rate, as margin, and gives about 44 s
   at 274 MB and the 12 s floor at Task 0's shape. Its cost is in Risks.
+- **S4's reader side** (Rio Grande, all hands 973f3aa1): a frame whose ledger read waits out the lock (5 s,
+  `LEDGER_BUSY_MS`) serves nothing under `enforce`, which fails closed, and now says so. The daemon answers with an
+  `error` frame, code `LEDGER_BUSY`, "ledger busy, nothing served, retry", where it answered an empty result. That
+  happens when the gate's own read timed out (the gate reads `closed` with `busy` set, whatever the mode), when the
+  frame's `state()` did, or when a lazy read or the receipt did. `is_busy` tells a lock wait from a torn file by
+  SQLite's error code. The receiver passes the code through (`_REMOTE_CODES`) into `neighbors.diagnostics`, and
+  `neighbors` reads degraded. Under `shadow` a busy State still falls back to the legacy path, as before.
 - **D9, the Pi's line** (the review, a loaded Pi, load 6-9, six runs at Task 0's shape):
 
   | Measurement | Budget | Six runs | Median |

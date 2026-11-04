@@ -2851,9 +2851,25 @@ UNSTAMPED = "no projection digest; run `engram-permissions rebuild`, then the mo
 
 @dataclass(frozen=True)
 class Gate:
-    """The effective gate: `off`, `shadow`, `enforce` or `closed`. `cause` says why when it is `closed`."""
+    """The effective gate: `off`, `shadow`, `enforce` or `closed`. `cause` says why when it is `closed`; `busy`, that
+    it is closed because the ledger's lock wasn't free in time (`is_busy`), so a reader can say so and retry."""
     mode: str
     cause: str | None = None
+    busy: bool = False
+
+
+def is_busy(error: BaseException | None) -> bool:
+    """Whether a failed ledger read, or the error it was raised from, is a lock wait that ran out (SQLITE_BUSY,
+    "database is locked"): the ledger is whole and busy, so a reader can retry. Not a torn or unreadable file."""
+    while error is not None:
+        if isinstance(error, LedgerBusy):
+            return True
+        if isinstance(error, sqlite3.OperationalError) and (
+                (getattr(error, "sqlite_errorcode", 0) or 0) & 0xFF == sqlite3.SQLITE_BUSY
+                or "database is locked" in str(error)):
+            return True
+        error = error.__cause__
+    return False
 
 
 def houses(engram_home: Path) -> list[Path]:
@@ -2929,7 +2945,7 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
         hot = ledger_path(root).with_name("permissions.db-journal").exists() and "locked" not in str(e)
         if hot:
             return _closed("ledger has a hot journal; any writing open clears it, such as engram-permissions sweep")
-        return _closed(f"ledger cannot be read: {e}")
+        return Gate("closed", f"ledger cannot be read: {e}", busy=is_busy(e))
     try:
         # meta and the log's last row in one read: a gate act writes `gate` and `head` in one commit, so a meta page
         # torn apart from the log names an older head, and the gate it holds is not the ledger's (P 5.6)
@@ -2940,7 +2956,7 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
         finally:
             led.conn.execute("COMMIT")
     except sqlite3.Error as e:
-        return _closed(f"ledger cannot be read: {e}")
+        return Gate("closed", f"ledger cannot be read: {e}", busy=is_busy(e))
     finally:
         led.close()
     if cut:
