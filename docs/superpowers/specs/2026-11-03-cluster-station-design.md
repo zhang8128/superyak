@@ -96,6 +96,22 @@ the plan.
   keeps its store on the site's work file system and restarts with the next job. That's open question 2, and it
   decides whether a site needs any long-lived process at all.
 
+## 2a. Where a session finds its memory (Rio Grande and Tardis, all hands 59500474 and 09e0e97b)
+
+- **Writes and live recalls go to the ship's home.** For a cluster ship, that's the cluster station. There's one writer
+  per store, as memory follows the ship decides, with the store hosts sharded by ship, so 600 nodes aren't 600 queues
+  on one machine. A node never keeps a writable replica of a mutable store, since two writers would drift.
+- **What never changes may be cached per node:** signed lessons, a published house's copies and ships' cards.
+  - Each one is verified by its signature or digest before use, and never written on the node.
+  - Lessons then fit the rail's 1 s budget without a network hop.
+  - A cache miss falls back to the home, and a revocation or a lesson's retraction invalidates the cache entry by id.
+- **The station's own services are Rio Grande's half:**
+  - priority lanes, and budgets carried to where a request waits;
+  - one heavy job per node through the lock, a job queue at site scale;
+  - watchers that see only their own checkout.
+
+  Each was found on the Pi on 2026-11-04 by breaking.
+
 ## 3. Admission: sessions by rule
 
 **A session key** is minted by the cluster station for one ship, one job and one node.
