@@ -1,6 +1,7 @@
 """Engram daemon — async local agent that runs as a background service.
 
-Talk to it from anywhere: CLI, scripts, other agents, claw, whatever.
+Talk to it from this machine: CLI, scripts, other agents, claw. It listens on loopback unless --host names another
+address, and it has no authentication.
 It persists between messages, maintains conversation state, and can
 call Claude Code for heavy lifting.
 
@@ -162,7 +163,7 @@ class DaemonHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"unknown endpoint: {path}"}, 404)
 
 
-LOOPBACK = ("127.0.0.1", "localhost", "::1")
+LOOPBACK = ("127.0.0.1", "localhost")  # HTTPServer is IPv4 only, so ::1 cannot be bound
 
 
 def parse_args(argv=None):
@@ -170,8 +171,9 @@ def parse_args(argv=None):
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP port")
     parser.add_argument("--host", default="127.0.0.1",
-                        help="Address to listen on (default loopback). The daemon has no authentication, so another "
-                             "address lets anyone who reaches it read memories and run Claude Code.")
+                        help="IPv4 address to listen on (default loopback). The daemon has no authentication, so "
+                             "another address lets anyone who reaches it read and write your memories and, unless "
+                             "--no-claude, run Claude Code with --permission-mode auto.")
     parser.add_argument("--no-claude", action="store_true", help="Disable Claude Code")
     return parser.parse_args(argv)
 
@@ -180,8 +182,9 @@ def exposure_warning(host: str, port: int) -> str | None:
     """The words printed when the daemon listens beyond this machine, or None on loopback."""
     if host in LOOPBACK:
         return None
-    return (f"warning: this daemon has no authentication. Anyone who can reach {host}:{port} can read your memories "
-            f"and, unless --no-claude, run Claude Code. Prefer the default loopback.")
+    return (f"warning: this daemon has no authentication. Anyone who can reach {host}:{port} can read and write your "
+            f"memories and, unless --no-claude, run Claude Code with --permission-mode auto. Prefer the default "
+            f"loopback.")
 
 
 def main():
@@ -215,7 +218,7 @@ def main():
     print(f"  local:    http://127.0.0.1:{args.port}")
     warning = exposure_warning(args.host, args.port)
     if warning:
-        print(f"  network:  http://{local_ip}:{args.port}")
+        print(f"  network:  http://{local_ip if args.host == '0.0.0.0' else args.host}:{args.port}")
         print()
         print(warning)
         print("Open the network URL on your phone to chat.")
