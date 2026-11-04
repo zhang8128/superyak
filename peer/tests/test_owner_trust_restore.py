@@ -469,3 +469,94 @@ def test_a_damaged_replaced_file_with_no_expect_fails_closed(trusted, capsys):
     out = against_live(capsys, t, copy)
     how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 0 pairings, and ' + backups.PAUSE_LOST
     assert named('damaged-grant', 'Andy C', how) in trusts_line(out)
+
+
+# ---- Lessons room adds, Task 5: a restore's holds take trust-made members out of the lessons chain ---------------------
+from test_lessons_adds import adds, adds_trusted, changes_of, chain_of, rooms_with, short, tardis_ship  # noqa: F401, E402
+
+
+def in_the_room(a):
+    """voyager, the trust-made ship, joins the lessons room; returns the chain."""
+    a.pi.station_lessons_add(short(a.ship))
+    return chain_of(a.pi.db_path)
+
+
+def held_rows(path, contact):
+    return [row for row in changes_of(path, contact) if row[1] == 'held']
+
+
+def test_a_restore_without_a_replaced_file_takes_trust_made_members_out_of_the_lessons_chain(adds_trusted, tmp_path):
+    """Spec item 7 revokes every trust; settling holds its ships (hold_contact, on the reconcile's raw connection), and
+    each leaves the lessons chain with its held row, dated by the reconcile. Its owner, whose code was typed, stays.
+    Mutation: hold_contact without drop_held_from_lessons."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    backups.reconcile(copy, clock=lambda: a.clock[0])
+    assert held_in(copy, a.ship) and rooms_with(copy, a.ship) == []
+    assert held_rows(copy, a.ship) == [('remove', 'held', None, None, chain[-1], 0, a.clock[0])]
+    assert rooms_with(copy, a.owner) == chain and held_rows(copy, a.owner) == []
+
+
+def test_unpair_named_takes_trust_made_members_out_of_the_lessons_chain(adds_trusted, tmp_path):
+    """UNPAIR= (backups._unpair, Federation.unpair on the copy): voyager leaves the chain, read as trust-made before the
+    unpair takes the codes away; the code-confirmed contacts of the peer stay. Mutation: _unpair without the helper."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    backups.reconcile(copy, replaced=a.pi.db_path, unpair=[a.tardis_fed.identity.peer_id], clock=lambda: a.clock[0])
+    assert rooms_with(copy, a.ship) == [] and [row[:6] for row in held_rows(copy, a.ship)] == \
+        [('remove', 'held', None, None, chain[-1], 0)]
+    for kept in (a.owner, tardis_ship(a)):
+        assert held_in(copy, kept) and rooms_with(copy, kept) == chain and held_rows(copy, kept) == []
+
+
+def test_a_retirement_the_restore_keeps_takes_every_contact_out_of_the_lessons_chain(adds_trusted, tmp_path):
+    """A retirement in the replaced file that the copy lacks (here written by hand) is a retire: _keep_retirements
+    unpairs the peer (backups._unpair), and every contact of it leaves the chain, the code-confirmed ones too, in one
+    batch. Mutation: _unpair passing every_contact=False for a retired peer."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    with a.pi.transaction() as db:
+        db.execute('INSERT INTO retired_peers(peer_id, retired, by_id) VALUES (?,?,?)',
+                   (a.tardis_fed.identity.peer_id, a.clock[0], a.ids['andy']))
+    backups.reconcile(copy, replaced=a.pi.db_path, clock=lambda: a.clock[0])
+    rows = [held_rows(copy, contact) for contact in (a.ship, a.owner, tardis_ship(a))]
+    assert all(rooms_with(copy, contact) == [] for contact in (a.ship, a.owner, tardis_ship(a)))
+    assert [[row[:6] for row in found] for found in rows] == [[('remove', 'held', None, None, chain[-1], earlier)]
+                                                              for earlier in (0, 1, 1)]
+    assert len({found[0][6] for found in rows}) == 1
+
+
+def test_a_copy_from_before_the_build_records_a_held_removal_with_its_reason(adds_trusted, tmp_path):
+    """A copy whose member_changes has no reason column gains it before the first held row, as the store's migration
+    adds it, so the hold never reads as Andy's own removal (_owner_removed: no actor, no grant)."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('ALTER TABLE member_changes DROP COLUMN reason')
+        db.commit()
+    backups.reconcile(copy, clock=lambda: a.clock[0])
+    assert held_rows(copy, a.ship) == [('remove', 'held', None, None, chain[-1], 0, a.clock[0])]
+
+
+def test_a_held_removal_carried_into_a_copy_from_before_the_build_keeps_its_reason(adds_trusted, tmp_path):
+    """Fix round 1, ruling 2: the replaced file's held removal, carried into a copy whose member_changes has no reason
+    column (_add_member_changes_like_replaced), keeps 'held', so it never reads as Andy's own removal: _owner_removed
+    stays false for voyager, and Rio Grande may add it back once a later trust returns it."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('ALTER TABLE member_changes DROP COLUMN reason')
+        db.commit()
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])     # live: voyager held out, its row reason 'held'
+    assert held_rows(a.pi.db_path, a.ship)
+    backups.reconcile(copy, replaced=a.pi.db_path, clock=lambda: a.clock[0])
+    live = go_live(copy, tmp_path / 'live')     # the station's own migration adds the column if the restore didn't
+    with live.transaction() as db:
+        assert not live._owner_removed(db, chain[-1], a.ship, a.ids['andy'])
+    assert [row[:5] for row in changes_of(live.db_path, a.ship) if row[0] == 'remove'] == \
+        [('remove', 'held', None, None, chain[-1])]

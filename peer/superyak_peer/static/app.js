@@ -1422,13 +1422,22 @@ function accountRoleDialog() {
   return `<dialog aria-labelledby="account-rights-title"><div class="dialog-content"><h2 id="account-rights-title">Review account rights</h2><p><strong>${escapeHtml(preview.name)}</strong> · ${escapeHtml(preview.username)}</p><p>${roleLabel(preview.oldRole)} → <strong>${roleLabel(preview.role)}</strong></p><p>${preview.role === 'super_admin' ? 'This person will be able to grant and revoke admin and super-admin rights, invite people, and pair peers.' : preview.role === 'admin' ? 'This person will be able to invite people and pair peers.' : 'This person will lose administrative rights. Unused invitations they created will be revoked.'}</p><p>Private chats, drafts, and records keep their existing sharing permissions.</p><div class="button-row"><button class="button" data-action="confirm-account-role">Grant these rights</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
 }
 
+// Lessons room adds, item 2: the line the station returns with a preview, said above the code box. Its first part is the
+// participant's name (already plain on the server), which is isolated here; the rest is escaped.
+function lessonsLine(preview) {
+  const line = preview.lessons_line;
+  if (!line) return "";
+  const at = Math.max(0, line.lastIndexOf(` on ${preview.peer_id.slice(0, 12)} `));
+  return `<p class="notice" data-testid="lessons-line">${isolatedName(line.slice(0, at))}${escapeHtml(line.slice(at))}</p>`;
+}
+
 function connectionsView() {
   const statuses = state.sync.deliveries || [];
   return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Pair a peer by typing the code its own screen shows. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form">${lessonsLine(state.pairPreview)}<div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${connectorAdminSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -2329,9 +2338,10 @@ async function confirmPair(form) {
   // fix:pairing-code: the person types the other machine's code; the server checks it. After a code that doesn't
   // match, the preview is cleared, so copying the code the message names is a deliberate step, not a reflex.
   const typed = form.elements.code.value;
+  const { lessons_line: _line, ...card } = state.pairPreview;  // the preview adds the line; the card is the card
   const wellFormed = /^[0-9a-f]{32}$/.test(typed.replace(/[\s-]/g, "").toLowerCase());  // what the server would check
   try {
-    await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, code: typed } });
+    await api("/api/connections/pair", { method: "POST", json: { card, code: typed, lessons_line_shown: Boolean(state.pairPreview.lessons_line) } });
     state.pairPreview = null; state.pairCode = "";
     await refresh("Peer paired. Nothing has been shared automatically.");
   } catch (error) {

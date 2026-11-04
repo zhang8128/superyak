@@ -182,6 +182,7 @@ only-include = [
     "tests/test_key_refusal.py",
     "tests/test_layers.py",
     "tests/test_lessons.py",
+    "tests/test_lessons_adds.py",
     "tests/test_lessons_hold_contract.py",
     "tests/test_lessons_tool_holds.py",
     "tests/test_lessons_index.py",

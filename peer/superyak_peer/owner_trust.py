@@ -63,6 +63,8 @@ DIGEST_TEXT = ('Owner trust, {day}: {n} ship(s) of {owner} on {peer} paired by {
                'Full ids: make station-trust-list on the Pi.')
 PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make station-trust-list shows them; if you "
               "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
+PAUSE_WAITING = ' {k} of its ships wait for the lessons room until you renew.'
+PAUSE_WAITING_ONE = ' 1 of its ships waits for the lessons room until you renew.'
 # A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
@@ -139,8 +141,12 @@ def ships_to_hold(db, grant_ids=None):
 def hold_contact(db, contact, now):
     """Holds one contact as Federation.unpair holds each of a peer's (backups._hold_like_replaced, for one): its
     confirmation gone, its pending and failed outbox rows withdrawn, and the received payloads it authored cleared.
-    A contact already held keeps the date of its first hold."""
+    A contact already held keeps the date of its first hold. A trust-made member of the lessons room leaves its chain
+    (drop_held_from_lessons), read before its confirmation goes; a Store caller of settle_owner_trust emits for the
+    rooms that changed (_emit_held)."""
+    from .lessons import drop_held_from_lessons
     db.execute('INSERT OR IGNORE INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+    drop_held_from_lessons(db, [contact['id']], now)
     db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
     db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')", (contact['id'],))
     db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
@@ -362,21 +368,24 @@ def trust_digests(db, now):
     return [notice for _, notice in sorted(listed, key=lambda item: item[0])]  # stable: grant order within a day
 
 
-def trust_pauses(db):
+def trust_pauses(db, waiting=None):
     """Spec item 4a, the alarm: one Ops notice for each unrevoked trust whose current window is full, so it posts at
     Odo's next cycle after the nth pairing. Its id names the grant and its window's row, so each window posts once and
     a renewal's window, paused in turn, posts again; Task 5's restore raises the sequence, so no id comes back. An
     expired trust still alarms (its pairings happened while it was live); a revoked one is the admin's answer already.
     A window with no count, which only a damaged file holds, reads as paused (fail closed, as Task 5's restore reads
-    it). Names go through safe_line. A pure read."""
+    it). Names go through safe_line. A pure read. `waiting(grant_id)`, when given, counts the grant's ships that wait for
+    the lessons room only for this pause (lessons.waiting_for_lessons); a count above 0 adds PAUSE_WAITING to the text."""
     notices = []
     for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' "
                             f'AND grant_id NOT IN ({REVOKED}) ORDER BY seq').fetchall():
         window_seq, expect, paired = trust_window(db, grant['grant_id'])
         if expect is None or paired >= expect:
-            notices.append({'id': f'trust-paused-{grant["grant_id"][:12]}-{window_seq}', 'text': PAUSE_TEXT.format(
-                owner=safe_line(owner_label(db, grant['peer_id'], grant['owner_user_id'])), peer=grant['peer_id'][:12],
-                n=paired if expect is None else expect)})
+            text = PAUSE_TEXT.format(owner=safe_line(owner_label(db, grant['peer_id'], grant['owner_user_id'])),
+                                     peer=grant['peer_id'][:12], n=paired if expect is None else expect)
+            waits = waiting(grant['grant_id']) if waiting else 0
+            notices.append({'id': f'trust-paused-{grant["grant_id"][:12]}-{window_seq}',
+                            'text': text + (PAUSE_WAITING_ONE if waits == 1 else PAUSE_WAITING.format(k=waits) if waits else '')})
     return notices
 
 
@@ -537,7 +546,9 @@ class OwnerTrust:
                                                f"AND event='grant' AND grant_id NOT IN ({REVOKED}) ORDER BY seq",
                                                (peer_id, owner))]
             ships = ships_to_hold(db, grants)
+            epochs = self._chain_epochs(db)
             db.executemany("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
                            "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", [(g, peer_id, owner, actor, now) for g in grants])
             settle_owner_trust(db, now)
+            self._emit_held(db, epochs)  # the ships it held left the lessons room: their peers get the roster
         return {'grant_id': grant_id, 'held': len(ships)}

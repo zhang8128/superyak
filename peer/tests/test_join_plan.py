@@ -46,7 +46,7 @@ def test_a_fresh_machine_shows_every_step_left_with_the_persons_together(station
     assert steps['this station listens for peers'] == ('left', 'Andy')
     assert steps['each account there paired here, with its own code'] == ('left', 'Andy')
     assert steps['the lessons room lists that peer'] == ('left', 'a ship')
-    assert steps["that peer's accounts are members of the lessons room"] == ('left', 'Andy')
+    assert steps["that peer's accounts are members of the lessons room"] == ('left', 'a ship')
     text = describe(plan(data, PEER, run=host(listening=False, served=False)), PEER)
     assert text.index('Left for Andy, in one sitting') < text.index('Left for ships') < text.index('To check on that machine')
 
@@ -56,7 +56,7 @@ def test_a_joined_machine_has_nothing_left_here_and_follows_the_chain(station):
     db.execute("INSERT INTO peers VALUES(?, '{}', 1)", (PEER,))
     for cid, name in (('c-andy', 'Andy'), ('c-ship', 'Tardis')):
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.execute('INSERT INTO lessons_peers VALUES(?, 0)', (PEER,))
     db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
     db.executemany("INSERT INTO remote_room_members VALUES('r2', ?)", [('c-andy',), ('c-ship',)])  # the chain's next room
@@ -71,12 +71,12 @@ def test_members_missing_from_the_current_room_are_named_and_a_held_contact_isnt
     db.execute("INSERT INTO peers VALUES(?, '{}', 1)", (PEER,))
     for cid, name in (('c-andy', 'Andy'), ('c-ship', 'Tardis')):
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.execute("INSERT INTO contact_holds VALUES('c-ship', 0)")
     db.commit()
     steps = plan(data, PEER, run=host())
     members = next(s for s in steps if s[3] == "that peer's accounts are members of the lessons room")
-    assert members[0] == 'left' and 'add Andy to the room r1' in members[4]
+    assert members[0] == 'left' and 'station-lessons-add CONTACT=c-andy (Andy)' in members[4] and 'room r1' in members[4]
     accounts = next(s for s in steps if s[3].startswith('each account there'))
     assert 'Tardis (held)' in accounts[4] and 'Andy (confirmed)' in accounts[4]
 
@@ -99,7 +99,7 @@ def live_contacts(db, *names):
     for name in names:
         cid = 'c-' + name.lower()
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.commit()
 
 
@@ -120,7 +120,7 @@ def test_members_of_a_room_the_chain_replaced_dont_count(station):
     db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
     db.commit()
     members = next(s for s in plan(data, PEER, run=host()) if s[3] == "that peer's accounts are members of the lessons room")
-    assert members[0] == 'left' and 'add Andy, Tardis to the room r2' in members[4]
+    assert members[0] == 'left' and 'CONTACT=c-andy (Andy), make station-lessons-add CONTACT=c-tardis (Tardis) (room r2' in members[4]
 
 
 def test_names_from_the_other_machine_are_safe_lines(station):   # Tardis's read: contact names are that machine's text

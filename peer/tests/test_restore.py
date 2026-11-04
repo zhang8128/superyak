@@ -2536,7 +2536,8 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'owner_trust',  # owner trust: every revocation the replaced file has, a trust paused there revoked, its sequence raised
     'retired_peers',  # owner trust: every retirement the replaced file has, its peer unpaired
     'trust_confirmations',  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
-    'trust_cap_refusals'}  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
+    'trust_cap_refusals',  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
+    'lessons_addable'}  # lessons room adds: emptied, so an older listing never vouches for what a newer CONFIRM dropped
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
@@ -2677,7 +2678,7 @@ def test_the_reconcile_s_unpair_holds_every_contact_as_federation_unpair_does(tm
         if old_copy:
             db.execute('DROP TABLE contact_holds')
         report = {'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0]}
-        backups._unpair(db, None, remote.identity.peer_id, report)
+        backups._unpair(db, None, remote.identity.peer_id, 1.0, report)
         db.commit()
         held = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
         contacts = {row[0] for row in db.execute('SELECT id FROM remote_contacts')}

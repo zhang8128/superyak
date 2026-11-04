@@ -1219,7 +1219,7 @@ def test_the_preview_shows_the_card_and_never_its_code(env, remote):
     _, clients, _, _ = env
     card = remote[1].card(remote[2]['id'])
     response = clients[2].post('/api/connections/preview', json={'card': card})
-    assert response.status_code == 200 and response.json() == card
+    assert response.status_code == 200 and response.json() == {**card, 'lessons_line': None}
     assert pairing_code(card) not in response.text and show_code(pairing_code(card)) not in response.text
 
 
@@ -1430,8 +1430,8 @@ def test_main_s_federation_sql_still_runs_on_a_store_this_branch_opened(two_peer
         db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], json.dumps(card)))
         db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name',
                    ('remote_x', card['peer_id'], 'someone', 'Someone'))
-        db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET code=excluded.code, '
-                   'confirmed=excluded.confirmed', ('remote_x', '0' * 32, 1.0))
+        db.execute('INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
+                   'code=excluded.code, confirmed=excluded.confirmed', ('remote_x', '0' * 32, 1.0))
         db.execute('INSERT OR IGNORE INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) '
                    'VALUES(?,?,?,?,?,?,?,?)', ('row_x', 1, ca['id'], 'layer_x', 1, 'layer.release', '{}', 'pending'))
         db.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')",

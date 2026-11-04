@@ -55,11 +55,11 @@ class Members:
             return safe_line(row['name'], 40)
         return contact_line(db, member_id, 40) or safe_line(member_id[:6], 40)
 
-    def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, new_room_id=None, earlier_rooms=0, claims_released=0):
+    def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, *, reason=None, new_room_id=None, earlier_rooms=0, claims_released=0):
         key = uid()
-        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,claims_released,created)'
-                   ' VALUES(?,?,?,?,?,?,?,?,?,?)',
-                   (key, grant_id, actor_id, member_id, change, room_id, new_room_id, earlier_rooms, claims_released, self.clock()))
+        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,claims_released,created,reason)'
+                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                   (key, grant_id, actor_id, member_id, change, room_id, new_room_id, earlier_rooms, claims_released, self.clock(), reason))
         return key
 
     def _act_room(self, db, actor, key, adding):
@@ -85,7 +85,7 @@ class Members:
         if not new_ids:
             raise Problem(409, NO_ONE_NEW.format(short=key[:6]))
         self._refuse_ship_in_marked(db, key, new_ids)  # D6: never a ship in a marked room, by any add path
-        self._lessons_add_gate(db, key, new_ids)  # first rail section 3: only Andy's, from listed peers
+        self._lessons_add_gate(db, key, new_ids)  # the owner adds; the lessons room's recorded ship adds vouched accounts through station_lessons_add
         carried = self._brief_to_carry(db, key, carry)
         new = self._create_room(db, owner_id, room['title'], ids(room['member_ids'] + new_ids), key)
         self._carry_cloud(db, key, new['id'])  # D8: the marks go with the room
@@ -150,9 +150,36 @@ class Members:
         room's chain is a removal with no grant by the owner (or by no one)."""
         chain = self._rooms_back(db, room_id)
         last = db.execute(f'SELECT change, grant_id, actor_id FROM member_changes WHERE member_id=? AND room_id IN ({",".join("?" * len(chain))})'
+                          " AND (reason IS NULL OR reason != 'held')"
                           ' ORDER BY created DESC, rowid DESC LIMIT 1', (member_id, *chain)).fetchone()
         return (last is not None and last['change'] == 'remove' and not last['grant_id']
                 and (not last['actor_id'] or last['actor_id'] == owner_id))
+
+    def _held_out(self, db, room_id, member_id):
+        """Lessons room adds, item 1: a hold took the member out of this room's chain (drop_held_from_lessons) and nothing
+        has changed them since: their latest row in the chain, held rows included, is a removal with reason 'held'."""
+        chain = self._rooms_back(db, room_id)
+        last = db.execute(f'SELECT change, reason FROM member_changes WHERE member_id=? AND room_id IN ({",".join("?" * len(chain))})'
+                          ' ORDER BY created DESC, rowid DESC LIMIT 1', (member_id, *chain)).fetchone()
+        return last is not None and last['change'] == 'remove' and last['reason'] == 'held'
+
+    def _remove_held(self, db, room, member_id, actor_id):
+        """The owner keeps out a member a hold took out of the chain: one owner removal in the act log, so _owner_removed
+        finds it and only he adds them back, and the usual removal notice in the room ("... from this room."). The hold
+        already took them out, so no membership, epoch or membership event changes. Returns what _remove_member returns,
+        with nothing left in any room and nothing released."""
+        logged = self._record_change(db, 'remove', room['id'], member_id, actor_id, None)
+        name = self._account_name(db, member_id)
+        bridged = self._bridged(db, room['id'])
+        self._post_as_system(db, room['id'], f'member-{logged}',
+                             REMOVED.format(by=self._account_name(db, actor_id), name=name, where=where(True, 0))
+                             + (BRIDGED_NOTE if bridged else ''))
+        user = db.execute('SELECT username,name FROM users WHERE id=?', (member_id,)).fetchone()
+        view = self._room(db, room['owner_id'], room['id'])
+        view.update(removed={'id': member_id, 'username': user['username'] if user else None,
+                             'name': user['name'] if user else name},
+                    earlier_rooms=0, claims_released=0, grant_revoked=False, bridged=bridged)
+        return view
 
     def _moderator_add(self, db, actor, room, grant, typed, by_username):
         """M7 in its order, in the caller's transaction (ruling 1): the typed member (a username on the ship route, an id on
@@ -274,5 +301,7 @@ class Members:
             if user_id == actor:
                 raise Problem(400, 'Cannot remove the room owner')
             if user_id not in room['member_ids'] and not self._earlier_with(db, actor, room, user_id):
+                if self._held_out(db, room['id'], user_id):  # a hold took them out; Andy keeps them out for good
+                    return self._remove_held(db, room, user_id, actor)
                 raise Problem(404, NOT_A_MEMBER.format(x=safe_line(user_id)))
             return self._remove_member(db, room, user_id, actor)

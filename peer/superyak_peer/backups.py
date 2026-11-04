@@ -416,6 +416,9 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             'connector_reads.size', 'connector_reads.outcome',
             # owner trust (spec item 7): a replaced file lacking one is absent, so every trust is revoked, never one whose
             # revocation or retirement it may have lost left live
+            # lessons room adds (Task 1): who typed a code, whether the line was shown, a change's reason, the addable list
+            'pairing_confirmations.typed_by', 'pairing_confirmations.lessons_line', 'member_changes.reason',
+            'lessons_addable.contact_id', 'lessons_addable.code_digest', 'lessons_addable.typed_by', 'lessons_addable.listed',
             *TRUST_COMPARED)
 
 
@@ -667,6 +670,10 @@ def _add_member_changes_like_replaced(db, old, now, report):
     if not _usable(db, old, report, 'grants.id', 'rooms.id', 'users.id', 'member_changes.id', 'member_changes.grant_id', 'member_changes.change',
                    'member_changes.actor_id', 'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created'):
         return
+    if _has(old, 'member_changes.reason') and not _has(db, 'member_changes.reason'):
+        # A copy from before lessons room adds gains the column (as the store's migration adds it) before the carry, so
+        # a hold's removal keeps its 'held' and never reads as the owner's own (_owner_removed: no actor, no grant).
+        db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
     have = {row[0] for row in db.execute('SELECT id FROM member_changes')}
     grants = {row[0] for row in db.execute('SELECT id FROM grants')} & {row[0] for row in old.execute('SELECT id FROM grants')}
     rooms = {row[0] for row in db.execute('SELECT id FROM rooms')}
@@ -800,14 +807,21 @@ def _shown(db, old, peer):
     return peer if sum(other[:12] == peer[:12] for other in ids | {peer}) > 1 else peer[:12]
 
 
-def _unpair(db, old, peer, report):
+def _unpair(db, old, peer, now, report):
     """Exactly Federation.unpair on the staged copy: every contact of the peer held and its confirmation gone, so
     pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
     contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
-    copy from before contact holds gains the table here, so the hold isn't lost on restore."""
+    copy from before contact holds gains the table here, so the hold isn't lost on restore. Its trust-made members leave
+    the lessons room (drop_held_from_lessons), read before their codes go; for a retired peer (a retirement
+    _keep_retirements keeps is a retire) every contact of it does."""
+    from .lessons import drop_held_from_lessons
     names = [row[0] for row in db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE peer_id=? ORDER BY label', (peer,))]
     db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
-    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (time.time(), peer))
+    held = now  # the restore's one time, so every hold of a restore shares one `created` and posts one notice
+    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (held, peer))
+    retired = _has(db, 'retired_peers.peer_id') and db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone()
+    drop_held_from_lessons(db, [row[0] for row in db.execute('SELECT id FROM remote_contacts WHERE peer_id=?', (peer,))],
+                           held, every_contact=bool(retired))
     if _has(db, 'pairing_confirmations.contact_id'):
         db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)',
                    (peer,))
@@ -830,7 +844,7 @@ def _unpair_like_replaced(db, old, now, report):
     there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
     for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
         if paired and peer in there and not there[peer]:
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
 
 
 def _hold_like_replaced(db, old, now, report):
@@ -838,8 +852,10 @@ def _hold_like_replaced(db, old, now, report):
     Copying the older copy's holds as they are would replace the newer live ones: cut a peer off, pair one participant
     again, restore an older copy, and every sibling would be active again with no code typed. So each is held as
     Federation.unpair holds it: its confirmation gone, its pending and failed outbox rows withdrawn, and the received
-    payloads it authored cleared. It runs after _unpair_like_replaced, whose peers are already held whole. A replaced file
-    from before holds has none to compare. Only takes away."""
+    payloads it authored cleared, and, a trust-made member of the lessons room, out of its chain (drop_held_from_lessons,
+    read before its confirmation goes). It runs after _unpair_like_replaced, whose peers are already held whole. A
+    replaced file from before holds has none to compare. Only takes away."""
+    from .lessons import drop_held_from_lessons
     if not _usable(db, old, report, *PEER_NEEDS, 'remote_contacts.user_id', 'inbox.actor') \
             or not _has(old, 'contact_holds.contact_id'):
         return
@@ -850,6 +866,7 @@ def _hold_like_replaced(db, old, now, report):
         if contact['id'] not in held_there or contact['id'] in held_here:
             continue
         db.execute('INSERT INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+        drop_held_from_lessons(db, [contact['id']], now)
         if _has(db, 'pairing_confirmations.contact_id'):
             db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
         withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')",
@@ -976,7 +993,7 @@ def _keep_trust_like_replaced(db, old, now, report):
             continue
         _revoke_trust(db, grant, *values)
         report['trusts'].append(_trust_line(db, old, grant, how))
-    _keep_retirements(db, old, report)
+    _keep_retirements(db, old, now, report)
 
 
 # The pause notice's own advice (owner_trust.PAUSE_TEXT), for a pause whose alarm the restore has lost
@@ -984,7 +1001,7 @@ PAUSE_LOST = "its pairings since the copy are lost; if you didn't expect them, u
 RETIRED_NEEDS = ('retired_peers.peer_id', 'retired_peers.retired', 'retired_peers.by_id')
 
 
-def _keep_retirements(db, old, report):
+def _keep_retirements(db, old, now, report):
     """Each retirement in the replaced file that the copy lacks is added, and its peer unpaired as Federation.unpair does
     when the copy has it paired. Reached with a usable replaced file, and also (Task 5's parked item) with one treated as
     absent because it lacks some other trust table, so a retirement it holds is never silently lost: retired_peers is
@@ -1006,7 +1023,7 @@ def _keep_retirements(db, old, report):
         kept += 1
         if _has(db, *PEER_NEEDS) and peer not in report['unpaired_full'] \
                 and db.execute('SELECT 1 FROM peers WHERE peer_id=? AND paired', (peer,)).fetchone():
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
     report['counts']['peer retirements kept'] = kept
 
 
@@ -1236,6 +1253,22 @@ def _clear_connector_sign_ins(db, old, now, report):
         report['counts']['connector sign-ins cleared'] = db.execute('DELETE FROM oauth_pending').rowcount
 
 
+ADDABLE_CLEARED = "The lessons listing's addable accounts were cleared; a CONFIRM rerun records them again."
+
+
+def _clear_lessons_addable(db, old, now, report):
+    """Lessons room adds (Task 5 fix round 1, ruling 1): lessons_addable is access, since a row vouches for an account
+    the lessons room's ship may add, so every row is cleared, with a replaced file or without. A restored older listing
+    must never vouch for an account a newer CONFIRM dropped. A CONFIRM rerun of make station-lessons-room records the
+    listing again against the restored pairings. The report says so (ADDABLE_CLEARED) when either file listed one."""
+    if not _usable(db, None, report, 'lessons_addable'):
+        return
+    cleared = db.execute('DELETE FROM lessons_addable').rowcount
+    there = old is not None and _has(old, 'lessons_addable') \
+        and old.execute('SELECT 1 FROM lessons_addable LIMIT 1').fetchone() is not None
+    report['addable_cleared'] = bool(cleared or there)
+
+
 TOKEN_COMPARED = ('connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used')
 
 
@@ -1323,7 +1356,7 @@ def _revoke_every_connection(db, old, now, report):
     report['counts']['connections revoked'] = len(rows)
 
 
-def _unpair_named(db, old, named, report):
+def _unpair_named(db, old, named, now, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
         return
@@ -1331,7 +1364,7 @@ def _unpair_named(db, old, named, report):
         raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
     for peer in named:
         if peer not in report['unpaired_full']:
-            _unpair(db, old, peer, report)
+            _unpair(db, old, peer, now, report)
     # a peer named here is no longer one the report calls left paired (N3)
     report['lacked'] = [item for item in report['lacked'] if item[2] not in report['unpaired_full']]
 
@@ -1693,7 +1726,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
               'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
-              'not_compared': [], 'grants': [], 'connections': [], 'trusts': []}
+              'not_compared': [], 'grants': [], 'connections': [], 'trusts': [], 'addable_cleared': False}
     salvage = None
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -1725,7 +1758,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
         try:
             now = clock()
             for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences,
-                         _hold_imprints, _clear_connector_sign_ins):
+                         _hold_imprints, _clear_connector_sign_ins, _clear_lessons_addable):
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
@@ -1734,7 +1767,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 _revoke_every_token(db, old, now, report)
                 _revoke_every_trust(db, old, now, report)
                 if salvage is not None:
-                    _keep_retirements(db, salvage, report)
+                    _keep_retirements(db, salvage, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
@@ -1745,7 +1778,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                              _report_differences):
                     step(db, old, now, report)
             _settle_trust(db, old, now, report)
-            _unpair_named(db, old, named, report)
+            _unpair_named(db, old, named, now, report)
             _settle_trust(db, old, now, report)  # again: an owner UNPAIR= held gets its dated revocation (S10, N13)
             _name_trusts(db, old, report)
             _write_mark(db, old, now, db_path)
@@ -1816,6 +1849,8 @@ def describe_reconcile(report):
     if report['trusts']:
         lines.append('Owner trusts: ' + '; '.join(f'{short} ({safe_line(owner)}, {how})'
                                                   for short, owner, how in report['trusts']) + '.')
+    if report['addable_cleared']:
+        lines.append(ADDABLE_CLEARED)
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
                      'Change again any that was changed for a reason.')

@@ -127,6 +127,14 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
             db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
+            # lessons room adds (spec 2026-11-03): who typed a pairing code, whether pair showed the lessons line, and why a member changed
+            confirmation_columns = {row['name'] for row in db.execute('PRAGMA table_info(pairing_confirmations)')}
+            if 'typed_by' not in confirmation_columns:
+                db.execute('ALTER TABLE pairing_confirmations ADD COLUMN typed_by TEXT REFERENCES users(id)')
+            if 'lessons_line' not in confirmation_columns:
+                db.execute('ALTER TABLE pairing_confirmations ADD COLUMN lessons_line INTEGER NOT NULL DEFAULT 0')
+            if 'reason' not in {row['name'] for row in db.execute('PRAGMA table_info(member_changes)')}:
+                db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
             if 'last_error' not in {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}:  # federation pull (spec §7)
                 db.execute('ALTER TABLE outbox ADD COLUMN last_error TEXT')
             # federation pull (spec §7, check 3 MF2): pairings made before the upgrade, and stores restored from older copies,

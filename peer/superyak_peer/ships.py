@@ -506,6 +506,7 @@ class Ships:
         """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this.
         Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone.
         A remote contact is named by its label (owner trust), and owner trust adds its pause alarm and daily digest."""
+        from .lessons import lessons_notices, waiting_for_lessons
         from .owner_trust import trust_digests, trust_pauses  # here: owner_trust imports safe_line from this module
         with self.reading() as db:
             now = self.clock()
@@ -537,6 +538,7 @@ class Ships:
                     notices.append({'id': f'push-failing-{r["peer_id"][:16]}-{int(r["failing_since"])}',
                                     'text': f'Delivery to {safe_line(r["names"])} has failed for a day. It keeps retrying; '
                                             'check that peer and its address under Connections.'})
-            notices += trust_pauses(db) + trust_digests(db, now)  # the alarm, then the record (spec items 4a and 5)
+            notices += trust_pauses(db, lambda grant: waiting_for_lessons(self, db, grant, now)) + trust_digests(db, now)  # the alarm, then the record (spec items 4a and 5)
+            notices += lessons_notices(db)  # lessons room adds, item 3: an add by the recorded ship, a hold batch
             large = wal_notice(self.db_path, now)
             return notices + [large] if large else notices

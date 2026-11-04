@@ -92,8 +92,9 @@ person whose own account a person confirmed with a code.
      refusal notice can post (Tardis, 2026-11-02). The count makes the person say what he expects, and reaching it
      stops the trust and tells a person to look within one cycle, where the daily digest tells them the next day. Revoke
      doesn't stop a stolen key (M4); the notice says to retire the peer for that.
-   - The cap of 200 a day (item 4) stays as a ceiling under the count. A trust-made ship lands in no room, since
-     membership stays Andy's act, so the worst a hostile host does before the pause is fill Connections with labelled
+   - The cap of 200 a day (item 4) stays as a ceiling under the count. A trust-made ship lands in no room but the lessons
+     room; it joins only under a live trust, is removed from it by any hold, lays nothing while its grant is paused or
+     ended, and shares one cap per grant, so the worst a hostile host does before the pause is fill Connections with labelled
      ships, which a revoke holds.
 5. **Notices:** one digest line per owner trust per day (UTC), posted by Odo once per digest id like other station
    notices (when it posts, at the first pairing or after the day ends, is the plan's to decide, N12), built in `station_notices` from `trust_confirmations`, not
@@ -129,8 +130,9 @@ person whose own account a person confirmed with a code.
   stranger's machine.
 - The pairing law in CLAUDE.md: a ship never types, relays, repeats or computes a code. Its new lines: a ship may run
   `pair-trusted` within an owner trust, and never grants or renews one.
-- Pairing grants no content, and no room by itself. The lessons room still takes members from Andy, or under a
-  moderate grant he gives.
+- Pairing grants no content, and no room by itself, except that a typed code for an account on a peer listed for the
+  lessons room makes it addable there by Rio Grande (lessons-room adds spec). Otherwise the lessons room takes members
+  from Andy, or under a moderate grant he gives.
 
 ## What it costs Andy, plainly (S9)
 

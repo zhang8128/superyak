@@ -314,7 +314,7 @@ def test_only_these_notices_are_written_by_the_system_author(env):
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == '_post_as_system':
                         callers.add((path.name, function.name))
     assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief'), ('moderators.py', '_make_moderate'),
-                       ('grants.py', '_revoke'), ('members.py', '_add_members'), ('members.py', '_remove_member'),
+                       ('grants.py', '_revoke'), ('members.py', '_add_members'), ('members.py', '_remove_member'), ('members.py', '_remove_held'),
                        ('room_cloud.py', '_tell_owner')}
     app, clients, users, clock = env
     store = app.state.store

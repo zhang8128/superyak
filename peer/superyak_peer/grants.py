@@ -61,6 +61,18 @@ def _utc(moment):
     return datetime.fromtimestamp(moment, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
 
+def rooms_back(db, room_id):
+    """G15: a room and every room it replaced, walking back along linked_room_id, the room itself first. A seen list
+    ends the walk at a cycle made by hand, so it always ends. SQL only (Grants._rooms_back is this), so a restore's raw
+    connection walks a chain too."""
+    walked, key = [], room_id
+    while key is not None and key not in walked:
+        walked.append(key)
+        row = db.execute('SELECT linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
+        key = row[0] if row else None
+    return walked
+
+
 class Grants:
     def _grant_policy(self, db):
         """G7: spec A's no-charter defaults. Every check reads the policy through this one function, so step 4 puts the
@@ -197,14 +209,8 @@ class Grants:
         return NOT_IN_ROOM if title is None else title
 
     def _rooms_back(self, db, room_id):
-        """G15: a room and every room it replaced, walking back along linked_room_id, the room itself first. A seen list
-        ends the walk at a cycle made by hand, so it always ends."""
-        walked, key = [], room_id
-        while key is not None and key not in walked:
-            walked.append(key)
-            row = db.execute('SELECT linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
-            key = row['linked_room_id'] if row else None
-        return walked
+        """G15: rooms_back, as a store method."""
+        return rooms_back(db, room_id)
 
     def _current_room(self, db, room_id):
         """G11: the current room a replaced room now covers, following linked_room_id forward (S5); None for a current

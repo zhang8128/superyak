@@ -15,6 +15,7 @@ from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull
 from .common import Problem, require, uid, encode, text, linked_room_ok
 from .owner_trust import (TRUST_CAP, plain_name, code_current, contact_trust, latest_grant, live_trust, owner_eligible,
                           settle_owner_trust, trust_window)
+from .lessons import drop_held_from_lessons, lessons_listed_here
 from .ships import SHIP_NAME
 
 class Obsolete(Exception):
@@ -186,7 +187,7 @@ class Federation:
                 return self.identity.card(None, dict(user), delivery='pull')
             return self.identity.card(self.endpoint, dict(user))
 
-    def pair(self, actor, card, *, code):
+    def pair(self, actor, card, *, code, lessons_line_shown=False):
         """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off
         that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
         the typed text. A retired peer is refused before any code is read (owner trust S11), and once the writes are
@@ -196,6 +197,7 @@ class Federation:
             raise Problem(400, 'Cannot pair this peer with itself')
         with self.store.transaction() as db:
             self.store._admin(db, actor)
+            now = self.store.clock()  # one time for the whole pair, so its holds share one `created` and post one notice
             if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (card['peer_id'],)).fetchone():
                 raise Problem(409, RETIRED)  # before the code, so no code, even one shown on that machine, trusts its key (S11)
             expected, typed = pairing_code(card), typed_code(code)
@@ -220,12 +222,16 @@ class Federation:
             # review SF2).
             if pairing_code({**(prior if previous else card), 'participant': card['participant']}) != expected:
                 raise Problem(409, 'Known peer trust material cannot be replaced')
+            epochs = self.store._chain_epochs(db)  # what this pair's holds change in the lessons chain, emitted below
             if previous and not previous['paired']:
                 # Serenity's review MF2: a peer unpaired with no holds (by main's unpair, before this branch or after a
                 # rollback, or in a copy restored from before holds) gets every contact held and unconfirmed first, so
                 # "unpaired" means "every contact held" whatever made it, and this pair releases the typed one only.
+                # Its trust-made members leave the lessons room (lessons room adds, item 1).
                 db.execute('INSERT OR IGNORE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
-                           (self.store.clock(), card['peer_id']))
+                           (now, card['peer_id']))
+                drop_held_from_lessons(db, [r[0] for r in db.execute('SELECT id FROM remote_contacts WHERE peer_id=?',
+                                                                     (card['peer_id'],))], now)
                 db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN '
                            '(SELECT id FROM remote_contacts WHERE peer_id=?)', (card['peer_id'],))
                 # Held as unpair holds them: nothing queued for them since goes out on this re-pair (review minor 2).
@@ -239,13 +245,17 @@ class Federation:
             contact = dict(db.execute('SELECT c.id, c.peer_id, c.user_id, l.label AS name FROM remote_contacts c JOIN contact_labels l '
                                       'ON l.id=c.id WHERE c.peer_id=? AND c.user_id=?',  # shown by its label (Task 6)
                                       (card['peer_id'], card['participant']['id'])).fetchone())
-            db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
-                       'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
+            line = 1 if lessons_line_shown and lessons_listed_here(db, card['peer_id']) else 0  # the flag counts only for a peer listed now
+            db.execute('INSERT INTO pairing_confirmations(contact_id, code, confirmed, typed_by, lessons_line) VALUES(?,?,?,?,?) '
+                       'ON CONFLICT(contact_id) DO UPDATE SET code=excluded.code, confirmed=excluded.confirmed, '
+                       'typed_by=excluded.typed_by, lessons_line=excluded.lessons_line',
+                       (contact['id'], expected, now, actor, line))
             # Any hold of an owner ends its trust (N13), whatever made the hold: the MF2 holds just above, or a hold
             # with no revocation beside it (a restore's), so typing a held owner's code can't bring its trust back.
-            settle_owner_trust(db, self.store.clock())
+            settle_owner_trust(db, now)
             db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
-            settle_owner_trust(db, self.store.clock())  # a ship whose own code was just typed stays: that is the proof
+            settle_owner_trust(db, now)  # a ship whose own code was just typed stays: that is the proof
+            self.store._emit_held(db, epochs)
             return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}
 
     def pair_trusted(self, actor, card, assertion):
@@ -349,13 +359,18 @@ class Federation:
                 db.execute('INSERT OR IGNORE INTO retired_peers(peer_id, retired, by_id) VALUES (?,?,?)',
                            (row['peer_id'], now, actor))
             siblings = "SELECT id FROM remote_contacts WHERE peer_id=?"
+            epochs = self.store._chain_epochs(db)
             db.execute(f'INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
                        (now, row['peer_id']))
+            # Lessons room adds, item 1: its trust-made members leave the lessons room, read before their codes go;
+            # a retire takes every contact of the peer out, since the stolen key speaks as them all.
+            drop_held_from_lessons(db, [r[0] for r in db.execute(siblings, (row['peer_id'],))], now, every_contact=retire)
             db.execute(f'DELETE FROM pairing_confirmations WHERE contact_id IN ({siblings})', (row['peer_id'],))
             db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (row['peer_id'],))
             db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (row['peer_id'],))
             db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (row['peer_id'],))
             settle_owner_trust(db, now)
+            self.store._emit_held(db, epochs)
         return {'ok':True}
 
     def connections(self, actor):

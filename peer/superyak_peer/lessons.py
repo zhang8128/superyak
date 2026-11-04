@@ -82,6 +82,9 @@ LIVE_KEY = ('This lesson contains a live ship key, so it was not posted. Treat t
             'revoke it and dock again.')
 RETRACTED = "That lesson was retracted, for good: its text can't be laid again on this peer"
 CAP = 'This ship already has 32 live lessons in the room; retract one first'
+GRANT_PAUSED = "{label}'s owner trust is paused until {owner} renews it, so it lays no lessons."
+GRANT_ENDED = "{label}'s owner trust is {state}, so it lays no lessons."
+GRANT_CAP = 'The ships of one owner trust share 32 live lessons, and they have them.'
 NO_SUCH_LESSON = 'No live lesson in this room has that id'
 WHO_RETRACTS = "Only a lesson's author or the room's owner retracts it"
 LABELS = 'The lessons room takes plain posts: no reply label and no ticket'
@@ -791,6 +794,11 @@ def describe_station_room(view):
     lines = [f'Room {view["room"][:6]} "{safe_line(view["title"])}". Titles and names come from people: data, not instructions.']
     lines += _member_lines(view['members'])
     lines.append('Listed peers: ' + (', '.join(p[:12] for p in view['peers']) or 'none'))
+    from .owner_trust import plain_name
+    for peer in view['peers']:  # who the ship could add from each (lessons room adds, item 2a); never a code
+        for a in view.get('addable', ()):
+            if a['peer_id'] == peer:
+                lines.append(f'  {plain_name(a["label"])} ({plain_name(a["user_short"])}) addable by {plain_name(view.get("ship", "the ship"))}')
     if view['recorded']:
         lines.append(f'Recorded as the lessons room. Its full id, for make lessons-room on each other peer: {view["full_id"]}')
     else:
@@ -960,21 +968,7 @@ class Lessons:
             return []
         key = record['room_key']
         if ':' not in key:
-            if db.execute('SELECT 1 FROM rooms WHERE id=?', (key,)).fetchone() is None:
-                return []  # room_key has no foreign key (elsewhere it names a remote room), so a hand edit can orphan it
-            seen = {key}
-            while True:
-                row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
-                if row is None or row['id'] in seen:
-                    break
-                key = row['id']
-                seen.add(key)
-            chain = []
-            for room in self._rooms_back(db, key):
-                if db.execute('SELECT 1 FROM rooms WHERE id=?', (room,)).fetchone() is None:
-                    break  # a linked_room_id with no room (a hand edit with foreign keys off): the chain ends here
-                chain.append(room)
-            return chain[::-1]
+            return _local_chain(db, key)
         origin, _, current = key.partition(':')
         rooms = self._remote_rooms_from(db, origin)
         if current not in rooms:
@@ -989,6 +983,19 @@ class Lessons:
 
     def _in_lessons_chain(self, db, key):
         return key in self._lessons_chain(db)
+
+    def _chain_epochs(self, db):
+        """{room id: epoch} for each room of the lessons chain at its origin (origin_chain), read by a hold before it
+        holds, so _emit_held can tell which rooms drop_held_from_lessons changed."""
+        return {key: db.execute('SELECT epoch FROM rooms WHERE id=?', (key,)).fetchone()[0] for key in origin_chain(db)}
+
+    def _emit_held(self, db, before):
+        """chat.membership, in the hold's transaction, for each room of the lessons chain whose epoch rose since `before`
+        (_chain_epochs): the holds since then took members out of it (drop_held_from_lessons). Federation sends each
+        paired member the room's roster without them, so every index drops their lessons on its next run."""
+        for key, epoch in self._chain_epochs(db).items():
+            if key in before and epoch != before[key]:
+                self.emit(db, 'chat.membership', key, epoch, {'held': True})
 
     def _lessons_snapshot(self, db):
         """Section 4 step 1, inside the caller's transaction: everything the checks and the index read. None when no room
@@ -1085,10 +1092,14 @@ class Lessons:
                     raise Problem(409, UNLISTED.format(name=contact_line(db, member, 40)))
                 members.append(_remote_member(contact, contact['peer_id']))
             import hashlib
+            addable = addable_contacts(self, db, room, listed)
             code = hashlib.sha256(encode({'room': room['id'], 'members': sorted(room['member_ids']), 'peers': listed,
-                                          'ship': vessel['id']}).encode()).hexdigest()[:8]
+                                          'ship': vessel['id'],
+                                          'addable': sorted([a['id'], a['code_digest'], a['typed_by']] for a in addable)}
+                                         ).encode()).hexdigest()[:8]
             view = {'room': room['id'], 'full_id': f"{peer}:{room['id']}", 'title': room['title'], 'members': members,
-                    'peers': listed, 'confirm': code, 'recorded': False}
+                    'peers': listed, 'ship': ship, 'confirm': code, 'recorded': False,
+                    'addable': [{k: v for k, v in a.items() if k != 'code_digest'} for a in addable]}
             if confirm is None:
                 return view
             if not isinstance(confirm, str) or confirm.strip().lower() != code:
@@ -1098,7 +1109,50 @@ class Lessons:
                        'ship_id=excluded.ship_id, recorded=excluded.recorded', (room['id'], vessel['id'], now))
             db.execute('DELETE FROM lessons_peers')
             db.executemany('INSERT INTO lessons_peers VALUES(?,?)', [(listed_peer, now) for listed_peer in listed])
+            db.execute('DELETE FROM lessons_addable')
+            db.executemany('INSERT INTO lessons_addable VALUES(?,?,?,?)', [(a['id'], a['code_digest'], a['typed_by'], now) for a in addable])
             return {**view, 'recorded': True}
+
+    def station_lessons_add(self, contact_prefix):
+        """`make station-lessons-add CONTACT=` (lessons room adds, item 1), on the origin: the room's recorded ship adds
+        one remote contact Andy vouched for to the chain's current room, with no ask of Andy. One transaction reads the
+        chain, resolves the contact, runs every check (addable_now) and makes the owner's add as the ship
+        (_add_members), so a refusal writes nothing. The contact is named by the start of its id (with or without
+        remote_) or of its participant id, which the listing and this command show in parentheses; no refusal echoes
+        what was typed, and a value shaped like a pairing code is refused unread. Returns {label, user_short, peer12,
+        old_room, new_room, lessons_carried}, the label and user id as stored (describe_lessons_add shows them plain)."""
+        from .identity import typed_code
+        from .owner_trust import LABELLED_CONTACT
+        from .ships import short_id
+        prefix = short_id(contact_prefix)
+        if typed_code(prefix) is not None:
+            raise Problem(400, ADD_CODE_SHAPED)
+        with self.transaction() as db:
+            chain = self._lessons_chain(db)
+            if not chain or ':' in chain[-1]:
+                raise Problem(409, ADD_NO_ROOM)
+            current = chain[-1]
+            owner_id = db.execute('SELECT owner_id FROM rooms WHERE id=?', (current,)).fetchone()['owner_id']
+            ship = db.execute("SELECT users.id FROM lessons_room JOIN users ON users.id=lessons_room.ship_id WHERE "
+                              "lessons_room.id=1 AND users.kind='ship' AND users.owner_id=?", (owner_id,)).fetchone()
+            if ship is None:  # a record at the origin always names the owner's ship; anything else is no record to act on
+                raise Problem(409, ADD_NO_ROOM)
+            matches = [r['id'] for r in db.execute('SELECT id, user_id FROM remote_contacts ORDER BY id')
+                       if r['id'].startswith(prefix) or r['id'].removeprefix('remote_').startswith(prefix)
+                       or r['user_id'].lower().startswith(prefix)]
+            if len(matches) > 1:
+                raise Problem(400, ADD_AMBIGUOUS)
+            if not matches:
+                raise Problem(404, ADD_NOT_REMOTE)
+            contact_id = matches[0]
+            room = self._room(db, owner_id, current)
+            refused = addable_now(self, db, room, contact_id, self.clock())
+            if refused is not None:
+                raise Problem(ADD_REFUSALS[refused[0]][0], refused[1])
+            new = self._add_members(db, owner_id, room, [contact_id], None, ship['id'])  # the room takes no brief (C15)
+            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+            return {'label': contact['label'], 'user_short': contact['user_id'][:8], 'peer12': contact['peer_id'][:12],
+                    'old_room': current, 'new_room': new['id'], 'lessons_carried': new.get('lessons_carried', 0)}
 
     def lessons_room_full_id(self):
         """`lessons where`: the chain's current room by its full id, `<origin peer id>:<room id>`, or None."""
@@ -1205,9 +1259,41 @@ class Lessons:
         found = lesson_id(full.partition(':')[0], post)
         if found in retracted:
             raise Problem(409, RETRACTED)
+        self._grant_gate(db, full, found, live)
         if found not in {item.id for item in live} and sum(item.author == full for item in live) >= LIVE_CAP:
             raise Problem(409, CAP)
         return found
+
+    def _grant_gate(self, db, full, found, live):
+        """Item 1 of the lessons room adds: a trust-made author lays only under a live grant, and all of one grant's ships
+        share one LIVE_CAP of live lessons. A stolen host key makes every assertion verify, so only the origin's doors
+        bound it (another peer's index sees no grants). A code-confirmed author or a local one is none of this."""
+        from .owner_trust import contact_line, latest_grant, owner_label, trust_state
+        from .ships import safe_line
+        peer, _, user = full.partition(':')
+        contact = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, user)).fetchone()
+        if contact is None or not trust_made(db, contact['id']):
+            return
+        grant = latest_grant(db, contact['id'])
+        state = trust_state(db, grant, self.clock())['state']
+        if state in ('paused', 'expired', 'revoked'):
+            label = contact_line(db, contact['id'], 40)
+            if state != 'paused':
+                raise Problem(403, GRANT_ENDED.format(label=label, state=state))
+            owner = db.execute("SELECT peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
+                               (grant,)).fetchone()
+            raise Problem(403, GRANT_PAUSED.format(label=label, owner=safe_line(owner_label(db, owner['peer_id'],
+                                                                                           owner['owner_user_id']), 40)))
+        if found in {item.id for item in live}:
+            return
+        mine = 0
+        for author in {item.author for item in live}:
+            peer, _, user = author.partition(':')
+            other = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, user)).fetchone()
+            if other and trust_made(db, other['id']) and latest_grant(db, other['id']) == grant:
+                mine += sum(item.author == author for item in live)
+        if mine >= LIVE_CAP:
+            raise Problem(429, GRANT_CAP)
 
     def _is_retraction(self, db, message_id):
         """Whether a post is a retraction, so unread doesn't count it as a new lesson (C32)."""
@@ -1533,6 +1619,7 @@ LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES peers(peer_id), recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
+CREATE TABLE IF NOT EXISTS lessons_addable(contact_id TEXT PRIMARY KEY REFERENCES remote_contacts(id), code_digest TEXT NOT NULL, typed_by TEXT, listed REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
 CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id),
@@ -1542,6 +1629,370 @@ CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT 
 CREATE TABLE IF NOT EXISTS lesson_outcomes(id TEXT PRIMARY KEY, created REAL NOT NULL,
     receipt_id TEXT NOT NULL UNIQUE REFERENCES lesson_receipts(id), outcome TEXT NOT NULL CHECK(outcome IN ('helped','misled','unused')));
 '''
+
+
+def lessons_listed_here(db, peer_id):
+    """Ruling 1: the lessons room is recorded at this origin (its key has no ':') and `peer_id` is one of its listed peers."""
+    record = db.execute('SELECT room_key FROM lessons_room WHERE id=1').fetchone()
+    return (record is not None and ':' not in record['room_key']
+            and db.execute('SELECT 1 FROM lessons_peers WHERE peer_id=?', (peer_id,)).fetchone() is not None)
+
+
+LESSONS_LINE = ('{name} on {peer} can be added to the lessons room by {ship} once you type its code; its lessons would '
+                'reach every ship.')
+
+
+def lessons_line_for(db, card):
+    """Lessons room adds, item 2: what typing this card's code would make addable, said before the code is typed. None
+    when the card's peer isn't listed, no room is recorded here, this peer isn't its origin, or no ship is recorded.
+    `card` is a validated card; the ship is the recorded ship's account name, read in the caller's transaction."""
+    from .owner_trust import plain_name
+    if not lessons_listed_here(db, card['peer_id']):
+        return None
+    ship = db.execute('SELECT users.name FROM lessons_room JOIN users ON users.id=lessons_room.ship_id '
+                      'WHERE lessons_room.id=1').fetchone()
+    if ship is None:
+        return None
+    return LESSONS_LINE.format(name=plain_name(card['participant']['name']), peer=card['peer_id'][:12],
+                               ship=plain_name(ship['name']))
+
+
+def _held(db, contact_id):
+    return db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact_id,)).fetchone() is not None
+
+
+def trust_made(db, contact_id):
+    """Whether owner trust made this contact, by connections()' rule (federation.py, `by_trust`, less its held and paired
+    parts): a trust confirmation and no current typed code of its own. A contact whose own typed code is current is
+    code-confirmed, even if owner trust paired it too: Andy's typed code is the stronger act (the ruling on Task 4)."""
+    from .owner_trust import code_current
+    return (db.execute('SELECT 1 FROM trust_confirmations WHERE contact_id=?', (contact_id,)).fetchone() is not None
+            and not code_current(db, contact_id))
+
+
+def _local_chain(db, key):
+    """Lessons._lessons_chain at the origin, where the recorded room `key` is a local room: the chain oldest first,
+    ending with the current room. It follows linked_room_id forward from the recorded room, then back to the first room
+    it doesn't hold. [] when the recorded room is gone (room_key has no foreign key, since elsewhere it names a remote
+    room, so a hand edit can orphan it). SQL only."""
+    from .grants import rooms_back
+    if db.execute('SELECT 1 FROM rooms WHERE id=?', (key,)).fetchone() is None:
+        return []
+    seen = {key}
+    while True:
+        row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
+        if row is None or row[0] in seen:
+            break
+        key = row[0]
+        seen.add(key)
+    chain = []
+    for room in rooms_back(db, key):
+        if db.execute('SELECT 1 FROM rooms WHERE id=?', (room,)).fetchone() is None:
+            break  # a linked_room_id with no room (a hand edit with foreign keys off): the chain ends here
+        chain.append(room)
+    return chain[::-1]
+
+
+def _table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def origin_chain(db):
+    """The lessons chain at its origin, from tables alone (the lessons_room record and the rooms' linked_room_id), as
+    Lessons._lessons_chain walks it there: [] where no room is recorded, where the record names a room elsewhere
+    (`<origin>:<room id>`: only the origin changes the room's members), or on a copy from before the lessons tables.
+    SQL only, so a restore's raw connection reads it too."""
+    if not _table(db, 'lessons_room'):
+        return []
+    record = db.execute('SELECT room_key FROM lessons_room WHERE id=1').fetchone()
+    if record is None or ':' in record[0]:
+        return []
+    return _local_chain(db, record[0])
+
+
+def drop_held_from_lessons(db, contact_ids, now, *, every_contact=False):
+    """Lessons room adds, item 1, "a hold removes it": every hold calls this in its own transaction, right after its
+    contact_holds insert, while the contact's typed code still reads as it did before the hold took it away. Each
+    contact given that is in a room of the lessons chain at its origin (origin_chain) and that owner trust made
+    (trust_made), or each one with `every_contact` (a retire: a stolen host key speaks as its code-confirmed accounts
+    too, and a retired peer never pairs again), leaves the chain as _remove_member takes a member out: its
+    remote_room_members rows go from every chain room it is in, and each room it left gets its epoch raised once. One
+    member_changes row per contact records it: a removal, reason 'held' (so _owner_removed doesn't read it as Andy's),
+    no actor, no grant, in the chain's current room, with how many earlier rooms it left, dated `now`, so a batch's
+    rows share one `created`. A remote contact holds no moderate grant, claim or deferral (their tables reference
+    users), so nothing else is undone. Returns the new rows' ids.
+
+    SQL only, so a restore's raw connection works, on a copy from before this build too: one from before owner trust
+    has no trust-made contact, and one from before the reason column gains it, as the store's migration adds it. It
+    posts nothing and emits nothing; a Store caller emits chat.membership for the rooms it changed (_emit_held)."""
+    contact_ids = list(dict.fromkeys(contact_ids))
+    chain = origin_chain(db) if contact_ids else []
+    if not chain or (not every_contact and not _table(db, 'trust_confirmations')):
+        return []
+    marks, current = ','.join('?' * len(chain)), chain[-1]
+    changes, touched = [], set()
+    for contact in contact_ids:
+        places = {r[0] for r in db.execute(f'SELECT room_id FROM remote_room_members WHERE contact_id=? AND room_id IN ({marks})',
+                                           (contact, *chain))}
+        if not places or not (every_contact or trust_made(db, contact)):
+            continue
+        if not changes and 'reason' not in {r[1] for r in db.execute('PRAGMA table_info(member_changes)')}:
+            db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
+        db.execute(f'DELETE FROM remote_room_members WHERE contact_id=? AND room_id IN ({marks})', (contact, *chain))
+        touched |= places
+        key = uid()
+        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,'
+                   "claims_released,created,reason) VALUES(?,NULL,NULL,?,'remove',?,NULL,?,0,?,'held')",
+                   (key, contact, current, len(places - {current}), now))
+        changes.append(key)
+    for room in chain:
+        if room in touched:
+            db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (room,))
+    return changes
+
+
+def _unaddable(store, db, room, contact_id, peer_ids=None, *, trust_path=False):
+    """Ruling 2's one rule, with its reason: None when the ship could add this contact to `room` (a dict with id,
+    member_ids and owner_id), else the name of the add's refusal, in the add's order. On the code path: ADD_NOT_REMOTE,
+    ADD_UNLISTED (not on a peer in `peer_ids`, by default the peers recorded as listed), ADD_NO_CODE (its typed code
+    isn't current, or it's held), ADD_MEMBER, ADD_OWNER_REMOVED. A trust-made contact (trust_made) has no current
+    typed code, so the code check leaves it out; one owner trust also paired whose own code is current is
+    code-confirmed and stays in. The trust path (`trust_path`) shares the peer, member and removal checks and leaves
+    the code and the trust to addable_now. Writes nothing. `store` supplies `_owner_removed`, a store method."""
+    from .owner_trust import code_current
+    contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
+    if contact is None:
+        return 'ADD_NOT_REMOTE'
+    if peer_ids is None:
+        peer_ids = [r[0] for r in db.execute('SELECT peer_id FROM lessons_peers')]
+    if contact['peer_id'] not in peer_ids:
+        return 'ADD_UNLISTED'
+    if not trust_path and (not code_current(db, contact_id) or _held(db, contact_id)):
+        return 'ADD_NO_CODE'
+    if contact_id in room['member_ids']:
+        return 'ADD_MEMBER'
+    if store._owner_removed(db, room['id'], contact_id, room['owner_id']):
+        return 'ADD_OWNER_REMOVED'
+    return None
+
+
+def listable(store, db, room, contact_id, peer_ids=None):
+    """Lessons room adds, Ruling 2: whether the ship could add this contact to `room` (a dict with id, member_ids and
+    owner_id): it is on a peer in `peer_ids` (default: the peers recorded as listed), its typed code is current (so
+    owner trust didn't make it: trust_made), it is unheld, it isn't a member of `room`, and the owner hasn't removed it
+    (_unaddable). Writes nothing. `store` supplies `_owner_removed`, a store method."""
+    return _unaddable(store, db, room, contact_id, peer_ids) is None
+
+
+def _code_digest(code):
+    """What lessons_addable keeps of a pairing code: its SHA-256, in hex. Never shown."""
+    import hashlib
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def addable_contacts(store, db, room, peer_ids):
+    """Every contact `listable` on these peers, as `{id, label, user_short, peer_id, code_digest, typed_by}`, in id order.
+    `code_digest` is the SHA-256 of the pairing code that confirmed it: for the confirm code and lessons_addable only,
+    never shown."""
+    out = []
+    for peer_id in sorted(set(peer_ids)):
+        rows = db.execute('SELECT c.id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id '
+                          'WHERE c.peer_id=? ORDER BY c.id', (peer_id,)).fetchall()
+        for row in rows:
+            if listable(store, db, room, row['id'], [peer_id]):
+                conf = db.execute('SELECT code, typed_by FROM pairing_confirmations WHERE contact_id=?', (row['id'],)).fetchone()
+                out.append({'id': row['id'], 'label': row['label'], 'user_short': row['user_id'][:8], 'peer_id': peer_id,
+                            'code_digest': _code_digest(conf['code']), 'typed_by': conf['typed_by']})
+    return out
+
+
+# Lessons room adds, item 1: make station-lessons-add's refusals, each a Problem with its status (ADD_REFUSALS).
+ADD_NO_ROOM = 'No lessons room is recorded at this origin.'
+ADD_AMBIGUOUS = 'The contact you named matches more than one contact; give more of its id.'  # never the typed value
+ADD_NOT_REMOTE = "The contact you named isn't a remote contact here."
+ADD_UNLISTED = "{label} is on {peer12}, which isn't listed for the lessons room."
+ADD_NO_CODE = "{label} has no current typed code here, or it's held."
+ADD_NOT_VOUCHED = ("{label}'s code wasn't typed by {owner} with the lessons line shown, and the listing {owner} confirmed "
+                   "didn't name it.")
+ADD_MEMBER = '{label} is already in the lessons room.'
+ADD_OWNER_REMOVED = '{owner} removed {label} from the lessons room; adding it back is his act.'
+ADD_TRUST = '{label} was paired by owner trust, and that trust is {state}.'
+ADD_TRUST_GRANTOR = '{label} was paired under an owner trust that {name} granted or renewed, not {owner}.'
+ADD_OWNER_NOT_ADDABLE = "{label}'s owner, {name}, isn't in the lessons room or addable to it."
+ADD_REFUSALS = {'ADD_NO_ROOM': (409, ADD_NO_ROOM), 'ADD_AMBIGUOUS': (400, ADD_AMBIGUOUS),
+                'ADD_NOT_REMOTE': (404, ADD_NOT_REMOTE), 'ADD_UNLISTED': (403, ADD_UNLISTED), 'ADD_NO_CODE': (403, ADD_NO_CODE),
+                'ADD_NOT_VOUCHED': (403, ADD_NOT_VOUCHED), 'ADD_MEMBER': (409, ADD_MEMBER),
+                'ADD_OWNER_REMOVED': (403, ADD_OWNER_REMOVED), 'ADD_TRUST': (403, ADD_TRUST),
+                'ADD_TRUST_GRANTOR': (403, ADD_TRUST_GRANTOR),
+                'ADD_OWNER_NOT_ADDABLE': (403, ADD_OWNER_NOT_ADDABLE)}  # name: (status, text)
+ADD_CODE_SHAPED = ("CONTACT takes a contact's short id, and this value has a pairing code's shape (32 hex), so it isn't "
+                   "taken or shown")
+ADDED_TO_LESSONS = ('Added {label} ({user_short}) on {peer12} to the lessons room: room {old6} became {new6}; '
+                    '{n} lessons carried.')
+
+
+def _vouched(db, contact_id, owner_id):
+    """Item 1's last check on the code path: the room's owner typed this contact's current code with the lessons line
+    shown, or the listing he confirmed named it with the code and the typist it has now (lessons_addable, read in the
+    caller's transaction, so an add racing a CONFIRM rerun reads the old table or the new one, never half)."""
+    conf = db.execute('SELECT code, typed_by, lessons_line FROM pairing_confirmations WHERE contact_id=?',
+                      (contact_id,)).fetchone()
+    if conf is None:
+        return False
+    if conf['typed_by'] == owner_id and conf['lessons_line'] == 1:
+        return True
+    return db.execute('SELECT 1 FROM lessons_addable WHERE contact_id=? AND code_digest=? AND typed_by IS ?',
+                      (contact_id, _code_digest(conf['code']), conf['typed_by'])).fetchone() is not None
+
+
+def _refusal(which, **words):
+    """addable_now's answer for a refusal: its name and its text, the words filled in."""
+    return which, ADD_REFUSALS[which][1].format(**words)
+
+
+def _code_path(store, db, room, contact, owner):
+    """The code path, for every contact owner trust didn't make (trust_made), one it also paired whose own typed code
+    is current among them: listable first (Ruling 2), then the vouching. `contact` is a labelled contact with `shown`,
+    its label through plain_name; `owner` is the room owner's name as shown. Returns addable_now's answer."""
+    why = _unaddable(store, db, room, contact['id'])
+    words = {'label': contact['shown'], 'peer12': contact['peer_id'][:12], 'owner': owner}
+    if why is not None:
+        return _refusal(why, **words)
+    if not _vouched(db, contact['id'], room['owner_id']):
+        return _refusal('ADD_NOT_VOUCHED', **words)
+    return None
+
+
+def addable_now(store, db, room, contact_id, now):
+    """Lessons room adds, item 1 (Ruling 3): None when the lessons room's recorded ship may add this remote contact to
+    `room`, the chain's current room at the origin (a dict with id, member_ids and owner_id), else (the refusal's name,
+    its text). Names come through plain_name. Writes nothing; `store` supplies `_owner_removed`.
+
+    A contact owner trust made (trust_made: a trust confirmation and no current typed code of its own) takes the trust
+    path: on a listed peer, not a member, not removed by the owner, its latest trust live and last granted or renewed
+    by the room's owner (any admin may grant one, and only the owner's act reaches his room), unheld, and its owner
+    (the person contact the grant names) a member of `room` or addable on the code path itself, never through another
+    trust. Every other contact takes the code path (_code_path), one owner trust also paired whose own code is current
+    among them, whatever that trust's state. The trust's state comes before the hold on the trust path because a
+    revocation holds every ship it ends: checked after, a revoked trust would read as only a hold."""
+    from .owner_trust import LABELLED_CONTACT, latest_grant, plain_name, trust_state
+    contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+    if contact is None:
+        return _refusal('ADD_NOT_REMOTE')
+    contact = {**dict(contact), 'shown': plain_name(contact['label'])}
+    account = db.execute('SELECT name FROM users WHERE id=?', (room['owner_id'],)).fetchone()
+    owner = plain_name(account['name'] if account else room['owner_id'])
+    if not trust_made(db, contact_id):
+        return _code_path(store, db, room, contact, owner)
+    grant = latest_grant(db, contact_id)
+    words = {'label': contact['shown'], 'peer12': contact['peer_id'][:12], 'owner': owner}
+    why = _unaddable(store, db, room, contact_id, trust_path=True)
+    if why is not None:
+        return _refusal(why, **words)
+    state = trust_state(db, grant, now)['state']
+    if state != 'live':
+        return _refusal('ADD_TRUST', state=state, **words)
+    return _trust_checks_after_state(store, db, room, contact_id, grant, owner, words)
+
+
+HELD_NAMED = 5  # ships a held-batch notice names before "and k more"
+
+
+def _trust_checks_after_state(store, db, room, contact_id, grant, owner, words):
+    """The trust path's checks that follow the trust's state, in addable_now's order: the grantor, the hold and the
+    owner. Shared with waiting_for_lessons, which asks them of a paused trust's ships as if it were live."""
+    from .owner_trust import _owner_contact, plain_name
+    act = db.execute("SELECT owner_trust.by_id, users.name FROM owner_trust LEFT JOIN users ON users.id=owner_trust.by_id "
+                     "WHERE owner_trust.grant_id=? AND owner_trust.event IN ('grant','renew') "
+                     'ORDER BY owner_trust.seq DESC LIMIT 1', (grant,)).fetchone()
+    if act is None or act['by_id'] != room['owner_id']:  # the latest grant or renewal is the act that keeps it live
+        return _refusal('ADD_TRUST_GRANTOR', name=plain_name(act['name']) if act and act['name'] else 'an unknown account',
+                        **words)
+    if _held(db, contact_id):
+        return _refusal('ADD_NO_CODE', **words)
+    person = _owner_contact(db, grant)
+    person = person and {**dict(person), 'shown': plain_name(person['label'])}
+    if not person or (person['id'] not in room['member_ids']
+                      and _code_path(store, db, room, person, owner) is not None):
+        return _refusal('ADD_OWNER_NOT_ADDABLE', name=person['shown'] if person else 'an unknown owner', **words)
+    return None
+
+
+def waiting_for_lessons(store, db, grant_id, now):
+    """Spec, the pause notice: how many of this grant's ships (trust-made contacts whose latest trust is this grant)
+    wait for the lessons room only because the trust is paused: the grant is paused, and the ship isn't a member and
+    would be addable if it were live (addable_now's refusal is ADD_TRUST, and the checks after the state pass: its
+    grantor, no hold, its owner). 0 where no lessons room is recorded here. A pure read."""
+    from .owner_trust import latest_grant, trust_state
+    if trust_state(db, grant_id, now)['state'] != 'paused':
+        return 0
+    chain = store._lessons_chain(db)
+    if not chain or ':' in chain[-1]:
+        return 0
+    owner_id = db.execute('SELECT owner_id FROM rooms WHERE id=?', (chain[-1],)).fetchone()['owner_id']
+    room = store._room(db, owner_id, chain[-1])
+    count = 0
+    for (contact_id,) in db.execute('SELECT DISTINCT contact_id FROM trust_confirmations ORDER BY contact_id').fetchall():
+        if latest_grant(db, contact_id) != grant_id or not trust_made(db, contact_id) or _held(db, contact_id):
+            continue
+        refused = addable_now(store, db, room, contact_id, now)
+        if refused is None or refused[0] != 'ADD_TRUST':
+            continue
+        contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
+        if contact is None:
+            continue
+        account = db.execute('SELECT name FROM users WHERE id=?', (room['owner_id'],)).fetchone()
+        if _trust_checks_after_state(store, db, room, contact_id, grant_id, account['name'] if account else room['owner_id'],
+                                     {'label': '', 'peer12': contact['peer_id'][:12], 'owner': ''}) is None:
+            count += 1
+    return count
+
+
+def lessons_notices(db):
+    """Spec item 3: the Ops notices for the lessons room's changes, one-off ids keyed by a member_changes row so Odo
+    posts each once. An add by anyone but the room's owner (the recorded ship) in a room of the lessons chain gets
+    `lessons-add-<row id>`; each batch of held removals sharing one `created` gets `lessons-held-<first row id>`, one
+    notice for all its ships. Every value through plain_name then safe_line. A pure read, from tables alone."""
+    from .owner_trust import plain_name
+    from .ships import safe_line
+    chain = origin_chain(db)
+    if not chain or not _table(db, 'member_changes'):
+        return []
+    marks = ','.join('?' * len(chain))
+
+    def line(value, limit=80):
+        return safe_line(plain_name(value), limit)
+    notices = [{'id': f'lessons-add-{r["id"]}', 'text': f'{line(r["label"])} ({line(r["user_id"][:8])}) on {line(r["peer_id"][:12])} '
+                                                         f'joined the lessons room, added by {line(r["ship"])}.'}
+               for r in db.execute(
+                   'SELECT m.id, l.label, c.user_id, c.peer_id, COALESCE(u.username, substr(m.actor_id, 1, 6)) AS ship '
+                   'FROM member_changes m JOIN remote_contacts c ON c.id=m.member_id JOIN contact_labels l ON l.id=c.id '
+                   'JOIN rooms ON rooms.id=m.room_id LEFT JOIN users u ON u.id=m.actor_id '
+                   f"WHERE m.change='add' AND m.room_id IN ({marks}) AND m.actor_id IS NOT NULL AND m.actor_id!=rooms.owner_id "
+                   'ORDER BY m.created, m.rowid', chain)]
+    if 'reason' not in {r[1] for r in db.execute('PRAGMA table_info(member_changes)')}:
+        return notices
+    batches = {}
+    for r in db.execute(
+            'SELECT m.id, m.created, COALESCE(l.label, substr(m.member_id, 1, 6)) AS label FROM member_changes m '
+            'LEFT JOIN contact_labels l ON l.id=m.member_id '
+            f"WHERE m.change='remove' AND m.reason='held' AND m.room_id IN ({marks}) ORDER BY m.created, m.rowid", chain):
+        batches.setdefault(r['created'], []).append(r)
+    for rows in batches.values():
+        names = [line(r['label'], 40) for r in rows]
+        shown = ', '.join(names[:HELD_NAMED]) + (f', and {len(names) - HELD_NAMED} more' if len(names) > HELD_NAMED else '')
+        head = '1 account left the lessons room when a hold took it out' if len(rows) == 1 else \
+            f'{len(rows)} accounts left the lessons room when a hold took them out'
+        notices.append({'id': f'lessons-held-{rows[0]["id"]}', 'text': safe_line(f'{head}: {shown}.', 400)})
+    return notices
+
+
+def describe_lessons_add(result):
+    """`make station-lessons-add`'s one line (item 3), every name through plain_name."""
+    from .owner_trust import plain_name
+    return ADDED_TO_LESSONS.format(label=plain_name(result['label']), user_short=plain_name(result['user_short']),
+                                   peer12=result['peer12'], old6=result['old_room'][:6], new6=result['new_room'][:6],
+                                   n=result['lessons_carried'])
 
 
 class Malformed(ValueError):
@@ -1616,6 +2067,13 @@ def main(argv=None):
       ('--confirm', {}))
 def _station_room(store, args):
     return describe_station_room(store.station_lessons_room(args.person, args.id, args.ship, args.peers, args.confirm))
+
+
+@verb('station-add', "On the origin: the lessons room's recorded ship adds one remote contact Andy vouched for",
+      ('--contact', {'required': True,
+                     'help': "the contact's short id, as the listing shows it in parentheses; never a pairing code"}))
+def _station_add_contact(store, args):
+    return describe_lessons_add(store.station_lessons_add(args.contact))
 
 
 @verb('where', "The lessons room's current room, by its full id")
