@@ -224,7 +224,7 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             return {**info, "vectors": []}
         units_of = getattr(self.provider, "embed_units", None)
         if callable(units_of):
-            units = units_of(texts, prefix=prefix)
+            units = [list(unit) for unit in units_of(texts, prefix=prefix)]  # iterators would be spent by the check
         else:
             units = [list(range(start, min(start + CHUNK_TEXTS, len(texts))))
                      for start in range(0, len(texts), CHUNK_TEXTS)]

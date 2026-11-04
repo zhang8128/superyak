@@ -325,3 +325,56 @@ def test_a_later_batch_request_waits_for_the_earlier_one_to_finish():
             order.append("a1")
     second.join(5)
     assert order == ["a1", "b1"]
+
+
+def test_units_given_as_iterators_still_answer_every_vector(socket_dir):
+    class Lazy(UnitProvider):
+        def embed_units(self, texts, *, prefix):
+            return (iter(unit) for unit in super().embed_units(texts, prefix=prefix))
+
+    provider = Lazy(unit_size=2)
+    server = _serve(socket_dir / "e.sock", provider)
+    try:
+        texts = ["a", "bb", "ccc"]
+        assert RemoteEmbedProvider(str(socket_dir / "e.sock")).embed(texts) == [_vector(t) for t in texts]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_after_a_batch_unit_queries_go_first_again():
+    lane = _Lane()
+    order, release = [], threading.Event()
+
+    def first_query():
+        with lane.hold():
+            order.append("q0")
+            release.wait(5)
+
+    def batch():
+        with lane.batch_request() as ticket:
+            for name in ("b1", "b2"):
+                with lane.hold(ticket):
+                    order.append(name)
+
+    def query(i):
+        with lane.hold():
+            order.append(f"q{i}")
+
+    holder = threading.Thread(target=first_query)
+    holder.start()
+    _wait_for(lambda: order == ["q0"])
+    threads = [threading.Thread(target=batch)]
+    threads[0].start()
+    _wait_for(lambda: lane.batches_waiting == 1)
+    threads += [threading.Thread(target=query, args=(i,)) for i in range(1, 31)]
+    for thread in threads[1:]:
+        thread.start()
+    _wait_for(lambda: lane.queries_waiting == 30)
+    release.set()
+    for thread in [holder, *threads]:
+        thread.join(5)
+    gap = order.index("b2") - order.index("b1")
+    # The run starts over after b1: b2 waits another QUERY_RUN_MAX queries (one more if a query took the lane
+    # before the batch thread asked for b2's turn), never goes straight after b1.
+    assert gap in (_Lane.QUERY_RUN_MAX + 1, _Lane.QUERY_RUN_MAX + 2), order
