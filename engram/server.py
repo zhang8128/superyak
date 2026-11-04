@@ -3287,9 +3287,8 @@ def recall(
                                        session_id=_session_id, receiver=_instance_name,
                                        engram_home=ENGRAM_HOME)
         else:
-            neighbors.attach_default(response, query=query, purpose=lighthouse_purpose, storage=_storage,
-                                     session_id=_session_id, receiver=_instance_name,
-                                     engram_home=ENGRAM_HOME)
+            neighbors.attach_default(response, query=query, storage=_storage, session_id=_session_id,
+                                     receiver=_instance_name, engram_home=ENGRAM_HOME)
     except Exception:
         # Neighbor failure cannot discard an otherwise complete local recall.
         response.pop("neighbors", None)

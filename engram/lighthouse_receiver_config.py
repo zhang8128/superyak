@@ -35,12 +35,16 @@ SETTINGS_KEYS = frozenset({"enabled", "publishers", "socket_path", "policy_path"
                            "default_context"})
 
 
+def _read_toml(path):
+    return tomllib.loads(bounded_read(path, 16384).decode("utf-8"))
+
+
 def _read_settings(path):
     """The toml as checked, or None when it is absent or disabled. ValueError when it is not valid, whole."""
     path = Path(path)
     if not path.exists():
         return None
-    data = tomllib.loads(bounded_read(path, 16384).decode("utf-8"))
+    data = _read_toml(path)
     if data.get("enabled") is False:
         return None
     if (data.get("enabled") is not True
@@ -53,10 +57,17 @@ def _read_settings(path):
 
 
 def default_context_of(path):
-    """The context an enabled receiver's owner set for recalls that name none (`default_context`), or None. ValueError
-    when the settings are not valid."""
-    data = _read_settings(path)
-    return None if data is None else data.get("default_context")
+    """The context an enabled receiver's owner set for recalls that name none (`default_context`). None with no file, a
+    disabled one or no key, whatever else that file holds: a recall that asked for nothing is told nothing, as before the
+    key existed, and an explicit crossing and `superyak-runtime status` name what's wrong with it. ValueError when the file
+    can't be read as TOML, since nobody can then say the key isn't in it, or when its value is no context."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    data = _read_toml(path)
+    if data.get("enabled") is False or "default_context" not in data:
+        return None
+    return context_ref(data["default_context"])["id"]
 
 
 def load_settings(path):

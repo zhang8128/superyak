@@ -2,6 +2,7 @@
 
 The remote case, a `[[remote_publishers]]` entry whose context equals `default_context`, lands with whichever of this and
 tardis/crossing merges second: neither branch alone has both halves."""
+import ast
 from datetime import datetime, timezone
 import importlib.util
 import os
@@ -44,8 +45,8 @@ def recording_arm(monkeypatch):
 
 def attach_default(tmp_path, storage=None, name="engram", response=None):
     response = dict(recall_id="turn", results=["local"]) if response is None else response
-    return neighbors.attach_default(response, query="q", purpose="session-recall", storage=storage, session_id="s",
-                                    receiver=name, engram_home=tmp_path)
+    return neighbors.attach_default(response, query="q", storage=storage, session_id="s", receiver=name,
+                                    engram_home=tmp_path)
 
 
 def attach_explicit(tmp_path, storage, context=CONTEXT):
@@ -145,11 +146,58 @@ def test_an_explicit_crossing_that_reaches_nobody_still_says_what_it_asked(tmp_p
     assert response["neighbors"]["context"] == CONTEXT and response["neighbors"]["by_default"] is False
 
 
-def test_a_default_crossing_has_the_tighter_deadline(tmp_path, monkeypatch):
+@pytest.mark.parametrize("line", [(), ("timeout_s = 1.5",), ("timeout_s = 5.0",)], ids=["unset, so 2.0", "1.5", "5.0"])
+def test_a_default_crossing_has_the_tighter_deadline(tmp_path, monkeypatch, line):
     calls = recording_arm(monkeypatch)
-    _, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"', "timeout_s = 5.0")
+    _, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"', *line)
     attach_default(tmp_path, storage)
     assert calls[0]["timeout_s"] == neighbors.DEFAULT_DEADLINE_S == 1.0
+
+
+REMOTE_SETTINGS = dict(remote_publishers=[dict(peer_id="a" * 64, ship="s", context=CONTEXT)],
+                       crossing_socket=Path("/nowhere/crossing.sock"), receiver_ship="me")
+
+
+def settings_with_remotes(publishers=("why",)):
+    return dict(publishers=list(publishers), socket_path=Path("/nowhere/s.sock"), policy_path=Path("/nowhere/p.json"),
+                k=1, timeout_s=5.0, **REMOTE_SETTINGS)
+
+
+def test_a_default_crossing_takes_only_local_settings_whatever_the_settings_hold(tmp_path, monkeypatch):
+    """The spec's headline rule, held on this side of any merge: a recall's text never leaves the machine by default. An
+    allow-list at the call, so a key that reaches another machine, whoever adds it later, can't reach a default crossing."""
+    calls = recording_arm(monkeypatch)
+    _, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"')
+    monkeypatch.setattr(neighbors, "load_settings", lambda path: settings_with_remotes())
+    attach_default(tmp_path, storage)
+    assert set(calls[0]) == {"query", "context", "purpose", "storage", "session_id", "recall_id", "receiver", "by_default",
+                             "publishers", "socket_path", "policy_path", "k", "timeout_s"}
+
+
+def test_an_explicit_crossing_still_takes_every_setting(tmp_path, monkeypatch):
+    calls = recording_arm(monkeypatch)
+    _, storage = receiver(tmp_path)
+    monkeypatch.setattr(neighbors, "load_settings", lambda path: settings_with_remotes())
+    attach_explicit(tmp_path, storage)
+    assert set(REMOTE_SETTINGS) <= set(calls[0]) and calls[0]["timeout_s"] == 5.0
+
+
+def test_a_default_with_no_local_publisher_says_so_and_asks_nobody(tmp_path, monkeypatch):
+    """Only remote publishers, once crossings land: the owner set a default nothing here can serve, and no query leaves."""
+    calls = recording_arm(monkeypatch)
+    _, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"')
+    monkeypatch.setattr(neighbors, "load_settings", lambda path: settings_with_remotes(publishers=()))
+    response = attach_default(tmp_path, storage)
+    assert calls == [] and response["results"] == ["local"] and response["degraded"] == ["neighbors"]
+    assert response["neighbors"]["diagnostics"] == [{"code": "NO_LOCAL_PUBLISHER"}]
+    assert response["neighbors"]["by_default"] is True
+
+
+def test_a_default_crossing_is_always_session_recall(tmp_path, monkeypatch):
+    calls = recording_arm(monkeypatch)
+    _, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"')
+    attach_default(tmp_path, storage)
+    assert calls[0]["purpose"] == "session-recall"
 
 
 def test_a_shorter_configured_timeout_stands(tmp_path, monkeypatch):
@@ -188,7 +236,21 @@ def test_a_hostile_value_never_crosses_and_a_recall_says_so(tmp_path, monkeypatc
     assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
 
 
+@pytest.mark.parametrize("text", ["", 'surprise = 1\n', 'enabled = "yes"\n', "enabled = true\n",
+                                  'enabled = true\npublishers = []\n', 'enabled = true\nlimit = 9\n',
+                                  'enabled = true\npublishers = ["why"]\nsocket_path = 7\n'])
+def test_a_toml_that_reads_and_names_no_key_changes_nothing_valid_or_not(tmp_path, monkeypatch, text):
+    """Decision 1, as on main. An explicit crossing and status name what's wrong with such a file; a recall that asked
+    for nothing isn't told."""
+    calls = recording_arm(monkeypatch)
+    instance, storage = receiver(tmp_path)
+    (instance / "lighthouse-receiver.toml").write_text(text)
+    assert attach_default(tmp_path, storage) == dict(recall_id="turn", results=["local"])
+    assert calls == []
+
+
 def test_an_unreadable_toml_says_so_and_keeps_local_results(tmp_path, monkeypatch):
+    """The one exception to decision 1: when a file can't be read at all, nobody can say the key isn't in it."""
     calls = recording_arm(monkeypatch)
     instance, storage = receiver(tmp_path)
     (instance / "lighthouse-receiver.toml").write_bytes(b"not = [toml\xff")
@@ -273,6 +335,15 @@ def test_bounded_read_stops_at_its_cap_and_survives_a_short_read(tmp_path, monke
     assert len(b"".join(returned)) == 11, "cap plus one, so a huge file is never read whole"
 
 
+def test_bounded_read_opens_so_nothing_can_block_or_become_a_terminal(tmp_path, monkeypatch):
+    path = tmp_path / "f"
+    path.write_bytes(b"x")
+    flags, real_open = [], os.open
+    monkeypatch.setattr(os, "open", lambda p, f, *a, **kw: flags.append(f) or real_open(p, f, *a, **kw))
+    bounded_read(path, 8)
+    assert flags[0] & os.O_NONBLOCK and flags[0] & os.O_NOCTTY
+
+
 def test_too_big_a_toml_says_so(tmp_path, monkeypatch):
     calls = recording_arm(monkeypatch)
     instance, storage = receiver(tmp_path)
@@ -326,7 +397,7 @@ def test_a_hung_publisher_costs_a_default_crossing_only_its_deadline(tmp_path, s
         took = time.monotonic() - begun
     finally:
         server.close()
-    assert 0.9 < took < 1.6
+    assert 0.9 < took < 3.0, "at the deadline, and far from the 5 s its timeout_s allows"
     assert response["results"] == ["local"]
     assert response["degraded"] == ["neighbors"]
     assert codes(response) == {"TIMEOUT"}
@@ -357,6 +428,19 @@ def test_a_stopped_daemon_keeps_local_results_and_names_it(tmp_path, short_socke
     assert codes(response) == {"UNAVAILABLE"}
 
 
+def test_the_receipt_row_says_a_crossing_was_a_default_and_an_explicit_row_is_unchanged(tmp_path, short_socket):
+    """So the report can count TIMEOUT among default crossings instead of inferring it."""
+    for attach, expected in ((attach_default, True), (attach_explicit, None)):
+        home = tmp_path / str(expected)
+        instance, storage = real_receiver(home, f'default_context = "{CONTEXT}"', sock=short_socket)
+        rows = []
+        storage.add_log_entry = lambda **kw: rows.append(kw)
+        attach(home, storage)
+        assert [row["event_type"] for row in rows] == ["lighthouse_receipt"]
+        assert rows[0]["context"].get("by_default") is expected
+        assert ("by_default" in rows[0]["context"]) is bool(expected)
+
+
 def test_an_expired_receiver_rule_is_named_on_a_default_crossing(tmp_path, short_socket):
     instance, storage = real_receiver(tmp_path, f'default_context = "{CONTEXT}"', sock=short_socket)
     policy(instance / "policy.json", valid_until="2026-02-01T00:00:00Z")
@@ -378,8 +462,17 @@ def test_recall_with_no_context_takes_the_default_path(engram_server_env, monkey
     monkeypatch.setattr(neighbors, "attach_default", default)
     result = server.recall("rivers", uninvited=0)
     assert result["neighbors"] == {"by_default": True}
-    assert seen["query"] == "rivers" and seen["purpose"] == "session-recall"
-    assert "context_id" not in seen
+    assert seen["query"] == "rivers"
+    assert "context_id" not in seen and "purpose" not in seen
+
+
+def test_a_purpose_with_no_context_means_nothing_as_it_always_has(engram_server_env, monkeypatch):
+    server = engram_server_env
+    seed(2)
+    defaulted = []
+    monkeypatch.setattr(neighbors, "attach_default", lambda response, **kw: defaulted.append(kw))
+    result = server.recall("rivers", uninvited=0, lighthouse_purpose="anything at all")
+    assert len(defaulted) == 1 and "purpose" not in defaulted[0] and "degraded" not in result
 
 
 def test_recall_naming_a_context_doesnt_take_the_default_path(engram_server_env, monkeypatch):
@@ -414,8 +507,16 @@ def test_instinct_only_recall_doesnt_take_the_default_path(engram_server_env, mo
 
 @pytest.mark.parametrize("hook", ["wake.py", "nudge.py", "sleep.py"])
 def test_hooks_make_no_neighbor_call(hook):
+    """By what they import, nested imports included, so a hook can't reach a crossing through `server.recall` either."""
     text = (ENGRAM / "hooks" / hook).read_text()
     assert "attach_default" not in text and "attach_neighbors" not in text and "neighbor_arm" not in text
+    imported = set()
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert not imported & {"server", "neighbors", "lighthouse_client", "context_lighthouse", "importlib"}
 
 
 # ---------------------------------------------------------------- superyak-runtime status
@@ -452,6 +553,47 @@ def test_status_calls_a_toml_path_that_is_no_file_invalid_as_a_recall_does(tmp_p
     path.mkdir() if kind == "directory" else os.mkfifo(path)
     status, _, errors = runtime_module()._receiver_status(instance, datetime(2026, 11, 4, tzinfo=timezone.utc))
     assert status["state"] == "invalid" and errors
+
+
+def test_status_calls_a_policy_that_is_a_fifo_unparseable_and_never_hangs(tmp_path):
+    instance, _ = real_receiver(tmp_path)
+    (instance / "policy.json").unlink()
+    os.mkfifo(instance / "policy.json")
+    status, _, errors = runtime_module()._receiver_status(instance, datetime(2026, 11, 4, tzinfo=timezone.utc))
+    assert errors and status["policy"]["parseable"] is False
+
+
+def test_status_reads_a_config_whole_through_a_short_read_and_refuses_past_its_limit(tmp_path, monkeypatch):
+    runtime, path = runtime_module(), tmp_path / "f"
+    path.write_bytes(b"x" * 100)
+    real_read, returned = os.read, []
+
+    def one_at_a_time(fd, n):
+        returned.append(real_read(fd, min(n, 1)))
+        return returned[-1]
+    monkeypatch.setattr(os, "read", one_at_a_time)
+    assert runtime._bounded_text(path, 200) == "x" * 100
+    returned.clear()
+    with pytest.raises(runtime.RuntimeConfigurationError, match="too large"):
+        runtime._bounded_text(path, 10)
+    assert len(b"".join(returned)) == 11
+
+
+def test_status_read_closes_what_it_opened_and_opens_so_nothing_blocks(tmp_path, monkeypatch):
+    runtime, path = runtime_module(), tmp_path / "f"
+    os.mkfifo(path)
+    opened, closed, flags = [], [], []
+    real_open, real_close = os.open, os.close
+
+    def recording_open(p, f, *a, **kw):
+        flags.append(f)
+        opened.append(real_open(p, f, *a, **kw))
+        return opened[-1]
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "close", lambda fd: (closed.append(fd), real_close(fd))[1])
+    with pytest.raises(runtime.RuntimeConfigurationError, match="regular file"):
+        runtime._bounded_text(path)
+    assert closed == opened and flags[0] & os.O_NONBLOCK and flags[0] & os.O_NOCTTY
 
 
 def test_status_with_no_toml_stays_disabled(tmp_path):

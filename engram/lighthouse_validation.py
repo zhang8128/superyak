@@ -18,7 +18,7 @@ _POLICY_VALIDATOR = jsonschema.Draft202012Validator(
 def bounded_read(path, cap):
     """At most `cap` bytes of a regular file. A recall reads through here with no deadline over it, so a FIFO or a
     device at the path refuses at once: non-blocking open, and the check is on what was opened, not on the name."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("NOT_A_REGULAR_FILE")

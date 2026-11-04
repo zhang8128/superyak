@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+from stat import S_ISREG
 import sys
 import tempfile
 import tomllib
@@ -38,8 +39,16 @@ class SnapshotLimitError(OSError):
 
 def _bounded_text(path: Path, limit: int = MAX_CONFIG_BYTES) -> str:
     try:
-        with path.open("rb") as stream:
-            content = stream.read(limit + 1)
+        # Non-blocking, and the check is on what was opened: a FIFO at a configured path must not hang `status`.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            if not S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeConfigurationError(f"configuration is not a regular file: {path}")
+            content = b""
+            while chunk := os.read(descriptor, limit + 1 - len(content)):
+                content += chunk
+        finally:
+            os.close(descriptor)
     except FileNotFoundError as error:
         raise RuntimeConfigurationError(f"configuration does not exist: {path}") from error
     except OSError as error:
@@ -315,8 +324,6 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     if not settings_path.exists():
         return {**base, "state": "disabled"}, None, errors
     try:
-        if not settings_path.is_file():
-            raise RuntimeConfigurationError("receiver configuration is not a file")
         settings = _parse_toml(settings_path)
     except RuntimeConfigurationError:
         return {

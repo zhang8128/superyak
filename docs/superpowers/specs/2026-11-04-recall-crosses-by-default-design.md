@@ -57,17 +57,25 @@ cluster ship doesn't set `default_context` until its spec has a bound.
 1. **A new optional key, `default_context`, in `lighthouse-receiver.toml`.** When it is set and the receiver is enabled, a
    recall that names no context crosses with it. Absent means today's behaviour exactly, so nothing changes on a machine
    until its owner sets it. It is validated by `context_ref` when the settings load: a bad value is `INVALID_CONFIG`.
+   A file that reads as TOML and names no key changes nothing, valid or not: an explicit crossing and `status` name what's
+   wrong with it. The one exception (section 2 review, S3): a file that can't be read at all (not TOML or not UTF-8, too
+   large, not a regular file) says `RECEIVER_CONFIG_INVALID` on a recall with no context, since nobody can then say the
+   key isn't in it.
 2. **A default crossing reaches local publishers only. A query never leaves the machine by default.** On
    `tardis/crossing`, a remote publisher is asked whenever a recall's context is its own (`neighbor_arm`,
    `remote_publishers`), and the query text goes with it. So a default crossing passes no remote publishers and no `ask`,
-   whatever the settings hold. Reaching another machine stays an explicit `lighthouse_context` on that call. Whichever of
-   this and the crossing merges second carries this rule and its test.
+   whatever the settings hold. Reaching another machine stays an explicit `lighthouse_context` on that call. The rule
+   holds on this side of any merge (section 2 review, M1, whose trial merge sent a query to a remote publisher when it
+   didn't): `attach_neighbors` gives a default crossing only `LOCAL_ARM_KEYS` of the settings, an allow-list at the call,
+   so a key that reaches another machine, whoever adds it later, can't reach one. A receiver with no local publisher says
+   `NO_LOCAL_PUBLISHER` and asks nobody. Whichever of this and the crossing merges second adds the end-to-end test.
 3. **An explicit `lighthouse_context` wins,** with today's behaviour, deadline and purpose. There is no per-call opt-out:
    the toml is the owner's switch.
 4. **A default crossing has a tighter deadline:** `min(timeout_s, 1.0)` seconds. A hung daemon must not add 5 s to every
    recall. It is still named: `TIMEOUT` in `neighbors.diagnostics`, and `neighbors` in `degraded`. 1.0 is provisional and
    labelled so in the code; the Pi's number should set it, and the test takes it as a constant.
-5. **Everything else stays as it is for an explicit crossing:** the same `session-recall` purpose, both policies decided
+5. **Everything else stays as it is for an explicit crossing:** the `session-recall` purpose (a default crossing always
+   uses it: a `lighthouse_purpose` with no context means nothing, as it always has), both policies decided
    each time (an expired or denied rule is named, since 1c03a00f), a receipt, a disclosure on the publisher's side, and
    instinct-only recall staying local. The publisher's rule is still the grant. This changes who asks, never what may be
    answered. Delivered text stays in `neighbors.delivered`, apart from local results, as today.
@@ -75,7 +83,9 @@ cluster ship doesn't set `default_context` until its spec has a bound.
    time budget. Only the `recall` tool gets the default. `attach_neighbors`' docstring ("a recall that names no context
    is inert") changes with it.
 7. **The answer says it was a default:** `neighbors.context` holds the context used, and `neighbors.by_default` is true,
-   so a reader and a test can tell the two apart.
+   so a reader and a test can tell the two apart. The receipt's log row carries `by_default: true` too, so the report can
+   count `TIMEOUT` among default crossings. An explicit crossing's row is unchanged, and the receipt itself stays the
+   kit's format.
 8. **`superyak-runtime status` reports `default_context`** beside the receiver's state. Its absence is not an error.
    `scripts/runtime.py` keeps its own list of the receiver's keys (:310-318), because it is standard-library only and
    can't import Engram. An unlisted key reads "invalid receiver configuration" even when recall works, so this change
@@ -86,7 +96,9 @@ cluster ship doesn't set `default_context` until its spec has a bound.
 - The Mac sets `default_context = "memory/technical"` once this merges and that machine's Engram sessions have restarted.
   Any other machine sets it only once a crossing there, under its usual load, comes in under the deadline, measured. On
   the Pi a batch on the shared embedder held a query embed for about 2 minutes (Rio Grande, 2026-11-04): a deadline
-  bounds that harm, and doesn't fix the queue.
+  bounds that harm, and doesn't fix the queue. The publisher's side matters there as well (section 2 review, N5): a frame
+  waits for its turn and is never refused, so while an embedder is stalled every recall leaves one more waiting daemon
+  thread and one more abandoned embed. The receiver's own policy loads and receipt write aren't under the deadline either.
 - Rollback: delete the line. Nothing else depends on it.
 - **Measure, and what it can't see.** Crossings per session come from `lighthouse_receipt` rows, against the baseline of 9
   in two months. Whether a crossing helped can only come from an explicit `log_outcome`: the sleep hook's automatic marks
@@ -112,6 +124,9 @@ cluster ship doesn't set `default_context` until its spec has a bound.
 - Set: a recall with no context crosses, `neighbors.by_default` is true, and a receipt is written.
 - Explicit context with the default set: explicit wins, `by_default` is false, and the deadline is `timeout_s`.
 - A bad value is `INVALID_CONFIG`, as every other bad key is; a recall then says so in `neighbors`, with local results kept.
+- A file that reads and names no key changes nothing, valid or not; one that can't be read says so.
+- A default crossing's `neighbor_arm` call takes exactly the local keys, whatever `load_settings` returns, and an explicit
+  one still takes the rest. This is the tripwire on a merged tree.
 - **A default crossing never asks a remote publisher,** in the case that would otherwise ask: a `[[remote_publishers]]`
   entry whose `context` equals `default_context`, with a recording `ask`. The recording stays empty, while the same recall
   naming that context explicitly asks. It lands with whichever branch merges second.

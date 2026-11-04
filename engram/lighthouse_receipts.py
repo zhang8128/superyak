@@ -93,21 +93,25 @@ def write_receipt(
     *,
     session_id: str | None,
     recall_id: str,
+    by_default: bool = False,
 ) -> str:
     validate_receipt(receipt)
     targets = [
         f"{item['publisher']}:{item['memoryId']}"
         for item in receipt["payload"]["delivered"]
     ]
+    context = {
+        "recall_id": recall_id,
+        "session_id": session_id,
+        "receipt": receipt,
+    }
+    if by_default:  # the row only: the receipt itself stays the kit's format
+        context["by_default"] = True
     storage.add_log_entry(
         id=str(uuid.uuid4()),
         event_type="lighthouse_receipt",
         layer="all",
         target_ids=targets,
-        context={
-            "recall_id": recall_id,
-            "session_id": session_id,
-            "receipt": receipt,
-        },
+        context=context,
     )
     return receipt["id"]
