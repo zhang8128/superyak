@@ -218,7 +218,7 @@ subprocess no hold sees). Its long form:
   of HEAD. It must print nothing, and no error:
   `B=60dd85175a1709627be63a4678694029c5721b74; comm -23 <(git rev-list HEAD --not $B | sort) <(git rev-list --ancestry-path $B..HEAD | sort)`
   `make install-hooks` installs a pre-push hook that runs it and refuses such a push to the public repo (with
-  the scrubbed terms in a private file, ~/.superyak/scrub-terms, mode 0600 or 0400, never in the repo); this item
+  the scrubbed terms in a private file, ~/.superyak/scrub-terms, mode 0600 or 0400, copied unread from the Pi over SSH, never in the repo); this item
   retires on each machine once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
 - Before merging a `gh/*` or `origin/*` ref, or a branch fetched from a bundle, check it: `git merge-base
   --is-ancestor $B <ref> && echo ok || echo OLD` must say ok, and then the comm line above, with `<ref>` in place

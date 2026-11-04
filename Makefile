@@ -240,7 +240,7 @@ setup-agent:
 
 # Refuse a push to the public repo of what the history scrub removed (docs/checklists.md, Before any push). Run it
 # after this target is on main: the path is the checkout's own, and a missing hook fails open. The hook also needs
-# ~/.superyak/scrub-terms (mode 0600, Andy's to place); without it every push to the public repo is refused.
+# ~/.superyak/scrub-terms (mode 0600, copied unread from the Pi over SSH); without it every push to the public repo is refused.
 install-hooks:
 	git config core.hooksPath "$(CURDIR)/scripts/git-hooks"
 	@echo 'pre-push hook installed for every worktree of this clone'

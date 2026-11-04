@@ -1,7 +1,7 @@
 #!/bin/sh
 # Refuse to push to the public repo what the 2026-10-27 history scrub removed. A pushed commit must be built on the
-# rewritten history, and no commit new to the remote may touch a scrubbed path or hold the scrubbed text. Installed by
-# `make install-hooks`; it holds "the branch's base is on the rewritten history" from docs/checklists.md.
+# rewritten history, and nothing it uploads past that base may touch a scrubbed path or hold the scrubbed text. Installed
+# by `make install-hooks`; it holds "the branch's base is on the rewritten history" from docs/checklists.md.
 SCRUBBED_BASE=60dd85175a1709627be63a4678694029c5721b74  # main right after the scrub
 # Tests point this at a throwaway repo's commit; a person who sets it could as well push with --no-verify.
 SCRUBBED_BASE="${SUPERYAK_PREPUSH_BASE:-$SCRUBBED_BASE}"
@@ -9,23 +9,136 @@ case "$2" in  # the private archive keeps the old history on purpose; only its e
     git@github.com:zhang8128/superyak-archive|git@github.com:zhang8128/superyak-archive.git|\
     https://github.com/zhang8128/superyak-archive|https://github.com/zhang8128/superyak-archive.git) exit 0 ;;
 esac
+LC_ALL=C  # bytes, unless a scan below says characters
+export LC_ALL
+GIT_NO_REPLACE_OBJECTS=1  # what goes up is the real object, whatever refs/replace shows here
+export GIT_NO_REPLACE_OBJECTS
 zero=0000000000000000000000000000000000000000
-tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/pre-push.XXXXXX") || { echo 'pre-push: no temporary directory, so nothing was pushed.' >&2; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM  # dash runs the EXIT trap only on an exit, and this directory holds a copy of the terms
 terms_file="${SUPERYAK_SCRUB_TERMS:-$HOME/.superyak/scrub-terms}"
+unreadable() {
+    echo "pre-push: $terms_file couldn't be read, so nothing was pushed." >&2
+    exit 1
+}
 # Exactly 0600 or 0400: POSIX exact modes, since macOS's find rejects `-perm /077`. A check that can't run refuses.
-if [ ! -r "$terms_file" ] || ! loose=$(find "$terms_file" -prune ! -perm 0600 ! -perm 0400 2>/dev/null) \
-        || [ -n "$loose" ]; then
+missing_or_loose() {
     echo "pre-push: $terms_file is missing, unreadable, or readable by others (it must be 0600 or 0400), so the scrubbed-text" >&2
-    echo "pre-push: check can't run and nothing was pushed. Ask Andy for the file; only a person skips this check." >&2
+    echo "pre-push: check can't run and nothing was pushed. Copy the file unread from the Pi over SSH and chmod 600 it (a machine that can't reach the Pi asks Andy); only a person skips this check." >&2
+    exit 1
+}
+[ -r "$terms_file" ] || missing_or_loose
+loose=$(find "$terms_file" -prune ! -perm 0600 ! -perm 0400 2>/dev/null) || unreadable
+[ -z "$loose" ] || missing_or_loose
+# The terms are one POSIX extended regex per line (no \d), never in this repo, which would republish them, and never in any
+# command's arguments, where `ps` and GIT_TRACE show them. They reach grep with -f. A read that lost a line would scan for
+# fewer terms and still pass, so its status is kept, and a line that could never match anything is refused by number.
+grep -a -v -e '^#' -e '^$' "$terms_file" > "$tmp/terms"
+case $? in
+    0) ;;
+    1) echo "pre-push: $terms_file holds no terms, so nothing was pushed." >&2; exit 1 ;;
+    *) unreadable ;;
+esac
+sed 's/[[:space:]][[:space:]]*/ /g' "$tmp/terms" > "$tmp/terms.squeezed" || unreadable
+grep -a -n -E '^[^#].*[[:space:]]$|^[[:space:]]+$' "$terms_file" > "$tmp/shapes"
+[ $? -gt 1 ] && unreadable
+if [ -s "$tmp/shapes" ]; then
+    echo "pre-push: $terms_file line $(cut -d: -f1 "$tmp/shapes" | tr '\n' ' ')ends in whitespace or a carriage return, so nothing was pushed." >&2
     exit 1
 fi
-terms=$(grep -v -e '^#' -e '^$' "$terms_file" | paste -sd '|' -)
-[ -n "$terms" ] || { echo "pre-push: $terms_file holds no terms, so nothing was pushed." >&2; exit 1; }
+printf '\357\273\277' > "$tmp/mark" || unreadable
+head -c 3 "$terms_file" > "$tmp/start" || unreadable
+cmp -s "$tmp/mark" "$tmp/start"
+case $? in
+    0) echo "pre-push: $terms_file starts with a byte-order mark, so nothing was pushed." >&2; exit 1 ;;
+    1) ;;
+    *) unreadable ;;
+esac
+tr -d '\000' < "$terms_file" > "$tmp/no-nul" || unreadable
+cmp -s "$tmp/no-nul" "$terms_file"
+case $? in
+    0) ;;
+    1) echo "pre-push: $terms_file holds a NUL byte, so nothing was pushed." >&2; exit 1 ;;
+    *) unreadable ;;
+esac
+characters=$({ locale -a | grep -iE '^(C|en_US)\.UTF-?8$'; locale -a | grep -iE '\.UTF-?8$'; } 2>/dev/null | head -1)
+[ -n "$characters" ] || { echo "pre-push: this machine has no UTF-8 locale, so half the scrubbed-text check can't run and nothing was pushed." >&2; exit 1; }
+
+squeezed() {
+    tr -s '[:space:]' ' '
+}
+
+name_bad_terms() {  # by line number only. A grep that fails on a plain pattern says nothing about the terms.
+    printf 'a\n' > "$tmp/one"
+    grep -E -f "$tmp/one" /dev/null 2>/dev/null
+    [ $? -eq 1 ] || return 0
+    n=1
+    last=$(grep -c '' "$terms_file")
+    while [ "$n" -le "$last" ]; do
+        sed -n "${n}p" "$terms_file" > "$tmp/one"
+        if ! grep -q -e '^#' -e '^$' "$tmp/one"; then
+            grep -E -f "$tmp/one" /dev/null 2>/dev/null
+            [ $? -gt 1 ] && echo "pre-push: line $n of $terms_file isn't a valid POSIX extended regex." >&2
+        fi
+        n=$((n + 1))
+    done
+}
+
+cant_run() {
+    echo "pre-push: $short: a scan for what the scrub removed couldn't run, so it was refused." >&2
+    name_bad_terms
+    status=1
+}
+
+read_objects() {  # the objects' list, the reading, the terms, the filter. Answers 0 for a term, 1 for none, 2 when it couldn't run.
+    rm -f "$tmp/fed" "$tmp/stripped" "$tmp/filtered"
+    { git cat-file --batch < "$1"; echo $? > "$tmp/fed"; } \
+        | { tr -d '\000'; echo $? > "$tmp/stripped"; } \
+        | { $4; echo $? > "$tmp/filtered"; } \
+        | LC_ALL=$2 grep -a -q -i -E -f "$3"
+    found=$?
+    [ "$found" -eq 0 ] && return 0  # grep stopping early is why the others' status only counts on no match
+    [ "$found" -eq 1 ] || return 2
+    read -r fed < "$tmp/fed" && read -r stripped < "$tmp/stripped" && read -r filtered < "$tmp/filtered" || return 2
+    [ "$fed$stripped$filtered" = 000 ] && return 1
+    return 2
+}
+
+holds_a_term() {  # the objects' list. Answers 0 for a term, 1 for none, 2 when a reading couldn't run.
+    for reading in C "$characters"; do
+        read_objects "$1" "$reading" "$tmp/terms" cat
+        answer=$?
+        [ "$answer" -eq 1 ] || return "$answer"
+        read_objects "$1" "$reading" "$tmp/terms.squeezed" squeezed
+        answer=$?
+        [ "$answer" -eq 1 ] || return "$answer"
+    done
+    return 1
+}
+
+name_objects() {  # only after a hit, so its cost is a refusal's: up to 5 of the objects holding a term, in 20 s
+    named_objects=
+    n=0
+    until=$(($(date +%s) + 20))
+    while read -r object && [ "$n" -lt 5 ] && [ "$(date +%s)" -lt "$until" ]; do
+        printf '%s\n' "$object" > "$tmp/this"
+        holds_a_term "$tmp/this"
+        if [ $? -eq 0 ]; then
+            named_objects="$named_objects $(git cat-file -t "$object") $(printf '%s' "$object" | cut -c1-8)"
+            n=$((n + 1))
+        fi
+    done < "$tmp/objects"
+    printf '%s' "$named_objects"
+}
+
 status=0
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ "$local_sha" = "$zero" ] && continue  # a delete pushes no history
+    # A ref is named by its short hash in everything below: its name may be the very thing being refused.
+    short=$(printf '%s' "$local_sha" | cut -c1-8)
     if ! git merge-base --is-ancestor "$SCRUBBED_BASE" "$local_sha" 2>/dev/null; then
-        echo "pre-push: $local_ref isn't built on the rewritten history (no ${SCRUBBED_BASE%"${SCRUBBED_BASE#????????}"} in its ancestry)." >&2
+        echo "pre-push: $short isn't built on the rewritten history (no ${SCRUBBED_BASE%"${SCRUBBED_BASE#????????}"} in its ancestry)." >&2
         status=1
         continue
     fi
@@ -33,27 +146,64 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # touched, even when a merge hides it (Serenity, 2026-10-28).
     # Only the base is excluded, never remote-tracking refs: a stale one left from before the scrub would vouch for old
     # commits the remote no longer has (Serenity, 2026-10-28).
-    git rev-list "$local_sha" --not "$SCRUBBED_BASE" | sort > "$tmp/new"
-    git rev-list --ancestry-path "$SCRUBBED_BASE..$local_sha" | sort > "$tmp/after"
-    old=$(comm -23 "$tmp/new" "$tmp/after" | head -5 | cut -c1-8 | tr '\n' ' ')
-    if [ -n "$old" ]; then
-        echo "pre-push: $local_ref carries commits from the old history: $old" >&2
+    git rev-list "$local_sha" --not "$SCRUBBED_BASE" > "$tmp/new.raw" || { cant_run; continue; }
+    sort "$tmp/new.raw" > "$tmp/new" || { cant_run; continue; }
+    git rev-list --ancestry-path "$SCRUBBED_BASE..$local_sha" > "$tmp/after.raw" || { cant_run; continue; }
+    sort "$tmp/after.raw" > "$tmp/after" || { cant_run; continue; }
+    comm -23 "$tmp/new" "$tmp/after" > "$tmp/old" || { cant_run; continue; }
+    if [ -s "$tmp/old" ]; then
+        echo "pre-push: $short carries commits from the old history: $(head -5 "$tmp/old" | cut -c1-8 | tr '\n' ' ')" >&2
         status=1
         continue
     fi
-    # Commits new to this remote that touch a scrubbed path, every side of a merge included (--full-history).
-    touched=$(git log --full-history --format=%h "$local_sha" --not --remotes="$1" -- \
+    # Every scan below starts at the base on every push, never at what a tracking ref says is new: a ref left behind when
+    # a remote branch was deleted vouches for a commit the remote no longer has. Each keeps its status, and one that dies
+    # refuses: a dead scan prints nothing, which must never read as "nothing found".
+    # Commits that touch a scrubbed path, every side of a merge included (--full-history).
+    git log --full-history --format=%h "$local_sha" --not "$SCRUBBED_BASE" -- \
         ':(glob)**/docs/sessions/**' ':(glob)**/fieldtests-2026-08-02/**' \
         ':(glob)**/research-fieldtest-results-2026-08-02.md' ':(glob)**/reports/2026-09-sharing-tests.md' \
-        ':(glob)**/research-structural-prosody-in-llm-generation.md' | head -5)
-    # ...or that add the scrubbed text. The terms are never in this repo, which would republish them: they live in a
-    # private file outside it, one extended regex per line, and a push fails closed without it.
-    held=$(git log --format=%h -i -E -G "$terms" "$local_sha" --not --remotes="$1" | head -5)
-    if [ -n "$touched$held" ]; then
-        echo "pre-push: $local_ref carries what the scrub removed: ${touched:+paths in $touched} ${held:+text in $held}" | tr '\n' ' ' >&2
+        ':(glob)**/research-structural-prosody-in-llm-generation.md' > "$tmp/touched" || { cant_run; continue; }
+    # Every object this push could upload, whole and as stored: commits, trees, blobs and tags. Text is matched as stored,
+    # and nothing is decoded. Each object is read in bytes, because a UTF-8 locale can hide a term beside a byte that isn't
+    # UTF-8; and in characters, because bytes can't fold a letter outside ASCII or match one with `.`. Each reading runs
+    # plain, and again with whitespace squeezed against terms squeezed the same way, so a term can cross a line break.
+    # Any reading finding a term is enough. A term found past the base refuses every later push built on it, on purpose: a
+    # person rewrites that history or moves SCRUBBED_BASE. It costs a few seconds a ref today and grows with the history.
+    git rev-list --objects --no-object-names "$local_sha" --not "$SCRUBBED_BASE" > "$tmp/objects" || { cant_run; continue; }
+    git cat-file --batch-check='%(objectname)' < "$tmp/objects" > "$tmp/checked" || { cant_run; continue; }
+    grep -q ' missing$' "$tmp/checked"
+    case $? in
+        0) cant_run; continue ;;  # cat-file exits 0 on a missing object, so nothing else would say
+        1) ;;
+        *) cant_run; continue ;;
+    esac
+    holds_a_term "$tmp/objects"
+    answer=$?
+    [ "$answer" -eq 2 ] && { cant_run; continue; }
+    held=
+    [ "$answer" -eq 0 ] && held=yes
+    # The ref's name goes up too, and so does every path, on a line of its own: a raw tree holds a name beside hash bytes,
+    # and on a line with such bytes macOS's grep matches nothing in characters. git log lists a path rev-list wouldn't,
+    # such as a blob's second name.
+    { printf '%s\n%s\n' "$local_ref" "$remote_ref" \
+        && git -c core.quotePath=false log -m --no-renames --name-only --format= "$local_sha" --not "$SCRUBBED_BASE"; } > "$tmp/names" || { cant_run; continue; }
+    named=
+    grep -a -q -i -E -f "$tmp/terms" "$tmp/names"
+    answer=$?
+    [ "$answer" -gt 1 ] && { cant_run; continue; }
+    [ "$answer" -eq 0 ] && named=yes
+    LC_ALL=$characters grep -a -q -i -E -f "$tmp/terms" "$tmp/names"
+    answer=$?
+    [ "$answer" -gt 1 ] && { cant_run; continue; }
+    [ "$answer" -eq 0 ] && named=yes
+    if [ -s "$tmp/touched" ] || [ -n "$held$named" ]; then
+        objects=
+        [ -n "$held" ] && objects=$(name_objects)
+        echo "pre-push: $short carries what the scrub removed: $([ -s "$tmp/touched" ] && echo "paths in $(head -5 "$tmp/touched")") ${held:+text in${objects:- an object}} ${named:+in a ref name or a path}" | tr '\n' ' ' >&2
         echo >&2
         status=1
     fi
 done
-[ $status -ne 0 ] && echo "pre-push: nothing was pushed. Rebuild the branch on main without it (docs/checklists.md, Before any push)." >&2
+[ $status -ne 0 ] && echo "pre-push: nothing was pushed. Rebuild the branch on main without it (docs/checklists.md, Before any push). 'git log --all --find-object=<hash>' names a blob's commit. If main itself holds it, that's for a person." >&2
 exit $status
