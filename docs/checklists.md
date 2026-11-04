@@ -533,6 +533,20 @@ be able to do this yourself. open it up" (Andy, 2026-11-02; CLAUDE.md).
 - [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
       each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
 
+## When a ship's lesson shelf is full
+
+Why: a ship holds at most 32 live lessons. The cap bounds what one role or one stolen key can put in front of everyone,
+and it doesn't judge quality: readers are bounded by at most 3 lessons a query and the 1 s budget, so quality belongs to
+ranking on outcomes (Tardis, all hands 53713a1d, with no receipts yet, so to revisit once they exist). Rio Grande retracted
+"Memoize recursion" for looking narrow, on 2026-11-04, and that was the wrong test: a narrow lesson's trigger is what makes
+it fire.
+
+- [ ] Retract the weakest trigger, not the narrowest claim. In order: no `command`, `file` or `error` value, so only
+      Near can reach it; then one whose mistake a test or guard now makes impossible; then one that only restates a
+      checklist line.
+- [ ] Measure "unfired" in other ships' queries, never in days. With no readers, days would retire everything.
+- [ ] A retraction is final for that text. A lesson comes back only reworded, so read it again before retracting.
+
 ## Re-checking review findings on a new head
 
 Why: a finding marked fixed without a re-run is a guess that ships as a fact.
