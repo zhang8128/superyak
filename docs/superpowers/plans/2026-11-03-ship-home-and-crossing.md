@@ -1035,6 +1035,12 @@ Stage 3 deploys under its own plan revision, once its three dependencies exist.
 - **(nit 7) A hold on one ship trusts the origin peer.** The publisher can't bind an `instance_id` to a ship, so a
   paired origin could name another of its contacts as `receiver_ship` and keep crossing for a held one's store. A
   hold cuts off an honest origin's ship; an unpair of the whole origin peer is the real cut-off.
+- **The trust-only refusal rests on the origin's honesty too** (section 2 review S4). Check 5 refuses a ship only an
+  owner trust paired, but it trusts the origin's `receiver_ship` for any code-typed contact, person or ship: probe P1b
+  named the owner's person contact as `receiver_ship` and was served to the trust-only ship's store ref. An honest
+  origin can't do this, since `ask()`'s `[[hosted]]` check accepts only (ship user, instance) pairs (NOT_HOSTED). So,
+  as for a hold, the refusal holds against an honest origin, and an unpair of the origin peer is the real cut-off.
+  Later, in the cluster spec: bind the receiving ship to the ref in `grant-remote`, and compare it at check 5.
 - **P10 may hold stage 2** until Andy moves the Pi's gate to `enforce`.
 - **Same uid.** Any process of the Pi's user can talk to the daemon's socket and claim a remote ref, and any process
   of Tardis's user can talk to `crossing.sock` and claim a hosted store. That's 1.1's caveat; real isolation needs one
