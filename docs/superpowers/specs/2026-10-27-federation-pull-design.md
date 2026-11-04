@@ -71,7 +71,8 @@ known identity's mode.
 - **"Check delivery now"** (`POST /api/sync` in `serve`) only makes every peer due and returns status. `sync_once`
   runs only in the process that holds `federation.lock` (check 3 SF3).
 - **`python -m superyak_peer federate --data-dir D`** is the one sync process for a data directory, on every peer.
-  - It has no listening socket.
+  - It has no network listener. Only under `--crossing-socket` does it open one Unix socket, `crossing.sock`, on its
+    own thread, to ask lighthouse crossings (ship home and crossing plan, 2026-11-03, P9).
   - Each pass runs `collect` and `sync_once`. On a pull peer it also runs `pull_once` for each paired push peer every
     60 s, and at once after starting, after a pass that succeeds following a failed one, and after a push to that peer
     succeeds.
@@ -365,7 +366,8 @@ The puller asks for a budget of 1 MiB.
 11. **`federate`:**
     - It survives an exception in `pull_once`.
     - It pulls at start and after a recovery.
-    - It **never listens**: the test fails on any `bind` or `listen` during a pass.
+    - It **opens no network listener**: binds and listens are recorded during a pass, and there are none; under
+      `--crossing-socket` the only one is the Unix socket `crossing.sock` (ship home and crossing plan, 2026-11-03, P9).
 12. **G4b (SF5):** `federate` and `federation-listen` refuse to start when `identity.json` is missing beside an existing
     store.
 13. **`federation-listen`:**

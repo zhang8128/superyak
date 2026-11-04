@@ -47,7 +47,8 @@ from lighthouse_protocol import (
 )
 from permission_ledger import LedgerUnreadable, is_busy
 from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE, REBUILD_WAIT_S
-from sharing import validate_audience
+import store_identity
+from sharing import RESERVED_AGENT, is_remote, receiver_ref, validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
 logger = logging.getLogger("engram.lighthouse_daemon")
@@ -55,6 +56,12 @@ logger = logging.getLogger("engram.lighthouse_daemon")
 # The busy timeout of the daemon's read-only ledger open (R19); a module constant so a test can lower it.
 LEDGER_BUSY_MS = 5000
 OUTSIDE_HOME = "group:outside-home"
+# Ship home and crossing spec 2.2 (plan P11): a remote store ref is judged in the ledger as the reserved agent, at this
+# root place only; any other place, or this one once it has a parent (M2), is no place, so the ledger refuses it.
+OUTSIDE_HOME_PLACE = "place:outside-home"
+REMOTE_READ_IDS = 5         # a remote read names at most this many memories (spec 2.3)
+TURN_SECONDS = 30.0         # a remote read must follow its recall within this long, on the daemon's clock (P13)
+TURNS_KEPT = 1000           # remote recalls' turns kept for their reads, the oldest dropped first (P13)
 
 PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 DOMAIN = "memory.recall"
@@ -489,26 +496,35 @@ class _LedgerSide:
     def __init__(self, daemon: "PublisherDaemon", publisher: "PublisherStore", frame: dict, mode: str,
                  frame_decision, state, ledger_id: str, now: datetime, release=None):
         from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
-        from permissions import LegacyLayer, acts_for_place, agent_place_at
+        from permissions import LegacyLayer, _parents, acts_for_place, agent_place_at
         self._release = release
         self.receipts = 0             # the receipts this frame has written: a read busy after one says what it decided
         self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
         self.state, self.ledger_id, self.now = state, ledger_id, now
         self.t = int(now.timestamp())
-        self.agent = f"agent:{frame['receiver']}"
+        remote = is_remote(frame["receiver"])
+        # A remote store is judged as the one reserved agent, at place:outside-home only while that place is a root:
+        # with a parent the home would dominate it and every `self` allow there would reach every remote store (M2).
+        self.agent = f"agent:{RESERVED_AGENT}" if remote else f"agent:{frame['receiver']}"
         self.place = agent_place_at(state, self.agent, self.t) or ""
+        if remote and (self.place != OUTSIDE_HOME_PLACE or _parents(state, OUTSIDE_HOME_PLACE)):
+            self.place = ""
         row = state.agents.get(self.agent)
         self.acting_for = "" if row is None else row.acts_for
         identity = publisher.storage.instance_identity().get("instance_id") or publisher.name
         self.copy = f"store:{identity}"
         self.shadow = mode == "shadow"
         self._uses = None
-        self._receiver = self._load_receiver_policy()
         self._receiver_verdicts: dict[str, bool] = {}
-        self.legacy = (
-            LegacyLayer("publisher", lambda use, action: frame_decision.effect == "allow"),
-            LegacyLayer("receiver", self._receiver_allows),
-        )
+        publisher_layer = LegacyLayer("publisher", lambda use, action: frame_decision.effect == "allow")
+        if remote:
+            # No local receiver file is read for a remote ref, and its legacy layer is left out: the receiver checked
+            # its own policy before asking (spec 2.4), and that layer would refuse every crossing (re-check 2, 1).
+            self._receiver = None
+            self.legacy = (publisher_layer,)
+        else:
+            self._receiver = self._load_receiver_policy()
+            self.legacy = (publisher_layer, LegacyLayer("receiver", self._receiver_allows))
 
     # ------------------------------------------------------------ the receiver's legacy layer (P 6.3 item 4)
     def _load_receiver_policy(self):
@@ -698,6 +714,31 @@ class PublisherDaemon:
         self._build_threads: set = set()
         # At most FRAMES_AT_ONCE frames build or hold a State at once; a frame waits for its turn (P 12.2, 15).
         self._frames = threading.BoundedSemaphore(FRAMES_AT_ONCE)
+        # Remote reads are bound to their recalls (crossing plan P13, spec 2.3 S-f): turnId -> (receiver ref,
+        # publisher name, the candidate ids returned, when). Local frames never touch it.
+        self._turns: collections.OrderedDict = collections.OrderedDict()
+        self._turns_lock = threading.Lock()
+
+    def _seconds(self) -> float:
+        now = self.clock()
+        return (now if now.tzinfo else now.replace(tzinfo=timezone.utc)).timestamp()
+
+    def _bind_turn(self, turn_id: str, frame: dict, publisher: str, ids) -> None:
+        with self._turns_lock:
+            self._turns[turn_id] = (frame["receiver"], publisher, frozenset(ids), self._seconds())
+            while len(self._turns) > TURNS_KEPT:
+                self._turns.popitem(last=False)
+
+    def _turn_bound(self, frame: dict, publisher: str) -> bool:
+        """Whether a remote read names a turn a remote recall bound within TURN_SECONDS, for the same receiver ref and
+        publisher, and only ids that recall returned. The binding isn't consumed, so a retry inside the window works."""
+        with self._turns_lock:
+            entry = self._turns.get(frame["turnId"])
+        if entry is None:
+            return False
+        receiver, bound_publisher, ids, at = entry
+        return (receiver == frame["receiver"] and bound_publisher == publisher and set(frame["memoryIds"]) <= ids
+                and 0 <= self._seconds() - at <= TURN_SECONDS)
 
     def _eligible(self, side: "_LedgerSide"):
         """This frame's eligible set of ``recall`` decisions for the house: from the cache while it is valid,
@@ -803,7 +844,7 @@ class PublisherDaemon:
         # A receiver's recorded request time cannot extend a publisher grant.
         at = self.clock()
         return PolicyRequest(
-            publisher=f"urn:engram:{frame['receiver']}",
+            publisher=receiver_ref(frame["receiver"]),
             profile=PROFILE,
             domain=DOMAIN,
             action=action,
@@ -831,6 +872,17 @@ class PublisherDaemon:
                 return error_frame(
                     "MALFORMED_FRAME", f"unexpected kind {frame['kind']}"
                 )
+            # Crossings (spec 2.2, 2.3; plan P10, nit 4): a receiver is a local name or a well-formed remote store
+            # ref; a local frame never names the reserved agent; a remote read names at most five memories.
+            remote = is_remote(frame["receiver"])
+            try:
+                receiver_ref(frame["receiver"])
+            except ValueError:
+                return error_frame("MALFORMED_FRAME", "receiver is neither a name nor a store ref")
+            if frame["receiver"] == RESERVED_AGENT:
+                return error_frame("MALFORMED_FRAME", "no local receiver takes the reserved agent's name")
+            if remote and frame["kind"] == "read" and len(frame["memoryIds"]) > REMOTE_READ_IDS:
+                return error_frame("MALFORMED_FRAME", "a remote read names at most five memories")
             publisher = self.publishers.get(frame.get("publisher"))
             if publisher is None or not publisher.db_path.is_file():
                 if publisher is not None:
@@ -842,6 +894,10 @@ class PublisherDaemon:
             gate = self._gate()
             if gate.busy:                   # closed because the ledger's lock wasn't free: nothing served, said so
                 raise _LedgerBusyFrame()
+            if remote and gate.mode != "enforce":
+                # P10: only the ledger makes a crossing fail closed (an unregistered remote-stores is refused there),
+                # and it decides only under enforce: off builds no ledger side and shadow delivers by the legacy path
+                return error_frame("PUBLISHER_UNAVAILABLE", "a remote frame is served only under enforce")
             # Never retain action permissions between requests or reread the
             # artifact for audiences: concurrent edits must not combine grants
             # from different policy snapshots.
@@ -856,6 +912,8 @@ class PublisherDaemon:
             if storage is None:
                 return error_frame("PUBLISHER_UNAVAILABLE", "store unavailable")
             try:
+                if remote and store_identity.is_imprint(storage.conn):
+                    return error_frame("PUBLISHER_UNAVAILABLE", "an imprint is never served to another peer")
                 house = _FrameHouse(publisher, storage)
                 if frame["kind"] == "recall":
                     return self._recall(house, frame, policy, gate)
@@ -947,6 +1005,8 @@ class PublisherDaemon:
                 "memory_ids": [c["memoryId"] for c in candidates],
             }
         )
+        if is_remote(frame["receiver"]):
+            self._bind_turn(turn_id, frame, publisher.name, [c["memoryId"] for c in candidates])
         return recall_result_frame(
             turn_id=turn_id,
             query_digest=content_digest(frame["query"]),
@@ -979,7 +1039,7 @@ class PublisherDaemon:
             self.embeddings,
             frame["query"],
             min(int(frame["k"]), MAX_CANDIDATES),
-            _allowed_audiences(policy, f"urn:engram:{frame['receiver']}", mode=gate.mode),
+            _allowed_audiences(policy, receiver_ref(frame["receiver"]), mode=gate.mode),
             eligible=placed.eligible if placed is not None and enforce else None,
         )
         if side is not None:
@@ -1003,6 +1063,8 @@ class PublisherDaemon:
     def _read(
         self, publisher: PublisherStore, frame: dict, policy: Policy, gate
     ) -> dict:
+        if is_remote(frame["receiver"]) and not self._turn_bound(frame, publisher.name):
+            return error_frame("TURN_UNBOUND", "a remote read must follow its recall, within 30 s, for its ids")
         decision = policy.decide(self._request(frame, "read"))
         items = []
         delivered: list[str] = []
@@ -1012,7 +1074,7 @@ class PublisherDaemon:
         if decision.effect == "allow" and not closed:
             allowed_audiences = _allowed_audiences(
                 policy,
-                f"urn:engram:{frame['receiver']}",
+                receiver_ref(frame["receiver"]),
                 mode=gate.mode,
             )
         if not closed:

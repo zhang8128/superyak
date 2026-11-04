@@ -182,3 +182,13 @@ class TestListInstances:
         assert "beta" in out
         assert "genome" in out
         assert "alpha" in out  # beta forked_from alpha
+
+
+def test_fork_instance_refuses_the_reserved_agents_name_and_creates_nothing(tmp_path, capsys):
+    """Ship home and crossing plan, Task 10 (spec 2.2): local instance creation refuses `remote-stores`."""
+    _make_genome_db(tmp_path)
+    with pytest.raises(SystemExit) as exit_:
+        fork_instance("remote-stores", engram_dir=tmp_path)
+    assert exit_.value.code == 1
+    assert not (tmp_path / "instances" / "remote-stores").exists()
+    assert "remote-stores" in capsys.readouterr().err

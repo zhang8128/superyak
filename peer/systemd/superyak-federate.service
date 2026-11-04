@@ -6,8 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/superyak/peer
-Environment=FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1
-ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer federate --data-dir ${FEDERATION_DATA}
+Environment=FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1 FEDERATE_ARGS=
+# FEDERATE_ARGS is --crossing-socket or nothing (make federation-units FEDERATE_ARGS=...): unbraced, so empty adds no argument
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer federate --data-dir ${FEDERATION_DATA} $FEDERATE_ARGS
 Restart=on-failure
 RestartSec=30
 MemoryMax=256M

@@ -15,6 +15,7 @@ TIMEOUT = 3.0
 PEER_REPLY = 64 * 1024  # a peer's answer to a push, and the most of any non-2xx answer read
 PULL_CAP = MAX_ENVELOPE + 64 * 1024  # federation-pull spec §5: one envelope at the most, and its frame
 PULL_RATE = 64 * 1024  # bytes a second over the declared length, after the headers
+CROSSING_ANSWER_CAP = 128 * 1024  # a signed crossing answer (ship home and crossing spec 2.3, plan P7)
 _resolvers = threading.BoundedSemaphore(4)
 
 
@@ -203,6 +204,43 @@ def pull_pinned(card, body, *, header_timeout=10.0, rate=PULL_RATE):
         if not pull_answer_ok(result):
             raise PeerAnswer(response.status, 'Peer pull response is malformed')
         return result
+    finally:
+        if timer:
+            timer.cancel()
+        conn.close()
+
+
+def crossing_pinned(card, body, *, deadline):
+    """Ship home and crossing spec 2.3, the asking side: POST a signed crossing to /federation/crossing over the same
+    pinned dial (no byte before the pin is compared), the whole call bounded by `deadline` on time.monotonic, at which
+    the socket is shut down. A non-2xx is PeerAnswer with its real status and words. A 2xx needs a Content-Length within
+    CROSSING_ANSWER_CAP, refused unread otherwise; a body shorter than it is TimeoutError. Returns the parsed answer,
+    which the caller verifies."""
+    url = _dialable(card)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Peer deadline exceeded')
+    conn = http.client.HTTPSConnection(url.hostname, url.port or 443, timeout=remaining)
+    timer = None
+    try:
+        wire = conn.sock = _pinned_socket(card, url, deadline)
+        timer = _expire(wire, deadline)
+        conn.request('POST', '/federation/crossing', body=body, headers={'Content-Type': 'application/json'})
+        response = conn.getresponse()
+        if not 200 <= response.status < 300:
+            raw = response.read(PEER_REPLY+1)
+            raise PeerAnswer(response.status, _error_text(raw) if len(raw) <= PEER_REPLY else '')
+        declared = response.getheader('Content-Length')
+        if declared is None or not declared.isdigit() or int(declared) > CROSSING_ANSWER_CAP:
+            raise PeerAnswer(response.status, 'Crossing answer has no Content-Length within the cap')
+        length = int(declared)
+        raw = response.read(length)
+        if len(raw) < length:
+            raise TimeoutError('Peer crossing answer stalled')
+        try:
+            return parse(raw, limit=CROSSING_ANSWER_CAP)
+        except Problem:
+            raise PeerAnswer(response.status, 'Peer crossing answer is malformed') from None
     finally:
         if timer:
             timer.cancel()

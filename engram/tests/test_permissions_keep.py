@@ -225,3 +225,117 @@ def test_off_has_no_guard(engram_server_env, tmp_path, monkeypatch):
     monkeypatch.setattr(Uses, "open_read_only", fails_the_test)
     out = server.remember(content=M1_TEXT)
     assert out.get("episode_id") and "would_refuse" not in out and not ledger_path(tmp_path).exists()
+
+
+# ---------------------------------------------------------------- ship home and crossing plan, Task 12: the remote guard
+# (spec 2.5's second rule; P16, S7, nit 8). It is the first statement of _keep_decision, so it runs in every gate mode,
+# before the gate-off return and before the return for a missing permission-uses.db.
+
+import time as _time
+
+import remote_deliveries as rd
+
+REMOTE_ITEM = ("The lighthouse crossing records every delivered passage beside the receiving store for ninety whole "
+               "days. It keeps no copy.")
+REMOTE_LONG = ("The lighthouse crossing records every delivered passage beside the receiving store for ninety whole "
+               "days.")
+REMOTE_SHORT = "Bridges need steady upstream support always."
+
+
+def deliver_remote(*texts):
+    rd.record(rd.path_for(server._storage.db_path),
+              [dict(disclosureId="d", publisher="urn:superyak:" + "c" * 64 + ":ship:x", memoryId=f"m{n}", content=t)
+               for n, t in enumerate(texts)], now=int(_time.time()))
+
+
+def episodes():
+    return server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
+
+
+def assert_remote_refused(text):
+    before = episodes()
+    assert server.remember(content=text) == server._REMOTE_REFUSED
+    assert episodes() == before
+
+
+def test_remote_text_is_refused_with_the_gate_off(engram_server_env, tmp_path, monkeypatch):
+    server._init()
+    deliver_remote(REMOTE_ITEM)
+    monkeypatch.setattr(Uses, "open_read_only", fails_the_test)
+    assert not ledger_path(tmp_path).exists()
+    assert_remote_refused(REMOTE_ITEM)
+    assert_remote_refused(REMOTE_LONG)
+    assert server._keep_check(REMOTE_ITEM, agent="agent:default", now=now()) == server._REMOTE_REFUSED
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_remote_text_is_refused_in_shadow_and_enforce(keep_world, mode):
+    if mode == "shadow":
+        set_gate(keep_world, "shadow")
+    deliver_remote(REMOTE_ITEM)
+    assert_remote_refused(REMOTE_ITEM)
+    assert_remote_refused("  - " + REMOTE_LONG)
+
+
+def test_remote_text_is_refused_with_no_receipts_file(keep_world):
+    from permission_uses import uses_path
+    deliver_remote(REMOTE_ITEM)
+    uses_path(server.ENGRAM_HOME).unlink(missing_ok=True)
+    assert_remote_refused(REMOTE_ITEM)
+    assert_remote_refused(REMOTE_LONG)
+
+
+def test_a_short_delivered_item_is_refused_whole_and_kept_inside_a_longer_note(engram_server_env):
+    """Nit 8: sentences count only at 12 words or more on both sides, so a short item blocks only a whole copy."""
+    server._init()
+    deliver_remote(REMOTE_SHORT)
+    assert_remote_refused(REMOTE_SHORT)
+    kept = server.remember(content="We agreed that bridges need steady upstream support always. So we wrote it down.")
+    assert kept.get("episode_id")
+
+
+def test_a_paraphrase_of_remote_text_is_kept(engram_server_env):
+    server._init()
+    deliver_remote(REMOTE_ITEM)
+    assert server.remember(content="The crossing keeps digests of what it delivered, for about three months.").get(
+        "episode_id")
+
+
+@pytest.mark.parametrize("make", ["not sqlite", "wrong table"])
+def test_an_unreadable_remote_record_refuses_with_its_cause(engram_server_env, make):
+    server._init()
+    path = rd.path_for(server._storage.db_path)
+    if make == "not sqlite":
+        path.write_bytes(b"this is not a sqlite file" * 40)
+    else:
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE something_else (x)")
+    before = episodes()
+    out = server.remember(content="Anything at all, delivered or not, from anywhere.")
+    assert out["layer"] == "rejected" and out["code"] == "REMOTE_DELIVERY_UNREADABLE" and out["cause"]
+    assert "busy" not in out["cause"] and episodes() == before
+
+
+def test_a_missing_remote_record_refuses_nothing(engram_server_env):
+    server._init()
+    assert not rd.path_for(server._storage.db_path).exists()
+    assert server.remember(content="Anything at all, delivered or not, from anywhere.").get("episode_id")
+
+
+def test_a_busy_remote_record_refuses_with_busy_try_again(engram_server_env, monkeypatch):
+    server._init()
+    deliver_remote(REMOTE_ITEM)
+    monkeypatch.setattr(rd, "BUSY_MS", 200)
+    path = rd.path_for(server._storage.db_path)
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO meta VALUES('held', '1') ON CONFLICT(key) DO UPDATE SET value='1'")
+    holder.execute("COMMIT")
+    try:
+        before = episodes()
+        out = server.remember(content="Anything at all, delivered or not, from anywhere.")
+        assert out["code"] == "REMOTE_DELIVERY_BUSY" and out["cause"] == "busy, try again"
+        assert episodes() == before
+    finally:
+        holder.close()

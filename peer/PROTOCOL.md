@@ -367,3 +367,73 @@ route yet, so it waits 5 minutes; a 5xx, a network failure or a pin mismatch goe
 the per-peer backoff. It pulls each listener every 60 s, at once at start, after a
 recovery, after a push to it succeeds, and after a sleep overrun. ("Check delivery now" makes every pull due too, but only
 `serve` offers it, and a pull peer such as the Mac runs none.)
+
+## Crossing (lighthouse crossings between peers)
+
+A crossing lets a receiving store's home ask another peer's published house a lighthouse `recall` or `read`, by
+POST `/federation/crossing` on that peer's `federation-listen` (16 KiB at most). Only listening (push) peers can be
+asked; any peer whose federation process runs with `--crossing-socket` can ask. The design is
+`docs/superpowers/specs/2026-11-03-ship-home-and-crossing-design.md`, section 2; the build follows
+`docs/superpowers/plans/2026-11-03-ship-home-and-crossing.md`.
+
+**Reserved kinds.** `pull`, `crossing` and `crossing-answer` are no record kind (`identity.RESERVED_KINDS`), so a
+pull, a crossing and an answer never verify as each other, as a record or as an envelope.
+
+The request is canonical JSON with exactly these keys:
+
+| Key | Rule |
+|---|---|
+| `version` | `1`, an int |
+| `kind` | `"crossing"` |
+| `origin`, `destination` | peer IDs |
+| `receiver_instance` | the receiving store's `instance_id`, a canonical UUID |
+| `receiver_ship` | the receiving ship's participant id on the origin |
+| `publisher_ship` | the asked ship's participant id on the destination |
+| `frame` | a lighthouse `recall` (`audience` `self`, a query of 1 to 4,096 characters, `k` 1 to 20) or `read` (`turnId` at most 64 characters, 1 to 5 distinct ids), exactly its keys |
+| `deadline_ms` | an int, 100 to 10,000: what is left of the receiver's deadline |
+| `nonce` | 32 lowercase hex characters |
+| `at` | an int Unix time |
+| `signature` | Ed25519 over the canonical request without `signature`, by the origin card's `signing_key` |
+
+The asking peer measures the canonical signed request and refuses it over 16 KiB before any dial (4,096 four-byte
+characters are 16 KiB alone).
+
+**Checks, in order, before anything of Engram's is opened** (they read only `peer.sqlite3` and `crossings.toml`):
+shape (400 "Invalid crossing request"); `destination` is this peer (403, before any nonce is kept); `origin` a
+paired peer of any card version (403 "Unknown or unpaired peer"); the signature (403 "Peer authentication
+failed"), `at` within 300 s (403), the nonce, kept in `pull_nonces` under the restore floor (409 "Replay");
+`receiver_ship` a contact from that origin that is not held and whose typed code is still its card's (403
+"Receiving ship is not a current contact"; a contact only an owner trust confirmed doesn't pass, 403 "Receiving ship
+is paired only by an owner trust, which crossings do not accept"); `publisher_ship`
+mapped to a published house in `crossings.toml` (404 "No published house for that ship"); and the load: two in
+flight per origin, four in all, sixty a minute per origin (429 "Too many crossings"). A `crossings.toml` that can't
+be used refuses every crossing with 503.
+
+**Processing.** The frame's `receiver` becomes `urn:superyak:<origin>:store:<receiver_instance>`, built from the
+verified origin, and its `publisher` the daemon publisher the ship maps to; the publisher's read-only lighthouse daemon
+answers it over its Unix socket within `deadline_ms`. A daemon error frame is 502 with the daemon's code as the
+`error`; a daemon past the deadline is 504 "Deadline passed"; an unreachable or malformed daemon is 502. An answer
+over 128 KiB, or a read whose delivered text passes 32 KiB of UTF-8, is 502 "Answer too large". None of these writes
+a row. Then a `crossings` row (`disclosure_id`, `origin_peer`, `receiver_ref`, `request_digest`, `nonce`, `at`)
+is written, and only then the answer goes back: a failed insert is 503 with no answer. `crossings` (trusted local)
+lists a sidecar disclosure to a remote store with no row as unsent.
+
+**The answer** is canonical JSON, signed by the answering peer, with exactly `version` (1), `kind`
+(`"crossing-answer"`), `origin` (the answering peer), `destination` (the asking peer), `request_digest` (SHA-256 of
+the canonical signed request), `nonce` (the request's), `frame` (the daemon's `recall_result` or `read_result`,
+with its `disclosureId`) and `signature`. The asking peer refuses any difference, a frame of the wrong kind, and a
+frame with no `disclosureId`, before it hands the frame on. Its transport is the pinned dial above, bounded by
+`deadline_ms`, needing a `Content-Length` within 128 KiB.
+
+**The local hop.** Engram asks through `<peer data dir>/crossing.sock` (mode 0600, one owner by `crossing.lock`),
+opened by `federate --crossing-socket` or `federation-listen --crossing-socket`, never by default. One canonical
+JSON line each way. The request has exactly `receiver_instance`, `receiver_ship`, `destination`, `publisher_ship`,
+`frame` and `deadline_ms`, read up to 32 KiB. The peer refuses a store not listed under `[[hosted]]` for that ship
+(`NOT_HOSTED`; any process of the same uid can claim a hosted store), a destination that isn't a paired push peer with
+an endpoint (`NOT_PAIRED`), under 100 ms left (`TIMEOUT`), and a signed request over 16 KiB (`QUERY_TOO_LARGE`),
+each without dialling. It then signs as itself with a fresh nonce, dials, and verifies the answer. The reply is
+`{"ok": true, "frame": ...}` or `{"ok": false, "code": ...}`, the code one of `NOT_HOSTED`, `NOT_PAIRED`,
+`TIMEOUT`, `UNAVAILABLE`, `QUERY_TOO_LARGE`, `BAD_REQUEST`, `BAD_ANSWER` and `REFUSED_<status>`. The publisher's
+known 403s have codes of their own: `REFUSED_CONTACT` (not a current contact), `REFUSED_TRUST_ONLY` (paired only by
+an owner trust), `REFUSED_UNPAIRED` (unknown or unpaired origin), `REFUSED_SIGNATURE` and `REFUSED_CLOCK`. Engram
+shows the code in `diagnostics` by name, and holds no peer key.

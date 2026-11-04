@@ -2,8 +2,9 @@
 with --sync. A pass every PASS_SECONDS: in pull mode it first pulls from each paired push peer whose pull is due, then
 collects and pushes. Whether a pull is due lives here, in memory (plan P4): at once at start, 60 s after a pull, or a
 failure's own backoff, as pull_once says; an overrun of the sleep by more than WAKE_OVERRUN s is a wake, and every peer
-is pulled at once (P13). Each step catches and logs its own faults, so one never ends the process. It listens on
-nothing: pulls and pushes only dial out."""
+is pulled at once (P13). Each step catches and logs its own faults, so one never ends the process. It never opens a
+network listener: pulls and pushes only dial out. With --crossing-socket (ship home and crossing plan P9) the command
+opens one Unix socket, crossing.sock, on its own thread (crossing.CrossingSocket), and no network one."""
 import json
 import logging
 import signal

@@ -99,7 +99,9 @@ def typed_code(typed):
 
 # Spec A step 3 (G3, G12): a signed record has exactly its kind's keys and names its station, so no record passes
 # as another kind, as a federation envelope (which has no record kind), or as another station's.
-# `pull` is reserved: it is the kind of a federation pull request (PULL_KEYS), so no record kind may take it.
+# `pull`, `crossing` and `crossing-answer` are reserved: they are the kinds of a federation pull request (PULL_KEYS), a
+# crossing request (CROSSING_KEYS) and its answer (CROSSING_ANSWER_KEYS), so no record kind may take one.
+RESERVED_KINDS = frozenset({'pull', 'crossing', 'crossing-answer'})
 RECORD_KEYS = {
     'instructions-revision': frozenset({'kind', 'station', 'layer_id', 'revision', 'owner_id', 'title', 'body',
                                         'audience_users', 'policy', 'created'}),
@@ -122,6 +124,12 @@ FUTURE_SLACK = 300   # an assertion issued more than this many seconds after now
 # kind, so a pull request can't pass as a record or an envelope, nor either of them as a pull request.
 PULL_KEYS = frozenset({'version', 'kind', 'origin', 'destination', 'nonce', 'at', 'limit', 'budget', 'ack', 'refused',
                        'signature'})
+# Crossings (ship home and crossing spec 2.3): a crossing request's twelve keys, and its signed answer's eight. Neither
+# names a station, and each has its own reserved kind, so neither passes as the other, a pull, a record or an envelope.
+CROSSING_KEYS = frozenset({'version', 'kind', 'origin', 'destination', 'receiver_instance', 'receiver_ship',
+                           'publisher_ship', 'frame', 'deadline_ms', 'nonce', 'at', 'signature'})
+CROSSING_ANSWER_KEYS = frozenset({'version', 'kind', 'origin', 'destination', 'request_digest', 'nonce', 'frame',
+                                  'signature'})
 
 # Each entry of an imprint-permission's `records`: the permissions spec's 5.1 fields less the five ledger-only ones.
 INNER_RECORD_KEYS = frozenset({'id', 'layer', 'effect', 'selector', 'valid_from', 'valid_until', 'anchor', 'backing',
@@ -202,6 +210,21 @@ class PeerIdentity:
                 or request['origin'] != self.peer_id:
             raise ValueError('Not a pull request this peer signs')
         return {**request, 'signature': base64.b64encode(self.key.sign(canonical(request))).decode()}
+
+    def sign_crossing(self, request):
+        """Crossings (spec 2.3): this peer's own crossing request, returned with its signature over the canonical request
+        without one."""
+        if not isinstance(request, dict) or set(request) != CROSSING_KEYS - {'signature'} \
+                or request['kind'] != 'crossing' or request['origin'] != self.peer_id:
+            raise ValueError('Not a crossing this peer signs')
+        return {**request, 'signature': base64.b64encode(self.key.sign(canonical(request))).decode()}
+
+    def sign_crossing_answer(self, answer):
+        """Crossings (spec 2.3, plan P7): this peer's answer to a crossing it served, signed as a request is."""
+        if not isinstance(answer, dict) or set(answer) != CROSSING_ANSWER_KEYS - {'signature'} \
+                or answer['kind'] != 'crossing-answer' or answer['origin'] != self.peer_id:
+            raise ValueError('Not a crossing answer this peer signs')
+        return {**answer, 'signature': base64.b64encode(self.key.sign(canonical(answer))).decode()}
 
     def sign_record(self, record):
         """G3: this station's signature over one of its own records (RECORD_KEYS), base64."""
@@ -286,6 +309,110 @@ def verify_pull(card, request):
         return request
     except (ValueError, TypeError, KeyError, InvalidSignature, Problem):
         raise Problem(403, 'Peer authentication failed') from None
+
+UUID_FORM = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')  # imprints' _ANY_UUID
+PARTICIPANT_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')  # a card's participant id (validate_card)
+CROSSING_DEADLINE = (100, 10_000)  # milliseconds (spec 2.3)
+FRAME_COMMON = frozenset({'protocolVersion', 'kind', 'receiver', 'publisher', 'context', 'purpose'})
+FRAME_KEYS = {'recall': FRAME_COMMON | {'audience', 'query', 'k', 'at'}, 'read': FRAME_COMMON | {'turnId', 'memoryIds'}}
+ANSWERS = {'recall': 'recall_result', 'read': 'read_result'}  # the frame kind that answers each request's
+
+
+def _sized(value, low, high):
+    return isinstance(value, str) and low <= len(value) <= high
+
+
+def crossing_frame_ok(frame):
+    """Plan P4: the peer checks the frame's shape itself, since it can't import Engram (the daemon still runs
+    validate_frame). A `recall` or a `read` with exactly its keys; `receiver` and `publisher` any 1 to 256 characters,
+    since the destination overwrites them; `context` exactly {id, path} with its path the id's segments."""
+    try:
+        if not isinstance(frame, dict) or frame.get('kind') not in FRAME_KEYS or set(frame) != FRAME_KEYS[frame['kind']]:
+            return False
+        context = frame['context']
+        if not (frame['protocolVersion'] == '0.1' and _sized(frame['receiver'], 1, 256)
+                and _sized(frame['publisher'], 1, 256) and _sized(frame['purpose'], 1, 256)
+                and isinstance(context, dict) and set(context) == {'id', 'path'} and _sized(context['id'], 1, 512)
+                and isinstance(context['path'], list) and all(_sized(p, 1, 512) for p in context['path'])
+                and '/'.join(context['path']) == context['id']):
+            return False
+        if frame['kind'] == 'recall':
+            return (frame['audience'] == 'self' and _sized(frame['query'], 1, 4096) and type(frame['k']) is int
+                    and 1 <= frame['k'] <= 20 and _sized(frame['at'], 1, 64))
+        ids = frame['memoryIds']
+        return (_sized(frame['turnId'], 1, 64) and isinstance(ids, list) and 1 <= len(ids) <= 5
+                and all(_sized(i, 1, 128) for i in ids) and len(set(ids)) == len(ids))
+    except (TypeError, KeyError):
+        return False
+
+
+def crossing_shape_ok(request):
+    """Crossings (spec 2.3, check 1): exactly CROSSING_KEYS, each of its type and range, and P4's frame, so no envelope,
+    pull, record or memory-route body passes."""
+    try:
+        if not isinstance(request, dict) or set(request) != CROSSING_KEYS:
+            return False
+        deadline = request['deadline_ms']
+        return (type(request['version']) is int and request['version'] == 1 and request['kind'] == 'crossing'
+                and all(isinstance(request[k], str) and HEX64.fullmatch(request[k]) for k in ('origin', 'destination'))
+                and isinstance(request['receiver_instance'], str) and UUID_FORM.fullmatch(request['receiver_instance'])
+                is not None
+                and all(isinstance(request[k], str) and PARTICIPANT_ID.fullmatch(request[k])
+                        for k in ('receiver_ship', 'publisher_ship'))
+                and crossing_frame_ok(request['frame'])
+                and type(deadline) is int and CROSSING_DEADLINE[0] <= deadline <= CROSSING_DEADLINE[1]
+                and isinstance(request['nonce'], str) and HEX32.fullmatch(request['nonce']) is not None
+                and type(request['at']) is int
+                and isinstance(request['signature'], str) and len(request['signature']) <= 128)
+    except (TypeError, KeyError):
+        return False
+
+
+def _verified(card, value):
+    unsigned = {k: v for k, v in value.items() if k != 'signature'}
+    key = ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode(card['signing_key'], validate=True))
+    key.verify(base64.b64decode(value['signature'], validate=True), canonical(unsigned))
+    return value
+
+
+def verify_crossing(card, request):
+    """Crossings (spec 2.3, check 4): a request with exactly CROSSING_KEYS, of kind `crossing`, from the card's peer,
+    signed by its key. Anything wrong here is 403, as verify_pull answers."""
+    try:
+        if not isinstance(request, dict) or set(request) != CROSSING_KEYS or request['kind'] != 'crossing' \
+                or request['origin'] != card['peer_id']:
+            raise ValueError()
+        return _verified(card, request)
+    except (ValueError, TypeError, KeyError, InvalidSignature, Problem):
+        raise Problem(403, 'Peer authentication failed') from None
+
+
+def crossing_digest(signed):
+    """Plan P7: the SHA-256 of the canonical signed request, which its answer carries as `request_digest`."""
+    return hashlib.sha256(canonical(signed)).hexdigest()
+
+
+def verify_crossing_answer(card, answer, *, me, digest, nonce, kind):
+    """Plan P7, the asking side: the answer has exactly CROSSING_ANSWER_KEYS, comes from the dialled card's peer to
+    `me`, binds the request by `digest` and `nonce`, carries the frame kind that answers `kind` with a `disclosureId`,
+    and verifies under the card's key. Any difference raises ValueError."""
+    try:
+        if not isinstance(answer, dict) or set(answer) != CROSSING_ANSWER_KEYS:
+            raise ValueError('Answer keys')
+        frame = answer['frame']
+        if not (type(answer['version']) is int and answer['version'] == 1 and answer['kind'] == 'crossing-answer'
+                and answer['origin'] == card['peer_id'] and answer['destination'] == me
+                and answer['request_digest'] == digest and answer['nonce'] == nonce):
+            raise ValueError('Answer binding')
+        if not (isinstance(frame, dict) and frame.get('protocolVersion') == '0.1' and kind in ANSWERS
+                and frame.get('kind') == ANSWERS[kind] and _sized(frame.get('disclosureId'), 1, 256)):
+            raise ValueError('Answer frame')
+        if not isinstance(answer['signature'], str):
+            raise ValueError('Answer signature')
+        return _verified(card, answer)
+    except (TypeError, KeyError, InvalidSignature, Problem):
+        raise ValueError('Crossing answer does not verify') from None
+
 
 def verify_record(card, record, signature):
     """G3: True only for a valid card, a record with exactly its kind's keys that names the card's station, and a
