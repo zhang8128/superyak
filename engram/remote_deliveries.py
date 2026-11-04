@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import unicodedata
 
 FILE_NAME = "remote-deliveries.db"
@@ -111,6 +112,26 @@ def _fault(error: Exception, path: Path) -> Exception:
     return Unreadable(f"{path}: {error}")
 
 
+def _create(path: Path) -> None:
+    """Make the file WAL from the moment it exists: set up under a name of its own, then linked into place (a link never
+    replaces a file another writer made first). Two connections setting up one file in rollback mode can deadlock, and
+    SQLite then answers one of them busy at once."""
+    staged = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.new")
+    os.close(os.open(staged, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    try:
+        with closing(sqlite3.connect(str(staged), isolation_level=None)) as con:
+            con.execute("PRAGMA journal_mode=WAL")
+            for statement in _SCHEMA:
+                con.execute(statement)
+        try:
+            os.link(staged, path)
+        except FileExistsError:
+            pass                                  # another writer made it first: that one is used
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{staged}{suffix}").unlink(missing_ok=True)
+
+
 def record(path, items, *, now: int) -> None:
     """Record each delivered remote item (dicts with disclosureId, publisher, memoryId, content) in one transaction,
     and, at most once an hour per file (the last prune's time is in `meta`), delete rows older than 90 days in it."""
@@ -122,7 +143,7 @@ def record(path, items, *, now: int) -> None:
         rows += [(item["disclosureId"], item["publisher"], item["memoryId"], "sentence", d, now) for d in parts]
     try:
         if not path.exists():
-            os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+            _create(path)
         with closing(_open(path)) as con:
             if con.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
                 con.execute("PRAGMA journal_mode=WAL")

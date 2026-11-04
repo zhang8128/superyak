@@ -548,3 +548,31 @@ def test_every_registered_tool_is_read_only_or_refuses_a_delivered_item_in_every
                 offenders.append((name, param, str(out)[:80]))
     assert offenders == []
     assert checked >= 40   # the walk reached the tools' string arguments, not none of them
+
+
+
+def test_two_writers_creating_the_record_at_once_both_land(tmp_path):
+    """The interim's two sessions (P19, condition 2) can deliver for the first time at the same moment. The file must
+    be WAL from the moment it exists: two connections setting it up in rollback mode can deadlock, and SQLite answers
+    one of them busy at once, which suppressed a delivery (seen in the two-session test, RECORD_BUSY)."""
+    for round_ in range(30):
+        path = rd.path_for(tmp_path / str(round_) / "graph.db")
+        path.parent.mkdir()
+        together, errors = threading.Barrier(2, timeout=10), []
+
+        def write(n):
+            together.wait()
+            try:
+                rd.record(path, delivered(f"Delivery number {n} of round {round_}, long enough to be a sentence of its own.",
+                                          disclosure=f"d{n}"), now=NOW)
+            except Exception as error:  # noqa: BLE001 - the test names any refusal
+                errors.append(repr(error))
+        threads = [threading.Thread(target=write, args=(n,)) for n in (1, 2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(20)
+        assert errors == [], (round_, errors)
+        with sqlite3.connect(path) as db:
+            assert {r[0] for r in db.execute("SELECT disclosure_id FROM remote_deliveries")} == {"d1", "d2"}
+            assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
