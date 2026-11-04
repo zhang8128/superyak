@@ -24,7 +24,7 @@ from permission_ledger import (SCHEMA_VERSION, Gate, Ledger, LedgerUnreadable, e
                                projection_now)
 from permissions import _COLUMNS, RuleError
 from tests.permissions_support import (  # noqa: F401
-    ANDY, M2, M3, MEDICAL, T, cli_home, cli_home_with_house, do, e1_county_ledger, fake_tty, raise_gate,
+    ANDY, M2, M3, MEDICAL, T, cli_home, cli_home_with_house, do, e1_county_ledger, fake_tty, make_house, raise_gate,
     raised_ledger)
 from tests.permissions_memory_support import digest_shape, digest_timings
 from tests.test_permissions_premerge_fixes import _tear_index
@@ -1106,3 +1106,55 @@ def test_0c_an_append_spends_no_canonical_json_on_the_parts(tmp_path, monkeypatc
     assert len(calls) == 2
     assert _follows(led)
     led.close()
+
+
+# ---------------------------------------------------------------- the section 2 review (the fresh Pi reviewer)
+
+def _page_at(path, number):
+    """(offset, size) of page `number` of the SQLite file at `path`."""
+    con = sqlite3.connect(path)
+    try:
+        size = con.execute("PRAGMA page_size").fetchone()[0]
+    finally:
+        con.close()
+    return (number - 1) * size, size
+
+
+def _rootpage(path, name):
+    con = sqlite3.connect(path)
+    try:
+        return con.execute("SELECT rootpage FROM sqlite_master WHERE name = ?", (name,)).fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_m1_a_torn_meta_index_page_never_reads_a_gate_at_enforce_as_off(tmp_path):
+    """The review's M1 (its probe_meta_index.py). The first raise of the gate inserts `gate` and `gate_raised`; the root
+    page of meta's autoindex written back as it was before the raise hides both from a read through the index, so the
+    gate read `off` on a ledger at enforce, and under `off` nothing calls state(), which refuses it. meta is read past
+    its index, as the projection digest reads it."""
+    _created(tmp_path)
+    make_house(tmp_path, "lighthouse")
+    path = ledger_path(tmp_path)
+    offset, size = _page_at(path, _rootpage(path, "sqlite_autoindex_meta_1"))
+    before = path.read_bytes()[offset:offset + size]
+    led = Ledger.open(tmp_path)
+    raise_gate(led, "enforce")
+    led.close()
+    with open(path, "r+b") as f:                     # the tear: no connection is open on the file here
+        f.seek(offset)
+        f.write(before)
+    con = sqlite3.connect(path)
+    try:                                             # the tear is real: through the index the two keys are gone
+        assert {k for (k,) in con.execute("SELECT key FROM meta ORDER BY key")} & {"gate", "gate_raised"} == set()
+        assert {k for (k,) in con.execute("SELECT key FROM meta NOT INDEXED")} >= {"gate", "gate_raised"}
+    finally:
+        con.close()
+    assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        assert led.meta()["gate"] == "enforce"
+    finally:
+        led.close()
+    with pytest.raises(LedgerUnreadable, match="SQLite's integrity check of the file"):
+        _state(tmp_path)

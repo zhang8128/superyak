@@ -958,7 +958,7 @@ def _read_key(conn: sqlite3.Connection, path: Path) -> tuple[_Key, bool]:
     commit lands meanwhile; the change counter and the file format bytes by pread on this process's descriptor for
     the file the connection opened; head by SQL; and a stat that must name that same file. Returns (the key, whether
     the rollback journal is pinned)."""
-    head = conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
+    head = conn.execute("SELECT value FROM meta NOT INDEXED WHERE key = 'head'").fetchone()
     opened = conn._key
     header = os.pread(_held_fd(opened), 28, 0)
     st = _stat(path)
@@ -1059,7 +1059,7 @@ class Ledger:
             raise FileNotFoundError(str(path))
         conn = cls._connect(path, read_only=read_only, busy_ms=busy_ms)
         try:
-            row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            row = conn.execute("SELECT value FROM meta NOT INDEXED WHERE key='schema_version'").fetchone()
             if row is None or row["value"] not in SCHEMA_VERSIONS:
                 conn.close()
                 raise LedgerUnreadable(f"{path}: not a version {' or '.join(SCHEMA_VERSIONS)} permission ledger")
@@ -1215,7 +1215,7 @@ class Ledger:
         try:
             key, pinned = self._read_key()
             if not _keeps_digest({r[0]: r[1] for r in self.conn.execute(
-                    "SELECT key, value FROM meta WHERE key IN ('schema_version', 'projection_parts')")}):
+                    "SELECT key, value FROM meta NOT INDEXED WHERE key IN ('schema_version', 'projection_parts')")}):
                 return None
             self._verify(key, pinned)
         finally:
@@ -1244,10 +1244,12 @@ class Ledger:
         return self.conn.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
 
     def meta(self) -> dict:
-        return {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta ORDER BY key")}
+        """Every meta key, read past meta's index (`NOT INDEXED`), as the projection digest reads it: a torn page of
+        its autoindex could hide a key, the gate's among them (the section 2 review's M1)."""
+        return {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta NOT INDEXED ORDER BY key")}
 
     def tables(self) -> dict:
-        out = {"meta": [dict(r) for r in self.conn.execute("SELECT key, value FROM meta ORDER BY key")],
+        out = {"meta": [dict(r) for r in self.conn.execute("SELECT key, value FROM meta NOT INDEXED ORDER BY key")],
                "ledger_log": [dict(r) for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq")]}
         for t in _TABLES:
             cols = ", ".join(_COLUMNS[t])
@@ -1494,7 +1496,7 @@ class Ledger:
             self._check_open_bounds(body, at)
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
-            head = self.conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
+            head = self.conn.execute("SELECT value FROM meta NOT INDEXED WHERE key = 'head'").fetchone()
             # a cut tail (P 5.6), checked here for every writer, a State read first or not: a row written now would
             # take the seq of the one the log lost, or, written over a last row whose change was lost, hide the tear.
             # The cheap reads a State makes, with no table loaded.
@@ -1580,7 +1582,7 @@ class Ledger:
         """The parts `meta.projection_parts` holds, read inside the writer's transaction; None for a ledger that
         keeps no digest (D5)."""
         held = {r[0]: r[1] for r in self.conn.execute(
-            "SELECT key, value FROM meta WHERE key IN ('schema_version', 'projection_parts')")}
+            "SELECT key, value FROM meta NOT INDEXED WHERE key IN ('schema_version', 'projection_parts')")}
         if not _keeps_digest(held):
             return None
         try:
@@ -1590,7 +1592,8 @@ class Ledger:
 
     def _parts_held(self) -> dict:
         """`meta.projection_parts`, read now."""
-        return _read_parts(self.conn.execute("SELECT value FROM meta WHERE key = 'projection_parts'").fetchone()[0])
+        return _read_parts(self.conn.execute(
+            "SELECT value FROM meta NOT INDEXED WHERE key = 'projection_parts'").fetchone()[0])
 
     def _differs_from_replay_later(self) -> Callable[[dict], list[str]]:
         """This ledger's tables recomputed now, read in one transaction, as a function of the replay's parts that
@@ -1599,7 +1602,7 @@ class Ledger:
         self.conn.execute("BEGIN")
         try:
             _whole, mine = projection_now(self.conn)
-            version = self.conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            version = self.conn.execute("SELECT value FROM meta NOT INDEXED WHERE key = 'schema_version'").fetchone()
         finally:
             self.conn.execute("COMMIT")
         if version is not None and version[0] != SCHEMA_VERSION:
@@ -1687,13 +1690,13 @@ class Ledger:
                         _fold(parts, table, new)
         for k, v in body.get("meta", {}).items():
             if parts is not None:
-                old = self.conn.execute("SELECT key, value FROM meta WHERE key = ?", (k,)).fetchone()
+                old = self.conn.execute("SELECT key, value FROM meta NOT INDEXED WHERE key = ?", (k,)).fetchone()
                 if old is not None:
                     _fold(parts, "meta", tuple(old), -1)
             self.conn.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                               (k, str(v)))
             if parts is not None:
-                _fold(parts, "meta", tuple(self.conn.execute("SELECT key, value FROM meta WHERE key = ?",
+                _fold(parts, "meta", tuple(self.conn.execute("SELECT key, value FROM meta NOT INDEXED WHERE key = ?",
                                                              (k,)).fetchone()))
 
     @staticmethod
