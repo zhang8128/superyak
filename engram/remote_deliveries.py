@@ -8,8 +8,9 @@ arguments, in every gate mode.
 
 Normalized: Unicode NFKC, leading Markdown markers stripped (`- `, `* `, `+ `, `> `, `1. `, `1) `, repeatedly), then
 casefolded, with whitespace runs made one space and stripped. Sentences are split on the text before it is normalized,
-after `.`, `!` or `?` followed by whitespace, or at a newline; each is then normalized, markers and all, and its words
-are its whitespace-separated runs. A text is refused when its normalized digest is among the recorded digests of either
+twice: after `.`, `!` or `?` followed by whitespace, or at a newline; and with newlines folded, after an end mark only
+(section 2 review, S2), so a hard-wrapped sentence copied unwrapped still matches. Each is then normalized, markers
+and all, and its words are its whitespace-separated runs. A text is refused when its normalized digest is among the recorded digests of either
 part, or when one of its sentences of 12 words or more has a digest among them.
 
 What it doesn't catch, said plainly: a paraphrase, a copy made after 90 days, a delivered sentence under 12 words
@@ -37,6 +38,7 @@ BUSY_MS = 2000
 MIN_WORDS = 12
 _MARKER = re.compile(r"(?:[-*+>]|[0-9]+[.)])\s+")
 _SPLIT = re.compile(r"(?<=[.!?])\s+|\n")
+_FOLDED_SPLIT = re.compile(r"(?<=[.!?])\s+")   # newlines folded into the sentence: splits at end marks only
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS remote_deliveries(disclosure_id TEXT NOT NULL, publisher TEXT NOT NULL, "
     "memory_id TEXT NOT NULL, part TEXT NOT NULL CHECK(part IN ('item','sentence')), digest TEXT NOT NULL, "
@@ -82,13 +84,21 @@ def sentences(text: str) -> list[str]:
     return [s for s in (normalize(part) for part in _SPLIT.split(text)) if s]
 
 
+def folded_sentences(text: str) -> list[str]:
+    """The text's sentences with newlines folded to spaces, split only after an end mark (section 2 review, S2), so a
+    sentence hard-wrapped across lines is one sentence; each normalized, empty ones dropped."""
+    return [s for s in (normalize(part) for part in _FOLDED_SPLIT.split(text)) if s]
+
+
 def digest(normalized: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def digests(text: str) -> tuple[str, list[str]]:
-    """(the item digest, the digests of its sentences of MIN_WORDS words or more)."""
-    return digest(normalize(text)), [digest(s) for s in sentences(text) if len(s.split()) >= MIN_WORDS]
+    """(the item digest, the digests of its sentences of MIN_WORDS words or more, split both ways: at end marks and
+    newlines, and with newlines folded, so a wrapped sentence copied unwrapped matches, and the reverse)."""
+    long = [s for s in sentences(text) + folded_sentences(text) if len(s.split()) >= MIN_WORDS]
+    return digest(normalize(text)), list(dict.fromkeys(digest(s) for s in long))
 
 
 def _is_busy(error: sqlite3.Error) -> bool:

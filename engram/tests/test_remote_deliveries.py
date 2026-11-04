@@ -576,3 +576,27 @@ def test_two_writers_creating_the_record_at_once_both_land(tmp_path):
         with sqlite3.connect(path) as db:
             assert {r[0] for r in db.execute("SELECT disclosure_id FROM remote_deliveries")} == {"d1", "d2"}
             assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+
+# Section 2 review, S2 (probe E5b): a sentence hard-wrapped across a line break, copied with the break taken out, and the
+# reverse. Each line fragment is under 12 words, so only the sentence folded onto one line can be recorded and caught.
+WRAPPED = ("A short opening line. The crossing keeps a digest of each passage it delivered beside\n"
+           "the receiving store, so a copy is refused for ninety days. A closing line.")
+UNWRAPPED = ("The crossing keeps a digest of each passage it delivered beside the receiving store, so a copy is refused "
+             "for ninety days.")
+
+
+def test_e5b_a_wrapped_delivered_sentence_copied_unwrapped_is_refused(tmp_path):
+    path = rd.path_for(tmp_path / "graph.db")
+    assert len(UNWRAPPED.split()) == 22 and all(len(part.split()) < 12 for part in rd.sentences(WRAPPED))
+    rd.record(path, delivered(WRAPPED), now=NOW)
+    assert rd.refused(path, [UNWRAPPED], now=NOW)
+    assert rd.refused(path, ["My notes say: " + "x. " + UNWRAPPED], now=NOW)
+
+
+def test_an_unwrapped_delivered_sentence_copied_wrapped_is_refused(tmp_path):
+    path = rd.path_for(tmp_path / "graph.db")
+    rd.record(path, delivered("An opening line. " + UNWRAPPED + " A closing line."), now=NOW)
+    copy = "My first note. " + UNWRAPPED.replace(" beside ", " beside\n") + " My last note."
+    assert rd.refused(path, [copy], now=NOW)
