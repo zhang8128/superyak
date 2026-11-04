@@ -188,11 +188,18 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
-        expect(page.get_by_text("Free, open-source and self-hosted: this home runs on a computer its owner keeps.", exact=False)).to_be_visible()
+        expect(page.get_by_text("Free, open-source and self-hosted: this home runs where its owner put it, not on a Superyak service.", exact=False)).to_be_visible()
         # The second cold walk: "Write privately" beside "its owner can read" read as private from the owner too, and
         # "home" was never said to be anything. "version" of what, it asked as well.
         expect(page.get_by_text("A home is a small server someone runs for the people they invite.", exact=False)).to_be_visible()
-        expect(page.get_by_text("Keep notes only you and this home's owner can read", exact=False)).to_be_visible()
+        # Its reader: "only" was a guarantee nothing makes. The words are in clear on disk, so whoever runs the machine,
+        # and any AI agent they run on it, can read them. So each clause here says what's true, and each is pinned.
+        words = page.locator("main").inner_text()
+        assert "Keep notes no other account can open until you share them" in words
+        assert "make public only what you choose." in words
+        assert "Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer." in words
+        assert "Room messages go to every member: an AI agent's copy goes on to its AI company" in words
+        assert "only you" not in words.lower()
         assert "write privately" not in page.locator("main").inner_text().lower()
         assert "the version you mean" not in page.locator("main").inner_text().lower()
         assert "personal home" not in page.locator("main").inner_text().lower()  # personal to whom, it asked
@@ -203,6 +210,37 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     with urlopen(browser_peer["base_url"] + "/") as response:
         shell = response.read().decode()
     assert "Opening your home" not in shell and "Opening this home" in shell
+
+
+def test_the_sign_in_pages_tile_shows_and_its_help_clears_the_button(browser_peer):
+    """The second cold walk: the S tile vanished on the dark panel, and `.login-panel > p` outranked `.login-help`."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+        style = "e => getComputedStyle(e).%s"
+        tile, panel = page.locator(".login-story .brand-mark"), page.locator(".login-story")
+        assert tile.evaluate(style % "backgroundColor") != panel.evaluate(style % "backgroundColor")
+        assert page.locator(".login-panel > .login-help").first.evaluate(style % "marginTop") == "16px"
+
+
+def test_on_a_phone_the_sign_in_form_is_on_the_first_screen_with_who_can_read(browser_peer):
+    """The page's words grew past a screen, and a returning person shouldn't scroll for the form. Who can read stays
+    in front of the password there, and nothing overflows."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 390, "height": 844})
+        try:
+            page = context.new_page()
+            page.goto(browser_peer["base_url"] + "/")
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            box = page.locator("#password").bounding_box()
+            assert box["y"] + box["height"] < 844
+            help_line = page.get_by_text("This home is run by its owner, who can read what's stored here.", exact=True)
+            assert help_line.bounding_box()["y"] < 844
+            assert page.evaluate("document.documentElement.scrollWidth") == 390
+        finally:
+            context.close()
+            browser.close()
 
 
 def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(browser_peer):
@@ -241,7 +279,9 @@ def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
             expect(shell.get_by_text(ABOUT, exact=False)).to_be_visible()
             # The second cold walk: "Opening this home…" alone looked stuck, with no way to tell what to do next. Read as
             # inner text, since Playwright's text locators and aria snapshot skip <noscript>, which this browser does show.
+            assert "This page can't finish opening without JavaScript, and signing in needs it." in shell.locator("body").inner_text()
             assert "Ask the person who runs this home for an invitation." in shell.locator("body").inner_text()
+            assert shell.locator(".loading-page noscript p").evaluate("p => getComputedStyle(p).paddingLeft") == "16px"
             expect(shell.get_by_role("link", name="What is Superyak?")).to_have_attribute(
                 "href", "https://github.com/zhang8128/superyak#readme")
         finally:
