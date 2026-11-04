@@ -1,6 +1,6 @@
 # Rotating the connector's key
 
-Revision 3, 2026-11-04, Serenity, folding in a fresh reviewer's APPROVE WITH CHANGES on revision 2. Law section 3: a fresh
+Revision 3, 2026-11-04, Serenity, approved: a fresh reviewer's APPROVE WITH CHANGES on revision 2, then APPROVE on this one. Law section 3: a fresh
 reader approves; Andy can veto. From 9a's review, N2: "Key rotation has no command. You delete the row and restart, and a
 running process keeps the old key." Draft 1 (32a52cff, 2026-10-30) was never reviewed. Verdicts:
 `docs/superpowers/reviews/2026-11-04-connector-key-rotation-review.md`.
@@ -68,9 +68,10 @@ do").
 7. **A bad key row stops being silent.** `_ensure_connector_key` runs `bytes.fromhex` on whatever is in the row, with no
    check. On main, a row that isn't hex stops every `Store(...)`, so the whole station won't start, with a bare `ValueError`.
    A short hex value such as `deadbeef` is taken as a 4-byte key, silently. It now takes only 64 hex characters, the test
-   `backups.py` already applies. Anything else raises an error naming this command, and the station stays down until
-   someone runs it. It doesn't mint a new key by itself: a bad row means something unexpected wrote to the store, and a
-   person should see that.
+   `backups.py` already applies. No row at all still makes a new key silently, as at a first start. Any other value raises
+   an error naming this command, and the station stays down until someone runs it. It doesn't mint a new key by itself: a
+   bad row means something unexpected wrote to the store, and a person should see that. A restore differs on purpose: it
+   has no person in the loop, and both of its paths leave a valid key before any `Store` opens that copy (re-check, 2).
 8. **Restore needs no change.** `_keep_connector_key_like_replaced` already keeps the replaced file's key when it differs, so
    restoring a copy from before a rotation doesn't bring the old key back. A test holds that against this command.
 9. **The runbook line:** stop the station's units (as `station-journal`'s step does), rotate, start them again.
