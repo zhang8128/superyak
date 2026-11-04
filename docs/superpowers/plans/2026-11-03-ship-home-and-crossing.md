@@ -985,7 +985,8 @@ closed: P10 refuses remote frames outside `enforce`, and `_requester_ok` refuses
      never `enforce` (`permission_ledger.py:2139-2151`);
    - every served house needs migration 029, or `enforce` serves it nothing (`lighthouse_daemon.py:375-381`,
      :859-863). Rio Grande checks each house read-only first.
-4. **The publisher's settings.** After Andy's yes in the room, Rio Grande writes on the Pi:
+4. **The publisher's settings.** Rio Grande writes on the Pi, with no yes asked first (Andy, 2026-11-04: "you should not
+   need this from me"): these are ship-side settings, and step 5 shows him the grant before anything takes effect:
    - **(section 2 review S5) Before this and any later `grant-remote`:** `shares` for that house, run by the
      publishing ship, shows no item with `refused_now`. Placements made before migration 030 stay served until
      unshared, and the daemon has no captured check, so a captured memory placed before then would cross. Any such
