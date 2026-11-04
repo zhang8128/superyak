@@ -9,7 +9,8 @@ Settings live in crossings.toml in the peer data directory (P2), read per reques
 of this peer to the daemon publisher serving its house, and `[[hosted]]` names the stores this home hosts (P19's
 interim, until the store host lands)."""
 import collections
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+import fcntl
 import http.client
 import json
 import logging
@@ -17,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import socketserver
 import sqlite3
 import stat
 import threading
@@ -419,3 +421,202 @@ def ask(federation, raw):
     except ValueError:
         return _no('BAD_ANSWER')
     return {'ok': True, 'frame': answer['frame']}
+
+
+SOCKET_FILE, LOCK_FILE = 'crossing.sock', 'crossing.lock'
+LOCK_HELD = 'another process already serves crossing.sock'
+RESTART_SECONDS = 1.0
+UNIX_PATH_MAX = 107  # sun_path's bytes, less its terminating NUL
+
+
+def crossing_lock(data_dir):
+    """Plan P9 and S3: one owner of crossing.sock per data directory, as federation_lock is one syncing process. An
+    flock on crossing.lock, opened O_NOFOLLOW at 0600 and taken LOCK_NB, held until the returned descriptor closes. A
+    second holder gets ValueError(LOCK_HELD)."""
+    fd = os.open(os.path.join(data_dir, LOCK_FILE),
+                 os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise ValueError(LOCK_HELD) from None
+    return fd
+
+
+def lock_held(data_dir):
+    """Whether a process holds crossing.lock now (for `crossings`): taken and let go at once when it is free."""
+    try:
+        os.close(crossing_lock(data_dir))
+        return False
+    except ValueError:
+        return True
+    except OSError:
+        return False
+
+
+class _Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        self.connection.settimeout(10)
+        raw = self.rfile.readline(LOCAL_REQUEST_MAX + 2)
+        if not raw.endswith(b'\n') or len(raw) > LOCAL_REQUEST_MAX + 1:
+            reply = _no('BAD_REQUEST')
+        else:
+            reply = ask(self.server.federation, raw[:-1])
+        self.wfile.write(canonical(reply) + b'\n')
+
+
+class _Server(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        log.error('crossing.sock: a request failed', exc_info=True)
+
+
+class CrossingSocket:
+    """Plan P9: crossing.sock in the peer data directory, mode 0600, served by a ThreadingUnixStreamServer that a
+    supervisor thread runs. A fault in the server is logged and it is bound again after RESTART_SECONDS; a handler's
+    fault is logged and ends only its own request. It shares only the Federation, and never raises into the process
+    that started it. Only crossing.lock's holder binds, or unlinks a stale crossing.sock, so no process takes over a
+    live one (S3)."""
+
+    def __init__(self, federation):
+        self.federation = federation
+        self.data_dir = Path(federation.store.data_dir)
+        self.path = self.data_dir / SOCKET_FILE
+        self._server, self._thread, self._lock_fd = None, None, None
+        self._stopping = threading.Event()
+
+    @property
+    def serving(self):
+        return self._server is not None and self.path.exists()
+
+    def start(self):
+        """Take crossing.lock (ValueError(LOCK_HELD) when another process holds it), then serve on a supervisor
+        thread. A symlinked crossing.sock, or a path too long for a Unix socket, is refused with ValueError."""
+        if len(os.fsencode(str(self.path))) > UNIX_PATH_MAX:
+            raise ValueError(f'{self.path} is too long for a Unix socket')
+        self._lock_fd = crossing_lock(self.data_dir)
+        if self.path.is_symlink():
+            os.close(self._lock_fd)
+            self._lock_fd = None
+            raise ValueError(f'{self.path} is a symlink; it is never replaced')
+        self._thread = threading.Thread(target=self._supervise, name='crossing-socket', daemon=True)
+        self._thread.start()
+        return self
+
+    def _bind(self):
+        if self.path.is_symlink():
+            raise ValueError(f'{self.path} became a symlink')
+        try:
+            self.path.unlink()  # stale: this process holds crossing.lock, so nobody else serves it
+        except FileNotFoundError:
+            pass
+        previous = os.umask(0o177)
+        try:
+            server = _Server(str(self.path), _Handler)
+        finally:
+            os.umask(previous)
+        os.chmod(self.path, 0o600, follow_symlinks=False)
+        server.federation = self.federation
+        return server
+
+    def _supervise(self):
+        while not self._stopping.is_set():
+            server = None
+            try:
+                server = self._bind()
+                self._server = server
+                if self._stopping.is_set():
+                    break
+                server.serve_forever(poll_interval=0.2)
+            except Exception:  # noqa: BLE001 - a fault in the socket never ends the process (spec 2.1)
+                log.exception('crossing.sock failed; it restarts in %s s', RESTART_SECONDS)
+            finally:
+                self._server = None
+                if server is not None:
+                    server.server_close()
+            if not self._stopping.is_set():
+                self._stopping.wait(RESTART_SECONDS)
+
+    def stop(self):
+        self._stopping.set()
+        server = self._server
+        if server is not None:
+            server.shutdown()
+        if self._thread is not None:
+            self._thread.join(10)
+        try:
+            if not self.path.is_symlink():
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+        if self._lock_fd is not None:
+            os.close(self._lock_fd)
+            self._lock_fd = None
+
+
+def start_crossing_socket(federation):
+    """The commands' way in (federate and federation-listen --crossing-socket, P9 and the plan re-check's item 4): the
+    started CrossingSocket, or None, logged, when it can't start, as when another process holds crossing.lock. The
+    process runs on without it, so its events, pulls and pushes are never stopped by the socket."""
+    try:
+        return CrossingSocket(federation).start()
+    except (ValueError, OSError) as error:
+        log.warning('crossing.sock not opened, so this process asks no crossings: %s', error)
+        return None
+
+
+def report(store):
+    """`crossings` (P18): recent `crossings` rows, then, for each [[published]] sidecar opened read-only, every
+    disclosure to a remote ref with no `crossings` row: the daemon recorded it and no answer was sent. Read-only."""
+    lines = [f'crossing.sock: {"served by a running process" if lock_held(store.data_dir) else "not served here"}']
+    with store.reading() as db:
+        rows = db.execute('SELECT * FROM crossings ORDER BY at DESC, disclosure_id LIMIT 50').fetchall()
+        sent = {r[0] for r in db.execute('SELECT disclosure_id FROM crossings')}
+    lines.append('Recent crossings (newest first):')
+    lines += [f'  {r["at"]} {r["disclosure_id"]} from {r["origin_peer"][:12]} as {r["receiver_ref"]}' for r in rows] \
+        or ['  none']
+    lines.append('Unsent (the daemon recorded a disclosure to a remote store, and no crossings row says it was sent):')
+    try:
+        settings = load_settings(store.data_dir)
+    except SettingsInvalid as error:
+        return lines + [f'  crossings.toml cannot be used: {error}']
+    found = False
+    for house in settings['published']:
+        try:
+            with closing(sqlite3.connect(f'file:{house["sidecar"]}?mode=ro', uri=True)) as sidecar:
+                rows = sidecar.execute("SELECT id, at, receiver, action FROM disclosures WHERE receiver LIKE "
+                                       "'urn:superyak:%' ORDER BY at").fetchall()
+        except sqlite3.Error as error:
+            lines.append(f'  {house["publisher"]}: its sidecar {house["sidecar"]} cannot be read ({error}), so this '
+                         'list may be short')
+            continue
+        for key, at, receiver, action in rows:
+            if key not in sent:
+                found = True
+                lines.append(f'  {house["publisher"]} {key} {action} at {at} for {receiver}')
+    if not found:
+        lines.append('  none found')
+    return lines
+
+
+def contact_report(store, peer_id):
+    """`crossings --contacts PEER_ID` (nit 6): each contact from that peer, by name and participant id, and whether
+    check 5 accepts it, by contact_current, the rule `serve` uses. It prints no pairing code."""
+    from .federation import contact_current
+    from .owner_trust import code_current
+    lines = [f'Contacts from {peer_id[:12]} as check 5 reads them:']
+    with store.reading() as db:
+        contacts = db.execute('SELECT c.id, c.user_id, c.name, p.paired, '
+                              'EXISTS(SELECT 1 FROM contact_holds h WHERE h.contact_id=c.id) AS held '
+                              'FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.peer_id=? ORDER BY c.name',
+                              (peer_id,)).fetchall()
+        for row in contacts:
+            if contact_current(db, peer_id, row['user_id']) is not None:
+                verdict = 'accepted'
+            else:
+                why = [w for w, bad in (('peer unpaired', not row['paired']), ('held', row['held']),
+                                        ('no current typed code', not code_current(db, row['id']))) if bad]
+                verdict = f'refused ({", ".join(why)})'
+            lines.append(f'  {row["name"]} ({row["user_id"]}): {verdict}')
+    return lines + ([] if contacts else ['  none'])
