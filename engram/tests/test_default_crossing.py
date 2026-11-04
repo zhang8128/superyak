@@ -192,6 +192,47 @@ def test_bounded_read_keeps_its_contract(tmp_path):
         bounded_read(tmp_path / "absent", 8)
 
 
+def test_bounded_read_refuses_a_fifo_for_what_it_is_even_with_valid_text_waiting(tmp_path):
+    path = tmp_path / "f"
+    os.mkfifo(path)
+    writer = os.open(path, os.O_RDWR)
+    try:
+        os.write(writer, b"enabled = true\n")
+        with pytest.raises(ValueError, match="NOT_A_REGULAR_FILE"):
+            bounded_read(path, 64)
+    finally:
+        os.close(writer)
+
+
+def test_bounded_read_closes_what_it_opened_when_it_refuses(tmp_path, monkeypatch):
+    path = tmp_path / "f"
+    os.mkfifo(path)
+    opened, closed = [], []
+    real_open, real_close = os.open, os.close
+    monkeypatch.setattr(os, "open", lambda *a, **kw: opened.append(real_open(*a, **kw)) or opened[-1])
+    monkeypatch.setattr(os, "close", lambda fd: (closed.append(fd), real_close(fd))[1])
+    with pytest.raises(ValueError):
+        bounded_read(path, 64)
+    assert opened and closed == opened
+
+
+def test_bounded_read_stops_at_its_cap_and_survives_a_short_read(tmp_path, monkeypatch):
+    path = tmp_path / "f"
+    path.write_bytes(b"x" * 100)
+    returned = []
+    real_read = os.read
+
+    def one_at_a_time(fd, n):
+        returned.append(real_read(fd, min(n, 1)))
+        return returned[-1]
+    monkeypatch.setattr(os, "read", one_at_a_time)
+    assert bounded_read(path, 200) == b"x" * 100
+    returned.clear()
+    with pytest.raises(ValueError, match="INPUT_TOO_LARGE"):
+        bounded_read(path, 10)
+    assert len(b"".join(returned)) == 11, "cap plus one, so a huge file is never read whole"
+
+
 def test_too_big_a_toml_says_so(tmp_path, monkeypatch):
     calls = recording_arm(monkeypatch)
     instance, storage = receiver(tmp_path)

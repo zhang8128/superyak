@@ -23,7 +23,7 @@ def bounded_read(path, cap):
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("NOT_A_REGULAR_FILE")
         data = b""
-        while len(data) <= cap and (chunk := os.read(fd, cap + 1 - len(data))):
+        while chunk := os.read(fd, cap + 1 - len(data)):
             data += chunk
     finally:
         os.close(fd)
