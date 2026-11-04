@@ -26,8 +26,6 @@ def _replace_key(database, clock, busy_seconds):
                                      isolation_level=None)) as db:
             db.execute('BEGIN IMMEDIATE')
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if 'system_meta' not in tables:
-                raise ValueError(f'{database} holds no system_meta table, so it is no station store; nothing was changed')
             row = db.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone()
             key_was = 'absent' if row is None else 'good' if key_is_good(row[0]) else 'bad'
             db.execute('INSERT OR REPLACE INTO system_meta VALUES(?, ?)', (KEY_NAME, secrets.token_hex(32)))
@@ -53,7 +51,7 @@ def rotate(data_dir, *, end_connections=False, active=None, clock=time.time, bus
     with DispatchGate(Path(data_dir).absolute() / 'dispatch.lock'):
         found = _replace_key(database, clock, busy_seconds)
     ended = 0
-    if end_connections and found['live']:
+    if end_connections:
         from .db import Store                # only now: the key it reads at its start has just been made good
         store = Store(Path(data_dir), clock=clock)
         try:
@@ -71,5 +69,5 @@ def report_lines(report, *, end_connections):
              f'Pending sign-ins removed: {report["pending_removed"]}']
     if end_connections:
         return [*lines, f'Connections ended: {report["connections_ended"]}']
-    return [*lines, f'{report["connections_kept"]} connections stay. If more than this key may have left, run it again '
+    return [*lines, f'Connections kept: {report["connections_kept"]}. If more than this key may have left, run it again '
                     'with --end-connections.']

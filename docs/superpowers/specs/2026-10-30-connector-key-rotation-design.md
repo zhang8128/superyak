@@ -63,7 +63,7 @@ do").
    connector key was changed, so this connection ended. Connect again if you still want it." That is a new `APP_ENDED`
    entry.
 6. **It prints counts only:** pending sign-ins removed, connections kept or ended, and with the default, one line that says
-   what it did not do: "N connections stay. If more than this key may have left, run it again with --end-connections." It
+   what it did not do: "Connections kept: N. If more than this key may have left, run it again with --end-connections." It
    never prints the key.
 7. **A bad key row stops being silent.** `_ensure_connector_key` runs `bytes.fromhex` on whatever is in the row, with no
    check. On main, a row that isn't hex stops every `Store(...)`, so the whole station won't start, with a bare `ValueError`.

@@ -4,6 +4,7 @@ A process holds the key in memory, so each test's "restart" is a new app on the 
 station's units do after the command has run with them stopped."""
 import re
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,6 +85,26 @@ def test_it_uses_the_stations_own_check_by_default(home, monkeypatch):
         key_rotation.rotate(data_dir(home))
 
 
+def test_it_holds_the_dispatch_gate_while_it_writes(home, monkeypatch):
+    """So it waits out a command already in the store, and no writer starts in the middle of it."""
+    events = []
+
+    class Gate:
+        def __init__(self, path):
+            assert Path(path) == data_dir(home).absolute() / 'dispatch.lock'
+
+        def __enter__(self):
+            events.append('entered')
+
+        def __exit__(self, *exc):
+            events.append('left')
+    real = key_rotation._replace_key
+    monkeypatch.setattr(key_rotation, 'DispatchGate', Gate)
+    monkeypatch.setattr(key_rotation, '_replace_key', lambda *a: (events.append('wrote'), real(*a))[1])
+    rotate(home)
+    assert events == ['entered', 'wrote', 'left']
+
+
 def test_a_store_held_locked_changes_nothing_and_says_so(home):
     before = meta(home)
     holder = raw(home)
@@ -98,7 +119,7 @@ def test_a_store_held_locked_changes_nothing_and_says_so(home):
 
 
 def test_it_makes_no_store_where_none_is(tmp_path):
-    with pytest.raises(ValueError, match='no station database'):
+    with pytest.raises(ValueError, match='no station database.*station-connector-rotate-key never makes one'):
         key_rotation.rotate(tmp_path / 'nowhere', active=lambda: [])
     assert not (tmp_path / 'nowhere').exists()
 
@@ -193,6 +214,21 @@ def test_a_connection_past_its_end_date_keeps_its_reason_and_isnt_counted_kept(c
     assert entry['ended']['why'] == 'ended'
 
 
+def test_a_connection_someone_revoked_isnt_counted_kept(connected):
+    [entry] = app_entries(connected, connected.person['id'])
+    connected.store.connected_app_revoke(connected.person['id'], entry['id'])
+    assert rotate(connected)['connections_kept'] == 0
+
+
+def test_a_connection_with_a_damaged_end_isnt_counted_kept_and_keeps_its_reason(connected):
+    with raw(connected) as db:
+        db.execute("UPDATE connector_grants SET ends='not a time'")
+    assert rotate(connected)['connections_kept'] == 0
+    assert rotate(connected, end_connections=True)['connections_ended'] == 0
+    [entry] = app_entries(restarted(connected), connected.person['id'])
+    assert entry['ended']['why'] == 'damaged'
+
+
 def test_a_second_run_is_harmless(connected):
     rotate(connected, end_connections=True)
     report = rotate(connected, end_connections=True)
@@ -216,6 +252,14 @@ def test_a_store_wont_start_on_a_bad_key_and_names_the_command(home, value):
     with pytest.raises(ValueError, match='make station-connector-rotate-key') as refused:
         Store(data_dir(home))
     assert value == '' or value not in str(refused.value), 'never the value'
+
+
+def test_a_key_row_that_isnt_even_text_is_refused_the_same_way_and_the_command_fixes_it(home):
+    set_key(home, b'\xaa' * 32)
+    with pytest.raises(ValueError, match='make station-connector-rotate-key'):
+        Store(data_dir(home))
+    assert rotate(home)['key_was'] == 'bad'
+    Store(data_dir(home))
 
 
 def test_a_store_with_no_key_row_still_makes_one_silently(home):
@@ -266,9 +310,11 @@ def test_a_store_from_before_the_connector_has_no_pending_rows_to_remove(home):
 
 # ---------------------------------------------------------------- what it says, and restore
 
-@pytest.mark.parametrize('flag, expected', [([], 'stay'), (['--end-connections'], 'ended')])
+@pytest.mark.parametrize('flag, expected', [([], 'Connections kept: 1.'), (['--end-connections'], 'Connections ended: 1')])
 def test_the_command_prints_counts_and_never_a_key(connected, monkeypatch, capsys, caplog, flag, expected):
     old = meta(connected)[KEY_NAME]
+    with raw(connected) as db:          # the command runs on the real clock, and this home's is in 1970
+        db.execute('UPDATE connector_grants SET ends=?', (time.time() + 86400,))
     monkeypatch.setattr(key_rotation, 'units_active', lambda: [])
     main(['station-connector-rotate-key', '--data-dir', str(data_dir(connected)), *flag])
     new = meta(connected)[KEY_NAME]

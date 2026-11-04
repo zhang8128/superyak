@@ -411,4 +411,4 @@ station that won't start because "This store's connector key is not 64 hex chara
    why, and each person connects again.
 4. **Start the units again.**
 
-A restore from before a rotation doesn't bring the old key back: the replaced file's key is kept when the two differ (step 6).
+A restore from before a rotation doesn't bring the old key back: the replaced file's key is kept when the two differ (step 5).
