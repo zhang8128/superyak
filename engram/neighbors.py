@@ -35,7 +35,8 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
 
     ``now`` is an injectable clock, never a wire-supplied authorization time.
     A recall grant denied for every publisher returns an empty result naming each publisher's decision code
-    (the top code when they share one, else RECEIVER_RULES_DENIED); other failures return diagnostics.
+    (the top code when they share one, else RECEIVER_RULES_DENIED). `diagnostics[0]` is the top-level code;
+    the per-publisher entries follow it; other failures return diagnostics.
     """
     import math
     if (not isinstance(receiver, str) or not NAME.fullmatch(receiver)

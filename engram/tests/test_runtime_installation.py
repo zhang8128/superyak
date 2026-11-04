@@ -980,3 +980,35 @@ def test_status_has_no_warning_for_a_rule_ending_in_30_days(tmp_path):
     assert result.returncode == 0
     assert status["ok"] is True
     assert "warnings" not in status
+
+
+def test_status_fails_closed_on_an_unreadable_validity_bound(tmp_path):
+    rule = dict(_rule_window(-30, 30), validUntil="not-a-date")
+    result, status = _status_with_rule(tmp_path, "publisher", rule)
+    assert result.returncode != 0
+    assert status["ok"] is False
+    assert any("rule window-rule has an unreadable validity bound" in e for e in status["errors"])
+    assert any("every rule is outside its validity window" in e for e in status["errors"])
+
+
+def test_status_warns_of_an_already_ended_sibling_rule(tmp_path):
+    _, launcher, memory_home, config, socket_path = _healthy_status_tree(tmp_path)
+    path = memory_home / ".engram" / "instances" / "lighthouse" / "lighthouse-policy.json"
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    artifact["payload"]["rules"] = [
+        dict(_rule_window(-30, 60), id="live-rule"),
+        dict(_rule_window(-90, -5), id="old-rule"),
+    ]
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    try:
+        result = _run_launcher(launcher, config, "status")
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+    status = json.loads(result.stdout)
+    assert result.returncode == 0 and status["ok"] is True
+    assert len(status["warnings"]) == 1
+    assert status["warnings"][0].startswith("publisher lighthouse rule old-rule ended 20")

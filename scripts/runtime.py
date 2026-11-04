@@ -123,6 +123,7 @@ def _rfc3339(value) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
+        # Python 3.11 or newer (the venv is 3.14): fromisoformat takes any fractional seconds and "Z".
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
@@ -148,8 +149,19 @@ def _policy_validity(
             continue
         start = _rfc3339(rule.get("validFrom"))
         end = _rfc3339(rule.get("validUntil"))
+        if (rule.get("validFrom") is not None and start is None) or (
+            rule.get("validUntil") is not None and end is None
+        ):
+            errors.append(
+                f"{label} rule {rule.get('id')} has an unreadable validity bound"
+            )
+            continue
         if end is not None and (last_end is None or end > last_end):
             last_end = end
+        if end is not None and end <= now:
+            warnings.append(
+                f"{label} rule {rule.get('id')} ended {end.date().isoformat()}"
+            )
         if (start is None or start <= now) and (end is None or now < end):
             valid_now += 1
             if end is not None and end - now <= timedelta(days=EXPIRY_WARNING_DAYS):
