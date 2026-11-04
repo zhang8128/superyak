@@ -5,3 +5,11 @@
 -- none was. It never goes down. No default: every row made before this migration reads NULL, meaning unknown, and
 -- share refuses it.
 ALTER TABLE semantics ADD COLUMN touched_capture INTEGER CHECK (touched_capture IN (0, 1));
+
+-- Every link to a capture raises the mark, whichever code writes the link: a server still running code from before
+-- this migration, or a future link path. The writers still mark the cluster episodes they never link.
+CREATE TRIGGER IF NOT EXISTS semantic_sources_mark_capture AFTER INSERT ON semantic_sources
+WHEN EXISTS (SELECT 1 FROM episodes WHERE id = NEW.episode_id AND source = 'auto')
+BEGIN
+    UPDATE semantics SET touched_capture = 1 WHERE id = NEW.semantic_id;
+END;

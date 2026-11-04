@@ -573,8 +573,10 @@ class Compressor:
                     source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
                     lane=lane,
-                    # the summary may draw on any episode of the cluster, linked or not: the capture mark sees them all
+                    # the summary may draw on any episode of the cluster, linked or not, and on the match whose
+                    # content compress showed the model: the capture mark sees them all
                     cluster_episode_ids=all_episode_ids,
+                    inherited_mark=self._inherited_capture_mark(cluster),
                 )
                 semantics_created += 1
                 # Track sibling semantics from the same split_group
@@ -1395,6 +1397,34 @@ class Compressor:
             logger.debug("Semantic vector search failed (table may be empty)")
 
         return "new", None, None
+
+    def _inherited_capture_mark(self, cluster: dict) -> int | None:
+        """The capture mark (migration 030) a "new" semantic for ``cluster`` starts from, before ``add_semantic``
+        looks the cluster's episodes up in the store, which can only raise it to 1. The order is 1 over None
+        (unknown) over 0, so a restatement can't launder a mark:
+        - 1 when the cluster state records an episode's source as 'auto' (even one another session deleted since),
+          or the cluster's match is marked 1. compress shows the model the match's content, whichever way the
+          summary reaches "new": the model's choice, the lane-override fallback, or refine;
+        - None when the match's mark is NULL or the match is gone, or an episode is gone from the store and the
+          state records no source for it;
+        - otherwise 0."""
+        unknown = False
+        for ep in cluster.get("episodes") or []:
+            if "source" in ep:
+                if ep["source"] == "auto":
+                    return 1
+            elif self._storage.get_episode(ep["id"]) is None:
+                unknown = True
+        match = cluster.get("match")
+        match_id = match.get("id") if isinstance(match, dict) else None
+        if match_id:
+            row = self._storage.conn.execute(
+                "SELECT touched_capture FROM semantics WHERE id = ?", (match_id,)).fetchone()
+            if row is None or row[0] is None:
+                unknown = True
+            elif row[0] != 0:
+                return 1
+        return None if unknown else 0
 
     def _filter_relevant_sources(
         self, episodes: list[dict], semantic_content: str,

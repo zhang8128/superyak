@@ -2189,6 +2189,120 @@ def test_the_cross_link_pass_marks_a_semantic_it_links_to_a_capture(tmp_db, embe
     assert _mark(tmp_db, "sem-x") == 1
 
 
+def _refusal(tmp_db, tmp_path, sid):
+    """The words share refuses `sid` with."""
+    from sharing import CapturedRefused, share
+    house = Storage(str(tmp_path / "house.db"))
+    try:
+        with pytest.raises(CapturedRefused) as caught:
+            share(source_storage=tmp_db, published_storage=house, source_id=sid, layer="semantic",
+                  audience="commons", reason="r", source_instance="default")
+    finally:
+        house.close()
+    return str(caught.value)
+
+
+def _new_over_a_match(tmp_db, compressor, embedder, match_mark):
+    """Round 2, N1(a): a later chosen episode matches S1, and the model answers "new", restating S1 from the match's
+    content that compress showed it. S1 links only a chosen episode; its mark is `match_mark` (1: a capture was in
+    its cluster, unlinked). Returns S2's id."""
+    chosen = _add_sourced(tmp_db, embedder, "match: a remembered note", "remember", _unit(12))
+    tmp_db.mark_episodes_compressed([chosen])
+    tmp_db.add_semantic("s1", "what the person said, distilled", "fact", 0.7, _unit(12), [chosen])
+    tmp_db.conn.execute("UPDATE semantics SET touched_capture = ? WHERE id = 's1'", (match_mark,))
+    tmp_db.conn.commit()
+    later = _add_sourced(tmp_db, embedder, "match: a later remembered note", "remember", _unit(12))
+    result = compressor.cluster_episodes()
+    (cluster,) = result["clusters"]
+    assert [ep["id"] for ep in cluster["episodes"]] == [later]
+    assert cluster["match"]["id"] == "s1" and cluster["match"]["content"] == "what the person said, distilled"
+    compressor.commit(result["compress_id"],
+                      [{"content": "what the person said, restated", "kind": "fact", "action": "new"}])
+    (s2,) = [s["id"] for s in tmp_db.get_active_semantics() if s["id"] != "s1"]
+    assert tmp_db.get_semantic(s2)["source_episode_ids"] == [later]
+    assert tmp_db.get_semantic(s2)["auto_generated"] == 0
+    return s2
+
+
+def test_a_new_summary_over_a_marked_match_takes_the_matchs_mark(tmp_db, compressor, embedder, tmp_path):
+    s2 = _new_over_a_match(tmp_db, compressor, embedder, 1)
+    assert _mark(tmp_db, s2) == 1
+    assert "was built from or reinforced by a captured prompt" in _refusal(tmp_db, tmp_path, s2)
+
+
+def test_a_new_summary_over_a_match_whose_mark_is_unknown_stays_unknown(tmp_db, compressor, embedder, tmp_path):
+    s2 = _new_over_a_match(tmp_db, compressor, embedder, None)
+    assert _mark(tmp_db, s2) is None
+    assert "was made before Engram recorded whether a captured prompt went into it" in _refusal(tmp_db, tmp_path, s2)
+
+
+def test_a_new_summary_over_a_clean_match_is_clean(tmp_db, compressor, embedder):
+    assert _mark(tmp_db, _new_over_a_match(tmp_db, compressor, embedder, 0)) == 0
+
+
+def test_refine_over_an_auto_semantic_whose_capture_moved_to_cold_storage_keeps_its_mark(
+        tmp_db, compressor, embedder, tmp_path):
+    # Round 2, N1(b): the refine cluster holds only the chosen episode, but its match shows the capture's words.
+    chosen = _add_sourced(tmp_db, embedder, "refine: a remembered note", "remember", _unit(14))
+    captured = _add_sourced(tmp_db, embedder, "refine: a person's typed words", "auto", _unit(14))
+    tmp_db.add_semantic("auto-1", "refine: a remembered note --- refine: a person's typed words", "fact", 0.6,
+                        _unit(14), [chosen, captured], auto_generated=True)
+    assert _mark(tmp_db, "auto-1") == 1
+    assert tmp_db.prune_episode_ids([captured]) == 1
+    result = compressor.cluster_episodes(scope="refine")
+    (cluster,) = result["clusters"]
+    assert [ep["id"] for ep in cluster["episodes"]] == [chosen] and cluster["match"]["id"] == "auto-1"
+
+    compressor.commit(result["compress_id"],
+                      [{"content": "a person's typed words, put another way", "kind": "fact", "action": "new"}])
+
+    (new,) = [s["id"] for s in tmp_db.get_active_semantics() if s["id"] != "auto-1"]
+    assert tmp_db.get_semantic(new)["source_episode_ids"] == [chosen]
+    assert tmp_db.get_semantic(new)["auto_generated"] == 0 and _mark(tmp_db, new) == 1
+    assert "was built from or reinforced by a captured prompt" in _refusal(tmp_db, tmp_path, new)
+
+
+def _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, gone_source, *, record_source=True):
+    """Cluster a chosen episode with another episode, then delete that other one before the commit (as another
+    session's nudge deletes a weak capture). Returns the new semantic's id."""
+    kept = _add_sourced(tmp_db, embedder, "commit race: a remembered note", "remember", _unit(15))
+    gone = _add_sourced(tmp_db, embedder, "commit race: the episode that goes", gone_source, _unit(15))
+    if gone_source == "auto":
+        _log_recall(tmp_db, [gone], "used")
+    result = compressor.cluster_episodes()
+    (cluster,) = result["clusters"]
+    assert sorted(ep["id"] for ep in cluster["episodes"]) == sorted([kept, gone])
+    if not record_source:
+        for ep in cluster["episodes"]:
+            if ep["id"] == gone:
+                del ep["source"]
+    tmp_db.conn.execute("DELETE FROM episodes WHERE id = ?", (gone,))
+    tmp_db.conn.commit()
+    monkeypatch.setattr(compressor, "_filter_relevant_sources", lambda episodes, content: [kept])
+    compressor.commit(result["compress_id"], [{"content": "a summary of the race", "kind": "fact", "action": "new"}])
+    (sem,) = tmp_db.get_active_semantics()
+    assert tmp_db.get_semantic(sem["id"])["source_episode_ids"] == [kept]
+    return sem["id"]
+
+
+def test_a_capture_deleted_between_compress_and_commit_still_marks_the_new_semantic(
+        tmp_db, compressor, embedder, monkeypatch):
+    # The verdict's note: the store no longer has the capture, so the cluster state's own source decides.
+    assert _mark(tmp_db, _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, "auto")) == 1
+
+
+def test_an_episode_gone_at_commit_whose_source_the_state_does_not_record_leaves_the_mark_unknown(
+        tmp_db, compressor, embedder, monkeypatch):
+    sid = _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, "remember", record_source=False)
+    assert _mark(tmp_db, sid) is None
+
+
+def test_a_chosen_episode_gone_at_commit_whose_source_the_state_records_leaves_the_mark_clean(
+        tmp_db, compressor, embedder, monkeypatch):
+    # The state recorded a source that is not 'auto' (NULL here, as remember() writes): not a capture.
+    assert _mark(tmp_db, _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, None)) == 0
+
+
 def test_a_bad_auto_with_scope_full_raises_before_any_reset(tmp_db, compressor, embedder):
     """The check comes before `_reset_all()`, which deletes every semantic: a bad value must leave the store whole."""
     sem_id = str(uuid.uuid4())

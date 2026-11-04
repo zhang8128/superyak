@@ -1220,17 +1220,22 @@ class Storage:
         auto_generated: bool = False,
         lane: str = "personal",
         cluster_episode_ids: list[str] | None = None,
+        inherited_mark: int | None = 0,
     ) -> str:
         """Add a semantic linked to ``source_episode_ids``. ``cluster_episode_ids`` are every episode it was distilled
         from, linked or not (compression links only those similar to its summary). Its capture mark (migration 030)
-        is 1 when any id in either list is a captured prompt in this store, otherwise 0, written in the same
-        transaction as the row."""
+        starts at ``inherited_mark``, what the caller knows from outside this store's episodes (compression passes
+        the mark of the semantic it may restate: 1, None for unknown, or 0), and is raised to 1 when any id in either
+        list is a captured prompt in this store. The order is 1 over None over 0, written in the same transaction as
+        the row."""
+        if inherited_mark not in (0, 1, None):
+            raise ValueError(f"inherited_mark must be 0, 1 or None, not {inherited_mark!r}")
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
             "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane,"
-            " touched_capture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
-            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane),
+            " touched_capture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane, inherited_mark),
         )
         self.mark_touched_capture(id, [*(source_episode_ids or []), *(cluster_episode_ids or [])])
         self.conn.execute(

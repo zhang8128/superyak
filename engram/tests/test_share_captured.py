@@ -161,6 +161,43 @@ def test_030_adds_the_mark_with_no_default_so_a_semantic_made_before_reads_null_
     assert _share(src, pub, after, "semantic").source_id == after
 
 
+def test_a_link_to_a_capture_written_without_the_helper_raises_the_mark(tmp_path):
+    # Round 2, N2: a server still running code from before 030 links a capture without marking it. The trigger marks.
+    src, pub = _stores(tmp_path)
+    chosen, captured = _chosen(src), _capture(src)
+    sid = _semantic(src, "a fact", [chosen])
+    src.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
+                     (sid, _chosen(src, "a chosen note old code linked")))
+    src.conn.commit()
+    assert _mark(src, sid) == 0
+    src.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", (sid, captured))
+    src.conn.commit()
+    assert _mark(src, sid) == 1
+    assert src.prune_episode_ids([captured]) == 1                      # the link cascades away; the mark stays
+    with pytest.raises(CapturedRefused, match="was built from or reinforced by a captured prompt"):
+        _share(src, pub, sid, "semantic")
+
+
+def test_030_runs_again_harmlessly(tmp_path):
+    src, _ = _stores(tmp_path)
+    chosen, captured = _chosen(src), _capture(src)
+    clean, marked = _semantic(src, "clean", [chosen]), _semantic(src, "marked", [chosen, captured])
+    unknown = _semantic(src, "unknown", [chosen])
+    src.conn.execute("UPDATE semantics SET touched_capture = NULL WHERE id = ?", (unknown,))
+    src.conn.execute("DELETE FROM schema_version WHERE version = 30")
+    src.conn.commit()
+    src.close()
+
+    src = Storage(str(tmp_path / "src" / "graph.db"), migrations_dir=MIGRATIONS)   # the ALTER is skipped
+    assert src.conn.execute("SELECT COUNT(*) FROM schema_version WHERE version = 30").fetchone()[0] == 1
+    assert (_mark(src, clean), _mark(src, marked), _mark(src, unknown)) == (0, 1, None)
+    assert src.conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                            "AND name = 'semantic_sources_mark_capture'").fetchone()[0] == 1
+    src.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", (clean, captured))
+    src.conn.commit()
+    assert _mark(src, clean) == 1
+
+
 def test_add_semantic_marks_a_capture_among_its_sources_or_its_cluster(tmp_path):
     src, _ = _stores(tmp_path)
     chosen, captured = _chosen(src), _capture(src)

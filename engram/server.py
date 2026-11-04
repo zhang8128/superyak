@@ -2642,24 +2642,46 @@ def shares(audience: str | None = None) -> dict:
             )
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
-        return {"shares": [_listed_share(record) for record in records]}
+        return {"shares": _listed_shares(records)}
 
 
-def _listed_share(record) -> dict:
-    """A placement as `shares` lists it. A placement made before share refused captured prompts stays served until it
-    is unshared, so one from this server's instance whose source row is still here and would now be refused carries
-    `refused_now`, the refusal's words, for the owner to unshare (fix:share-refuses-captured-memories)."""
+def _listed_shares(records) -> list[dict]:
+    """The placements as `shares` lists them. A placement made before share refused captured prompts stays served
+    until it is unshared, so each one from this server's instance that would now be refused carries `refused_now`,
+    for the owner to unshare (fix:share-refuses-captured-memories). The capture digests of the store and its cold
+    storage are read once per call, not once per placement."""
+    from sharing import capture_digests
+    here = _instance_name or "default"
+    mine = [r.source_instance == here and r.layer in ("episode", "semantic") for r in records]
+    captures = capture_digests(_storage) if any(mine) else frozenset()
+    listed = []
+    for record, own in zip(records, mine):
+        item = asdict(record)
+        refused = _refused_now(record, captures) if own else None
+        if refused is not None:
+            item["refused_now"] = refused
+        listed.append(item)
+    return listed
+
+
+def _refused_now(record, captures) -> str | None:
+    """Why a placement from this instance would be refused now, or None. When its source row is still here, the
+    words are share's own refusal. Whether or not the row is here (a capture soon moves to cold storage or is deleted
+    by the nudge), a placed text that is a capture's text word for word is named. `captures` is None when the store's
+    cold storage exists but cannot be read, and then every such placement is named, failing closed."""
     from sharing import captured_reason
-    item = asdict(record)
-    if record.source_instance != (_instance_name or "default") or record.layer not in ("episode", "semantic"):
-        return item
     getter = _storage.get_episode if record.layer == "episode" else _storage.get_semantic
     row = getter(record.source_id)
     if row is not None:
-        refused = captured_reason(_storage, record.layer, row)
+        refused = captured_reason(_storage, record.layer, row, captures=captures)
         if refused is not None:
-            item["refused_now"] = refused
-    return item
+            return refused
+    if captures is None:
+        return ("its store's cold storage cannot be read, so whether this placement's text is a captured prompt's "
+                "cannot be told; unshare it")
+    if record.content_digest in captures:
+        return "this placement's text is a captured prompt's, word for word; unshare it"
+    return None
 
 
 def _get_reading_gap_domains() -> list[str]:
