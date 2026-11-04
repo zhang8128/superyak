@@ -70,3 +70,17 @@ def test_share_tools_fail_without_creating_a_missing_published_house(
     assert server.unshare(share_id="missing") == error
     assert not path.exists()
     assert not path.parent.exists()
+
+
+def test_sharing_a_captured_prompt_is_an_error_and_places_nothing(engram_server_env, tmp_path):
+    # fix:share-refuses-captured-memories: the nudge's captures (source 'auto') are a person's typed words.
+    _published_house(tmp_path)
+    seed()
+    episode = server.remember(content="a prompt the nudge hook captured, typed by a person")
+    server._storage.conn.execute("UPDATE episodes SET source = 'auto' WHERE id = ?", (episode["episode_id"],))
+    server._storage.conn.commit()
+
+    out = server.share(memory_id=episode["episode_id"], audience="commons", reason="r")
+
+    assert "error" in out and "captured prompt" in out["error"]
+    assert server.shares()["shares"] == []

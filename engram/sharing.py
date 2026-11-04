@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import store_identity
 from lighthouse_protocol import content_digest
@@ -23,8 +25,90 @@ SHAREABLE_LAYERS = ("episode", "semantic")
 REASON_INVALID_AUDIENCE = "invalid_audience"
 REASON_INVALID_LAYER = "invalid_layer"
 INVALID_REASONS = (REASON_INVALID_AUDIENCE, REASON_INVALID_LAYER)
+CAPTURED_SOURCE = "auto"            # hooks/nudge.py stores a person's novel prompts verbatim with this source
 
 logger = logging.getLogger(__name__)
+
+
+class CapturedRefused(ValueError):
+    """A captured prompt, or knowledge built from one, is never shared: it is what a person typed, not what a ship
+    chose to remember."""
+
+
+def _cold_holds_capture(source_storage, digest: str) -> bool | None:
+    """Whether the store's cold storage holds a capture whose text has this digest, read-only. None when cold
+    storage exists but cannot be read. Never creates cold.db (Storage._cold_storage would)."""
+    conn = getattr(source_storage, "_cold_conn", None)
+    opened = None
+    try:
+        if conn is None:
+            db_path = getattr(source_storage, "db_path", None)
+            if not db_path or db_path == ":memory:" or not Path(db_path).is_file():
+                return False
+            cold = Path(db_path).with_name("cold.db")
+            if not cold.is_file():
+                return False
+            conn = opened = sqlite3.connect(f"file:{cold}?mode=ro", uri=True)
+        return _holds_capture(conn, digest)
+    except sqlite3.Error:
+        return None
+    finally:
+        if opened is not None:
+            opened.close()
+
+
+def _holds_capture(conn, digest: str) -> bool:
+    return conn.execute("SELECT 1 FROM episodes WHERE source = ? AND content_hash = ? LIMIT 1",
+                        (CAPTURED_SOURCE, digest)).fetchone() is not None
+
+
+def captured_reason(source_storage, layer: str, row: dict) -> str | None:
+    """Why `row` must not be shared because it is, or may be built from, a captured prompt; None when it may be.
+
+    An episode is refused when its source is 'auto'. A semantic is shared only when its provenance is known and holds
+    no capture, so it is refused when:
+    - automatic compression wrote it (`auto_generated`), since its text is its episodes' own text;
+    - it has no source links: moving an episode to cold storage deletes its links (ON DELETE CASCADE), so nobody can
+      tell what it was built from;
+    - a link names an episode that is gone (the nudge hard-deletes weak captures without foreign keys, so the link
+      stays);
+    - a linked episode is a capture;
+    - its text is a capture's text word for word, in the store or in its cold storage.
+    A known limit: a model-written semantic that kept links to chosen episodes after a capture among its sources moved
+    to cold storage passes, since the cascade left no trace of that link."""
+    remedy = "remember what you mean to share, in your own words, and share that"
+    if layer == "episode":
+        if (row.get("source") or "") == CAPTURED_SOURCE:
+            return (f"episode {row['id']} is a captured prompt (source 'auto'): what a person typed, never shared; "
+                    f"{remedy}")
+        return None
+    if layer != "semantic":
+        return None
+    sid = row.get("id")
+    if row.get("auto_generated"):
+        return (f"semantic {sid} was written by automatic compression from its episodes' own text, which may be "
+                f"captured prompts; share the episodes you chose, or {remedy}")
+    ids = list(row.get("source_episode_ids") or [])
+    if not ids:
+        return (f"semantic {sid} has no source episodes left, so whether it was built from a captured prompt cannot "
+                f"be told; {remedy}")
+    placeholders = ", ".join("?" * len(ids))
+    found = {r[0]: r[1] for r in source_storage.conn.execute(
+        f"SELECT id, source FROM episodes WHERE id IN ({placeholders})", ids)}
+    for eid in ids:
+        if eid not in found:
+            return (f"semantic {sid}: its source episode {eid} is gone, so whether it was a captured prompt cannot "
+                    f"be told; {remedy}")
+        if (found[eid] or "") == CAPTURED_SOURCE:
+            return f"semantic {sid} is built from captured prompt {eid} (source 'auto'); {remedy}"
+    digest = content_digest(row.get("content", ""))["value"]
+    in_cold = _cold_holds_capture(source_storage, digest)
+    if in_cold is None:
+        return (f"semantic {sid}: its store's cold storage cannot be read, so whether its text is a captured "
+                f"prompt's cannot be told; {remedy}")
+    if in_cold or _holds_capture(source_storage.conn, digest):
+        return f"semantic {sid} is a captured prompt's text word for word; {remedy}"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +199,9 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
     row = getter(source_id)
     if row is None:
         raise ValueError(f"no {layer} {source_id!r} in the source instance")
+    refused = captured_reason(source_storage, layer, row)
+    if refused is not None:
+        raise CapturedRefused(refused)
 
     content = row.get("content", "")
     digest_value = content_digest(content)["value"]

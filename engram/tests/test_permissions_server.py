@@ -155,6 +155,16 @@ def test_u11_share_with_no_covering_allow_changes_nothing_and_returns_the_permit
     assert out["cli"].startswith("engram-permissions allow") and ledger_bytes() == before
 
 
+def test_a_captured_prompt_is_refused_before_any_allow_is_asked_for(enforce_server):
+    # fix:share-refuses-captured-memories: no needs-allow, no proposal, the ledger untouched.
+    server._storage.conn.execute("UPDATE episodes SET source = 'auto' WHERE id = ?", (M["other"],))
+    server._storage.conn.commit()
+    before = ledger_bytes()
+    out = server.share(memory_id=M["other"], audience="place:la-county/public-health", reason="r")
+    assert "captured prompt" in out["error"] and "status" not in out and "permit" not in out
+    assert ledger_bytes() == before and server.shares()["shares"] == []
+
+
 def test_needs_allow_cli_quotes_an_agent_supplied_reason(enforce_server):
     import shlex
     reason = "x'; touch /tmp/pwned; echo '"

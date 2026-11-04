@@ -107,6 +107,8 @@ def _semantic(store, sid, text):
     store.conn.execute(
         "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) "
         "VALUES (?, ?, 'fact', 0.5, ?, 0, 'h', 'personal')", (sid, text, CREATED))
+    # A chosen source episode: share refuses a semantic whose provenance is unknown (fix:share-refuses-captured).
+    store.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, 'c1')", (sid,))
     store.conn.commit()
 
 

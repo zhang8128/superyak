@@ -2301,6 +2301,12 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
     sid = _store_id()
     getter = _storage.get_episode if layer == "episode" else _storage.get_semantic
     row = getter(memory_id) if layer in ("episode", "semantic") else None
+    if row is not None:
+        # Before any allow is asked for: the owner is never asked to place a person's typed words.
+        from sharing import captured_reason
+        refused = captured_reason(_storage, layer, row)
+        if refused is not None:
+            return {"error": refused}
     try:
         led = Ledger.open(ENGRAM_HOME)
     except (LedgerUnreadable, FileNotFoundError) as exc:
