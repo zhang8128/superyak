@@ -30,7 +30,7 @@ def receiver(tmp_path, *lines, name="engram"):
     (instance / "graph.db").write_text("")
     (instance / "lighthouse-receiver.toml").write_text("\n".join((
         "enabled = true", 'publishers = ["why"]', 'socket_path = "s.sock"', 'policy_path = "policy.json"', *lines)) + "\n")
-    return instance, type("S", (), {"db_path": instance / "graph.db"})()
+    return instance, type("S", (), {"db_path": instance / "graph.db", "instance_identity": lambda self: {"instance_id": "i"}})()
 
 
 def recording_arm(monkeypatch):
@@ -179,7 +179,7 @@ def test_an_explicit_crossing_still_takes_every_setting(tmp_path, monkeypatch):
     _, storage = receiver(tmp_path)
     monkeypatch.setattr(neighbors, "load_settings", lambda path: settings_with_remotes())
     attach_explicit(tmp_path, storage)
-    assert set(REMOTE_SETTINGS) <= set(calls[0]) and calls[0]["timeout_s"] == 5.0
+    assert {"remote_publishers", "receiver_ship"} <= set(calls[0]) and calls[0]["timeout_s"] == 5.0
 
 
 def test_a_default_with_no_local_publisher_says_so_and_asks_nobody(tmp_path, monkeypatch):
