@@ -3755,7 +3755,8 @@ def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     Use action="discard" for junk clusters (no signal) — episodes are
     marked compressed but no semantic is created."""
     _init()
-    refused = _remote_refusal([x.get("content") for x in summaries if isinstance(x, dict)] if isinstance(summaries, list) else None)  # spec 2.5: on the raw arguments, before any write
+    refused = _remote_refusal(  # spec 2.5: on the raw arguments, before any write
+        [x.get("content") for x in summaries if isinstance(x, dict)] if isinstance(summaries, list) else None)
     if refused is not None:
         return refused
     logger.info("Tool called: compress_commit(compress_id=%s, summaries=%d)",
@@ -4036,7 +4037,8 @@ def assessment_report(
         notes: Anything else worth keeping.
     """
     _init()
-    refused = _remote_refusal(reached_for, missing, felt_absences, instinct_consistent_moments, notes)  # spec 2.5: on the raw arguments, before any write
+    refused = _remote_refusal(  # spec 2.5: on the raw arguments, before any write
+        reached_for, missing, felt_absences, instinct_consistent_moments, notes)
     if refused is not None:
         return refused
     logger.info("Tool called: assessment_report(function_score=%s)", function_score)

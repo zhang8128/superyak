@@ -117,21 +117,26 @@ def test_a_missing_file_means_nothing_was_delivered(tmp_path):
 
 
 def test_rows_older_than_90_days_stop_refusing_and_are_pruned_at_most_once_an_hour(tmp_path):
+    """S7: rows past 90 days never refuse, and go at a write an hour or more after the last prune; a write sooner
+    prunes nothing, even rows already past 90 days, so concurrent writers don't each prune."""
     path = rd.path_for(tmp_path / "graph.db")
-    rd.record(path, delivered(ITEM, disclosure="old"), now=NOW)
+
+    def kept(disclosure):
+        with sqlite3.connect(path) as db:
+            return db.execute("SELECT COUNT(*) FROM remote_deliveries WHERE disclosure_id=?", (disclosure,)).fetchone()[0]
+    rd.record(path, delivered(ITEM, disclosure="a"), now=NOW)                 # the first write prunes (none yet)
+    rd.record(path, delivered("A later delivery of no consequence at all.", disclosure="b"), now=NOW + 1000)
     later = NOW + 90 * DAY + 1
     assert not rd.refused(path, [ITEM], now=later)       # past 90 days, even before any prune
-
-    def count():
-        with sqlite3.connect(path) as db:
-            return db.execute("SELECT COUNT(*) FROM remote_deliveries WHERE disclosure_id='old'").fetchone()[0]
-    rd.record(path, delivered("A first unrelated delivery of no consequence.", disclosure="a"), now=NOW + 1800)
-    assert count() == 2                                   # within the hour of the first record's prune: no prune
-    rd.record(path, delivered("A second unrelated delivery of no consequence.", disclosure="b"), now=later)
-    assert count() == 0                                   # an hour past the last prune: the old rows go
-    rd.record(path, delivered(ITEM, disclosure="c"), now=later + 10)
+    assert kept("a") == 2
+    rd.record(path, delivered("A third delivery of no consequence at all.", disclosure="c"), now=later)
+    assert kept("a") == 0 and kept("b") == 1            # an hour past the last prune: a's rows go, b is not yet old
+    rd.record(path, delivered("A fourth delivery of no consequence at all.", disclosure="d"), now=later + 1500)
+    assert kept("b") == 1                                # b is past 90 days now, but the last prune was 1,500 s ago
+    rd.record(path, delivered("A fifth delivery of no consequence at all.", disclosure="e"), now=later + 3600)
+    assert kept("b") == 0                                # an hour after the last prune, b goes
     with sqlite3.connect(path) as db:
-        assert db.execute("SELECT value FROM meta WHERE key='last_prune'").fetchone()[0] == str(later)
+        assert db.execute("SELECT value FROM meta WHERE key='last_prune'").fetchone()[0] == str(later + 3600)
 
 
 # ---------------------------------------------------------------- busy is not unreadable (S7, the plan re-check's item 4)

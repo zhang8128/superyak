@@ -297,7 +297,7 @@ def test_a_replayed_nonce_is_409_and_crossing_nonces_share_pull_nonces(world):
     hold_contact(world)
     value = request(world)
     refused(world, value, 403, 'Receiving ship is not a current contact')
-    assert nonce_kept(world, value)[0] == value['at']
+    assert tuple(nonce_kept(world, value) or ()) == (value['at'],)
     refused(world, value, 409, 'Replay')
     daemon_saw_nothing(world)
 
