@@ -12,7 +12,7 @@ Usage:
     python daemon.py --host 0.0.0.0         # Listen beyond loopback (no authentication: read the warning)
 
 Client (from another terminal):
-    curl -X POST http://localhost:7432/chat -d '{"message": "hello"}'
+    curl -X POST http://localhost:7432/chat -H 'Content-Type: application/json' -d '{"message": "hello"}'
     curl http://localhost:7432/status
     curl http://localhost:7432/recall?q=ostrom+commons
     curl http://localhost:7432/core
@@ -39,10 +39,83 @@ DEFAULT_PORT = int(os.environ.get("ENGRAM_DAEMON_PORT", "7432"))
 DEFAULT_MODEL = os.environ.get("LOCAL_AGENT_MODEL", "gemma4:31b")
 
 
+def allowed_hosts(bound_host: str, local_ip: str | None, extra: list[str] | None = None) -> frozenset[str]:
+    """The host names a request may carry: loopback, the bound host, the detected local IP when bound to every
+    interface, and any --allow-host. A web page can't make a browser send another (DNS rebinding sends its own)."""
+    names = {"127.0.0.1", "localhost"}
+    if bound_host in ("0.0.0.0", ""):  # both bind every interface
+        if local_ip:
+            names.add(local_ip)
+    elif bound_host not in LOOPBACK:
+        names.add(bound_host)
+    names.update(_host_name(name) for name in extra or [])  # a Host's port is never compared, so drop one here
+    return frozenset(name.lower() for name in names)
+
+
+def _split_host(value: str) -> tuple[str, int]:
+    """A Host header's name and port (80 when it names none)."""
+    name, sep, port = value.rpartition(":")
+    if sep and port.isascii() and port.isdigit():
+        return name.lower(), int(port)
+    return value.lower(), 80
+
+
+def _host_name(value: str) -> str:
+    """The name in a Host header, without its port."""
+    return _split_host(value)[0]
+
+
+def _same_origin(origin: str, host: str | None, allowed: frozenset[str]) -> bool:
+    """An Origin is ours when it is http and names the request's own host and port (any name we know, with no Host:
+    a forwarded port, `ssh -L 9000:localhost:7432`, still matches its own Host)."""
+    try:
+        parsed = urlparse(origin)
+        port = parsed.port or 80
+    except ValueError:  # an Origin urlparse can't read (``http://[evil``) is not ours
+        return False
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    if host is None:
+        return parsed.hostname.lower() in allowed
+    return (parsed.hostname.lower(), port) == _split_host(host)
+
+
+# Answers no page may frame (the chat page can reach /chat, which can run Claude Code).
+_NO_FRAMING = (("X-Frame-Options", "DENY"), ("Content-Security-Policy", "frame-ancestors 'none'"))
+_CHAT_PAGE_PATHS = ("/", "/chat")
+
+
 class DaemonHandler(BaseHTTPRequestHandler):
     """HTTP handler for the engram daemon."""
 
     agent: LocalAgent  # Set by the server
+    allowed_hosts: frozenset[str] = frozenset({"127.0.0.1", "localhost"})  # set by main() from the bound host
+
+    def end_headers(self) -> None:
+        for name, value in _NO_FRAMING:
+            self.send_header(name, value)
+        super().end_headers()
+
+    def _from_a_page_we_dont_name(self) -> bool:
+        """Refuse (403), before any read or write, what a web page we don't name could send: a Host we don't name
+        (DNS rebinding), an Origin that isn't this request's own scheme, host and port, and a cross-site or same-site
+        request (Fetch Metadata) other than a top-level visit to the chat page. A header a browser always sends but
+        a script or curl may not (Host, Sec-Fetch-Site) is not required."""
+        host = self.headers.get("Host")
+        refused = host is not None and _host_name(host) not in self.allowed_hosts
+        origin = self.headers.get("Origin")
+        if not refused and origin is not None:
+            refused = not _same_origin(origin, host, self.allowed_hosts)
+        if not refused and (self.headers.get("Sec-Fetch-Site") or "").lower() in ("cross-site", "same-site"):
+            visit = (self.command == "GET"
+                     and (self.headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+                     and (self.headers.get("Sec-Fetch-Dest") or "").lower() == "document"
+                     and urlparse(self.path).path in _CHAT_PAGE_PATHS)
+            refused = not visit
+        if refused:
+            self._send_json({"error": "this daemon answers only its own pages and host names; a name it should "
+                                      "answer to can be added with --allow-host NAME"}, 403)
+        return refused
 
     def log_message(self, format, *args):
         logger.info(format, *args)
@@ -69,11 +142,13 @@ class DaemonHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self._from_a_page_we_dont_name():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
 
-        if path == "/" or path == "/chat":
+        if path in _CHAT_PAGE_PATHS:
             self._serve_chat_html()
             return
 
@@ -122,6 +197,13 @@ class DaemonHandler(BaseHTTPRequestHandler):
             })
 
     def do_POST(self):
+        if self._from_a_page_we_dont_name():
+            return
+        media_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            # A cross-site form or a no-preflight fetch can send text/plain or a form encoding, never JSON.
+            self._send_json({"error": "POST bodies must be application/json"}, 415)
+            return
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode() if content_length else "{}"
 
@@ -170,6 +252,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Engram daemon — async local agent")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP port")
+    parser.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                        help="Another host name requests may carry, such as this machine's tailnet name")
     parser.add_argument("--host", default="127.0.0.1",
                         help="IPv4 address to listen on (default loopback). The daemon has no authentication, so "
                              "another address lets anyone who reaches it read and write your memories and, unless "
@@ -196,8 +280,6 @@ def main():
 
     DaemonHandler.agent = agent
 
-    server = HTTPServer((args.host, args.port), DaemonHandler)
-
     # Detect local network IP for phone access
     import socket
     try:
@@ -207,6 +289,9 @@ def main():
         s.close()
     except Exception:
         local_ip = "127.0.0.1"
+
+    DaemonHandler.allowed_hosts = allowed_hosts(args.host, local_ip, args.allow_host)
+    server = HTTPServer((args.host, args.port), DaemonHandler)
 
     status = agent.status()
     print(f"engram daemon")
