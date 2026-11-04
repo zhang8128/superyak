@@ -373,5 +373,7 @@ def test_repeats_list_newest_first_with_ids_ship_how_hook_and_verified_apart_and
     assert lines[2] == (f"2027-01-15 08:01:00Z  {verified['id']}  rio-grande  {lessons.short_lesson_id(hashes)}  how receipt  "
                         f"verified by receipt {receipts(store)[0]}  hook on (declared)")
     assert len(lines) == 3 and 'Copy a hash' not in done.stdout and 'glob' not in done.stdout and '2 ' not in lines[0]
+    from superyak_peer.db import Store
+    Store(store.data_dir.parent / 'other', signing=False)  # an empty peer, which the verb no longer makes for itself
     empty = run_lessons('repeats', '--data-dir', store.data_dir.parent / 'other')
-    assert empty.returncode == 0 and empty.stdout == 'No repeats recorded yet.\n'
+    assert empty.returncode == 0 and empty.stdout == 'No lessons room on this peer, so no lesson can be shown here; this zero measures nothing.\n'

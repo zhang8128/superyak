@@ -272,7 +272,7 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
                               capture_output=True, text=True, timeout=60)
     refused = make('lessons-units')
     assert refused.returncode != 0 and 'No peer database' in refused.stdout + refused.stderr and not calls.exists()
-    (data / 'peer.sqlite3').write_bytes(b'')
+    (data / 'peer.sqlite3').write_bytes(b'a stand-in for a real store')
     installed = make('lessons-units')
     assert installed.returncode == 0, installed.stderr
     for name in LESSONS_UNITS:
@@ -397,7 +397,7 @@ def test_a_checkout_away_from_home_superyak_is_linked_there_and_anything_else_th
     units, data, home, shim = tmp_path / 'systemd-user', tmp_path / 'data', tmp_path / 'home', tmp_path / 'bin'
     for directory in (units, data, home, shim):
         directory.mkdir()
-    (data / 'peer.sqlite3').write_bytes(b'')
+    (data / 'peer.sqlite3').write_bytes(b'a stand-in for a real store')
     (shim / 'systemctl').write_text('#!/bin/sh\nexit 0\n')
     (shim / 'systemctl').chmod(0o755)
     env = {**os.environ, 'HOME': str(home), 'PATH': f'{shim}:{os.environ["PATH"]}'}

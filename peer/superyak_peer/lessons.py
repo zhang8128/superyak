@@ -1591,6 +1591,13 @@ def main(argv=None):
     try:
         store = None
         if opens:
+            # A Store would make one, and answer for a peer that isn't. It builds a whole schema in an empty file too (a torn
+            # restore, a `touch`). The file vanishing between this and the Store is left open: closing it needs a no-create
+            # flag on Store, for a window as narrow as a restore's swap.
+            path = args.data_dir / 'peer.sqlite3'
+            if not path.is_file() or path.stat().st_size == 0:
+                parser.exit(1, f'There is no peer here: {args.data_dir} holds no peer.sqlite3, and this never makes one. If '
+                               "this machine's peer is elsewhere, name it: --data-dir, or make's LESSONS_DATA.\n")
             from .db import Store
             store = Store(args.data_dir, signing=False)
         said = run(store, args)
@@ -1662,13 +1669,22 @@ def _list(store, args):
     return describe_lessons(store.lessons_list())
 
 
+NO_ROOM = 'No lessons room on this peer, so no lesson can be shown here; this zero measures nothing.'
+
+
+def _no_room(store, rows):
+    """With nothing to list and no room recorded, a "none yet" would read as if lessons could have come (Tardis, 2026-11-04)."""
+    return NO_ROOM if not rows and store.lessons_room_full_id() is None else None
+
+
 @verb('receipts', "This peer's receipts, newest first", ('--limit', {'type': int, 'default': 50}))
 def _receipts(store, args):
     try:
         index = read_index(args.data_dir / INDEX_FILE)
     except IndexUnreadable:
         index = None  # ships are then named by their ids
-    return describe_receipts(store.lesson_receipts(args.limit), index)
+    rows = store.lesson_receipts(args.limit)
+    return _no_room(store, rows) or describe_receipts(rows, index)
 
 
 @verb('segments', "Section 7: segments per pair of ships, from this peer's index, flagged where its receipts tell",
@@ -1688,7 +1704,8 @@ def _repeat(store, args):
 
 @verb('repeats', "Section 7.1: this peer's repeat records, newest first", ('--limit', {'type': int, 'default': 50}))
 def _repeats(store, args):
-    return describe_repeats(*store.lesson_repeats(args.limit))
+    rows = store.lesson_repeats(args.limit)
+    return _no_room(store, rows[0]) or describe_repeats(*rows)
 
 
 @verb('outcome', "Lesson outcomes spec, section 3: say once, within 24 h, whether a lesson shown to this peer's ship helped, misled or went unused",
@@ -1703,7 +1720,8 @@ def _outcome(store, args):
 @verb('outcomes', "Lesson outcomes spec, section 3: this peer's outcome records, newest first, with that spec's section 5 counts",
       ('--limit', {'type': int, 'default': 50}))
 def _outcomes(store, args):
-    return describe_outcomes(*store.lesson_outcomes(args.limit))
+    rows = store.lesson_outcomes(args.limit)
+    return _no_room(store, rows[0]) or describe_outcomes(*rows)
 
 
 if __name__ == '__main__':
