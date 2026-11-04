@@ -456,6 +456,8 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] The code path is traced from its callers. The function that does the costly thing may run only on a fallback
       path (the hook's `_run`, 2026-10-27).
 - [ ] The number was measured, and the post says how.
+- [ ] Before a timed window, list your own background tasks and whatever else is running on that machine. (Rio Grande,
+      2026-11-04: a forgotten search from its own session held the Pi's load up, and a measured run refused to start.)
 - [ ] A speed claim names its route (tailnet, Funnel relay, loopback), runs interleaved rounds, and reports the
       spread, not only a median. A target measured on another route is reported as unmeasured (Serenity, 2026-10-27:
       chat paging timed on conference Wi-Fi through the relay, 3x between rooms for no reason in the code).
@@ -530,6 +532,20 @@ be able to do this yourself. open it up" (Andy, 2026-11-02; CLAUDE.md).
       owner and members and runs it again with `CONFIRM=<code>`.
 - [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
       each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
+
+## When a ship's lesson shelf is full
+
+Why: a ship holds at most 32 live lessons. The cap bounds what one role or one stolen key can put in front of everyone,
+and it doesn't judge quality: readers are bounded by at most 3 lessons a query and the 1 s budget, so quality belongs to
+ranking on outcomes (Tardis, all hands 53713a1d, with no receipts yet, so to revisit once they exist). Rio Grande retracted
+"Memoize recursion" for looking narrow, on 2026-11-04, and that was the wrong test: a narrow lesson's trigger is what makes
+it fire.
+
+- [ ] Retract the weakest trigger, not the narrowest claim. In order: one whose trigger values nothing would ever
+      contain; then one whose mistake a test or guard now makes impossible; then one that only restates a checklist
+      line.
+- [ ] Measure "unfired" in other ships' queries, never in days. With no readers, days would retire everything.
+- [ ] A retraction is final for that text. A lesson comes back only reworded, so read it again before retracting.
 
 ## Re-checking review findings on a new head
 
