@@ -1,7 +1,7 @@
 """Station signatures over records (spec A step 3, merge 3a: G1-G6 of 2026-10-15-grants-step3-design.md)."""
 import base64
 import pytest
-from superyak_peer.identity import PeerIdentity, RECORD_KEYS, canonical, verify_record
+from superyak_peer.identity import PeerIdentity, RECORD_KEYS, canonical, make_ship_assertion, verify_record
 from test_instructions import activate, docked, new_layer, ship_client
 
 ENDPOINT = 'https://station.test'  # a card needs an HTTPS endpoint; any will do for checking signatures
@@ -77,7 +77,8 @@ def test_sign_record_refuses_anything_but_this_stations_records(tmp_path):
 def test_each_record_kind_signs_and_verifies_with_exactly_its_keys(tmp_path):
     identity = PeerIdentity.load_or_create(tmp_path / 'a')
     card = card_of(identity)
-    assert set(RECORD_KEYS) == {'instructions-revision', 'grant', 'grant-revocation', 'imprint-permission', 'imprint-receipt'}
+    assert set(RECORD_KEYS) == {'instructions-revision', 'grant', 'grant-revocation', 'imprint-permission', 'imprint-receipt',
+                                'ship-assertion'}
     for kind, keys in RECORD_KEYS.items():
         record = {key: None for key in keys} | {'kind': kind, 'station': identity.peer_id}
         assert verify_record(card, record, identity.sign_record(record)), kind
@@ -87,6 +88,9 @@ def test_each_record_kind_signs_and_verifies_with_exactly_its_keys(tmp_path):
     assert RECORD_KEYS['grant'] == {'kind', 'station', 'id', 'issuer_id', 'grantee_id', 'actions', 'targets', 'rooms',
                                     'expires', 'budget', 'depth', 'confirm', 'parent_id', 'charter_layer_id',
                                     'charter_revision', 'follow', 'created'}
+    assert RECORD_KEYS['ship-assertion'] == {'kind', 'station', 'ship_id', 'ship_name', 'owner_id', 'issued', 'expires'}
+    assertion = make_ship_assertion(identity, ship_id='ship-1', ship_name='tardis', owner_id='owner-1', now=1_800_000_000)
+    assert verify_record(card, assertion['record'], assertion['signature'])  # one as export-ship writes it (Owner trust 1)
 
 
 def signature_rows(store):

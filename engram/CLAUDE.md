@@ -259,7 +259,10 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`; `gate enforce` refuses until the ledger's projection digest lands, plan R56). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
+`enforce`). `enforce` needs a ledger stamped with the projection digest: schema version 2, which every ledger made or
+rebuilt by this code is. On an unstamped ledger (version 1, made before the digest) `gate enforce` is refused and a
+gate already at `enforce` reads `closed`, until `engram-permissions rebuild --out <dir>` makes a stamped copy and,
+with every Engram process stopped, it is moved into place. With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
 only refuses or narrows: the daemon never serves `group:outside-home`, `share` refuses that audience, and the policy
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
 refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and
@@ -273,12 +276,19 @@ the plan's gate G0).
 
 Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
 `engram-permissions verify` writes nothing, so an agent may run it. It runs SQLite's integrity check and checks
-the log's hash chain, that no table names a seq past the log's last row, and that each seq column the row sets
-holds its seq, reading every table past its indexes. Every reader makes the same tail checks and refuses a
-ledger that fails them, and the gate reads `closed` when the head is not the log's last row. The checks catch a
-cut tail (a copy of the file taken mid-write without its journal) that tore one row per column. A tear across
-several rows of one column, or a torn index page, can still read whole to a reader; the projection digest (a
-follow-up, before any house runs `enforce`) closes the class.
+the log's hash chain, that no table names a seq past the log's last row, that each seq column the row sets holds
+its seq, and, on a stamped ledger, each part of the projection digest against the tables, reading every table past
+its indexes; it reports the parts. Every reader makes the same tail checks and refuses a ledger that fails them, and
+the gate reads `closed` when the head is not the log's last row. The tail checks catch a cut tail (a copy of the file
+taken mid-write without its journal) that tore one row per column. The projection digest (`meta.projection` and
+`meta.projection_parts`, kept by every append) catches the rest: a tear across several rows of one column, or a torn
+index page. `Ledger.state()` checks it before it serves a State, and every act and append checks the state it builds
+on the same way: a state this process verified (its memo) or a writer marked (`.engram/permissions.verified`, which
+only writers write) is trusted, and any other runs the full check, seconds on the Pi. Not every read checks it: the
+gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do some
+direct reads, such as the imprint filter's (`store_row`, its co-subject and refusal queries). A ledger that fails
+reads as unreadable. The recovery is `engram-permissions rebuild --out <dir>`, which replays the log and says whether
+the old tables matched it, then moving the copy into place with every Engram process stopped.
 
 An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
 `permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); on the Pi the daemon needs `ENGRAM_EMBEDDER_SOCKET`, or it loads a second model.

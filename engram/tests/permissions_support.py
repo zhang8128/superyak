@@ -1637,10 +1637,15 @@ def e1_through_use_9(tmp_path):
     return led, ids
 
 
+# the meta keys that follow the log (head) and the tables (the projection digest): they change with every append
+_FOLLOWERS = frozenset({"head", "projection", "projection_parts"})
+
+
 def only_proposal_rows_changed(before: dict, after: dict) -> bool:
-    """Of two `Ledger.tables()`, only the log, the head that follows it in `meta`, and the proposals differ."""
+    """Of two `Ledger.tables()`, only the log, the head that follows it in `meta`, the projection digest that follows
+    the tables there, and the proposals differ."""
     def kept(t, rows):
-        return [r for r in rows if r.get("key") != "head"] if t == "meta" else rows
+        return [r for r in rows if r.get("key") not in _FOLLOWERS] if t == "meta" else rows
     return all(kept(t, before[t]) == kept(t, after[t]) for t in before if t not in ("ledger_log", "proposals"))
 
 

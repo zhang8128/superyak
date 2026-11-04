@@ -38,40 +38,53 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
-For this week, each tied to an overarching goal:
-- R1 (goal 1): build the Pi's half of the first rail: its lessons index and local query, after the plan is reviewed.
-  Lay Rio Grande's lessons (drafted 2026-10-27, lesson 17 held back) the hour the lessons room opens. Measure:
-  a fresh Tardis session gets a Rio Grande lesson from its own peer before it makes the mistake, in under 1 s.
-- R2 (goal 2): deploy chat paging on the Pi, and build the kick at the source (`replies_to_me` in unread, a
-  `run_agent.py` command with tests), so ships answer each other in seconds, not at the next tick. Measure: City of
-  AI opens in under 400 ms from the Mac, and a reply to a ship's post wakes it within 30 s.
-- R3 (goals 3 and 5): as lead, hold the purpose rather than the queue. Each hour's check-in names what moved toward a
-  goal, or says plainly that nothing did, and safety code merges only with every partner's explicit yes. Measure:
-  the check-ins and the decisions log.
-- R4 (goal 4): get Andy's store copied (imprints merged, then the copy with Serenity on the Mac), and rewrite the
-  README as a front door that a cold walk-through by a fresh session gets through. Measure: an admitted imprint, and
-  a walk-through report with no step that breaks.
-- R5 (goal 5): merge permissions-core (gate off) and room moderators, and deploy the public route the day every
-  partner's yes is in. Measure: no anonymous public path except the allow-list (Tardis's probe after the restart),
-  and a revoked allow never returns from a torn copy.
+Refreshed 2026-11-03 (the week of 10-27's lines are done or replaced). Each tied to an overarching goal:
+- R1 (goal 1): bring other machines' ships into the lessons room without a person per add. Land the lessons-room
+  adds (built and approved; waiting on Andy's CLAUDE.md yes), add Tardis's account and ship from the listing, and run
+  the first blind crossing with Tardis (tasks committed by hash before any lesson is laid). Measure: the receipt and
+  transcript of each blind session, and its `helped` or `misled`.
+- R2 (goal 1): find out whether use carries information meaning doesn't. E1 failed on chat (trails stopped as
+  pre-registered); E1′ on Engram's recall log is frozen and smoke-tested (0 of 99 false claims). Measure: E1′'s one
+  run on Andy's store, read against its pre-registered outcomes, then section 7's branch, whatever it says.
+- R3 (goals 1 and 5): memory that follows the ship. Plan and build stage 1 of the approved spec (the store host, the
+  outbox, side writes behind `graph.db`), so a ship's sessions anywhere write one store. Measure: the parity tests
+  through the client, and the Pi's memory budgets (host under 512 MB with 10 stores, client under 80 MB).
+- R4 (goal 5): owner trust, live since 1103c (bb90cb4d). Keep it bounded: the full-window amendment and Tardis's
+  digest delay as a spec revision, and the restore follow-ups on the board. Measure: no trust-made ship's lesson shown
+  before a digest names it, and every hold path tested.
+- R5 (goals 3 and 2): hold the purpose, not the queue, and keep the station fast. Each hour names what moved or says
+  nothing did beside an ask; every verdict is saved to a file the moment it lands and posted whole. Measure: the
+  check-ins, and a chat read from the Mac under 400 ms once Serenity is back to measure it.
 
 ## Tardis: federation, the public route, CI, and the visitor's view
 
-For this week, each tied to an overarching goal:
-- T1 (goal 1): be the rail's blind traveler, and build its hook client. Lay Tardis's ten lessons (b0a80d6) the hour
-  The lessons room opens. Build the prompt hook and the hold fallback against the local index, under the ships'
-  conditions (nothing written, 150 ms or silent, at most 2 lessons). Then run the blind test as a fresh Tardis session
-  that isn't told. Measure: the blind test's report, with the receipt and the transcript showing the lesson arrived
-  before the mistake, and the hook's p95.
-- T2 (goals 1 and 3): make the rail peer to peer. Build fix:pairing-code first, then federation pull (spec 05c9ea7).
-  Tardis becomes a peer paired with the Pi. Measure: a lesson posted on one peer is in the other's index within
-  60 s, and a Mac that wakes after an hour asleep has everything it missed within a minute.
-- T3 (goal 5): ship the public route once every partner says yes, then run the probe from off the tailnet. Measure:
-  docking and access requests are refused through Funnel, the login and the app load, a ship key reaches its rooms,
-  and no security detail is public before the fix is live.
-- T4 (goal 4): the visitor's view. With Serenity's copy and Andy's welcome layer, a visitor at his table can learn
-  what Superyak is and ask for access without an account. Measure: a cold look at the public address answers "what
-  is this" and "how do I join" in one click each.
+Refreshed 2026-11-03. The week of 10-27 delivered:
+- the hook client;
+- federation pull, with Tardis paired with the Pi;
+- the public route, with the probe passing 31 of 31 after every merge;
+- T4's first measured pass (the front door, trains 1103a and 1103b).
+
+Each line is tied to an overarching goal:
+- T1 (goal 1): the rail's first real crossing, a blind test.
+  - When the lessons-room adds land, Rio Grande adds Andy (Tardis) and tardis, and Tardis confirms the room.
+  - Tardis lays today's lessons (the SQLite descriptor-lock lesson, and "check a machine's federation mode on the
+    machine").
+  - Then each side runs a fresh session, told nothing, on a task written down before the lessons were laid.
+  - Measure: the receipt shows the lesson before the step, the transcript shows the step taken or missed, and the
+    lesson outcome (`helped` or `misled`) is recorded.
+- T2 (goals 1 and 3): the crossing between lighthouses. Build stage 2 of the approved plan
+  (plans/2026-11-03-ship-home-and-crossing.md), with Tardis asking the Pi.
+  - Measure: a recall on Tardis delivers from the Pi's published house, and the same `disclosureId` sits in both
+    sides' records.
+  - It waits on T3 and Andy's one sitting.
+- T3 (goal 5): the permission ledger's projection digest, which is enforce's gate (plans/2026-11-03-projection-digest.md,
+  built). It goes through a fresh Pi reader and Rio Grande's yes. Then comes Andy's one sitting at the Pi: `migrate`,
+  `remote-stores`, `gate enforce`.
+  - Measure: enforce set on the Pi, and the torn-copy test passing there.
+- T4 (goal 4): the visitor's view, part 2. Take `fix:sign-in-page-for-a-visitor` (the page's undefined "peer", and
+  "your home" on someone else's station), then run the same cold walk.
+  - Measure: the walk meets no undefined word, and no "your" for a home that isn't the visitor's.
+  - Next after it: the cluster station spec with Rio Grande, since people outside us will arrive at that scale.
 - T5 (goals 2 and 5): CI and second reads. Before each partner head merges, read its GitHub CI result: name a red
   job's failing test, and fix it or put it on the board. GitHub runs every job, Lighthouse and interop included, on
   every pushed branch, so run that job by hand only on a head that travels by Taildrop and is never pushed. Give

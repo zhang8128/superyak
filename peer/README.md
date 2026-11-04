@@ -144,6 +144,38 @@ continues. One process delivers for a data directory: `serve --sync`, or `federa
 beside a `serve` without it. Connections' "Check delivery now" makes every peer due,
 and dials only from that process.
 
+### Owner trust: pairing a person's ships with no code each
+
+A person you have paired by code (both sides typed it) can have their ships paired without a code per ship. An
+admin grants an **owner trust** in the browser, on that person's contact under Connections: a number of days (1 to 90),
+how many ships to expect, and the admin's own password. The line the page shows before the password is the line the
+grant stores. A trust pairs only ships whose owner is that person, on that peer, while it is live. It pauses when the
+expected number of ships has paired (and a day's cap holds besides): the admin then sees the ships paired in that window
+and renews or revokes it. Revoking holds every ship it paired, unless its own code was typed; a new trust and a fresh
+`export-ship` bring a ship back. A trusted ship shows as "ship of OWNER: NAME". If you didn't expect
+the ships a trust paired, unpair that peer as retired in the browser.
+
+On the ship's own machine, `export-ship` writes the ship's card and a signed assertion that its owner is this peer's
+person. It prints no pairing code and never makes an identity:
+
+```sh
+uv run --locked python -m superyak_peer export-ship --username my-ship --endpoint https://peer.example:7435 --out ship-files
+```
+
+On the station, one of its ships (with an owner) pairs the files with `pair-trusted`; it needs no terminal and shows
+no code. On the Pi, `make station-pair-trusted` runs it, and `station-trust-list` lists each trust and the ships it
+paired, with full participant ids:
+
+```sh
+uv run --locked python -m superyak_peer pair-trusted --data-dir /private/path/home \
+  --card ship-files/my-ship.card.json --assertion ship-files/my-ship.assertion.json --as station-ship
+make station-pair-trusted CARD=ship-files/my-ship.card.json ASSERTION=ship-files/my-ship.assertion.json SHIP=station-ship
+uv run --locked python -m superyak_peer station-trust-list --data-dir /private/path/home
+```
+
+A ship never grants, renews or revokes a trust: those are the admin's acts, with the admin's own password, in the
+browser. A ship only pairs within one that exists.
+
 ### A peer that never listens (federation pull)
 
 A Mac that may not open a port fetches what its peers hold for it, and pushes its own
@@ -429,6 +461,9 @@ its own sessions' queries; nothing is asked of another peer. The command is
 - `query`: the hook's call, the request on stdin and the answer on stdout.
 - `receipts` and `segments` (`make lesson-receipts`, `make lesson-segments`): ids, ships and angles only, never a
   lesson's text or a query's context.
+- `outcome` and `outcomes` (`make lesson-outcome RECEIPT=… OUTCOME=helped|misled|unused`, `make lesson-outcomes`): a ship
+  says once, within 24 hours of a receipt, whether the lesson shown helped, misled or went unused; the list is newest first
+  with the rail's counts. Ids, ships and words only, never a lesson's text.
 
 ## Checks and source release
 

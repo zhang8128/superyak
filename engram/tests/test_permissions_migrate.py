@@ -104,9 +104,12 @@ def _store(path, ids, embed):
 
 
 def _semantic(store, sid, text):
+    # Marked as touching no capture: share refuses a semantic whose mark is unknown (migration 030,
+    # fix:share-refuses-captured-memories). Built from a chosen source episode.
     store.conn.execute(
-        "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) "
-        "VALUES (?, ?, 'fact', 0.5, ?, 0, 'h', 'personal')", (sid, text, CREATED))
+        "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane, "
+        "touched_capture) VALUES (?, ?, 'fact', 0.5, ?, 0, 'h', 'personal', 0)", (sid, text, CREATED))
+    store.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, 'c1')", (sid,))
     store.conn.commit()
 
 
@@ -412,3 +415,25 @@ def test_migrate_whose_house_update_fails_makes_no_ledger_and_runs_again_once_th
     con = sqlite3.connect(house)
     con.execute("DROP TRIGGER no_fill"); con.commit(); con.close()
     fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+
+
+def test_migrate_builds_a_stamped_ledger_checked_whole_once_and_marked(legacy_home, fake_tty):
+    """The projection digest plan (D5, the re-check's S4): migrate owns a fresh file, so it skips the key protocol
+    for each act, checks the file whole once at the end, and marks it after it is renamed into place."""
+    import permission_ledger
+    checks = permission_ledger.full_checks
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    assert permission_ledger.full_checks == checks + 1
+    path = legacy_home / ".engram" / "permissions.db"
+    led = Ledger.open_read_only(legacy_home)
+    try:
+        assert led.meta()["schema_version"] == "2"
+        led.conn.execute("BEGIN")
+        key, _ = led._read_key()
+        led.conn.execute("COMMIT")
+    finally:
+        led.close()
+    assert json.loads(path.with_name("permissions.verified").read_text()) == {
+        "counter": key.counter, "ctime_ns": key.ctime_ns, "dev": key.dev, "head": key.head, "ino": key.ino,
+        "size": key.size}
+    assert not list(path.parent.glob("permissions.db.migrating*"))

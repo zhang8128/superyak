@@ -67,6 +67,11 @@ RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
 # Section 7.1: the only values a repeat record takes beside its ids and its time.
 REPEAT_HOW = ('receipt', 'read')
 REPEAT_HOOK = ('on', 'off')
+# Lesson outcomes spec, section 3: the only values an outcome record takes beside its ids and its time.
+OUTCOMES = ('helped', 'misled', 'unused')
+OUTCOME_SECONDS = 24 * 3600
+RECEIPT_PREFIX = re.compile(r'[0-9a-f]{6,32}')
+RECEIPT_SHORT = 8  # the characters of an id the verbs print
 
 NOT_A_LESSON = 'The lessons room takes only lessons and retractions, in the wire format of first rail section 2'
 PERSON = "A lesson can't name a person or hold an email address or phone number"
@@ -104,6 +109,19 @@ REPEAT_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons ro
 REPEAT_OWN = "A ship's own lesson is never its repeat: the query never shows a ship its own lesson (section 5, step 3)"
 REPEAT_NO_RECEIPT = ("This peer holds no receipt of that lesson for this ship, so the repeat can't be verified; record it "
                      'with --how read')
+
+# Lesson outcomes spec, section 3's refusals: each names its rule and never echoes what was typed.
+OUTCOME_WORD = 'Say what the lesson did: helped, misled or unused'
+OUTCOME_ID = 'Name the receipt by its full id (32 hex) or a prefix of at least 6, in lowercase'
+OUTCOME_UNKNOWN = 'No receipt of this ship on this peer matches that id'
+OUTCOME_AMBIGUOUS = "That prefix matches more than one of this ship's receipts; give more of it"
+OUTCOME_TWICE = 'That receipt already has its outcome; a ship changes its mind only through a later receipt'
+OUTCOME_LATE = 'That receipt is more than 24 hours old, so it takes no outcome'
+OUTCOME_NO_SHIP = ('No ship account on this peer is a member of the lessons room, so there is no ship to record an '
+                   "outcome for: the ship is this peer's one ship account in the room, never an argument")
+OUTCOME_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the '
+                 "ship is this peer's one ship account in the room, never an argument")
+OUTCOME_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it records no outcome here"
 
 Lesson = namedtuple('Lesson', 'ship claim why error command file learned_from')
 Retraction = namedtuple('Retraction', 'lesson_id')
@@ -531,13 +549,16 @@ def dumps(answer):
     return json.dumps(answer, ensure_ascii=False)
 
 
-def shown(item, match, command=None):
+def shown(item, match, command=None, receipt=None):
     """One lesson of the answer, with exactly the contract's keys, in its order; `command` only for a words match
-    through one of its `command` values, that value exactly."""
+    through one of its `command` values, that value exactly; `receipt` (last) only on the query's answer, never at a
+    prompt."""
     entry = {'id': short_lesson_id(item['id']), 'ship': item['ship'], 'claim': item['claim'], 'why': item['why'],
              'match': match}
     if command is not None:
         entry['command'] = command
+    if receipt is not None:
+        entry['receipt'] = receipt
     return entry
 
 
@@ -737,13 +758,28 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 
+# A remote member as a lessons room view names it (owner trust, Task 6): by its label, and whether a trust paired it.
+SEEN_CONTACT = ('SELECT c.peer_id, l.label, EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=c.id) AS ship '
+                'FROM remote_contacts c JOIN contact_labels l ON l.id=c.id')
+
+
+def _remote_member(contact, peer):
+    """A remote member of a view: its label as its name (None with no card here), and `ship` only for a ship an owner
+    trust paired, whose line keeps its whole name (_member_lines)."""
+    return {'kind': 'remote', 'name': contact and contact['label'], 'peer': peer,
+            **({'ship': True} if contact and contact['ship'] else {})}
+
+
 def _member_lines(members):
-    """Each member of a lessons room view: a local one by username and kind (and owner), a remote one by name and peer."""
-    from .ships import safe_line
+    """Each member of a lessons room view: a local one by username and kind (and owner), a remote one by name and peer;
+    a ship an owner trust paired keeps its whole name after its shortened owner (ship_label_line)."""
+    from .ships import safe_line, ship_label_line
     lines = []
     for m in members:
         if m['kind'] == 'remote':
-            name = 'an account with no card here' if m['name'] is None else safe_line(m['name'], 40)
+            name = ('an account with no card here' if m['name'] is None
+                    else ship_label_line(m['name'], m['name'].rpartition(': ')[2], 40) if m.get('ship')
+                    else safe_line(m['name'], 40))
             lines.append(f'  {name}  (on peer {safe_line(m["peer"][:12])})')
         else:
             lines.append(f'  {m["username"]}  ({m["kind"]}' + (f', owned by {m["owner"]})' if m['owner'] else ')'))
@@ -864,6 +900,22 @@ def describe_repeats(rows, counts):
         seen = f"verified by receipt {r['receipt_id']}" if r['how'] == 'receipt' else 'unverified'
         lines.append(f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(r['created']))}  {r['id']}  {r['ship']}  "
                      f"{short_lesson_id(r['lesson_id'])}  how {r['how']}  {seen}  hook {r['hook']} (declared)")
+    return '\n'.join(lines)
+
+
+def describe_outcomes(rows, counts):
+    """`make lesson-outcomes` (lesson outcomes spec, section 3): newest first, each with its ids, ship, lesson and outcome; no text. The
+    counts line is that spec's section 5, over the whole peer, even when the list is cut at its limit."""
+    if not rows:
+        return 'No outcomes on this peer yet.'
+    n = RECEIPT_SHORT
+    lines = [f"{r['id'][:n]}  {r['ship']}  lesson {short_lesson_id(r['lesson_id'])}  receipt {r['receipt_id'][:n]}  {r['outcome']}"
+             for r in rows]
+    queries = counts['queries']
+    rate = f"{100 * counts['verified_repeats'] / queries:.1f}" if queries else '-'
+    lines.append(f"Coverage: {counts['outcomes']} outcomes on {counts['receipts']} receipts. Helped {counts['helped']}, "
+                 f"misled {counts['misled']}, unused {counts['unused']}. Verified repeats: {counts['verified_repeats']} "
+                 f"in {queries} queries ({rate} per 100).")
     return '\n'.join(lines)
 
 
@@ -1027,10 +1079,11 @@ class Lessons:
                     keeper = db.execute('SELECT username FROM users WHERE id=?', (user['owner_id'],)).fetchone()
                     members.append({'kind': user['kind'], 'username': user['username'], 'owner': keeper and keeper['username']})
                     continue
-                contact = db.execute('SELECT name, peer_id FROM remote_contacts WHERE id=?', (member,)).fetchone()
+                contact = db.execute(f'{SEEN_CONTACT} WHERE c.id=?', (member,)).fetchone()  # by its label (owner trust)
                 if contact['peer_id'] not in listed:
-                    raise Problem(409, UNLISTED.format(name=safe_line(contact['name'], 40)))
-                members.append({'kind': 'remote', 'name': contact['name'], 'peer': contact['peer_id']})
+                    from .owner_trust import contact_line
+                    raise Problem(409, UNLISTED.format(name=contact_line(db, member, 40)))
+                members.append(_remote_member(contact, contact['peer_id']))
             import hashlib
             code = hashlib.sha256(encode({'room': room['id'], 'members': sorted(room['member_ids']), 'peers': listed,
                                           'ship': vessel['id']}).encode()).hexdigest()[:8]
@@ -1095,15 +1148,16 @@ class Lessons:
 
     def _member_as_seen(self, db, peer, member):
         """One member of a room from another peer, as this peer sees it: a local account by username and kind (and
-        owner); any other by the name on its card here (None when this peer has no card for it) and its peer."""
+        owner); any other by its contact label here, the name on its card or "ship of <owner>: <name>" for a ship an
+        owner trust paired (None when this peer has no card for it), and its peer."""
         member_peer, _, user = member.partition(':')
         if member_peer == peer:
             row = db.execute('SELECT users.username, users.kind, owners.username AS owner FROM users LEFT JOIN users AS owners '
                              'ON owners.id=users.owner_id WHERE users.id=?', (user,)).fetchone()
             if row is not None:
                 return {'kind': row['kind'], 'username': row['username'], 'owner': row['owner']}
-        contact = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (member_peer, user)).fetchone()
-        return {'kind': 'remote', 'name': contact and contact['name'], 'peer': member_peer}
+        contact = db.execute(f'{SEEN_CONTACT} WHERE c.peer_id=? AND c.user_id=?', (member_peer, user)).fetchone()
+        return _remote_member(contact, member_peer)
 
     def lessons_ship(self, username, owner):
         """`lessons ship`, trusted local (section 11 item 3): a ship account with no key, owned by a person here."""
@@ -1262,19 +1316,20 @@ class Lessons:
                     if (found is None or found.author == full or found.lesson.learned_from == request['ship']
                             or short_lesson_id(found.id) in request['seen']):
                         continue
-                    kept.append((found, shown(item, match, command)))
+                    key = uid()  # drawn before the fit, so the answer's receipt and the row written for it agree
+                    kept.append((found, key, shown(item, match, command, key[:RECEIPT_SHORT])))
                     if len(kept) == request['limit']:
                         break
-                answer = fit([entry for _, entry in kept])
+                answer = fit([entry for _, _, entry in kept])
                 if deadline is not None:
                     left = deadline - monotonic()
                     if left <= 0:  # nobody waits for it: no receipt nobody saw
                         raise _Late
                     db.execute(f'PRAGMA busy_timeout={max(1, min(BUSY_MS, int(left * 1000)))}')
                 now = self.clock()
-                for found, entry in kept:
+                for found, key, entry in kept:
                     if entry in answer['lessons']:  # a receipt only for a lesson shown
-                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
+                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
                                                                                         None if entry['match'] == 'words' else entry['match']))
                 db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
                            (now, ship['id'], nearest, len(answer['lessons'])))
@@ -1304,6 +1359,24 @@ class Lessons:
             return {(r[0], r[1]): r[2] for r in db.execute(
                 'SELECT ship_id, lesson_id, MIN(created) FROM lesson_receipts GROUP BY ship_id, lesson_id')}
 
+    def _lessons_ship(self, db, refusals):
+        """This peer's ship for a record (sections 3 and 7.1): on the origin, C28's recorded ship; where the record names
+        none (every other peer), the one ship account here that is a member of the current lessons room. Either way a
+        member. `refusals` is (no ship, more than one, not a member)."""
+        record = self._lessons_record(db)
+        snapshot = self._lessons_snapshot(db)
+        if record is None or snapshot is None:
+            raise Problem(404, 'No lessons room is recorded on this peer')
+        ship = record['ship_id']
+        if ship is None:  # not the origin: derived from what this peer holds (snapshot.ships: its ship members)
+            here = [full.partition(':')[2] for full in snapshot.ships.values()]
+            if len(here) != 1:
+                raise Problem(409, refusals[1] if here else refusals[0])
+            return here[0]
+        if f'{snapshot.peer}:{ship}' not in snapshot.members:
+            raise Problem(409, refusals[2])
+        return ship
+
     def lesson_repeat(self, lesson, how, hook):
         """`lessons repeat`, section 7.1: record that this peer's ship made a mistake a lesson it had seen covers. The
         ship is never an argument: on the origin it is C28's recorded ship; where the record names none (every other
@@ -1331,18 +1404,8 @@ class Lessons:
                 raise Problem(409, REPEAT_AMBIGUOUS) if matches else Problem(404, REPEAT_NO_SHORT)
             named = matches[0]
         with self.transaction() as db:
-            record = self._lessons_record(db)
             snapshot = self._lessons_snapshot(db)
-            if record is None or snapshot is None:
-                raise Problem(404, 'No lessons room is recorded on this peer')
-            ship = record['ship_id']
-            if ship is None:  # not the origin: derived from what this peer holds (snapshot.ships: its ship members)
-                here = [full.partition(':')[2] for full in snapshot.ships.values()]
-                if len(here) != 1:
-                    raise Problem(409, REPEAT_SHIPS if here else REPEAT_NO_SHIP)
-                ship = here[0]
-            elif f'{snapshot.peer}:{ship}' not in snapshot.members:
-                raise Problem(409, REPEAT_NOT_MEMBER)
+            ship = self._lessons_ship(db, (REPEAT_NO_SHIP, REPEAT_SHIPS, REPEAT_NOT_MEMBER))
             first, retracted = accepted_lessons(snapshot)
             if named in retracted:
                 if named != lesson:  # resolved from the index, which hasn't dropped it yet
@@ -1374,6 +1437,53 @@ class Lessons:
             counts = dict(db.execute("SELECT how, count(*) FROM lesson_repeats GROUP BY how").fetchall())
         return rows, {'verified': counts.get('receipt', 0), 'unverified': counts.get('read', 0)}
 
+    def lesson_outcome(self, receipt, outcome):
+        """`lessons outcome` (lesson outcomes spec, section 3): this peer's ship says once, within 24 hours of a receipt, whether the lesson shown
+        helped, misled or went unused. `receipt` is the receipt's id or a prefix of at least 6; the ship is derived as for
+        repeats, never an argument, and only its own receipts match. Each refusal names its rule, never the value, and
+        writes nothing. A retracted lesson's receipt still takes its outcome. No text reaches the record."""
+        import sqlite3  # here, not at the top: the hook's query path loads no database module
+        if outcome not in OUTCOMES:
+            raise Problem(400, OUTCOME_WORD)
+        if not isinstance(receipt, str) or not RECEIPT_PREFIX.fullmatch(receipt):
+            raise Problem(400, OUTCOME_ID)
+        with self.transaction() as db:
+            ship = self._lessons_ship(db, (OUTCOME_NO_SHIP, OUTCOME_SHIPS, OUTCOME_NOT_MEMBER))
+            found = db.execute('SELECT id, created, lesson_id FROM lesson_receipts WHERE ship_id=? AND substr(id, 1, ?) = ? LIMIT 2',
+                               (ship, len(receipt), receipt)).fetchall()
+            if len(found) != 1:
+                raise Problem(409, OUTCOME_AMBIGUOUS) if found else Problem(404, OUTCOME_UNKNOWN)
+            row = found[0]
+            if db.execute('SELECT 1 FROM lesson_outcomes WHERE receipt_id=?', (row['id'],)).fetchone():
+                raise Problem(409, OUTCOME_TWICE)
+            now = self.clock()
+            if now - row['created'] > OUTCOME_SECONDS:
+                raise Problem(409, OUTCOME_LATE)
+            key = uid()
+            try:
+                db.execute('INSERT INTO lesson_outcomes VALUES(?,?,?,?)', (key, now, row['id'], outcome))
+            except sqlite3.IntegrityError:  # another writer's outcome for this receipt came between the check and here
+                raise Problem(409, OUTCOME_TWICE) from None
+            username = db.execute('SELECT username FROM users WHERE id=?', (ship,)).fetchone()['username']
+            return {'id': key, 'created': now, 'ship': username, 'receipt_id': row['id'],
+                    'short': short_lesson_id(row['lesson_id']), 'outcome': outcome}
+
+    def lesson_outcomes(self, limit=50):
+        """`make lesson-outcomes`: (this peer's outcome records, newest first, each with its ship and lesson; section 5's
+        counts over the whole peer: receipts, outcomes by word, queries and verified repeats)."""
+        with self.transaction() as db:
+            rows = [dict(r) for r in db.execute(
+                'SELECT o.id, o.created, users.username AS ship, o.receipt_id, r.lesson_id, o.outcome FROM lesson_outcomes o '
+                'JOIN lesson_receipts r ON r.id=o.receipt_id JOIN users ON users.id=r.ship_id '
+                'ORDER BY o.created DESC, o.rowid DESC LIMIT ?', (min(500, max(1, limit)),))]
+            by_word = dict(db.execute('SELECT outcome, count(*) FROM lesson_outcomes GROUP BY outcome').fetchall())
+            one = lambda sql: db.execute(sql).fetchone()[0]
+            counts = {'receipts': one('SELECT count(*) FROM lesson_receipts'), 'outcomes': sum(by_word.values()),
+                      **{word: by_word.get(word, 0) for word in OUTCOMES},
+                      'queries': one('SELECT count(*) FROM lesson_queries'),
+                      'verified_repeats': one("SELECT count(*) FROM lesson_repeats WHERE how='receipt'")}
+        return rows, counts
+
     def _lessons_add_gate(self, db, key, new_ids):
         """Section 3, at the origin: no new local member in any room of the chain, and a remote one only from a listed
         peer."""
@@ -1383,10 +1493,10 @@ class Lessons:
         for member in new_ids:
             if db.execute('SELECT 1 FROM users WHERE id=?', (member,)).fetchone():
                 raise Problem(403, NEW_LOCAL)
-            contact = db.execute('SELECT peer_id, name FROM remote_contacts WHERE id=?', (member,)).fetchone()
+            contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (member,)).fetchone()
             if contact is not None and contact['peer_id'] not in listed:
-                from .ships import safe_line
-                raise Problem(403, UNLISTED.format(name=safe_line(contact['name'], 40)))
+                from .owner_trust import contact_line
+                raise Problem(403, UNLISTED.format(name=contact_line(db, member, 40)))
 
     def _carry_lessons(self, db, old_key, new_key, new_ids):
         """Section 3's backfill, in the add's own transaction: when the add brings in a member on a listed peer that no
@@ -1429,6 +1539,8 @@ CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT 
     lesson_id TEXT NOT NULL CHECK(length(lesson_id)=129 AND substr(lesson_id,65,1)=':' AND substr(lesson_id,1,64) NOT GLOB '*[^0-9a-f]*' AND substr(lesson_id,66) NOT GLOB '*[^0-9a-f]*'),
     how TEXT NOT NULL CHECK(how IN ('receipt','read')), receipt_id TEXT REFERENCES lesson_receipts(id), hook TEXT NOT NULL CHECK(hook IN ('on','off')),
     CHECK((how='receipt') = (receipt_id IS NOT NULL)));
+CREATE TABLE IF NOT EXISTS lesson_outcomes(id TEXT PRIMARY KEY, created REAL NOT NULL,
+    receipt_id TEXT NOT NULL UNIQUE REFERENCES lesson_receipts(id), outcome TEXT NOT NULL CHECK(outcome IN ('helped','misled','unused')));
 '''
 
 
@@ -1471,6 +1583,8 @@ def main(argv=None):
     if extra:
         if args.verb == 'repeat':  # section 7.1: no other input, and a refusal never echoes what was typed
             parser.exit(2, 'lessons repeat takes one lesson id, --how and --hook, and nothing else\n')
+        if args.verb == 'outcome':
+            parser.exit(2, 'lessons outcome takes one receipt id and one outcome, and nothing else\n')
         parser.error('unrecognized arguments: ' + ' '.join(extra))
     args.started = started
     _, _, run, opens = VERBS[args.verb]
@@ -1575,6 +1689,21 @@ def _repeat(store, args):
 @verb('repeats', "Section 7.1: this peer's repeat records, newest first", ('--limit', {'type': int, 'default': 50}))
 def _repeats(store, args):
     return describe_repeats(*store.lesson_repeats(args.limit))
+
+
+@verb('outcome', "Lesson outcomes spec, section 3: say once, within 24 h, whether a lesson shown to this peer's ship helped, misled or went unused",
+      ('receipt', {'help': 'a receipt id, or a prefix of at least 6'}), ('outcome', {'help': 'helped, misled or unused'}))
+def _outcome(store, args):
+    made = store.lesson_outcome(args.receipt, args.outcome)
+    n = RECEIPT_SHORT
+    return (f"Recorded outcome {made['id'][:n]}: {made['ship']}, lesson {made['short']}, receipt {made['receipt_id'][:n]}, "
+            f"{made['outcome']}.")
+
+
+@verb('outcomes', "Lesson outcomes spec, section 3: this peer's outcome records, newest first, with that spec's section 5 counts",
+      ('--limit', {'type': int, 'default': 50}))
+def _outcomes(store, args):
+    return describe_outcomes(*store.lesson_outcomes(args.limit))
 
 
 if __name__ == '__main__':

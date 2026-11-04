@@ -19,6 +19,7 @@ const state = {
   connections: [],
   ships: [], dockCode: null, docking: null,
   imprints: null, imprintCode: null, imprint: null, imprintAsk: null,
+  trust: null,  // the one owner-trust form or question open on Connections (ownerTrust, retireControl)
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
@@ -110,6 +111,7 @@ function clearAccountAdministration() {
   state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null; state.pairCode = "";
   state.myCode = null; state.ships = []; state.docking = null;
   state.imprints = null; state.imprintCode = null; state.imprint = null; state.imprintAsk = null;
+  state.trust = null;
 }
 
 function bindEditorIdentity(user) {
@@ -292,7 +294,8 @@ function currentLayerEdit() {
 
 function choiceContact(contact, selected) {
   const remote = contact.remote ? " · paired contact" : "";
-  return `<label class="choice"><input type="checkbox" name="audience-user" value="${escapeHtml(contact.id)}" ${selected.includes(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>Named person${remote}</small></span></label>`;
+  // a ship an owner trust paired reads as a ship, by its "ship of <owner>" label (owner trust, Task 6's review)
+  return `<label class="choice"><input type="checkbox" name="audience-user" value="${escapeHtml(contact.id)}" ${selected.includes(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${contact.trust_ship ? "Ship" : "Named person"}${remote}</small></span></label>`;
 }
 
 function choiceSpace(space, selected) {
@@ -959,10 +962,107 @@ function chatsView() {
     <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
+// __main__.contact_state's words: held, and why (owner trust Task 7: a retired peer, or a ship whose owner's trust
+// ended), confirmed by typing or by owner trust, or neither
 function contactState(contact) {
-  // a code shows only for a contact confirmed by typing: any other could be copied into a re-pair (fix:pairing-code)
-  if (contact.held) return "Held until its own code is typed";
-  return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
+  if (contact.held) {
+    if (contact.retired) return "held: its peer was retired; it comes back only as a new identity";
+    return contact.trust_ship ? "held: its owner's trust was revoked; with the owner confirmed by code, a new trust and a fresh export-ship bring it back, or its own code" : "held until its own code is typed";
+  }
+  if (contact.confirmed_by === "owner trust") return "confirmed by owner trust";  // confirmed, but no code was typed
+  return contact.confirmed ? "confirmed by typing" : "no typed code on record";
+}
+
+function capitalized(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// One contact of a peer. A code shows only for a contact confirmed by typing: any other could be copied into a re-pair
+// (fix:pairing-code). A ship an owner trust made reads label first, "ship of <owner>: <name>, confirmed by owner trust"
+// (spec item 3); a person whose code was typed carries its owner trust beneath it.
+// A name from another peer, isolated in <bdi>: a right-to-left override in it can't run on into the text after it, such
+// as a pairing code or a date (Task 7's review, the same fault as the grant line's)
+function isolatedName(name) {
+  return `<bdi>${escapeHtml(name)}</bdi>`;
+}
+
+function contactLine(item) {
+  const code = item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "";
+  if (item.trust_ship) return `<li data-contact="${escapeHtml(item.id)}"><span>${isolatedName(item.name)}, ${escapeHtml(contactState(item))}</span>${code ? ` <span>${code}</span>` : ""}</li>`;
+  return `<li data-contact="${escapeHtml(item.id)}"><span>${isolatedName(item.name)}</span> <span>${code || "No code shown"}</span> <span>${escapeHtml(capitalized(contactState(item)))}</span>${ownerTrust(item)}</li>`;
+}
+
+// Owner trust (spec items 2, 4a and 6), the admin's acts on a person contact whose code was typed: grant, renew and
+// revoke, one open at a time in state.trust. The grant and the renewal ask for the admin's own password; a renewal
+// first lists the ships paired in the window and sends back the window it showed. Every name is escaped where shown.
+// The grant line is always the station's (owner_trust.grant_line): its name already through safe_line and its date by
+// the station's clock, never this browser's, so what the admin reads before the password is the text the grant stores,
+// and the form sends it back as `shown`. The name sits in <bdi>, so a right-to-left name can't reorder the peer or date
+// (Task 7's review).
+function trustLineHtml(line) {
+  return `${escapeHtml(line.before)}<bdi>${escapeHtml(line.name)}</bdi>${escapeHtml(line.after)}`;
+}
+
+function trustDaysValid(days) {
+  const n = Number(days);
+  return days !== "" && Number.isInteger(n) && n >= 1 && n <= 90;
+}
+
+function trustLineCurrent(open) {  // the station's line for the days now in the form, or null while it's on its way
+  return open.line && open.lineFor === open.days ? open.line : null;
+}
+
+function trustPreview(open) {
+  if (trustLineCurrent(open)) return trustLineHtml(open.line);
+  return trustDaysValid(open.days) ? "Reading the grant line from the station…" : "Choose a whole number of days from 1 to 90.";
+}
+
+function trustStanding(trust) {
+  if (trust.state === "paused") return `Paused after ${escapeHtml(trust.expect ?? trust.paired)} pairings: renew or revoke it.`;
+  if (trust.state === "expired") return "Expired: it pairs no new ship. The ships it paired stay paired until it's revoked.";
+  return `Live: ${escapeHtml(trust.paired)} of ${escapeHtml(trust.expect)} expected ships paired in this window.`;
+}
+
+function trustError(open) {
+  return `<p class="meta" id="trust-error" role="alert">${escapeHtml(open.error || "")}</p>`;
+}
+
+function trustWindow(view) {
+  const count = view.paired ? `${escapeHtml(view.paired)} ${view.paired === 1 ? "ship" : "ships"} paired in this window, of ${escapeHtml(view.expect)} expected:` : "No ships paired in this window yet.";
+  return `<div class="trust-window"><p>${count}</p>${view.ships.length ? `<ul>${view.ships.map((ship) => `<li>${isolatedName(ship.label)} · paired ${escapeHtml(formatDate(ship.confirmed))} by ${escapeHtml(ship.acting_ship)}${ship.held ? " · held" : ""}</li>`).join("")}</ul>` : ""}</div>`;
+}
+
+function trustForm(open) {
+  const renew = open.mode === "renew";
+  return `<form id="trust-${renew ? "renew" : "grant"}-form" class="active-panel"><p class="meta">${renew ? "Renewed, it reads:" : "The grant reads:"} <span class="trust-preview">${trustPreview(open)}</span></p>${renew ? trustWindow(open.view) : ""}
+    <div class="field"><label for="trust-days">Days</label><input class="input" id="trust-days" name="days" type="number" min="1" max="90" step="1" required value="${escapeHtml(open.days)}"></div>
+    <div class="field"><label for="trust-expect">Expect up to</label><input class="input" id="trust-expect" name="expect" type="number" min="1" max="10000" step="1" required value="${escapeHtml(open.expect)}" aria-describedby="trust-expect-hint"><p class="meta" id="trust-expect-hint">How many ships you expect this host to pair${renew ? " in the new window" : ""}. The trust pauses when that many have paired.</p></div>
+    <div class="field"><label for="trust-password">Password</label><input class="input" id="trust-password" name="password" type="password" autocomplete="new-password" required aria-describedby="trust-password-hint"><p class="meta" id="trust-password-hint">Type your own station password. Don't accept a password your browser suggests.</p></div>
+    ${trustError(open)}<div class="button-row"><button class="button" type="submit"${trustLineCurrent(open) ? "" : " disabled"}>${renew ? "Renew" : "Grant"}</button><button class="button secondary" type="button" data-action="trust-cancel">Cancel</button></div></form>`;
+}
+
+function ownerTrust(contact) {
+  if (contact.confirmed_by !== "typing") return "";
+  const trust = contact.owner_trust, open = state.trust?.contactId === contact.id ? state.trust : null, id = escapeHtml(contact.id);
+  if (!trust || trust.state === "revoked") {
+    if (open?.mode === "grant") return `<div class="owner-trust">${trustForm(open)}</div>`;
+    return `<div class="owner-trust"><button class="button secondary" data-action="trust-open" data-id="${id}">Trust ships owned by ${isolatedName(contact.name)}</button></div>`;
+  }
+  const line = `trust-line-${id}`;
+  const head = `<p class="meta" id="${line}">${trust.line ? trustLineHtml(trust.line) : ""}</p><p class="meta">${trustStanding(trust)}</p>`;
+  if (open?.mode === "renew") return `<div class="owner-trust">${head}${trustForm(open)}</div>`;
+  if (open?.mode === "revoke") return `<div class="owner-trust">${head}<div class="active-panel"><p class="trust-question" tabindex="-1">Revoke the owner trust for ships owned by ${isolatedName(contact.name)}? Every ship paired under this owner's trust is held at once, unless its own code was typed. A new trust and a fresh export-ship bring a ship back.</p><div class="button-row"><button class="button danger" data-action="trust-revoke">Yes, revoke</button><button class="button secondary" data-action="trust-cancel">Cancel</button></div></div></div>`;
+  return `<div class="owner-trust">${head}<div class="button-row"><button class="button secondary" data-action="trust-renew-open" data-id="${id}" aria-describedby="${line}">Renew</button><button class="button danger secondary" data-action="trust-revoke-ask" data-id="${id}" aria-describedby="${line}">Revoke</button></div></div>`;
+}
+
+// Spec item 6, S11: a host that may be compromised is unpaired as retired, which no code typed for it undoes; it asks
+// first. A retired peer offers nothing more.
+function retireControl(connection, peers) {
+  if (peers.some((item) => item.retired)) return "";
+  if (state.trust?.mode === "retire" && state.trust.contactId === connection.id) {
+    return `<div class="active-panel"><p class="trust-question" tabindex="-1">Unpair ${peers.map((item) => isolatedName(item.name)).join(", ")} as retired? Every contact of this peer is held, and its card is refused for good. No code typed for it pairs it again, even one shown on that machine's own screen. It comes back only as a new identity: a new data directory, two typed codes, a new owner trust and fresh assertions.</p><div class="button-row"><button class="button danger" data-action="retire">Yes, unpair as retired</button><button class="button secondary" data-action="trust-cancel">Cancel</button></div></div>`;
+  }
+  return `<button class="button danger secondary" data-action="retire-ask" data-id="${escapeHtml(connection.id)}">Unpair as retired (this machine may be compromised)</button>`;
 }
 
 // federation pull spec §8 (plan nit 20): how this peer receives, and how delivery to it is going
@@ -993,7 +1093,8 @@ function problemShown(problem) {
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3>${connectionDelivery(connection)}<p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  const eyebrow = peers.some((item) => item.retired) ? "Retired peer" : connection.paired ? "Paired peer" : "Disconnected peer";
+  return `<div class="card"><p class="eyebrow">${eyebrow}</p><h3>${peers.map((item) => isolatedName(item.name)).join(", ")}</h3>${connectionDelivery(connection)}<p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map(contactLine).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => isolatedName(item.name)).join(", ")}.</p>` : ""}${retireControl(connection, peers)}</div>`;
 }
 
 // federation pull spec §8. A refusal shows its status code only: the words after it can come from the other peer.
@@ -2364,6 +2465,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
   if (form.id === "pair-confirm-form") await confirmPair(form);
+  if (form.id === "trust-grant-form" || form.id === "trust-renew-form") await submitTrust(form);
   if (form.id === "profile-form") {
     const oldName = state.me.name;
     try {
@@ -2680,7 +2782,119 @@ document.addEventListener("click", async (event) => {
     try { await api(`/api/connections/${pathPart(target.dataset.id)}`, { method: "DELETE", json: {} }); await refresh("The peer and all of its contacts are disconnected"); }
     catch (error) { setFlash(error.message, true); render(); }
   }
+  if (action === "trust-open" || action === "trust-revoke-ask" || action === "retire-ask") {
+    const contact = state.connections.find((item) => item.id === target.dataset.id);
+    if (!contact) return;
+    const mode = { "trust-open": "grant", "trust-revoke-ask": "revoke", "retire-ask": "retire" }[action];
+    // the expected count has no default: the admin always says it (spec item 4a)
+    state.trust = { mode, contactId: contact.id, grantId: contact.owner_trust?.grant_id, days: "90", expect: "", error: "", line: null, lineFor: null };
+    render();
+    (document.querySelector("#trust-days") || document.querySelector(".trust-question"))?.focus();  // the question, not its yes
+    if (mode === "grant") await loadTrustLine();
+  }
+  if (action === "trust-renew-open") {
+    const contact = state.connections.find((item) => item.id === target.dataset.id), identity = identityKey(state.me);
+    if (!contact?.owner_trust) return;
+    try {
+      const view = await api(`/api/owner-trust/${pathPart(contact.owner_trust.grant_id)}`);
+      if (identityKey(state.me) !== identity) return;
+      // 90 days, since a renewal never shortens a trust, and the last count, which he may change (spec item 4a)
+      state.trust = { mode: "renew", contactId: contact.id, grantId: view.grant_id, view, days: "90", expect: String(view.expect ?? ""), error: "", line: null, lineFor: null };
+      render();
+      document.querySelector("#trust-days")?.focus();
+      await loadTrustLine();
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+      setFlash(error.message, true); render();
+    }
+  }
+  if (action === "trust-cancel") { state.trust = null; render(); }
+  if (action === "trust-revoke" || action === "retire") {
+    const open = state.trust, identity = identityKey(state.me);
+    if (!open || open.busy || open.mode !== (action === "retire" ? "retire" : "revoke")) return;
+    open.busy = target.disabled = true;
+    try {
+      if (action === "retire") {
+        await api(`/api/connections/${pathPart(open.contactId)}`, { method: "DELETE", json: { retire: true } });
+        if (identityKey(state.me) !== identity) return;
+        state.trust = null;
+        await refresh("The peer is retired, and all of its contacts are held.");
+      } else {
+        const done = await api(`/api/owner-trust/${pathPart(open.grantId)}/revoke`, { method: "POST", json: {} });
+        if (identityKey(state.me) !== identity) return;
+        state.trust = null;
+        await refresh(`Owner trust revoked; ${done.held} ${done.held === 1 ? "ship" : "ships"} held.`);
+      }
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+      state.trust = null; setFlash(error.message, true);  // as unpair says it: the refresh may change what's asked
+      await refresh();
+    }
+  }
 });
+
+// The station's grant line for the days now in the form, a grant's or a renewal's (both read it for the owner contact),
+// shown in place so the password typed so far stays. Until it arrives the form can't be sent.
+let trustLineTimer = null, trustLineSequence = 0;
+async function loadTrustLine() {
+  const open = state.trust, identity = identityKey(state.me), sequence = ++trustLineSequence;
+  if (!open || !["grant", "renew"].includes(open.mode) || !trustDaysValid(open.days)) { showTrustLine(); return; }
+  const days = open.days;
+  try {
+    const line = await api(`/api/connections/${pathPart(open.contactId)}/trust?days=${encodeURIComponent(days)}`);
+    if (sequence !== trustLineSequence || state.trust !== open || identityKey(state.me) !== identity) return;
+    open.line = line; open.lineFor = days;
+  } catch (error) {
+    if (sequence !== trustLineSequence || state.trust !== open || identityKey(state.me) !== identity) return;
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    open.error = error.message;
+  }
+  showTrustLine();
+}
+
+function showTrustLine() {
+  const open = state.trust, form = open && document.querySelector(`#trust-${open.mode}-form`);
+  if (!form) return;
+  form.querySelector(".trust-preview").innerHTML = trustPreview(open);  // escaped parts (trustLineHtml)
+  form.querySelector('button[type="submit"]').disabled = !trustLineCurrent(open);
+  form.querySelector("#trust-error").textContent = open.error || "";
+}
+
+// The grant's and the renewal's submit (spec items 2 and 4a): the admin's own password, typed. A renewal sends back the
+// window its page showed (`seen`), so a ship paired since then makes it refuse, and the page shows the window again.
+// Both send the grant line they showed (`shown`), which the station refuses unless it is the text it would store.
+async function submitTrust(form) {
+  const open = state.trust, renew = form.id === "trust-renew-form", identity = identityKey(state.me);
+  if (!open || open.busy || open.mode !== (renew ? "renew" : "grant")) return;
+  const password = form.elements.password.value, line = trustLineCurrent(open);
+  if (!password || !line) return;  // the field is required, and the button waits for the line, so the browser refuses first
+  const json = { days: Number(form.elements.days.value), expect: Number(form.elements.expect.value), password, shown: line.text };
+  if (renew) json.seen = [open.view.window_seq, open.view.paired];
+  const path = renew ? `/api/owner-trust/${pathPart(open.grantId)}/renew` : `/api/connections/${pathPart(open.contactId)}/trust`;
+  open.busy = form.querySelector('button[type="submit"]').disabled = true;
+  try {
+    const done = await api(path, { method: "POST", json });
+    if (identityKey(state.me) !== identity) return;
+    state.trust = null;
+    await refresh(`Owner trust ${renew ? "renewed" : "granted"}: ${done.text}`);
+  } catch (error) {
+    if (identityKey(state.me) !== identity) return;
+    if (error.status === 401 && !/password/i.test(error.message)) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    open.busy = false; open.error = error.message; open.line = null;  // renders again, with no password, and reads the line again
+    if (renew) {
+      try { open.view = await api(`/api/owner-trust/${pathPart(open.grantId)}`); }
+      catch (_) { state.trust = null; }  // the trust can't be read: the error shows in the page's flash instead
+      if (!state.trust) setFlash(error.message, true);
+    }
+    await refresh();
+    if (state.me && state.trust === open && !document.querySelector(`#trust-${open.mode}-form`)) {
+      state.trust = null; setFlash(open.error, true); render();  // the trust changed under the form: say it in the flash
+    }
+    if (state.trust === open) await loadTrustLine();
+  }
+}
 
 document.addEventListener("input", (event) => {
   Research.remember(event.target); Dashboard.input(event.target);
@@ -2695,6 +2909,16 @@ document.addEventListener("input", (event) => {
   }
   if (event.target.id === "board-outcome" && state.boardDone) state.boardDone.outcome = event.target.value;
   if (event.target.id === "pair-code") state.pairCode = event.target.value;  // kept through a re-render
+  if (event.target.closest("#trust-grant-form, #trust-renew-form") && state.trust) {
+    const form = event.target.form, open = state.trust;  // days and count kept through a re-render; never the password
+    open.expect = form.elements.expect.value;
+    if (open.days !== form.elements.days.value) {  // the old line goes, and the form waits for the station's new one
+      open.days = form.elements.days.value;
+      showTrustLine();
+      clearTimeout(trustLineTimer);
+      trustLineTimer = setTimeout(loadTrustLine, 200);
+    }
+  }
   if (event.target.closest("#grant-form")) state.grantForm = readGrantForm(event.target.form);  // kept through a re-render
   if (event.target.id === "grant-reason" && state.grantAsk) state.grantAsk.reason = event.target.value;
   if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {

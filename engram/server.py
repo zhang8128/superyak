@@ -2301,6 +2301,12 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
     sid = _store_id()
     getter = _storage.get_episode if layer == "episode" else _storage.get_semantic
     row = getter(memory_id) if layer in ("episode", "semantic") else None
+    if row is not None:
+        # Before any allow is asked for: the owner is never asked to place a person's typed words.
+        from sharing import captured_reason
+        refused = captured_reason(_storage, layer, row)
+        if refused is not None:
+            return {"error": refused}
     try:
         led = Ledger.open(ENGRAM_HOME)
     except (LedgerUnreadable, FileNotFoundError) as exc:
@@ -2504,7 +2510,7 @@ def permit(
     gate = _permission_gate()
     if gate.mode == "closed":
         return {"error": f"the permissions gate is closed, so nothing is changed: {gate.cause}"}
-    from permission_ledger import Ledger, LedgerUnreadable
+    from permission_ledger import Ledger, LedgerBusy, LedgerUnreadable
     from permissions import RuleError
     if op not in ("share", "deny", "withdraw", "shorten", "narrow", "collect", "uncollect") + _PERMIT_KINDS:
         return {"error": f"unknown op {op!r}"}
@@ -2522,6 +2528,8 @@ def permit(
             out = led.perform(act, actor=_agent_ref(), channel="tool", now=now)
         except (RuleError, ValueError, TypeError, KeyError) as exc:
             return {"error": str(exc)}
+        except LedgerBusy:                   # other writers kept changing the ledger under this one (D4, step 2)
+            return {"error": "the ledger was busy; nothing was written; try again"}
         grant = None
         if out.status == "done":
             row = led.conn.execute("SELECT under_grant FROM ledger_log WHERE seq = ?", (out.seq,)).fetchone()
@@ -2636,7 +2644,48 @@ def shares(audience: str | None = None) -> dict:
             )
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
-        return {"shares": [asdict(record) for record in records]}
+        return {"shares": _listed_shares(records)}
+
+
+def _listed_shares(records) -> list[dict]:
+    """The placements as `shares` lists them. A placement made before share refused captured prompts stays served
+    until it is unshared, so each one from this server's instance that would now be refused carries `refused_now`,
+    for the owner to unshare (fix:share-refuses-captured-memories). The capture digests of the store and its cold
+    storage are read once per call, not once per placement."""
+    from sharing import capture_digests
+    here = _instance_name or "default"
+    mine = [r.source_instance == here and r.layer in ("episode", "semantic") for r in records]
+    captures = capture_digests(_storage) if any(mine) else None
+    listed = []
+    for record, own in zip(records, mine):
+        item = asdict(record)
+        refused = _refused_now(record, captures) if own else None
+        if refused is not None:
+            item["refused_now"] = refused
+        listed.append(item)
+    return listed
+
+
+def _refused_now(record, captures) -> str | None:
+    """Why a placement from this instance would be refused now, or None. When its source row is still here, the
+    words are share's own refusal. Whether or not the row is here (a capture soon moves to cold storage or is deleted
+    by the nudge), a placed text that is a capture's text word for word is named. When the store holds no such
+    capture and its cold storage exists but cannot be read (`captures.cold` is None), the placement is named, failing
+    closed."""
+    from sharing import captured_reason
+    getter = _storage.get_episode if record.layer == "episode" else _storage.get_semantic
+    row = getter(record.source_id)
+    if row is not None:
+        refused = captured_reason(_storage, record.layer, row, captures=captures)
+        if refused is not None:
+            return refused
+    copied = captures.copies({record.content_digest})
+    if copied is None:
+        return ("its store's cold storage cannot be read, so whether this placement's text is a captured prompt's "
+                "cannot be told; unshare it")
+    if copied:
+        return "this placement's text is a captured prompt's, word for word; unshare it"
+    return None
 
 
 def _get_reading_gap_domains() -> list[str]:

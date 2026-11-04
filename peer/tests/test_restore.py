@@ -2532,7 +2532,11 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
     'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes', 'imprint_requests', 'imprint_receipts',
-    'contact_holds', 'pairing_confirmations'}  # fix:pairing-code (Serenity's review MF1): held as in the replaced file
+    'contact_holds', 'pairing_confirmations',  # fix:pairing-code (Serenity's review MF1): held as in the replaced file
+    'owner_trust',  # owner trust: every revocation the replaced file has, a trust paused there revoked, its sequence raised
+    'retired_peers',  # owner trust: every retirement the replaced file has, its peer unpaired
+    'trust_confirmations',  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
+    'trust_cap_refusals'}  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
@@ -2540,6 +2544,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
     'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
+    'lesson_outcomes',  # lesson outcomes: a local record beside the receipts, never federated
     # federation pull (plan SF9): copied as they are. A copy's nonces end where it was taken, so the listener reads the
     # reconcile's mark in system_meta and counts a request whose `at` is at most the mark plus 300 s as a replay
     # (fix:restore-keeps-pull-nonces). The backfill covers a copy older than peer_delivery.

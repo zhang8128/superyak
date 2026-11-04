@@ -97,9 +97,12 @@ class Layers:
             details = self._audience_details(db, draft)
             files = [dict(require(db.execute('SELECT id,name,media_type,size,digest FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())) for fid in draft['attachment_ids']]
             people = []
-            for contact in draft['audience_users']:
-                table = 'remote_contacts' if contact.startswith('remote_') else 'users'
-                people.append(dict(require(db.execute(f'SELECT id,name FROM {table} WHERE id=?', (contact,)).fetchone())))
+            for contact in draft['audience_users']:  # a remote contact by its label (owner trust, Task 6)
+                if contact.startswith('remote_'):
+                    person = db.execute('SELECT id, label AS name FROM contact_labels WHERE id=?', (contact,)).fetchone()
+                else:
+                    person = db.execute('SELECT id,name FROM users WHERE id=?', (contact,)).fetchone()
+                people.append(dict(require(person)))
             return {**self._layer_json(row), 'files':files, 'people':people, 'audience_details':details,
                     'space_versions':{space['id']:space['version'] for space in details}}
 

@@ -205,6 +205,9 @@ def test_every_route_outside_the_allow_list_refuses_a_public_request(watched, cr
     walked = every_route(app)
     templates = {template for template, _, _ in walked}
     assert {'/api/connections', '/api/sync', '/federation/events', '/assets', '/api/dockings', '/api/access-requests'} <= templates
+    # owner trust (Task 7): the admin's grant, renewal page, renewal and revoke are walked too, so none is public
+    assert {'/api/connections/{contact_id}/trust', '/api/owner-trust/{grant_id}', '/api/owner-trust/{grant_id}/renew',
+            '/api/owner-trust/{grant_id}/revoke', '/api/connections/{contact_id}'} <= templates
     before, client = rows(app), public(app, **credentials)
     for template, method, path in walked:
         if (template, method) in ALLOWED:

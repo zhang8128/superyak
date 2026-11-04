@@ -13,13 +13,13 @@ NOW = datetime(2026, 9, 6, tzinfo=timezone.utc)
 ALLOW = {"effect": "allow", "ruleId": "publisher-rule", "code": None}
 
 
-def policy(path, actions=("recall", "read", "inject_context"), *, publisher="why", weight=1, issuer="engram"):
+def policy(path, actions=("recall", "read", "inject_context"), *, publisher="why", weight=1, issuer="engram", valid_until="2027-01-01T00:00:00Z"):
     rule = dict(id="chosen", effect="allow", publishers=[f"urn:engram:{publisher}"],
                 profiles=["urn:lighthouse:profile:engram-recall-trace"], domains=["memory.recall"],
                 actions=list(actions), contexts=["memory/technical"],
                 claimMediaTypes=["application/vnd.engram.recall-rank-claim+json"],
                 purposes=["session-recall"], audiences=["self"],
-                validFrom="2026-01-01T00:00:00Z", validUntil="2027-01-01T00:00:00Z",
+                validFrom="2026-01-01T00:00:00Z", validUntil=valid_until,
                 requiredEvidence=[], requiredAttestations=[])
     artifact = dict(protocolVersion="0.1", kind="ConnectionPolicy", id="urn:policy:receiver",
                     issuedAt="2026-01-01T00:00:00Z", issuer=f"urn:engram:{issuer}",
@@ -79,8 +79,54 @@ def test_crossing_has_reproducible_content_free_receipt(crossing):
 def test_recall_permission_precedes_query(crossing, actions):
     args, calls, _, _ = crossing
     policy(args["policy_path"], actions=actions)
-    assert neighbors.neighbor_arm(**args) is None
+    result = neighbors.neighbor_arm(**args)
+    assert result["diagnostics"][0] == {"code": "NO_MATCHING_ALLOW"}
     assert calls == []
+
+
+def test_expired_rule_says_outside_validity(crossing):
+    args, calls, _, _ = crossing
+    policy(args["policy_path"], valid_until="2026-06-01T00:00:00Z")
+    result = neighbors.neighbor_arm(**args)
+    assert result["degraded"] is True
+    assert result["diagnostics"] == [{"code": "OUTSIDE_VALIDITY"},
+                                     {"publisher": "urn:engram:why", "code": "OUTSIDE_VALIDITY"}]
+    assert calls == []
+
+
+def test_no_matching_allow_names_each_publisher(crossing):
+    args, calls, _, _ = crossing
+    args["publishers"] = ["other"]
+    result = neighbors.neighbor_arm(**args)
+    assert result["diagnostics"] == [{"code": "NO_MATCHING_ALLOW"},
+                                     {"publisher": "urn:engram:other", "code": "NO_MATCHING_ALLOW"}]
+    assert calls == []
+
+
+def test_mixed_denials_give_rules_denied_with_both(crossing):
+    args, calls, _, _ = crossing
+    policy(args["policy_path"], valid_until="2026-06-01T00:00:00Z")
+    args["publishers"] = ["why", "other"]
+    result = neighbors.neighbor_arm(**args)
+    assert result["diagnostics"][0] == {"code": "RECEIVER_RULES_DENIED"}
+    assert result["diagnostics"][1:] == [{"publisher": "urn:engram:why", "code": "OUTSIDE_VALIDITY"},
+                                         {"publisher": "urn:engram:other", "code": "NO_MATCHING_ALLOW"}]
+    assert calls == []
+
+
+def test_attach_neighbors_degrades_on_denied_rules(tmp_path, monkeypatch):
+    denied = neighbors._empty("OUTSIDE_VALIDITY")
+    monkeypatch.setattr(neighbors, "neighbor_arm", lambda **kw: denied)
+    monkeypatch.setattr(neighbors, "context_ref", lambda c: CONTEXT)
+    instance = tmp_path / ".engram" / "instances" / "engram"
+    instance.mkdir(parents=True)
+    monkeypatch.setattr(neighbors, "load_settings", lambda p: {})
+    (instance / "graph.db").write_text("")
+    storage = type("S", (), {"db_path": instance / "graph.db"})()
+    response = neighbors.attach_neighbors(dict(recall_id="r"), query="q", context_id="memory/technical",
+                                          purpose="session-recall", storage=storage, session_id="s",
+                                          receiver="engram", engram_home=tmp_path)
+    assert response["degraded"] == ["neighbors"]
 
 
 @pytest.mark.parametrize("actions", [("recall",), ("recall", "read"), ("recall", "inject_context")])
@@ -146,15 +192,28 @@ def test_invalid_policy_stops_before_query(crossing, change):
     assert calls == []
 
 
-def test_no_config_or_context_is_inert(tmp_path, monkeypatch):
+def test_no_context_is_inert(tmp_path, monkeypatch):
     def fail(**kw): raise AssertionError("must not consult")
     monkeypatch.setattr(neighbors, "neighbor_arm", fail)
-    for context in (None, "memory/technical"):
-        response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
-        original = deepcopy(response)
-        neighbors.attach_neighbors(response, query="query", context_id=context, purpose="session-recall",
-                                   storage=Log(), session_id="s", receiver="engram", engram_home=tmp_path)
-        assert response == original
+    response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
+    original = deepcopy(response)
+    neighbors.attach_neighbors(response, query="query", context_id=None, purpose="session-recall",
+                               storage=Log(), session_id="s", receiver="engram", engram_home=tmp_path)
+    assert response == original
+
+
+@pytest.mark.parametrize("receiver, code", [("engram", "RECEIVER_DISABLED"), (None, "NO_RECEIVER")])
+def test_an_asked_neighbor_that_cannot_be_reached_says_so(tmp_path, monkeypatch, receiver, code):
+    """A recall that names a lighthouse context but reaches no neighbor says so (Rio Grande's Engram test,
+    2026-11-03): local results alone, returned silently, would let a ship think it searched shared memory."""
+    def fail(**kw): raise AssertionError("must not consult")
+    monkeypatch.setattr(neighbors, "neighbor_arm", fail)
+    response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
+    neighbors.attach_neighbors(response, query="query", context_id="memory/technical", purpose="session-recall",
+                               storage=Log(), session_id="s", receiver=receiver, engram_home=tmp_path)
+    assert response["results"] == [{"id": "local", "score": 0.7}]
+    assert response["neighbors"]["diagnostics"] == [{"code": code}]
+    assert response["neighbors"]["delivered"] == [] and "neighbors" in response["degraded"]
 
 
 def test_receiver_can_weight_peers_without_transitive_discovery(crossing, monkeypatch):
