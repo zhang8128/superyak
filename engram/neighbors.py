@@ -11,6 +11,7 @@ from lighthouse_client import (LighthouseClient, NeighborUnavailable, ask_crossi
 from lighthouse_policy import PolicyRequest
 from lighthouse_protocol import artifact_digest, canonical_json, content_digest, recall_frame, read_frame
 from permissions import annotation_line
+import remote_deliveries
 from lighthouse_receipts import build_receipt, write_receipt
 from lighthouse_receiver_config import (MAX_PUBLISHERS, NAME, context_ref, load_receiver_policy, load_settings,
                                         valid_publishers, valid_remote_publishers)
@@ -242,6 +243,21 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
         permitted = [i["permission"] for i in delivered if isinstance(i.get("permission"), dict)]
         delivered = [{**i, "permission": annotation_line(i["permission"])} if isinstance(i.get("permission"), dict) else i
                      for i in delivered]
+        # P16: what came from another peer is recorded beside the store first, then the receipt. A failed record
+        # returns nothing, as a failed receipt does; a record left by a receipt that then fails guards unseen text.
+        remote_items = [item for item in delivered if item["publisher"] in remote_names]
+        if remote_items:
+            read_ids = {d["publisher"]: d["disclosureId"] for d in read_disclosures}
+            try:
+                remote_deliveries.record(
+                    remote_deliveries.path_for(storage.db_path),
+                    [dict(disclosureId=read_ids.get(i["publisher"]) or "", publisher=i["publisher"],
+                          memoryId=i["memoryId"], content=i["content"]) for i in remote_items],
+                    now=int(clock().timestamp()))
+            except remote_deliveries.RecordBusy:
+                return dict(_empty("RECORD_BUSY"), sources=sources, selected=selected)
+            except Exception:
+                return dict(_empty("RECORD_FAILED"), sources=sources, selected=selected)
         recall_rules = {source["policyDecision"]["ruleId"] for source in sources}
         receipt = build_receipt(receiver=receiver, turn_id=recall_id, context=context, purpose=purpose,
                                 sources=sources, selected=selected,

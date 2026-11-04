@@ -433,7 +433,9 @@ def remote(tmp_path):
     sock = FakeCrossingSocket()
     path = tmp_path / "policy.json"
     remote_policy(path, local=())
-    args = dict(query="private query", context=deepcopy(CONTEXT), purpose="session-recall", k=1, storage=Log(),
+    log = Log()
+    log.db_path = str(tmp_path / "graph.db")  # remote deliveries are recorded beside the store (Task 12)
+    args = dict(query="private query", context=deepcopy(CONTEXT), purpose="session-recall", k=1, storage=log,
                 session_id="s", recall_id="local-turn", receiver="engram", publishers=[], socket_path=None,
                 policy_path=path, now=lambda: NOW,
                 remote_publishers=[dict(peer_id=PEER, ship=SHIP, context="memory/technical")],
