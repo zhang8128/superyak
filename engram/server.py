@@ -1483,6 +1483,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
         _storage,
         _embeddings,
         operation_lock=_server_lifecycle_lock,
+        exclude=_config.indexing.exclude,
     )
     _register_server_cleanup(_watcher, _watcher.stop, "watcher")
 
