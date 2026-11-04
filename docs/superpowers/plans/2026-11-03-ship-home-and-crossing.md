@@ -1107,3 +1107,44 @@ The Mac's lighthouse receiver rule expired 2026-10-15, and recall fell back to l
 - It sets `validUntil` explicitly. The default is 90 days, and `--until` sets it, up to 366 days. The date is printed in its output.
 - Rio Grande's fix:lighthouse-expired-rule-silent makes runtime status warn 14 days ahead and names `OUTSIDE_VALIDITY` in a recall's diagnostics. A crossing that hits an expired publisher rule shows that code in `neighbors`, never silence. Task 10 tests the default date and the `--until` cap.
 - Deploy step 4 records the date in the room, so a person sees it.
+
+## Build findings, stage 2 (Tasks 0-14, built 2026-11-04 on main 4be306de)
+
+The builder followed the plan's intent wherever main had moved since it was written (b7d91462), and stopped to report
+where an assumption no longer held. Points 1 to 5 correct the plan's text, and point 1 is a decision for the partners.
+
+1. **Check 5 and owner trust. OPEN, a decision for Rio Grande and Serenity.**
+   - **What's built:** P5's helper already exists as `owner_trust.code_current`, and check 5 is
+     `federation.contact_current`: paired, not held, and `code_current`. So a ship contact confirmed only by an owner
+     trust, with no typed code, is refused. That's the conservative reading of spec 2.2's "a current typed
+     confirmation".
+   - **What spec 2.2 also says:** "by the rule `connections()` uses", and `connections()` reports a trust-made ship as
+     "confirmed by owner trust".
+   - **Tardis's proposal:** accept a trust-made ship contact while its trust is live (not revoked, not expired), with
+     holds applying as now. Cluster ships are trust-paired, so with the conservative rule no cluster ship could ever
+     cross.
+   - **For stage 2,** the tardis ship is code-confirmed on the Pi, so the first crossing works either way.
+2. **P8 and P17.** A 16 KiB cap on the local line made P17 unreachable, since P17's own example (4,096 four-byte
+   characters) is over 16 KiB as a local line. So the peer reads the local line up to 32 KiB, P17 still measures the
+   signed request at 16 KiB, and a BAD_REQUEST code was added.
+3. **P11 and S1's allows** need `read` as well. Deciding `inject_context` requires recall, read and `inject_context`,
+   or the ledger answers NO_ALLOW. The tests and Task 13 use all three, and Deploy step 5's allows read "recall, read
+   and inject_context".
+4. **M2 can't happen through the ledger:** rule P26 keeps a one-segment place a root, at registration and through
+   `add-parent`. The daemon's and the CLI's parent checks stay, as defence in depth. Their tests simulate a parent
+   through `permissions._parents`.
+5. **B5's "returns None"** is out of date. With main's lighthouse diagnostics, an all-denied configuration returns an
+   empty result that names its code, and remote-only matches that.
+6. **Moved code, intent kept:**
+   - The daemon's eligible-set cache, `_FrameHouse` and LEDGER_BUSY moved. A busy ledger still answers LEDGER_BUSY
+     before the enforce check, and the cache key carries agent and place, so remote crossings share one
+     `remote-stores` entry.
+   - Two newer main rules apply. Only reviewed code enters `store.reading()`, so crossing.py uses
+     `store.transaction()` as `serve_pull` does. Contact names show through `contact_labels`.
+7. **The Deploy order before the first crossing** (Rio Grande, all hands c858a53c):
+   1. Restart rio-grande's session, so its Engram server postdates 53d22df0, and check that `status()` names migration
+      030.
+   2. Rio Grande shares its chosen memories.
+   3. Andy's one sitting: `migrate`, `agent remote-stores` at `place:outside-home`, and `gate enforce`.
+   4. Tardis's `federate` runs with `--crossing-socket`.
+   5. The first recall.
