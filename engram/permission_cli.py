@@ -26,10 +26,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from permission_ledger import (MARKER, PUBLISHED_HOUSE, Ledger, _mark_moved, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               check_gate_digest, check_gate_mode, check_retire_person, effective_gate, houses,
-                               ledger_path,
-                               make_private)
+from permission_ledger import (MARKER, PUBLISHED_HOUSE, Ledger, LedgerBusy, LedgerUnreadable, _lacks_029, _mark_moved,
+                               _seconds, _words_kind, check_gate_digest, check_gate_mode, check_retire_person,
+                               effective_gate, houses, ledger_path, make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -1573,6 +1572,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     except RuleError as e:
         print(f"refused: {e}", file=sys.stderr)
+        return 1
+    except LedgerBusy as e:                  # other writers kept changing the ledger under this one (D4, step 2)
+        print(f"the ledger was busy; nothing was written; try again ({e})", file=sys.stderr)
         return 1
     except (LedgerUnreadable, sqlite3.Error) as e:
         print(f"the ledger cannot be used: {e}", file=sys.stderr)

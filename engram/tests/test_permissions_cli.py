@@ -287,3 +287,14 @@ def test_times_take_a_date_or_rfc_3339_utc():
     for bad in ("2026-11-02T10:30:00+01:00", "tomorrow", "2026-13-01", ""):
         with pytest.raises(argparse.ArgumentTypeError):
             permission_cli._when(bad)
+
+
+def test_a_busy_ledger_says_nothing_was_written_and_to_try_again(cli_home, fake_tty, monkeypatch, capsys):
+    """The projection digest's section 2 review, S3: a writer that found the ledger changed under its lock on each of
+    its tries raises LedgerBusy, which the command reads as a busy ledger, not a traceback."""
+    monkeypatch.setattr(Ledger, "_append_on", lambda self, *args, **kwargs: None)   # an unverified change each try
+    before = ledger_bytes(cli_home)
+    fake_tty.answer_the_printed_code()
+    assert main(["person", "add", "jenn"]) == 1
+    assert "the ledger was busy; nothing was written; try again" in capsys.readouterr().err
+    assert ledger_bytes(cli_home) == before
