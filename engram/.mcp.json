@@ -10,19 +10,6 @@
         "ENGRAM_HARNESS": "claude-code"
       }
     },
-    "reader": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/Users/kairos/Projects/reader",
-        "python",
-        "server.py"
-      ],
-      "env": {
-        "READER_HOME": "/Users/kairos/Projects/reader"
-      }
-    },
     "team": {
       "command": "sh",
       "args": [
