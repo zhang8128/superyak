@@ -41,7 +41,7 @@ limit = 1
 timeout_s = 2.0
 ```
 
-Paths resolve relative to this file. At most eight publishers, five returned memories, and ten seconds are accepted. Defaults are one memory and two seconds. Socket exchanges share one total deadline and each frame is capped at 1 MiB; returned memory text is capped at 32 KiB in total. Slow or unavailable publishers can exhaust the shared deadline. A missing file or `enabled = false` disables the integration on the next call. A named instance falling back to the default database cannot use that instance's receiver settings.
+Paths resolve relative to this file. At most eight publishers, five returned memories, and ten seconds are accepted. Defaults are one memory and two seconds. Socket exchanges share one total deadline and each frame is capped at 1 MiB; returned memory text is capped at 32 KiB in total. Slow or unavailable publishers can exhaust the shared deadline. A missing file or `enabled = false` disables the integration on the next call; anything at that path that is not a regular file is invalid, never read. A named instance falling back to the default database cannot use that instance's receiver settings.
 
 An optional `default_context = "memory/technical"` makes this receiver's recalls that name no context cross with that one. It reaches local publishers only, so a query never leaves the machine unless that call names a context; its deadline is the lower of `timeout_s` and 1 s; the answer's `neighbors.by_default` is true. Without the key a recall behaves as it always has. Set it only once a crossing on this machine, under its usual load, comes in under the deadline. Hooks don't cross. Spec: `docs/superpowers/specs/2026-11-04-recall-crosses-by-default-design.md`.
 

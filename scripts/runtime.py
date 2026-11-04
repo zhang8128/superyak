@@ -312,9 +312,11 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     errors: list[str] = []
     settings_path = instance_dir / "lighthouse-receiver.toml"
     base = {"config": str(settings_path), "publishers": []}
-    if not settings_path.is_file():
+    if not settings_path.exists():
         return {**base, "state": "disabled"}, None, errors
     try:
+        if not settings_path.is_file():
+            raise RuntimeConfigurationError("receiver configuration is not a file")
         settings = _parse_toml(settings_path)
     except RuntimeConfigurationError:
         return {

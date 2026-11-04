@@ -74,6 +74,18 @@ def test_no_named_receiver_is_inert(tmp_path, monkeypatch, name):
     assert calls == []
 
 
+def test_a_name_that_walks_out_of_instances_reads_nothing_there(tmp_path, monkeypatch):
+    """`../up` would reach .engram/up/lighthouse-receiver.toml, a toml nobody chose for a receiver."""
+    calls = recording_arm(monkeypatch)
+    (tmp_path / ".engram" / "instances").mkdir(parents=True)
+    up = tmp_path / ".engram" / "up"
+    up.mkdir()
+    (up / "lighthouse-receiver.toml").write_text(
+        f'enabled = true\npublishers = ["why"]\nsocket_path = "s"\npolicy_path = "p"\ndefault_context = "{CONTEXT}"\n')
+    assert attach_default(tmp_path, None, "../up") == dict(recall_id="turn", results=["local"])
+    assert calls == []
+
+
 def test_no_receiver_file_is_inert(tmp_path, monkeypatch):
     calls = recording_arm(monkeypatch)
     assert attach_default(tmp_path, None) == dict(recall_id="turn", results=["local"])
@@ -94,6 +106,9 @@ def test_load_settings_keeps_its_shape_for_every_other_caller(tmp_path):
     instance, _ = receiver(tmp_path, f'default_context = "{CONTEXT}"')
     settings = receiver_config.load_settings(instance / "lighthouse-receiver.toml")
     assert set(settings) == {"publishers", "socket_path", "policy_path", "k", "timeout_s"}
+    assert receiver_config.load_settings(instance / "absent.toml") is None
+    (instance / "off.toml").write_text("enabled = false\n")
+    assert receiver_config.load_settings(instance / "off.toml") is None
 
 
 # ---------------------------------------------------------------- crossing
@@ -117,6 +132,17 @@ def test_an_explicit_context_wins_and_keeps_its_own_deadline(tmp_path, monkeypat
     assert calls[0]["timeout_s"] == 5.0
     assert response["neighbors"]["by_default"] is False
     assert response["neighbors"]["context"] == CONTEXT
+
+
+@pytest.mark.parametrize("name, toml, code", [(None, None, "NO_RECEIVER"), ("engram", "enabled = false\n", "RECEIVER_DISABLED")])
+def test_an_explicit_crossing_that_reaches_nobody_still_says_what_it_asked(tmp_path, name, toml, code):
+    instance, storage = receiver(tmp_path)
+    if toml:
+        (instance / "lighthouse-receiver.toml").write_text(toml)
+    response = neighbors.attach_neighbors(dict(results=["local"]), query="q", context_id=CONTEXT, purpose="session-recall",
+                                          storage=storage, session_id="s", receiver=name, engram_home=tmp_path)
+    assert response["neighbors"]["diagnostics"] == [{"code": code}]
+    assert response["neighbors"]["context"] == CONTEXT and response["neighbors"]["by_default"] is False
 
 
 def test_a_default_crossing_has_the_tighter_deadline(tmp_path, monkeypatch):
@@ -146,6 +172,7 @@ def test_a_bad_value_is_invalid_config_and_a_recall_says_so(tmp_path, monkeypatc
     assert response["degraded"] == ["neighbors"]
     assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
     assert response["neighbors"]["by_default"] is True
+    assert response["neighbors"]["context"] is None
 
 
 def test_an_unreadable_toml_says_so_and_keeps_local_results(tmp_path, monkeypatch):
@@ -248,6 +275,7 @@ def test_the_answer_says_why_when_the_store_is_not_the_receivers(tmp_path, monke
     response = attach_default(tmp_path, elsewhere)
     assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
     assert response["neighbors"]["by_default"] is True
+    assert response["neighbors"]["context"] == CONTEXT
 
 
 # ---------------------------------------------------------------- when the publisher is down or hung
@@ -342,13 +370,14 @@ def test_recall_with_no_context_takes_the_default_path(engram_server_env, monkey
 
 
 def test_recall_naming_a_context_doesnt_take_the_default_path(engram_server_env, monkeypatch):
+    """These fakes record and the test looks afterwards: the seam's `except Exception` would swallow an assert in them."""
     server = engram_server_env
     seed(2)
-
-    def fail(*a, **kw): raise AssertionError("an explicit context is not a default")
-    monkeypatch.setattr(neighbors, "attach_default", fail)
-    monkeypatch.setattr(neighbors, "attach_neighbors", lambda response, **kw: response)
+    asked, defaulted = [], []
+    monkeypatch.setattr(neighbors, "attach_default", lambda response, **kw: defaulted.append(kw))
+    monkeypatch.setattr(neighbors, "attach_neighbors", lambda response, **kw: asked.append(kw["context_id"]))
     assert server.recall("rivers", uninvited=0, lighthouse_context=CONTEXT)["results"]
+    assert asked == [CONTEXT] and defaulted == []
 
 
 def test_a_failure_on_the_default_path_keeps_the_local_recall(engram_server_env, monkeypatch):
@@ -364,10 +393,10 @@ def test_a_failure_on_the_default_path_keeps_the_local_recall(engram_server_env,
 
 def test_instinct_only_recall_doesnt_take_the_default_path(engram_server_env, monkeypatch):
     server = engram_server_env
-
-    def fail(*a, **kw): raise AssertionError("instincts are local")
-    monkeypatch.setattr(neighbors, "attach_default", fail)
-    assert "neighbors" not in server.recall("rivers", layer="instinct")
+    defaulted = []
+    monkeypatch.setattr(neighbors, "attach_default", lambda response, **kw: defaulted.append(kw))
+    result = server.recall("rivers", layer="instinct")
+    assert defaulted == [] and "neighbors" not in result and "degraded" not in result
 
 
 @pytest.mark.parametrize("hook", ["wake.py", "nudge.py", "sleep.py"])
@@ -400,6 +429,23 @@ def test_status_reports_the_key_when_set(tmp_path):
     status, _, errors = status_of(tmp_path, f'default_context = "{CONTEXT}"')
     assert status["state"] == "enabled" and errors == []
     assert status["default_context"] == CONTEXT
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_status_calls_a_toml_path_that_is_no_file_invalid_as_a_recall_does(tmp_path, kind):
+    instance, _ = real_receiver(tmp_path)
+    path = instance / "lighthouse-receiver.toml"
+    path.unlink()
+    path.mkdir() if kind == "directory" else os.mkfifo(path)
+    status, _, errors = runtime_module()._receiver_status(instance, datetime(2026, 11, 4, tzinfo=timezone.utc))
+    assert status["state"] == "invalid" and errors
+
+
+def test_status_with_no_toml_stays_disabled(tmp_path):
+    instance, _ = real_receiver(tmp_path)
+    (instance / "lighthouse-receiver.toml").unlink()
+    status, _, errors = runtime_module()._receiver_status(instance, datetime(2026, 11, 4, tzinfo=timezone.utc))
+    assert status["state"] == "disabled" and errors == []
 
 
 def test_status_raises_no_error_when_absent(tmp_path):

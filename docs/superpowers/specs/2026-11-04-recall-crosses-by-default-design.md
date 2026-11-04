@@ -30,6 +30,21 @@ twice each. Mac only: the Pi is untested, and its embedder is slower and busier.
 Delivered text: p50 584 characters, p90 3,090. Four real questions on 2026-11-04 delivered 4 different memories: 2 useful,
 1 a repeat of a local result, 1 noise.
 
+**Those are warm numbers, and a daemon drops its model after 300 s idle.** Added during the build, after Tardis's cold
+crossing took 2.7 s. The same kind of throwaway copy, the Mac's own `limit = 1`, timing the crossing alone:
+
+| Crossing | Mac | Runs |
+|---|---|---|
+| Warm, straight after another | 28-31 ms | 11 |
+| Warm, 0.5-2 s after another | 42-54 ms | 9 |
+| After an idle drop (`ENGRAM_EMBED_IDLE_SECONDS=2`, 6 s apart) | 141-150 ms | 7 |
+| First after a daemon start | 609-621 ms, once 1,614 ms | 4 |
+
+So the Mac's rollout line holds, but the worst of those is over 1 s: it is once per daemon start, and it would read as a
+named `TIMEOUT`, with local results kept. Not measured: an idle drop with the model's file out of the OS's cache, as after
+hours asleep, and whether a daemon that a crossing gave up on finishes loading (no crossing hit the deadline in these
+runs). The report at 50 outcomes counts `TIMEOUT` among default crossings, which is where either would show.
+
 **What it adds to the logs,** read from the Mac's store. A `lighthouse_receipt` row's context averages 6,669 bytes (max
 8,638), against 382 for a recall. Recalls run at 4.2 a day since 2026-09-02, so every recall crossing adds about 28 KB a
 day, about 10 MB a year, to a `memory_log` holding 2.2 MB of context today. A disclosure row adds about 800 bytes on the
