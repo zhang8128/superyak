@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS oauth_pending(id TEXT PRIMARY KEY, request TEXT NOT N
 # oauth_pending (Task 5): a request from its sign-in on, keyed by `request`, the SHA-256 of its fragment's tag, so one
 # fragment is one row. `decided` is when Allow or Deny was chosen; the plan's columns had no mark for a Deny.
 REGISTER_BODY_MAX = 8 * 1024  # bytes
+MCP_BODY_MAX = 64 * 1024  # a tool call's arguments are a room id, a query of 200 characters, a message id
 CLIENT_NAME_MAX, CLIENT_NAME_BYTES = 100, 200
 GRANT_TYPES = ('authorization_code', 'refresh_token')
 CLIENT_VERSION = 1

@@ -21,12 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
+from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
 MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
+SIGN_IN_BODY_MAX = 8 * 1024  # a name, a password and an invitation token, as JSON
 COOKIE = 'superyak_session'
 DEVICE_COOKIE = 'superyak_device'  # public route spec 3: the known-device cookie, kept at logout
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
@@ -54,6 +56,14 @@ PUBLIC_ROUTES = {
     '/.well-known/oauth-authorization-server': {'GET'}, '/register': {'POST'}, '/authorize': {'GET'},
     '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
+}
+# Each public write's whole body, by path. BrowserBoundary reads no further, so a stranger can't make the home hold
+# MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large" in its own words. A
+# test holds this to PUBLIC_ROUTES' POSTs, so a public write added later needs a line here.
+ROUTE_BODY_MAX = {
+    '/api/login': SIGN_IN_BODY_MAX, '/api/invitations/redeem': SIGN_IN_BODY_MAX, '/register': REGISTER_BODY_MAX,
+    '/authorize/signin': REGISTER_BODY_MAX, '/authorize/decision': REGISTER_BODY_MAX, '/token': REGISTER_BODY_MAX,
+    '/mcp': MCP_BODY_MAX,
 }
 # The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
 # dot, and a port only when it isn't the default, without a leading zero. Anything else stops serve, rather than
@@ -101,12 +111,15 @@ class BrowserBoundary:
         if browser_write:
             if not origin or origin != request_origin:
                 return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
+        route_max = ROUTE_BODY_MAX.get(scope['path'])
         body = bytearray()
         while True:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 return
             body.extend(message.get('body', b''))
+            if route_max is not None and len(body) > route_max:
+                break
             if len(body) > MAX_REQUEST:
                 return await JSONResponse({'error': 'Request too large'}, 413)(scope, receive, send)
             if not message.get('more_body', False):
@@ -200,7 +213,9 @@ class SignInLane:
         finally:
             self.inside -= 1
 
-async def body(request):
+async def body(request, limit=None):
+    if limit is not None and len(await request.body()) > limit:
+        raise Problem(413, 'Request too large')
     try:
         value = await request.json()
     except (ValueError, UnicodeDecodeError, RecursionError):
@@ -378,7 +393,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/login')
     async def login(request: Request):
-        data = await body(request)
+        data = await body(request, SIGN_IN_BODY_MAX)
         return await login_response(request, data.get('username'), data.get('password'))
 
     if local_demo:
@@ -557,7 +572,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
-        data = await body(request)
+        data = await body(request, SIGN_IN_BODY_MAX)
         # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
         return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
 
