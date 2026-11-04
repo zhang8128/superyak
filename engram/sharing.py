@@ -27,6 +27,32 @@ REASON_INVALID_LAYER = "invalid_layer"
 INVALID_REASONS = (REASON_INVALID_AUDIENCE, REASON_INVALID_LAYER)
 CAPTURED_SOURCE = "auto"            # hooks/nudge.py stores a person's novel prompts verbatim with this source
 
+# Ship home and crossing spec 2.2 (plan P12): remote refs, in one place. A store ref is what the publisher's peer writes
+# into a crossing frame's receiver, from the origin it verified; a ship ref is how a receiver names a remote publisher.
+# Each holds colons, so neither can be a local NAME, and only an exact rule names one (lighthouse_policy._pattern_score).
+REMOTE_PREFIX = "urn:superyak:"
+REMOTE_STORE_REF = re.compile(
+    r"urn:superyak:[0-9a-f]{64}:store:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+REMOTE_SHIP_REF = re.compile(r"urn:superyak:[0-9a-f]{64}:ship:[A-Za-z0-9_-]{1,64}\Z")
+RESERVED_AGENT = "remote-stores"   # the one ledger agent standing for every remote store (spec 2.2, A)
+_LOCAL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")   # lighthouse_receiver_config.NAME
+
+
+def is_remote(value) -> bool:
+    """Whether a receiver or publisher names a remote store or ship (well formed or not)."""
+    return isinstance(value, str) and value.startswith(REMOTE_PREFIX)
+
+
+def receiver_ref(name_or_ref: str) -> str:
+    """A frame receiver as policies and audience maps key it: a well-formed remote store ref as it is, a local NAME as
+    `urn:engram:<name>`. Anything else, a malformed remote ref above all, raises ValueError."""
+    if isinstance(name_or_ref, str):
+        if REMOTE_STORE_REF.fullmatch(name_or_ref):
+            return name_or_ref
+        if _LOCAL_NAME.fullmatch(name_or_ref):
+            return f"urn:engram:{name_or_ref}"
+    raise ValueError("INVALID_RECEIVER")
+
 logger = logging.getLogger(__name__)
 
 
