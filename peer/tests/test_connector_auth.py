@@ -73,12 +73,16 @@ def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home):
 
 def test_the_body_bound_still_holds_where_the_origin_check_is_skipped(home):
     """Rio Grande's section 2, S2: /register, /token and /mcp are the only anonymous public POSTs without the
-    same-origin check, so the 6 MB bound must still apply to them."""
+    same-origin check, so a bound must still apply to them. It is now each route's own, in that route's words
+    (fix:public-post-body-cap-before-buffer), reached long before the 6 MB one."""
     from superyak_peer.app import MAX_REQUEST
     client = public_client(home.app)
-    for path in ('/register', '/token', '/mcp'):
-        response = client.post(path, content=b'x' * (MAX_REQUEST + 1))
-        assert (response.status_code, response.json()) == (413, {'error': 'Request too large'}), path
+    form = {'content-type': 'application/x-www-form-urlencoded'}
+    for path, headers, status, words in (('/register', {}, 413, 'invalid_client_metadata'),
+                                         ('/token', form, 413, 'invalid_request'),
+                                         ('/mcp', {}, 401, 'invalid_token')):     # its token is checked before its size
+        response = client.post(path, content=b'x' * (MAX_REQUEST + 1), headers=headers)
+        assert (response.status_code, response.json()) == (status, {'error': words}), path
 
 
 def test_another_scheme_or_port_on_the_public_name_is_another_origin(tmp_path):

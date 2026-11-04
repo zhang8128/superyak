@@ -57,14 +57,15 @@ PUBLIC_ROUTES = {
     '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
-# Each public write's whole body, by path. BrowserBoundary reads no further, so a stranger can't make the home hold
-# MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large" in its own words. A
-# test holds this to PUBLIC_ROUTES' POSTs, so a public write added later needs a line here.
+# Each public write's whole body, by route template. BrowserBoundary reads no further, so a stranger can't make the home
+# hold MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large" in its own words.
+# A test holds this to PUBLIC_ROUTES' POSTs, so a public write added later needs a line here.
 ROUTE_BODY_MAX = {
     '/api/login': SIGN_IN_BODY_MAX, '/api/invitations/redeem': SIGN_IN_BODY_MAX, '/register': REGISTER_BODY_MAX,
     '/authorize/signin': REGISTER_BODY_MAX, '/authorize/decision': REGISTER_BODY_MAX, '/token': REGISTER_BODY_MAX,
     '/mcp': MCP_BODY_MAX,
 }
+SMALLEST_ROUTE_BODY = min(ROUTE_BODY_MAX.values())  # under this no route's cap can matter, so no route is looked up
 # The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
 # dot, and a port only when it isn't the default, without a leading zero. Anything else stops serve, rather than
 # leaving a typo to turn the connector off quietly (Rio Grande's section 2 of connector-config, S1).
@@ -90,10 +91,24 @@ def is_public(scope):
         address = address.ipv4_mapped
     return not (address.is_loopback or any(address in network for network in TAILNET))
 
+def route_body_max(router, scope):
+    """The ROUTE_BODY_MAX of the route the router dispatches this request to, found as PublicRoute.allowed finds it: the
+    first full match, else the first partial one. Never by the path's text: a route's pattern ends in `$`, which matches
+    before a trailing newline, so `/api/login%0A` is login to the router and to nothing in a dict."""
+    probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
+    for route in router.routes:
+        match, _ = route.matches(probe)
+        if match == Match.FULL:
+            return ROUTE_BODY_MAX.get(getattr(route, 'path', None))
+        if match == Match.PARTIAL and partial is None:
+            partial = route
+    return None if partial is None else ROUTE_BODY_MAX.get(getattr(partial, 'path', None))
+
+
 class BrowserBoundary:
     """Bound input before JSON parsing; check origins for browser writes."""
-    def __init__(self, app, *, allowed_origins=()):
-        self.app, self.allowed_origins = app, set(allowed_origins)
+    def __init__(self, app, *, router, allowed_origins=()):
+        self.app, self.router, self.allowed_origins = app, router, set(allowed_origins)
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
@@ -111,13 +126,15 @@ class BrowserBoundary:
         if browser_write:
             if not origin or origin != request_origin:
                 return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
-        route_max = ROUTE_BODY_MAX.get(scope['path'])
+        route_max, looked = None, False
         body = bytearray()
         while True:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 return
             body.extend(message.get('body', b''))
+            if not looked and len(body) > SMALLEST_ROUTE_BODY:
+                looked, route_max = True, route_body_max(self.router, scope)
             if route_max is not None and len(body) > route_max:
                 break
             if len(body) > MAX_REQUEST:
@@ -339,7 +356,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         from .connector_routes import install as install_connector
         install_connector(app, public_origin, connector_callback or DEFAULT_CALLBACK)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
-    app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
+    app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins)
     app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)

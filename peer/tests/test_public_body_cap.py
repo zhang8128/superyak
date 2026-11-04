@@ -12,8 +12,18 @@ from superyak_peer.app import MAX_REQUEST, PUBLIC_ROUTES, ROUTE_BODY_MAX, SIGN_I
 from superyak_peer.connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 
 
-def boundary_run(path, *, chunk, chunks=10_000):
-    """BrowserBoundary on a POST of `chunks` chunks: how many it pulled, what the route got, and any answer it gave."""
+PUBLIC_ORIGIN = 'https://home.example'
+
+
+@pytest.fixture(scope='module')
+def router(tmp_path_factory):
+    """The real router, with the connector's routes: the cap is found by what it dispatches, not by a path's text."""
+    return create_app(tmp_path_factory.mktemp('home') / 'home', allowed_origins=[PUBLIC_ORIGIN],
+                      public_origin=PUBLIC_ORIGIN).router
+
+
+def boundary_run(router, path, *, chunk, chunks=10_000, method='POST'):
+    """BrowserBoundary on a request of `chunks` chunks: how many it pulled, what the route got, and any answer it gave."""
     pulled, got, answers = [0], [], []
 
     async def receive():
@@ -26,10 +36,14 @@ def boundary_run(path, *, chunk, chunks=10_000):
     async def send(message):
         answers.append(message)
 
-    scope = {'type': 'http', 'method': 'POST', 'path': path, 'scheme': 'http',
+    scope = {'type': 'http', 'method': method, 'path': path, 'scheme': 'http', 'root_path': '',
              'headers': [(b'host', b'testserver'), (b'origin', b'http://testserver')]}
-    asyncio.run(BrowserBoundary(route)(scope, receive, send))
+    asyncio.run(BrowserBoundary(route, router=router)(scope, receive, send))
     return pulled[0], got, answers
+
+
+def test_the_sign_in_cap_is_8_kb():
+    assert SIGN_IN_BODY_MAX == 8192
 
 
 def test_every_public_write_has_a_cap_so_a_route_added_later_cant_skip_it():
@@ -40,25 +54,60 @@ def test_every_public_write_has_a_cap_so_a_route_added_later_cant_skip_it():
                                        ('/authorize/decision', REGISTER_BODY_MAX), ('/token', REGISTER_BODY_MAX),
                                        ('/mcp', MCP_BODY_MAX), ('/api/login', SIGN_IN_BODY_MAX),
                                        ('/api/invitations/redeem', SIGN_IN_BODY_MAX)])
-def test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself(path, cap):
+def test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself(router, path, cap):
     chunk = 1024
-    pulled, got, answers = boundary_run(path, chunk=chunk)
+    pulled, got, answers = boundary_run(router, path, chunk=chunk)
     assert pulled == cap // chunk + 1, 'one chunk past the cap, and no more'
     assert answers == [], 'the route says too large, in its own words'
     assert got[0]['more_body'] is False and cap < len(got[0]['body']) <= cap + chunk
 
 
-def test_a_body_at_the_cap_reaches_its_route_whole():
-    pulled, got, _ = boundary_run('/register', chunk=REGISTER_BODY_MAX, chunks=1)
+@pytest.mark.parametrize('path, cap', [('/api/login\n', SIGN_IN_BODY_MAX), ('/api/invitations/redeem\n', SIGN_IN_BODY_MAX),
+                                       ('/register\n', REGISTER_BODY_MAX), ('/token\n', REGISTER_BODY_MAX),
+                                       ('/mcp\n', MCP_BODY_MAX)])
+def test_the_cap_follows_what_the_router_dispatches_not_the_paths_text(router, path, cap):
+    """A route's pattern ends in `$`, which matches before a trailing newline: `/api/login%0A` is login to the router and
+    to nothing in a dict. Found by the automated security review of the first version of this fix."""
+    pulled, got, answers = boundary_run(router, path, chunk=1024)
+    assert pulled == cap // 1024 + 1 and answers == [] and got[0]['more_body'] is False
+
+
+def test_the_cap_holds_for_a_method_the_route_refuses_and_a_body_on_a_get(router):
+    assert boundary_run(router, '/register', chunk=1024, method='GET')[0] == REGISTER_BODY_MAX // 1024 + 1
+    assert boundary_run(router, '/mcp', chunk=1024, method='GET')[0] == MCP_BODY_MAX // 1024 + 1
+
+
+class CountingRouter:
+    """A router that counts its scans: a request under every cap should cost none, and a larger one one."""
+
+    def __init__(self, router):
+        self.real, self.scans = router, 0
+
+    @property
+    def routes(self):
+        self.scans += 1
+        return self.real.routes
+
+
+def test_a_small_body_costs_no_route_scan_and_a_large_one_costs_one(router):
+    counting = CountingRouter(router)
+    boundary_run(counting, '/api/rooms/x/messages', chunk=1024, chunks=4)
+    assert counting.scans == 0
+    boundary_run(counting, '/api/rooms/x/messages', chunk=1024, chunks=64)
+    assert counting.scans == 1
+
+
+def test_a_body_at_the_cap_reaches_its_route_whole(router):
+    pulled, got, _ = boundary_run(router, '/register', chunk=REGISTER_BODY_MAX, chunks=1)
     assert pulled == 1 and len(got[0]['body']) == REGISTER_BODY_MAX and got[0]['more_body'] is False
 
 
-def test_any_other_route_keeps_the_6_mb_bound():
+def test_any_other_route_keeps_the_6_mb_bound(router):
     chunk = 1024 * 1024
-    pulled, got, answers = boundary_run('/api/rooms/x/messages', chunk=chunk)
+    pulled, got, answers = boundary_run(router, '/api/rooms/x/messages', chunk=chunk)
     assert pulled == MAX_REQUEST // chunk + 1 and got == []
     assert answers[0]['status'] == 413
-    pulled, got, answers = boundary_run('/api/rooms/x/messages', chunk=chunk, chunks=6)
+    pulled, got, answers = boundary_run(router, '/api/rooms/x/messages', chunk=chunk, chunks=6)
     assert pulled == 6 and len(got[0]['body']) == 6 * chunk and answers == []
 
 
@@ -68,7 +117,7 @@ def home(tmp_path):
                       headers={'origin': 'http://testserver'})
 
 
-@pytest.mark.parametrize('path', ['/api/login', '/api/invitations/redeem'])
+@pytest.mark.parametrize('path', ['/api/login', '/api/invitations/redeem', '/api/login%0A', '/api/invitations/redeem%0A'])
 def test_a_sign_in_route_refuses_past_its_cap_before_it_parses(home, path, monkeypatch):
     parsed = []
     real_loads = json.loads
@@ -98,6 +147,11 @@ def test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path(tmp_path, 
     finally:
         BrowserBoundary.__call__ = real_call
     assert answer.status_code in (401, 404) and pulled == []
+
+
+def test_a_route_with_no_cap_of_its_own_still_reads_its_body(home):
+    answer = home.post('/api/access-requests', json={'name': 'x', 'contact': 'y', 'note': 'z'})
+    assert answer.status_code not in (413, 500), answer.text
 
 
 def test_a_sign_in_at_its_cap_is_still_judged_as_a_sign_in(home):
