@@ -9,6 +9,7 @@ import sqlite3
 
 from lighthouse_protocol import canonical_json
 from permission_ledger import ZERO, Ledger, _digest, ledger_path
+from tests.permissions_memory_support import restamp_projection
 from permissions import _COLUMNS, selector_json
 from tests.permissions_budget_core import (ALL, COLLECTIONS, JOINT, LEFT, OWNER, REQUESTER_CHAIN, RIGHT, budget_refs)
 
@@ -84,6 +85,7 @@ def build_reference(home, *, universe=100_000, log_rows=LOG_ROWS, tail=10_000):
     conn.executemany("INSERT INTO ledger_log VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows())
     conn.execute("COMMIT")
     led.close()
+    restamp_projection(home)
     return ledger_path(home), collect_seq
 
 
@@ -104,11 +106,13 @@ def add_revoked_records(home, count):
         conn.execute("COMMIT")
     finally:
         conn.close()
+    restamp_projection(home)
 
 
 def detach_last_collect(home, tail):
     """The ledger under `home` with the last `tail` members of ALL taken out of the table, and their refs: the
-    collection holds 90,000 and a `collect` act of the 10,000 puts them back."""
+    collection holds 90,000 and a `collect` act of the 10,000 puts them back. Its own connection deletes, which no
+    ledger connection may (the authorizer, S8), and it restamps the projection after."""
     conn = sqlite3.connect(ledger_path(home), isolation_level=None)
     try:
         refs = [r[0] for r in conn.execute(
@@ -117,9 +121,10 @@ def detach_last_collect(home, tail):
         conn.executemany("DELETE FROM collection_members WHERE collection=? AND object=?",
                          ((ALL, r) for r in refs))
         conn.execute("COMMIT")
-        return sorted(refs)
     finally:
         conn.close()
+    restamp_projection(home)
+    return sorted(refs)
 
 
 # ---------------------------------------------------------------- the receipts file (fold, uses)

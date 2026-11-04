@@ -9,6 +9,7 @@ from permissions import decide
 from tests.permissions_support import (  # noqa: F401
     ANDY, M1, M1_TEXT, M3, T, add_subject, cli_home, cli_home_with_house, deliver_m1_through, do, fake_tty,
     keep_world, keep_world_with_imprint_allowed, raise_gate, raised_ledger, receipt_rows, remove_subject)
+from tests.permissions_memory_support import restamp_projection
 from tests.test_permissions_serenity_fixes import _revoked_r1
 from tests.test_permissions_p36 import guard_ledger  # noqa: F401
 from tests.test_recall_margins import engram_server_env  # noqa: F401
@@ -192,6 +193,7 @@ def _log(home) -> list:
 def test_should_fix_3_a_writer_with_no_state_refuses_the_seq_a_table_already_names(tmp_path):
     use, seq = _revoked_r1(tmp_path)
     _cut_last_row_and_head(tmp_path, seq)
+    restamp_projection(tmp_path)          # the digest holds the torn tables: only the writer's tail checks see it
     before = _log(tmp_path)
     led = Ledger.open(tmp_path)
     try:
@@ -213,6 +215,7 @@ def test_should_fix_3_a_writer_with_no_state_refuses_the_seq_a_table_already_nam
 def test_should_fix_3_a_writer_with_no_state_never_covers_a_last_row_whose_change_was_lost(tmp_path):
     """Written over, the torn row would no longer be the last, and the tear would read as whole."""
     use, seq, _ = _last_row_kept_its_change_lost(tmp_path, "revoked")
+    restamp_projection(tmp_path)          # the digest holds the torn tables: only the writer's tail checks see it
     led = Ledger.open(tmp_path)
     try:
         with pytest.raises(LedgerUnreadable, match=f"the log's last row, seq {seq}, sets records.revoked_seq"):

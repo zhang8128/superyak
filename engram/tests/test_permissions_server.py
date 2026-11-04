@@ -405,3 +405,12 @@ def test_shadow_keeps_the_legacy_audience_and_links_a_covering_allow_when_there_
     assert placement_row(out["share_id"])["record_id"] == rid
     assert ledger_state().lane_notes[f"mem:{STORE_ID[0]}/episode/{M['local']}"]
     assert "error" in server.share(memory_id=M["local"], audience="place:la-county/public-health", reason="r")
+
+
+def test_permit_on_a_busy_ledger_says_nothing_was_written_and_to_try_again(enforce_server, monkeypatch):
+    """The projection digest's section 2 review, S3: LedgerBusy from the write is the tool's error, not a traceback."""
+    monkeypatch.setattr(Ledger, "_append_on", lambda self, *args, **kwargs: None)   # an unverified change each try
+    before = ledger_bytes()
+    out = server.permit(op="deny", selector=selector(["place:la-county/public-health"]), reason="r")
+    assert out == {"error": "the ledger was busy; nothing was written; try again"}
+    assert ledger_bytes() == before

@@ -2510,7 +2510,7 @@ def permit(
     gate = _permission_gate()
     if gate.mode == "closed":
         return {"error": f"the permissions gate is closed, so nothing is changed: {gate.cause}"}
-    from permission_ledger import Ledger, LedgerUnreadable
+    from permission_ledger import Ledger, LedgerBusy, LedgerUnreadable
     from permissions import RuleError
     if op not in ("share", "deny", "withdraw", "shorten", "narrow", "collect", "uncollect") + _PERMIT_KINDS:
         return {"error": f"unknown op {op!r}"}
@@ -2528,6 +2528,8 @@ def permit(
             out = led.perform(act, actor=_agent_ref(), channel="tool", now=now)
         except (RuleError, ValueError, TypeError, KeyError) as exc:
             return {"error": str(exc)}
+        except LedgerBusy:                   # other writers kept changing the ledger under this one (D4, step 2)
+            return {"error": "the ledger was busy; nothing was written; try again"}
         grant = None
         if out.status == "done":
             row = led.conn.execute("SELECT under_grant FROM ledger_log WHERE seq = ?", (out.seq,)).fetchone()

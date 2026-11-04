@@ -112,18 +112,57 @@ def _deterministic_rng():
         np.random.seed(1729)
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _enforce_raised_as_before():
-    """The gate act refuses `enforce` until the ledger's projection digest lands
-    (`permission_ledger.ENFORCE_WAITS`, Serenity's pre-merge item 5). The tests
-    of what `enforce` does raise it as before, so that code stays tested for
-    the day the digest lands; tests/test_permissions_premerge_fixes.py puts the
-    refusal back to test it. Session-wide, so module and session fixtures that
-    raise the gate (the U24 reference house) see it too."""
+# The suite-wide check runs on ledgers under this many projected rows (the plan's re-check, S8): U24's reference
+# ledger, rebuilt by 811,000 appends, would be recomputed per append.
+PROJECTION_CHECK_ROWS = 5000
+
+
+@pytest.fixture(autouse=True)
+def _projection_follows_every_append():
+    """The projection digest plan's Task 3 (S8), in place of a random-act generator: after every `Ledger._append` in
+    this suite, on a ledger that keeps the digest and holds under PROJECTION_CHECK_ROWS projected rows,
+    `meta.projection` and `projection_parts` are the tables recomputed (`projection_now`), read in one transaction.
+    ENGRAM_PROJECTION_CHECK=off turns it off (the budget tests, and a test whose own assert must be the one that
+    fails). It sets and restores the method itself, not through the `monkeypatch` fixture: an autouse fixture that
+    took `monkeypatch` would set it up before a test's `tmp_path`, so it would undo a test's patches after `tmp_path`'s
+    teardown had run with them (an `os.open` patched in tests/test_categories_v2.py broke its rmtree)."""
+    import os
+
     import permission_ledger
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(permission_ledger, "ENFORCE_WAITS", None)
+    real = permission_ledger.Ledger._append
+
+    def checked(self, *args, **kwargs):
+        seq = real(self, *args, **kwargs)
+        if os.environ.get("ENGRAM_PROJECTION_CHECK") != "off":
+            # a fresh file (rebuild, migrate) carries its parts in memory until `_finish_fresh` writes them
+            _check_projection(self.conn, seq, self._carried if self._fresh else None)
+        return seq
+
+    permission_ledger.Ledger._append = checked
+    try:
         yield
+    finally:
+        permission_ledger.Ledger._append = real
+
+
+def _check_projection(conn, seq, carried=None):
+    import permission_ledger
+    conn.execute("BEGIN")
+    try:
+        meta = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+        if "projection_parts" not in meta:
+            return                                       # a ledger made before the digest keeps none (D5)
+        held = carried if carried is not None else permission_ledger._read_parts(meta["projection_parts"])
+        if sum(n for n, _ in held.values()) >= PROJECTION_CHECK_ROWS:
+            return
+        whole, parts = permission_ledger.projection_now(conn)
+    finally:
+        conn.execute("COMMIT")
+    differs = [p for p in parts if parts[p] != held[p]]
+    stored = f"{seq}:{permission_ledger._parts_digest(held)}" if carried is not None else meta["projection"]
+    assert stored == f"{seq}:{whole}" and not differs, (
+        f"meta.projection is not the tables after seq {seq}: {stored} against {seq}:{whole}, the parts "
+        f"that differ: {differs}")
 
 
 @pytest.fixture

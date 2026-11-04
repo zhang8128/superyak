@@ -45,7 +45,7 @@ from lighthouse_protocol import (
     recall_result_frame,
     validate_frame,
 )
-from permission_ledger import LedgerUnreadable
+from permission_ledger import LedgerUnreadable, is_busy
 from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE, REBUILD_WAIT_S
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
@@ -418,6 +418,20 @@ class _CacheEntry:
                 and self.eligible.at <= t and (self.eligible.horizon is None or t < self.eligible.horizon))
 
 
+class _LedgerBusyFrame(Exception):
+    """A frame whose ledger read waited out the lock (`is_busy`) under ``enforce``, or the gate's own read did: it
+    serves nothing, and its answer says so (the projection digest's section 2 review, S4's reader side)."""
+
+
+LEDGER_BUSY = ("LEDGER_BUSY", "ledger busy, nothing served, retry")
+
+
+def _busy_frame(error: Exception, enforce: bool) -> None:
+    """Under ``enforce``, a ledger read that waited out the lock ends the frame with LEDGER_BUSY."""
+    if enforce and is_busy(error):
+        raise _LedgerBusyFrame() from error
+
+
 class EligibleSetBuilding(LedgerUnreadable):
     """A frame found no eligible set it may be served from: one is being built past the rebuild wait, its build
     failed, or it was built for another ledger state (P 12.2, "While a set is being built"). The frame is answered
@@ -477,6 +491,7 @@ class _LedgerSide:
         from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
         from permissions import LegacyLayer, acts_for_place, agent_place_at
         self._release = release
+        self.receipts = 0             # the receipts this frame has written: a read busy after one says what it decided
         self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
         self.state, self.ledger_id, self.now = state, ledger_id, now
         self.t = int(now.timestamp())
@@ -568,7 +583,9 @@ class _LedgerSide:
         try:
             if self._uses is None:
                 self._uses = Uses.open(self.daemon.engram_home)
-            return self._uses.append(row, subjects)
+            receipt = self._uses.append(row, subjects)
+            self.receipts += receipt is not None
+            return receipt
         except Exception as error:
             logger.warning("permission receipt not written for %s: %s", self.publisher.name, error)
             return None
@@ -823,6 +840,8 @@ class PublisherDaemon:
                     "no such publisher or store unavailable",
                 )
             gate = self._gate()
+            if gate.busy:                   # closed because the ledger's lock wasn't free: nothing served, said so
+                raise _LedgerBusyFrame()
             # Never retain action permissions between requests or reread the
             # artifact for audiences: concurrent edits must not combine grants
             # from different policy snapshots.
@@ -845,6 +864,9 @@ class PublisherDaemon:
                 publisher.checkin(storage)
         except FrameError as error:
             return error_frame(error.code, "")
+        except _LedgerBusyFrame:
+            logger.warning("permission ledger busy: serving nothing to this frame, which is told to retry")
+            return error_frame(*LEDGER_BUSY)
         except Exception:
             logger.warning("frame handling failed", exc_info=True)
             return error_frame("PUBLISHER_UNAVAILABLE", "internal failure")
@@ -883,6 +905,7 @@ class PublisherDaemon:
         except Exception as error:
             self._frames.release()
             logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
+            _busy_frame(error, enforce)
             return None, enforce
 
     @staticmethod
@@ -947,6 +970,7 @@ class PublisherDaemon:
             placed = None if side is None else side.recall_set()
         except LedgerUnreadable as error:       # a lazy read failed: the gate's closed answer, or the legacy one
             self._unreadable(publisher, error)
+            _busy_frame(error, enforce)
             if enforce:
                 return []
             side = None
@@ -963,6 +987,7 @@ class PublisherDaemon:
                 written = side.receipt_recall(candidates, placed)
             except LedgerUnreadable as error:
                 self._unreadable(publisher, error)
+                _busy_frame(error, enforce)
                 return [] if enforce else candidates
             if not written and enforce:
                 return []
@@ -1003,6 +1028,9 @@ class PublisherDaemon:
                         deliver, item_permission = side.read_item(memory_id, content)
                     except LedgerUnreadable as error:       # enforce serves nothing, shadow the legacy content
                         self._unreadable(publisher, error)
+                        # LEDGER_BUSY only while no item has a receipt: once one has, the frame answers with what it
+                        # decided, so no `allowed` receipt stands for an item it didn't deliver (the re-check's N1)
+                        _busy_frame(error, gate.mode == "enforce" and side.receipts == 0)
                         deliver, item_permission = gate.mode == "shadow" and content is not None, None
                     if not deliver:
                         content, audiences, item_permission = None, [], None
