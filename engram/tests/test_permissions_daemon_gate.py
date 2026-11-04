@@ -134,3 +134,48 @@ def test_rs5_a_configured_publisher_with_no_store_yet_closes_nothing(tmp_path):
     assert daemon.handle_frame(recall(pending))["code"] == "PUBLISHER_UNAVAILABLE"
     make_real_house(tmp_path, "pending")                 # made now: 029 gives it the ledger's id (Task 16)
     assert daemon.handle_frame(recall(pub))["candidates"]
+
+
+def _locked_read_item(monkeypatch, on_call):
+    """`_LedgerSide.read_item` raising LedgerUnreadable from "database is locked" on call number `on_call` (1-based)."""
+    import sqlite3
+
+    import lighthouse_daemon
+    from permission_ledger import LedgerUnreadable
+    real, calls = lighthouse_daemon._LedgerSide.read_item, []
+
+    def read_item(self, memory_id, content):
+        calls.append(memory_id)
+        if len(calls) == on_call:
+            try:
+                raise sqlite3.OperationalError("database is locked")
+            except sqlite3.OperationalError as e:
+                raise LedgerUnreadable(f"the permission ledger's rows could not be read: {e}") from e
+        return real(self, memory_id, content)
+
+    monkeypatch.setattr(lighthouse_daemon._LedgerSide, "read_item", read_item)
+
+
+def test_n1_a_read_busy_after_an_item_was_receipted_answers_what_was_decided(tmp_path, monkeypatch):
+    """The re-check's N1 (the reviewer's probe): `_read` decides items one by one and writes each item's receipt as it
+    goes, so LEDGER_BUSY raised at item 2 left item 1's `allowed` receipt for an item never delivered, against
+    read_item's own rule (M8). LEDGER_BUSY is the answer only while no item of the frame has a receipt; after that,
+    that item and the rest are not delivered, and the frame answers with what was decided."""
+    from lighthouse_protocol import read_frame
+    from tests.permissions_support import _daemon_frame_kwargs, receipt_rows
+    daemon, pub = raised_daemon(tmp_path, mode="enforce")
+    first, second = [c["memoryId"] for c in daemon.handle_frame(recall(pub))["candidates"][:2]]
+    frame = read_frame(**_daemon_frame_kwargs(pub), turn_id="turn-1", memory_ids=[first, second])
+
+    def allowed_receipts(since):
+        return [r for r in receipt_rows(tmp_path)[since:] if r["action"] == "inject_context" and r["allowed"] == 1]
+
+    _locked_read_item(monkeypatch, on_call=2)
+    before = len(receipt_rows(tmp_path))
+    reply = daemon.handle_frame(frame)
+    delivered = [] if reply["kind"] == "error" else [i for i in reply["items"] if i["content"] is not None]
+    assert len(allowed_receipts(before)) <= len(delivered), (reply, allowed_receipts(before))   # no allowed receipt
+    assert reply["kind"] == "read_result" and [i["content"] is not None for i in reply["items"]] == [True, False]
+    _locked_read_item(monkeypatch, on_call=1)      # the first item busy: no receipt yet, so the frame says so
+    before = len(receipt_rows(tmp_path))
+    assert daemon.handle_frame(frame) == LEDGER_BUSY and allowed_receipts(before) == []

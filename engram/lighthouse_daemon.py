@@ -491,6 +491,7 @@ class _LedgerSide:
         from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
         from permissions import LegacyLayer, acts_for_place, agent_place_at
         self._release = release
+        self.receipts = 0             # the receipts this frame has written: a read busy after one says what it decided
         self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
         self.state, self.ledger_id, self.now = state, ledger_id, now
         self.t = int(now.timestamp())
@@ -582,7 +583,9 @@ class _LedgerSide:
         try:
             if self._uses is None:
                 self._uses = Uses.open(self.daemon.engram_home)
-            return self._uses.append(row, subjects)
+            receipt = self._uses.append(row, subjects)
+            self.receipts += receipt is not None
+            return receipt
         except Exception as error:
             logger.warning("permission receipt not written for %s: %s", self.publisher.name, error)
             return None
@@ -1025,7 +1028,9 @@ class PublisherDaemon:
                         deliver, item_permission = side.read_item(memory_id, content)
                     except LedgerUnreadable as error:       # enforce serves nothing, shadow the legacy content
                         self._unreadable(publisher, error)
-                        _busy_frame(error, gate.mode == "enforce")
+                        # LEDGER_BUSY only while no item has a receipt: once one has, the frame answers with what it
+                        # decided, so no `allowed` receipt stands for an item it didn't deliver (the re-check's N1)
+                        _busy_frame(error, gate.mode == "enforce" and side.receipts == 0)
                         deliver, item_permission = gate.mode == "shadow" and content is not None, None
                     if not deliver:
                         content, audiences, item_permission = None, [], None

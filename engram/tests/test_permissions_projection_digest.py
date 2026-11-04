@@ -1192,8 +1192,10 @@ def test_m2_rebuild_replays_a_whole_log_when_a_table_page_is_malformed(tmp_path,
 def test_s4_an_append_waits_longer_for_the_lock_on_a_larger_ledger(tmp_path, monkeypatch):
     """The review's S4: on a loaded Pi the full check at U24's reference shape (274 MB) took 19-22 s, past a fixed
     12 s, so a writer behind a rare check failed at COMMIT with nothing written. The wait scales with the file's size,
-    read by stat: max(12 s, 0.16 s per MB), twice the 0.08 s per MB measured."""
-    assert permission_ledger._append_busy_ms(274_000_000) >= 40_000
+    read by stat: max(12 s, 0.35 s per MB). The re-check's S1: the check's cost follows projected rows (about 8 us a
+    row at load 8), and at 0.16 s per MB a dense ledger had no margin past about 75 MB."""
+    assert permission_ledger._append_busy_ms(274_000_000) >= 95_000
+    assert permission_ledger._append_busy_ms(75_000_000) >= 26_000
     assert permission_ledger._append_busy_ms(28_700_000) == 12_000          # Task 0's shape: the floor
     assert permission_ledger._append_busy_ms(4096) == 12_000
     real = os.stat

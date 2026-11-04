@@ -730,10 +730,12 @@ def _full_check(conn: sqlite3.Connection) -> None:
 # that file: closing any descriptor on a file drops every POSIX lock the process holds on it, SQLite's too (M2).
 MARKER = "permissions.verified"
 # A writer waits out a reader's rare full check, which holds SHARED for its whole length (the re-check's S1), and that
-# check grows with the file: on a loaded Pi it took 4.8 s at Task 0's 28.7 MB and 19-22 s at U24's 274 MB, about
-# 0.08 s per MB (the section 2 review's S4). So an append waits max(12 s, twice that per MB).
+# check grows with the file: on a loaded Pi it took 4.8 s at Task 0's 28.7 MB and 19-22 s at U24's 274 MB (the section
+# 2 review's S4). Its cost follows projected rows, about 8 us a row at load 8, so a dense ledger costs more per MB than
+# U24's; 0.16 s per MB left one no margin past about 75 MB (the section 2 re-check's S1). An append waits
+# max(12 s, 0.35 s per MB).
 APPEND_BUSY_MS = 12000
-APPEND_BUSY_MS_PER_MB = 160
+APPEND_BUSY_MS_PER_MB = 350
 WRITER_TRIES = 3
 _RECHECK_S = 0.05               # the wait before the marker is read once more (S2)
 _MEMO_KEPT = 64
@@ -842,7 +844,7 @@ class _Conn(sqlite3.Connection):
 
 def _append_busy_ms(size: int) -> int:
     """How long an append waits for the lock on a ledger file of `size` bytes: APPEND_BUSY_MS at least, and
-    APPEND_BUSY_MS_PER_MB for each MB (10**6 bytes), about 44 s at U24's 274 MB."""
+    APPEND_BUSY_MS_PER_MB for each MB (10**6 bytes), about 96 s at U24's 274 MB."""
     return max(APPEND_BUSY_MS, int(size / 1_000_000 * APPEND_BUSY_MS_PER_MB))
 
 
