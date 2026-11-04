@@ -127,7 +127,14 @@ def test_a_local_request_with_an_extra_key_or_a_bad_frame_is_refused(asking):
 
 
 @pytest.mark.parametrize('error, code', [(PeerAnswer(429, 'Too many crossings'), 'REFUSED_429'),
-                                         (PeerAnswer(403, 'Receiving ship is not a current contact'), 'REFUSED_403'),
+                                         (PeerAnswer(403, 'Receiving ship is not a current contact'), 'REFUSED_CONTACT'),
+                                         (PeerAnswer(403, 'Receiving ship is paired only by an owner trust, which '
+                                                          'crossings do not accept'), 'REFUSED_TRUST_ONLY'),
+                                         (PeerAnswer(403, 'Clocks differ by more than 5 minutes'), 'REFUSED_CLOCK'),
+                                         (PeerAnswer(403, 'Peer authentication failed'), 'REFUSED_SIGNATURE'),
+                                         (PeerAnswer(403, 'Unknown or unpaired peer'), 'REFUSED_UNPAIRED'),
+                                         (PeerAnswer(403, 'Some other refusal'), 'REFUSED_403'),
+                                         (PeerAnswer(404, 'No published house for that ship'), 'REFUSED_404'),
                                          (TimeoutError('Peer deadline exceeded'), 'TIMEOUT'),
                                          (PinMismatch('Peer certificate differs from its card'), 'UNAVAILABLE'),
                                          (ConnectionRefusedError(), 'UNAVAILABLE')])
@@ -238,3 +245,30 @@ def test_a_third_crossing_whose_deadline_passes_while_waiting_is_a_timeout(askin
         release.set()
         for thread in threads:
             thread.join(10)
+
+
+@pytest.mark.parametrize('why, code', [('held', 'REFUSED_CONTACT'), ('trust only', 'REFUSED_TRUST_ONLY'),
+                                       ('unpaired', 'REFUSED_UNPAIRED'), ('stale clock', 'REFUSED_CLOCK')])
+def test_the_publishers_refusal_reaches_the_receiver_by_its_code(asking, monkeypatch, why, code):
+    """The section 2 review's M2, both ends: the publisher's 403 words, carried as HTTP carries them, become the
+    asking side's code, so the receipt tells a trust-only ship from a held one, an unpaired origin or a clock."""
+    from superyak_peer.common import Problem
+    from test_crossing_route import hold_contact, trust_only
+    w, _ = asking
+
+    def dial(card, body, *, deadline):
+        try:
+            return w.a[2].serve_crossing(body)
+        except Problem as refusal:
+            raise PeerAnswer(refusal.status, refusal.message) from None
+    monkeypatch.setattr(crossing, 'crossing_pinned', dial)
+    if why == 'held':
+        hold_contact(w)
+    elif why == 'trust only':
+        trust_only(w)
+    elif why == 'unpaired':
+        w.a[2].unpair(w.a[1], w.contact)
+    else:
+        shared = w.clock
+        monkeypatch.setattr(w.a[0], 'clock', lambda: shared() + 600)  # the publisher's clock alone, ten minutes ahead
+    assert ask(w, line(w)) == {'ok': False, 'code': code}

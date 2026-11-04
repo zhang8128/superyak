@@ -154,6 +154,15 @@ def contact_current(db, peer_id, user_id):
     return row['id'] if row is not None and code_current(db, row['id']) else None
 
 
+def contact_trust_only(db, peer_id, user_id):
+    """Whether `user_id` is a contact from `peer_id`, on a paired peer and not held, that only an owner trust
+    confirmed: check 5 refuses it in words of its own (the section 2 review's M2; the partners' ruling stands)."""
+    return db.execute('SELECT 1 FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.peer_id=? AND c.user_id=? '
+                      'AND p.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds) '
+                      'AND EXISTS(SELECT 1 FROM trust_confirmations t WHERE t.contact_id=c.id)',
+                      (peer_id, user_id)).fetchone() is not None
+
+
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
         self.store, self.endpoint = store, endpoint

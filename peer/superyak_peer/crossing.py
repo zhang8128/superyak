@@ -37,6 +37,12 @@ CONTENT_MAX = 32 * 1024           # the text a read delivers, as UTF-8 (spec 2.3
 DAEMON_REPLY_MAX = 1024 * 1024    # one daemon line, as lighthouse_client reads one
 DAEMON_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 NOT_CONTACT = 'Receiving ship is not a current contact'
+TRUST_ONLY = 'Receiving ship is paired only by an owner trust, which crossings do not accept'
+# The asking side's codes for the publisher's known 403 words (the section 2 review's M2), so a receipt tells a
+# trust-only ship from a held contact, an unpaired origin, a bad signature or a clock. Any other 403 is REFUSED_403.
+REFUSAL_CODES = {NOT_CONTACT: 'REFUSED_CONTACT', TRUST_ONLY: 'REFUSED_TRUST_ONLY',
+                 'Clocks differ by more than 5 minutes': 'REFUSED_CLOCK',
+                 'Peer authentication failed': 'REFUSED_SIGNATURE', 'Unknown or unpaired peer': 'REFUSED_UNPAIRED'}
 BAD_ANSWER, TOO_LARGE, TOO_MANY = 'Bad publisher answer', 'Answer too large', 'Too many crossings'
 SETTINGS_FILE = 'crossings.toml'
 SETTINGS_MAX = 64 * 1024
@@ -170,7 +176,7 @@ def serve(federation, raw):
     (403); 4. its signature (403), `at` within 300 s (403), and its nonce, kept in pull_nonces under the restore floor
     (409 "Replay"); 5. `receiver_ship` a current, unheld, typed-confirmed contact from that origin (403); 6.
     `publisher_ship` mapped to a published house (404); 7. the load (429)."""
-    from .federation import CLOCKS_DIFFER, contact_current
+    from .federation import CLOCKS_DIFFER, contact_current, contact_trust_only
     store = federation.store
     value = parse(raw, limit=CROSSING_REQUEST_MAX)
     if not crossing_shape_ok(value):
@@ -190,7 +196,7 @@ def serve(federation, raw):
         raise Problem(409, 'Replay')
     with store.transaction() as db:
         if contact_current(db, origin, value['receiver_ship']) is None:
-            raise Problem(403, NOT_CONTACT)
+            raise Problem(403, TRUST_ONLY if contact_trust_only(db, origin, value['receiver_ship']) else NOT_CONTACT)
     try:
         settings = load_settings(store.data_dir)
     except SettingsInvalid as error:
@@ -409,7 +415,7 @@ def ask(federation, raw):
         with federation.crossing_asks.slot(value['destination'], deadline):
             answer = crossing_pinned(card, body, deadline=deadline)
     except PeerAnswer as refusal:
-        return _no(f'REFUSED_{refusal.status}')
+        return _no((refusal.status == 403 and REFUSAL_CODES.get(refusal.message)) or f'REFUSED_{refusal.status}')
     except TimeoutError:
         return _no('TIMEOUT')
     except (OSError, ValueError, PinMismatch, http.client.HTTPException) as error:

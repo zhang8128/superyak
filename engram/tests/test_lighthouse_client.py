@@ -540,7 +540,8 @@ def test_the_crossing_client_returns_the_inner_frame(client_module):
 
 
 @pytest.mark.parametrize("code", ["NOT_HOSTED", "NOT_PAIRED", "TIMEOUT", "UNAVAILABLE", "QUERY_TOO_LARGE", "BAD_ANSWER",
-                                  "BAD_REQUEST", "REFUSED_403", "REFUSED_429", "REFUSED_502"])
+                                  "BAD_REQUEST", "REFUSED_403", "REFUSED_429", "REFUSED_502", "REFUSED_TRUST_ONLY",
+                                  "REFUSED_CONTACT", "REFUSED_CLOCK", "REFUSED_SIGNATURE", "REFUSED_UNPAIRED"])
 def test_each_p8_code_is_raised_by_name(client_module, code):
     with scripted_peer(answering(line({"ok": False, "code": code}))) as path:
         with pytest.raises(client_module.NeighborUnavailable) as error:

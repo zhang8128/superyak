@@ -153,7 +153,10 @@ class LighthouseClient:
 
 # Ship home and crossing plan P8: the codes the peer's local hop answers, each shown in diagnostics by name.
 CROSSING_CODES = frozenset({"NOT_HOSTED", "NOT_PAIRED", "TIMEOUT", "UNAVAILABLE", "QUERY_TOO_LARGE", "BAD_ANSWER",
-                            "BAD_REQUEST"})
+                            "BAD_REQUEST",
+                            # the publisher's known 403s, by name (the section 2 review's M2); any other is REFUSED_<status>
+                            "REFUSED_TRUST_ONLY", "REFUSED_CONTACT", "REFUSED_CLOCK", "REFUSED_SIGNATURE",
+                            "REFUSED_UNPAIRED"})
 _REFUSED = re.compile(r"REFUSED_[1-5][0-9][0-9]\Z")
 MAX_CROSSING_LINE = 160 * 1024     # the answer's 128 KiB and its frame, as one line
 _SHIP_REF = re.compile(r"urn:superyak:([0-9a-f]{64}):ship:([A-Za-z0-9_-]{1,64})\Z")

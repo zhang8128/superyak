@@ -332,15 +332,27 @@ def test_a_ship_that_is_no_contact_of_the_origin_is_403(world):
     daemon_saw_nothing(world)
 
 
-def test_a_contact_confirmed_only_by_an_owner_trust_is_403(world):
-    """Spec 2.2 asks for a current *typed* confirmation, by code_current (the rule connections() uses). A contact an
-    owner trust confirmed, with no typed code, doesn't pass check 5: a decision for the partners to confirm."""
-    with world.a[0].transaction() as db:
-        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (world.contact,))
+def trust_only(w):
+    """The contact as an owner trust leaves it: a trust confirmation, and no typed code."""
+    with w.a[0].transaction() as db:
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (w.contact,))
         db.execute('INSERT INTO trust_confirmations VALUES(?,?,?,?,?,?,?,?)',
-                   ('t1', world.contact, 'g1', '{}', world.rio['id'], world.clock(), '1970-01-12', 1))
-    refused(world, request(world), 403, 'Receiving ship is not a current contact')
+                   ('t1', w.contact, 'g1', '{}', w.rio['id'], w.clock(), '1970-01-12', 1))
+
+
+def test_a_contact_confirmed_only_by_an_owner_trust_is_403_in_its_own_words(world):
+    """Spec 2.2 asks for a current *typed* confirmation, by code_current (the rule connections() uses); the partners
+    ruled that a contact an owner trust confirmed, with no typed code, stays refused. The section 2 review's M2: its 403
+    has words of its own, so the receiver's receipt can say why."""
+    trust_only(world)
+    refused(world, request(world), 403, 'Receiving ship is paired only by an owner trust, which crossings do not accept')
     daemon_saw_nothing(world)
+
+
+def test_a_held_trust_only_contact_is_refused_as_not_current(world):
+    trust_only(world)
+    hold_contact(world)
+    refused(world, request(world), 403, 'Receiving ship is not a current contact')
 
 
 def test_an_unmapped_publisher_ship_is_404(world):

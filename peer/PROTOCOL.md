@@ -403,7 +403,8 @@ shape (400 "Invalid crossing request"); `destination` is this peer (403, before 
 paired peer of any card version (403 "Unknown or unpaired peer"); the signature (403 "Peer authentication
 failed"), `at` within 300 s (403), the nonce, kept in `pull_nonces` under the restore floor (409 "Replay");
 `receiver_ship` a contact from that origin that is not held and whose typed code is still its card's (403
-"Receiving ship is not a current contact"; a contact only an owner trust confirmed doesn't pass); `publisher_ship`
+"Receiving ship is not a current contact"; a contact only an owner trust confirmed doesn't pass, 403 "Receiving ship
+is paired only by an owner trust, which crossings do not accept"); `publisher_ship`
 mapped to a published house in `crossings.toml` (404 "No published house for that ship"); and the load: two in
 flight per origin, four in all, sixty a minute per origin (429 "Too many crossings"). A `crossings.toml` that can't
 be used refuses every crossing with 503.
@@ -432,5 +433,7 @@ JSON line each way. The request has exactly `receiver_instance`, `receiver_ship`
 an endpoint (`NOT_PAIRED`), under 100 ms left (`TIMEOUT`), and a signed request over 16 KiB (`QUERY_TOO_LARGE`),
 each without dialling. It then signs as itself with a fresh nonce, dials, and verifies the answer. The reply is
 `{"ok": true, "frame": ...}` or `{"ok": false, "code": ...}`, the code one of `NOT_HOSTED`, `NOT_PAIRED`,
-`TIMEOUT`, `UNAVAILABLE`, `QUERY_TOO_LARGE`, `BAD_REQUEST`, `BAD_ANSWER` and `REFUSED_<status>`. Engram shows
-the code in `diagnostics` by name, and holds no peer key.
+`TIMEOUT`, `UNAVAILABLE`, `QUERY_TOO_LARGE`, `BAD_REQUEST`, `BAD_ANSWER` and `REFUSED_<status>`. The publisher's
+known 403s have codes of their own: `REFUSED_CONTACT` (not a current contact), `REFUSED_TRUST_ONLY` (paired only by
+an owner trust), `REFUSED_UNPAIRED` (unknown or unpaired origin), `REFUSED_SIGNATURE` and `REFUSED_CLOCK`. Engram
+shows the code in `diagnostics` by name, and holds no peer key.

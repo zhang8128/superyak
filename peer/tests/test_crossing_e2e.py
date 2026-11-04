@@ -154,7 +154,7 @@ def test_a_recall_on_the_pull_peer_delivers_from_the_push_peers_house_and_the_fo
         a_fed.unpair(alice, contact)
         third = ask()
         assert third['delivered'] == [] and {'publisher': f'urn:superyak:{a_peer}:ship:{rio["id"]}',
-                                             'code': 'REFUSED_403'} in third['diagnostics']   # check 3 refuses
+                                             'code': 'REFUSED_UNPAIRED'} in third['diagnostics']   # check 3 refuses
     finally:
         for proc in (federate, listener, publisher):
             stop(proc)
