@@ -8,6 +8,7 @@ it checks the hosted store and the destination, signs, dials the publisher pinne
 Settings live in crossings.toml in the peer data directory (P2), read per request by mtime: `[[published]]` maps a ship
 of this peer to the daemon publisher serving its house, and `[[hosted]]` names the stores this home hosts (P19's
 interim, until the store host lands)."""
+import json
 import logging
 import os
 from pathlib import Path
@@ -16,9 +17,12 @@ import stat
 import threading
 import tomllib
 
-from .identity import UUID_FORM
+from .common import Problem
+from .identity import UUID_FORM, crossing_shape_ok, parse, verify_crossing
 
 log = logging.getLogger(__name__)
+CROSSING_REQUEST_MAX = 16 * 1024  # spec 2.3; the listener's cap for the route too
+NOT_CONTACT = 'Receiving ship is not a current contact'
 SETTINGS_FILE = 'crossings.toml'
 SETTINGS_MAX = 64 * 1024
 PUBLISHED_KEYS = frozenset({'ship', 'publisher', 'daemon_socket', 'sidecar'})
@@ -143,3 +147,46 @@ def hosted_store(store, settings, receiver_ship, receiver_instance):
     return any(row['instance_id'] == receiver_instance and ids.get(row['ship']) == receiver_ship
                for row in settings['hosted'])
 
+
+def serve(federation, raw):
+    """POST /federation/crossing, the publisher's side (spec 2.3). The checks run in the spec's order and touch only
+    peer.sqlite3 and crossings.toml, so nothing of Engram's is opened before all of them pass:
+    1. the shape (400); 2. the destination (403, before any nonce is kept); 3. a paired origin of any card version
+    (403); 4. its signature (403), `at` within 300 s (403), and its nonce, kept in pull_nonces under the restore floor
+    (409 "Replay"); 5. `receiver_ship` a current, unheld, typed-confirmed contact from that origin (403); 6.
+    `publisher_ship` mapped to a published house (404); 7. the load (429)."""
+    from .federation import CLOCKS_DIFFER, contact_current
+    store = federation.store
+    value = parse(raw, limit=CROSSING_REQUEST_MAX)
+    if not crossing_shape_ok(value):
+        raise Problem(400, 'Invalid crossing request')
+    if value['destination'] != federation.identity.peer_id:
+        raise Problem(403, 'Not addressed to this peer')
+    origin = value['origin']
+    with store.reading() as db:
+        peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (origin,)).fetchone()
+    if not peer:
+        raise Problem(403, 'Unknown or unpaired peer')
+    verify_crossing(json.loads(peer['card']), value)
+    now = store.clock()
+    if abs(value['at'] - now) > 300:
+        raise Problem(403, CLOCKS_DIFFER)
+    if not federation.take_nonce(origin, value['nonce'], value['at'], now):
+        raise Problem(409, 'Replay')
+    with store.reading() as db:
+        if contact_current(db, origin, value['receiver_ship']) is None:
+            raise Problem(403, NOT_CONTACT)
+    try:
+        settings = load_settings(store.data_dir)
+    except SettingsInvalid as error:
+        log.error('crossings.toml refused, so every crossing is refused: %s', error)
+        raise Problem(503, 'Crossings are not configured on this peer') from None
+    house = published_house(store, settings, value['publisher_ship'])
+    if house is None:
+        raise Problem(404, 'No published house for that ship')
+    return _answer(federation, value, house)
+
+
+def _answer(federation, value, house):
+    """The daemon call, the answer and its `crossings` row (plan P7): Task 4."""
+    raise Problem(503, 'Crossings are not answered yet')
