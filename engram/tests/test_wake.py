@@ -724,3 +724,57 @@ class TestWakeLaneFilter:
         msg = _run_wake(str(tmp_path))["systemMessage"]
         assert personal_text in msg
         assert work_text not in msg
+
+
+
+from tests.test_recall_margins import engram_server_env  # noqa: E402,F401 - the real server on a temp home
+
+# ---------------------------------------------------------------- ship home and crossing plan, Task 12 (spec 2.5, rule 1)
+
+def _deliver_remote_through_a_recall(tmp_path, text):
+    """A live recall's crossing into the real server's store: neighbor_arm with one remote publisher, asked through a
+    recording `ask`. It writes the content-free receipt and the remote record, and returns what it delivered."""
+    import copy
+    import neighbors
+    import server
+    from lighthouse_protocol import content_digest
+    from tests.test_neighbors import ALLOW, CONTEXT, NOW, PEER, SHIP, remote_policy
+    policy = tmp_path / "receiver-policy.json"
+    remote_policy(policy, local=())
+
+    def ask(instance, ship, publisher, frame, ms):
+        if frame["kind"] == "recall":
+            return dict(protocolVersion="0.1", kind="recall_result", turnId="t", queryDigest=content_digest(frame["query"]),
+                        context=frame["context"], decision=ALLOW, disclosureId="trace",
+                        candidates=[dict(memoryId="m9", rank=1, layer="episode", lane="work", audiences=["commons"],
+                                         contentDigest=content_digest(text))])
+        return dict(protocolVersion="0.1", kind="read_result", disclosureId="read",
+                    items=[dict(memoryId="m9", content=text, audiences=["commons"], decision=ALLOW)])
+    result = neighbors.neighbor_arm(query="what did the crossing keep", context=copy.deepcopy(CONTEXT),
+                                    purpose="session-recall", k=1, storage=server._storage, session_id="s",
+                                    recall_id="r", receiver="engram", publishers=[], policy_path=policy, now=lambda: NOW,
+                                    remote_publishers=[dict(peer_id=PEER, ship=SHIP, context="memory/technical")],
+                                    receiver_ship="e" * 32, receiver_instance="x", ask=ask)
+    return [item["content"] for item in result["delivered"]]
+
+
+REMOTE_TEXT = ("The lighthouse crossing records every delivered passage beside the receiving store for ninety whole "
+               "days. Remote words stay remote.")
+REMOTE_SENTENCE = "The lighthouse crossing records every delivered passage beside the receiving store"
+
+
+def test_wake_shows_no_remote_text_after_a_crossing_and_the_tools_that_feed_it_refuse_it(
+        engram_server_env, tmp_path, monkeypatch):
+    """Spec 2.5's first rule: remote text never enters the wake hook's output. The hook runs no crossing, and the tools
+    whose text it injects (a task context, the clipboard's pins and reminders, residues) refuse remote text."""
+    import server
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    server._init()
+    assert _deliver_remote_through_a_recall(tmp_path, REMOTE_TEXT) == [REMOTE_TEXT]
+    for attempt in (lambda: server.task_focus("crossing work", REMOTE_TEXT), lambda: server.clipboard_pin(REMOTE_TEXT),
+                    lambda: server.clipboard_remind(REMOTE_TEXT), lambda: server.dream_capture(REMOTE_TEXT)):
+        assert attempt() == server._REMOTE_REFUSED
+    server.task_focus("crossing work", "my own plan for the crossing")
+    server._storage.conn.commit()
+    out = _run_wake_raw(str(tmp_path))
+    assert out.strip() and REMOTE_SENTENCE not in out and "Remote words stay remote" not in out

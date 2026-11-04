@@ -109,19 +109,6 @@ def test_federate_survives_a_pull_that_raises_and_still_pushes(tmp_path, monkeyp
     assert len(synced) == 2
 
 
-def test_federate_never_listens(tmp_path, monkeypatch):
-    import socket
-    from superyak_peer.federate import Federate
-    clock, a, mac = puller(tmp_path)
-
-    def refuse(*args, **kwargs):
-        raise AssertionError('federate opened a listening socket')
-    monkeypatch.setattr(socket.socket, 'bind', refuse)
-    monkeypatch.setattr(socket.socket, 'listen', refuse)
-    monkeypatch.setattr(mac[2], 'pull_once', lambda card, send=None: {'next': 60})
-    Federate(mac[2], clock=Wake(), sleep=lambda s: None).run_pass()
-
-
 def test_a_push_peer_runs_federate_without_pulling(tmp_path, monkeypatch):
     from superyak_peer.federate import Federate
     clock, a, mac = puller(tmp_path)
@@ -154,14 +141,17 @@ def test_federate_runs_its_passes_and_sigterm_ends_it_cleanly(tmp_path):
     fails, is logged and backs off), and SIGTERM ends it between steps with exit 0 and no traceback."""
     import signal
     import time
-    clock, a, mac = puller(tmp_path)
+    clock, a, mac = short_puller()  # short enough for a Unix socket, so one opened by mistake would bind and show
     proc = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federate', '--data-dir', str(mac[0].data_dir)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(3)
+    running_without_a_socket = proc.poll() is None and not (mac[0].data_dir / 'crossing.sock').exists()
     proc.send_signal(signal.SIGTERM)
     out, err = proc.communicate(timeout=30)
     assert proc.returncode == 0, err
     assert 'Traceback (most recent call last)' not in err.split('A pull from')[0]  # only a logged pull failure, if any
+    assert running_without_a_socket  # no --crossing-socket, no crossing.sock while it runs (crossing plan P9)
+    assert 'crossing.sock' not in err  # nor any attempt at one
 
 
 # Task 8e: "Check delivery now", POST /api/sync (plan P11, nit 9)
@@ -418,3 +408,269 @@ def test_federate_and_the_listener_refuse_a_lost_identity_and_make_none(tmp_path
         assert done.returncode == 1 and 'holds signed records' in done.stderr, (command, done.stderr)
         assert not (store.data_dir / 'identity.json').exists(), command
         assert files() == before, command
+
+
+# Ship home and crossing plan, Task 7: crossing.sock (P9, S3). One Unix socket, only under --crossing-socket, on its
+# own supervised thread; one owner per directory by crossing.lock; a held lock starts the process without the socket
+# (the plan re-check's item 4), so events and pulls keep flowing.
+
+import json as _json
+import socket as _socket
+import stat as _stat
+import tempfile as _tempfile
+import time as _time
+from pathlib import Path as _Path
+
+
+def short_puller():
+    """puller() in a short directory: a Unix socket path must stay under 108 bytes."""
+    return puller(_Path(_tempfile.mkdtemp(prefix='x')))
+
+
+def over_socket(path, raw, timeout=5):
+    with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(str(path))
+        client.sendall(raw + b'\n')
+        data = b''
+        while not data.endswith(b'\n'):
+            part = client.recv(65536)
+            if not part:
+                break
+            data += part
+    return data
+
+
+def wait_until(condition, seconds=20):
+    end = _time.monotonic() + seconds
+    while not condition():
+        if _time.monotonic() > end:
+            return False
+        _time.sleep(0.02)
+    return True
+
+
+def started_socket(fed):
+    from superyak_peer.crossing import CrossingSocket
+    sockets = CrossingSocket(fed)
+    sockets.start()
+    assert wait_until(lambda: sockets.serving)
+    return sockets
+
+
+LINE = b'{"deadline_ms": 2000}'
+
+
+def test_federate_binds_no_network_socket_and_crossing_sock_only_under_the_flag(monkeypatch):
+    """Spec 2.1 and P9: "no network bind; one Unix bind at crossing.sock only under --crossing-socket". Binds and
+    listens are recorded, not refused; without the socket the list is empty."""
+    from superyak_peer.federate import Federate
+    clock, a, mac = short_puller()
+    bound, real_bind, real_listen = [], _socket.socket.bind, _socket.socket.listen
+
+    def bind(self, address):
+        bound.append(('bind', self.family, address))
+        return real_bind(self, address)
+
+    def listen(self, *args):
+        bound.append(('listen', self.family, None))
+        return real_listen(self, *args)
+    monkeypatch.setattr(_socket.socket, 'bind', bind)
+    monkeypatch.setattr(_socket.socket, 'listen', listen)
+    monkeypatch.setattr(mac[2], 'pull_once', lambda card, send=None: {'next': 60})
+    Federate(mac[2], clock=Wake(), sleep=lambda s: None).run_pass()
+    assert bound == []
+    sockets = started_socket(mac[2])
+    try:
+        Federate(mac[2], clock=Wake(), sleep=lambda s: None).run_pass()
+    finally:
+        sockets.stop()
+    assert bound == [('bind', _socket.AF_UNIX, str(mac[0].data_dir / 'crossing.sock')), ('listen', _socket.AF_UNIX, None)]
+
+
+def test_the_socket_is_private_and_a_request_reaches_ask(monkeypatch):
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    asked = []
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: asked.append((fed, raw)) or {'ok': False, 'code': 'X'})
+    sockets = started_socket(mac[2])
+    try:
+        path = mac[0].data_dir / 'crossing.sock'
+        mode = path.lstat().st_mode
+        assert _stat.S_ISSOCK(mode) and mode & 0o777 == 0o600
+        assert (mac[0].data_dir / 'crossing.lock').stat().st_mode & 0o777 == 0o600
+        assert _json.loads(over_socket(path, LINE)) == {'ok': False, 'code': 'X'}
+    finally:
+        sockets.stop()
+    assert asked == [(mac[2], LINE)]
+    assert not (mac[0].data_dir / 'crossing.sock').exists()  # stop removes it
+
+
+def test_a_handler_that_raises_is_logged_and_the_socket_answers_again(monkeypatch, caplog):
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    sockets = started_socket(mac[2])
+    path = mac[0].data_dir / 'crossing.sock'
+    try:
+        monkeypatch.setattr(crossing, 'ask', lambda fed, raw: (_ for _ in ()).throw(RuntimeError('the handler broke')))
+        assert over_socket(path, LINE) == b''
+        assert any('crossing.sock' in r.getMessage() and r.levelname == 'ERROR' for r in caplog.records)
+        monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'BACK'})
+        assert _json.loads(over_socket(path, LINE)) == {'ok': False, 'code': 'BACK'}
+    finally:
+        sockets.stop()
+
+
+def test_a_server_that_dies_is_logged_and_comes_back_within_2_s_while_passes_run(monkeypatch, caplog):
+    from superyak_peer import crossing
+    from superyak_peer.federate import Federate
+    clock, a, mac = short_puller()
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'ALIVE'})
+    monkeypatch.setattr(mac[2], 'pull_once', lambda card, send=None: {'next': 60})
+    synced = []
+    monkeypatch.setattr(mac[2], 'sync_once', lambda **k: synced.append(1) or {})
+    sockets = started_socket(mac[2])
+    try:
+        dead = sockets._server
+
+        def boom():
+            raise RuntimeError('the server died')
+        dead.service_actions = boom
+        died = _time.monotonic()
+        loop = Federate(mac[2], clock=Wake(), sleep=lambda s: None)
+        loop.run_pass()
+        assert wait_until(lambda: sockets._server is not dead and sockets.serving, 5)
+        assert _json.loads(over_socket(mac[0].data_dir / 'crossing.sock', LINE)) == {'ok': False, 'code': 'ALIVE'}
+        assert _time.monotonic() - died < 2
+        loop.run_pass()
+        assert synced == [1, 1]
+        assert any('crossing.sock' in r.getMessage() and 'restart' in r.getMessage() for r in caplog.records)
+    finally:
+        sockets.stop()
+
+
+def test_a_stale_socket_with_no_lock_holder_is_replaced(monkeypatch):
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    path = mac[0].data_dir / 'crossing.sock'
+    stale = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    stale.bind(str(path))
+    stale.close()  # its file stays, with nobody behind it
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'NEW'})
+    sockets = started_socket(mac[2])
+    try:
+        assert _json.loads(over_socket(path, LINE)) == {'ok': False, 'code': 'NEW'}
+    finally:
+        sockets.stop()
+
+
+def test_a_symlinked_socket_path_or_lock_is_refused():
+    from superyak_peer.crossing import CrossingSocket, crossing_lock
+    clock, a, mac = short_puller()
+    data = mac[0].data_dir
+    (data / 'elsewhere').write_text('')
+    (data / 'crossing.sock').symlink_to(data / 'elsewhere')
+    with pytest.raises(ValueError, match='symlink'):
+        CrossingSocket(mac[2]).start()
+    (data / 'crossing.sock').unlink()
+    (data / 'crossing.lock').unlink()
+    (data / 'crossing.lock').symlink_to(data / 'elsewhere')
+    with pytest.raises(OSError):
+        crossing_lock(data)
+
+
+def test_a_second_owner_is_refused_and_the_first_socket_still_answers(monkeypatch):
+    """S3: only crossing.lock's holder binds or unlinks crossing.sock, so no process takes over a live one."""
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'FIRST'})
+    sockets = started_socket(mac[2])
+    try:
+        with pytest.raises(ValueError, match='another process already serves crossing.sock'):
+            crossing.CrossingSocket(mac[2]).start()
+        assert crossing.start_crossing_socket(mac[2]) is None  # the commands' way in: logged, and no socket
+        assert _json.loads(over_socket(mac[0].data_dir / 'crossing.sock', LINE)) == {'ok': False, 'code': 'FIRST'}
+    finally:
+        sockets.stop()
+
+
+def test_federate_with_the_flag_serves_crossing_sock_and_sigterm_ends_both():
+    import signal
+    clock, a, mac = short_puller()
+    path = mac[0].data_dir / 'crossing.sock'
+    proc = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federate', '--crossing-socket', '--data-dir',
+                             str(mac[0].data_dir)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert wait_until(path.exists, 30)
+        assert path.lstat().st_mode & 0o777 == 0o600
+        assert _json.loads(over_socket(path, b'{"not": "a request"}')) == {'ok': False, 'code': 'BAD_REQUEST'}
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+    assert proc.returncode == 0, err
+    assert not path.exists()
+
+
+def test_a_second_federate_starts_without_the_socket_and_the_first_still_answers(monkeypatch):
+    """S3 and the plan re-check's item 4: a held crossing.lock is logged, and federate runs on without the socket, so
+    its pulls and pushes go on; the socket that was there keeps answering, never taken over."""
+    import signal
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    path = mac[0].data_dir / 'crossing.sock'
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'FIRST'})
+    sockets = started_socket(mac[2])
+    inode = path.lstat().st_ino
+    proc = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federate', '--crossing-socket', '--data-dir',
+                             str(mac[0].data_dir)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _time.sleep(4)
+        assert proc.poll() is None  # it runs on
+        assert path.lstat().st_ino == inode
+        assert _json.loads(over_socket(path, LINE)) == {'ok': False, 'code': 'FIRST'}
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+        sockets.stop()
+    assert proc.returncode == 0, err
+    assert 'another process already serves crossing.sock' in err
+
+
+def push_peer_here():
+    from test_federation_outcomes import Clock, station
+    push = station(_Path(_tempfile.mkdtemp(prefix='x')) / 'push', 'pat', Clock())
+    push[2].card(push[1])
+    push[0].claim_federation_mode('push')
+    return push
+
+
+@pytest.mark.parametrize('flag', [True, False])
+def test_federation_listen_opens_crossing_sock_only_under_the_flag(monkeypatch, flag):
+    import uvicorn
+    from superyak_peer import __main__ as cli
+    push = push_peer_here()
+    path = push[0].data_dir / 'crossing.sock'
+    seen = []
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **options: seen.append(wait_until(path.exists, 5 if flag else 0.5)))
+    cli.main(['federation-listen', '--data-dir', str(push[0].data_dir), '--port', '0']
+             + (['--crossing-socket'] if flag else []))
+    assert seen == [flag]
+    assert not path.exists()
+
+
+def test_federation_listen_with_a_held_lock_still_serves_events_and_pulls(monkeypatch, caplog):
+    import uvicorn
+    from superyak_peer import __main__ as cli
+    from superyak_peer import crossing
+    push = push_peer_here()
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: {'ok': False, 'code': 'FIRST'})
+    sockets = started_socket(push[2])
+    ran = []
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **options: ran.append(app))
+    try:
+        cli.main(['federation-listen', '--data-dir', str(push[0].data_dir), '--port', '0', '--crossing-socket'])
+        assert len(ran) == 1  # the listener still runs: events and pulls flow
+        assert _json.loads(over_socket(push[0].data_dir / 'crossing.sock', LINE)) == {'ok': False, 'code': 'FIRST'}
+    finally:
+        sockets.stop()
+    assert any('another process already serves crossing.sock' in r.getMessage() for r in caplog.records)

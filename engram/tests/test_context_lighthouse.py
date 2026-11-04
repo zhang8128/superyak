@@ -367,3 +367,23 @@ def test_real_socket_chat_and_withdrawal_after_count(tmp_path):
                 worker.join(timeout=5)
     finally:
         store.close()
+
+
+def test_lighthouse_source_never_asks_a_remote_publisher(crossing):
+    """Ship home and crossing plan P14: `context` re-reads by turnId later, which a remote turn's 30 s binding would
+    refuse, and spec 2.5's first rule puts remote text in a session only through that turn's `recall`. So the source
+    passes no remote publishers and no `ask`, and never connects to crossing.sock, while its local publisher works."""
+    from tests.test_neighbors import PEER, SHIP, FakeCrossingSocket, remote_policy
+    store, source, calls, state, settings, policy_path = crossing
+    sock = FakeCrossingSocket()
+    try:
+        remote_policy(policy_path)
+        settings.write_text('enabled = true\npublishers = ["why"]\nsocket_path = "s.sock"\npolicy_path = "policy.json"\n'
+                            f'crossing_socket = "{sock.path}"\nreceiver_ship = "{"e" * 32}"\n'
+                            f'[[remote_publishers]]\npeer_id = "{PEER}"\nship = "{SHIP}"\ncontext = "memory/technical"\n')
+        source.thread = 't'
+        found = source.search('bridge')
+        assert found and [c['kind'] for c in calls][:2] == ['recall', 'read']
+        assert sock.requests == []
+    finally:
+        sock.close()

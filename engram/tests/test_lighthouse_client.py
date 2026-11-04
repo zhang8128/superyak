@@ -502,3 +502,102 @@ def test_fusion_rejects_duplicate_or_invalid_source_ranks(client_module, items):
 def test_fusion_rejects_invalid_result_limits(client_module, limit):
     with pytest.raises(client_module.NeighborUnavailable):
         client_module.fuse_traces({"publisher": (1, [candidate()])}, limit)
+
+
+# ---------------------------------------------------------------- ship home and crossing plan, Task 11: the local hop's
+# client (P8, P19's ask_crossing). One canonical line to crossing.sock, one line back, within the deadline.
+
+PEER = "c" * 64
+SHIP_REF = f"urn:superyak:{PEER}:ship:" + "d" * 32
+INSTANCE = "2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+
+
+def local_hop(**changes):
+    return {"receiver_instance": INSTANCE, "receiver_ship": "e" * 32, "destination": PEER, "publisher_ship": "d" * 32,
+            "frame": request(), "deadline_ms": 2000, **changes}
+
+
+def answering(reply_bytes, seen=None, delay=0):
+    def script(connection):
+        got = receive_request(connection)
+        if seen is not None:
+            seen.append(got)
+        if delay:
+            time.sleep(delay)
+        connection.sendall(reply_bytes)
+    return script
+
+
+def line(value):
+    return (json.dumps(value) + "\n").encode()
+
+
+def test_the_crossing_client_returns_the_inner_frame(client_module):
+    seen = []
+    with scripted_peer(answering(line({"ok": True, "frame": trace()}), seen)) as path:
+        got = client_module.CrossingClient(path, timeout_s=2).call(local_hop(), deadline=time.monotonic() + 2)
+    assert got == trace() and seen == [local_hop()]
+
+
+@pytest.mark.parametrize("code", ["NOT_HOSTED", "NOT_PAIRED", "TIMEOUT", "UNAVAILABLE", "QUERY_TOO_LARGE", "BAD_ANSWER",
+                                  "BAD_REQUEST", "REFUSED_403", "REFUSED_429", "REFUSED_502", "REFUSED_TRUST_ONLY",
+                                  "REFUSED_CONTACT", "REFUSED_CLOCK", "REFUSED_SIGNATURE", "REFUSED_UNPAIRED"])
+def test_each_p8_code_is_raised_by_name(client_module, code):
+    with scripted_peer(answering(line({"ok": False, "code": code}))) as path:
+        with pytest.raises(client_module.NeighborUnavailable) as error:
+            client_module.CrossingClient(path, timeout_s=2).call(local_hop(), deadline=time.monotonic() + 2)
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("wire", [b"not json\n", b"[]\n", line({"ok": False, "code": "SOMETHING_ELSE"}),
+                                  line({"ok": True}), line({"ok": True, "frame": {"kind": "recall_result"}}),
+                                  line({"ok": True, "frame": trace(), "more": 1}),
+                                  line({"ok": True, "frame": {**trace(), "kind": "read_result"}}), b""])
+def test_a_malformed_line_is_malformed(client_module, wire):
+    with scripted_peer(answering(wire)) as path:
+        with pytest.raises(client_module.NeighborUnavailable) as error:
+            client_module.CrossingClient(path, timeout_s=2).call(local_hop(), deadline=time.monotonic() + 2)
+    assert error.value.code == "MALFORMED_FRAME"
+
+
+def test_an_oversize_line_is_too_large(client_module):
+    big = b'{"ok": true, "frame": "' + b"x" * (160 * 1024) + b'"}\n'
+    with scripted_peer(answering(big)) as path:
+        with pytest.raises(client_module.NeighborUnavailable) as error:
+            client_module.CrossingClient(path, timeout_s=2).call(local_hop(), deadline=time.monotonic() + 2)
+    assert error.value.code == "FRAME_TOO_LARGE"
+
+
+def test_a_crossing_past_its_deadline_is_a_timeout(client_module):
+    with scripted_peer(answering(line({"ok": True, "frame": trace()}), delay=0.8)) as path:
+        started = time.monotonic()
+        with pytest.raises(client_module.NeighborUnavailable) as error:
+            client_module.CrossingClient(path, timeout_s=2).call(local_hop(), deadline=time.monotonic() + 0.3)
+        assert time.monotonic() - started < 0.7
+    assert error.value.code == "TIMEOUT"
+
+
+def test_an_absent_crossing_socket_is_unavailable(client_module, tmp_path):
+    with pytest.raises(client_module.NeighborUnavailable) as error:
+        client_module.CrossingClient(tmp_path / "absent", timeout_s=2).call(local_hop(), deadline=time.monotonic() + 2)
+    assert error.value.code == "UNAVAILABLE"
+
+
+def test_ask_crossing_sends_exactly_p8s_keys_split_from_the_ref(client_module):
+    seen = []
+    with scripted_peer(answering(line({"ok": True, "frame": trace()}), seen)) as path:
+        got = client_module.ask_crossing(INSTANCE, "e" * 32, SHIP_REF, request(), 1500, socket_path=path)
+    assert got == trace()
+    [sent] = seen
+    assert set(sent) == {"receiver_instance", "receiver_ship", "destination", "publisher_ship", "frame", "deadline_ms"}
+    assert (sent["destination"], sent["publisher_ship"], sent["deadline_ms"]) == (PEER, "d" * 32, 1500)
+    assert sent["frame"] == request()
+
+
+@pytest.mark.parametrize("ref", ["urn:engram:why", f"urn:superyak:{PEER}:store:{INSTANCE}", SHIP_REF + " ",
+                                 f"urn:superyak:{PEER[:-1]}:ship:d"])
+def test_ask_crossing_refuses_a_malformed_ref_without_connecting(client_module, tmp_path, monkeypatch, ref):
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: (_ for _ in ()).throw(AssertionError("connected")))
+    with pytest.raises(client_module.NeighborUnavailable) as error:
+        client_module.ask_crossing(INSTANCE, "e" * 32, ref, request(), 1500, socket_path=tmp_path / "s")
+    assert error.value.code == "INVALID_PUBLISHER"

@@ -94,7 +94,8 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     seeded = command(python, '-m', 'superyak_peer', 'demo', '--data-dir', state, cwd=tmp_path)
     assert 'station-room' in command(python, '-I', '-m', 'superyak_peer.lessons', '--help', cwd=tmp_path).stdout  # first rail: in the wheel
     # federation pull (plan SF12): __main__ imports these lazily, so only an explicit import shows they're in the wheel
-    command(python, '-I', '-c', 'import superyak_peer.listener, superyak_peer.federate', cwd=tmp_path)
+    command(python, '-I', '-c', 'import superyak_peer.listener, superyak_peer.federate, superyak_peer.crossing',
+            cwd=tmp_path)  # crossing: ship home and crossing plan, Task 14
     credentials = json.loads((state / 'demo-credentials.json').read_text())
     assert all(c['password'] not in seeded.stdout for c in credentials)
     with socket.socket() as sock:
@@ -154,6 +155,8 @@ def test_standard_build_excludes_private_state_and_unlisted_package_source(archi
             'tests/test_lessons_timing.py'} <= sdist.keys()
     assert {'systemd/superyak-federate.service', 'systemd/superyak-federation-listen.service', 'launchd/superyak-federate.plist',
             'tests/test_listener.py', 'tests/test_federate.py'} <= sdist.keys()  # federation pull, plan SF12
+    assert {'superyak_peer/crossing.py', 'scripts/crossing_check.py', 'tests/test_crossing_wire.py',
+            'tests/test_crossing_route.py', 'tests/test_crossing_ask.py', 'tests/test_crossing_e2e.py'} <= sdist.keys()
     forbidden = [sentinel.encode(), *(c['password'].encode() for c in credentials)]
     leaks = {kind: [name for name, content in files.items() if any(part.startswith('.') for part in Path(name).parts) or any(marker in content for marker in forbidden) or name in injected] for kind, files in [('sdist', sdist), ('wheel', wheel_files), ('direct_wheel', direct_wheel_files)]}
     assert leaks == {'sdist': [], 'wheel': [], 'direct_wheel': []}, leaks

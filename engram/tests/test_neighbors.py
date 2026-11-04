@@ -346,3 +346,329 @@ def test_content_budget_follows_rank_after_revocation(crossing, monkeypatch, rev
     result = neighbors.neighbor_arm(**args)
     assert result["selected"][0]["publisher"] == "urn:engram:mike"
     assert [i["publisher"] for i in result["delivered"]] == ["urn:engram:mike"]
+
+
+# ---------------------------------------------------------------- ship home and crossing plan, Task 11: remote publishers
+# (P14, P15, P19's asking seam, B5). A remote publisher is asked only through `ask`, the function with the store host's
+# call shape; today attach_neighbors binds lighthouse_client.ask_crossing to the receiver's crossing.sock.
+
+import socketserver
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+PEER = "c" * 64
+SHIP = "d" * 32
+SHIP_REF = f"urn:superyak:{PEER}:ship:{SHIP}"
+INSTANCE = "2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+REMOTE_TEXT = "A remote memory, shared by its own ship and read across peers."
+
+
+def remote_policy(path, *, local=("recall", "read", "inject_context"), remote=("recall", "read", "inject_context")):
+    """The receiver's policy: `local` actions for urn:engram:why and `remote` ones for the remote ship's exact ref."""
+    def rule(rule_id, publisher, actions):
+        return dict(id=rule_id, effect="allow", publishers=[publisher],
+                    profiles=["urn:lighthouse:profile:engram-recall-trace"], domains=["memory.recall"],
+                    actions=list(actions), contexts=["memory/technical"],
+                    claimMediaTypes=["application/vnd.engram.recall-rank-claim+json"], purposes=["session-recall"],
+                    audiences=["self"], validFrom="2026-01-01T00:00:00Z", validUntil="2027-01-01T00:00:00Z",
+                    requiredEvidence=[], requiredAttestations=[])
+    rules = ([rule("local", "urn:engram:why", local)] if local else []) + (
+        [rule("remote", SHIP_REF, remote)] if remote else [])
+    artifact = dict(protocolVersion="0.1", kind="ConnectionPolicy", id="urn:policy:receiver",
+                    issuedAt="2026-01-01T00:00:00Z", issuer="urn:engram:engram",
+                    payloadMediaType="application/vnd.lighthouse.connection-policy+json", payload={"rules": rules},
+                    extensions={})
+    artifact["digest"] = artifact_digest(artifact)
+    path.write_text(json.dumps(artifact))
+
+
+def remote_answer(request):
+    frame = request["frame"]
+    if frame["kind"] == "recall":
+        return {"ok": True, "frame": dict(
+            protocolVersion="0.1", kind="recall_result", turnId="remote-turn", queryDigest=content_digest(frame["query"]),
+            context=frame["context"], decision=ALLOW, disclosureId="remote-trace",
+            candidates=[dict(memoryId="m9", rank=1, layer="episode", lane="work", audiences=["commons"],
+                             contentDigest=content_digest(REMOTE_TEXT))])}
+    return {"ok": True, "frame": dict(protocolVersion="0.1", kind="read_result", disclosureId="remote-read",
+                                      items=[dict(memoryId="m9", content=REMOTE_TEXT, audiences=["commons"],
+                                                  decision=ALLOW)])}
+
+
+class FakeCrossingSocket:
+    """A peer's crossing.sock: one line in, one line out per connection. It records each request and answers with
+    `answer(request)`, after `delay` seconds."""
+
+    def __init__(self):
+        self.folder = Path(tempfile.mkdtemp(prefix="x"))
+        self.path = self.folder / "crossing.sock"
+        self.requests, self.answer, self.delay = [], remote_answer, 0
+        sock = self
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                request = json.loads(self.rfile.readline())
+                sock.requests.append(request)
+                time.sleep(sock.delay)
+                reply = sock.answer(request)
+                self.wfile.write(reply if isinstance(reply, bytes) else (canonical_json(reply) + "\n").encode())
+
+        self.server = socketserver.ThreadingUnixStreamServer(str(self.path), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def remote(tmp_path):
+    """neighbor_arm's arguments with one remote publisher (and no local one) behind a fake crossing.sock, asked
+    through ask_crossing as attach_neighbors binds it."""
+    import functools
+    from lighthouse_client import ask_crossing
+    sock = FakeCrossingSocket()
+    path = tmp_path / "policy.json"
+    remote_policy(path, local=())
+    log = Log()
+    log.db_path = str(tmp_path / "graph.db")  # remote deliveries are recorded beside the store (Task 12)
+    args = dict(query="private query", context=deepcopy(CONTEXT), purpose="session-recall", k=1, storage=log,
+                session_id="s", recall_id="local-turn", receiver="engram", publishers=[], socket_path=None,
+                policy_path=path, now=lambda: NOW,
+                remote_publishers=[dict(peer_id=PEER, ship=SHIP, context="memory/technical")],
+                receiver_ship="e" * 32, receiver_instance=INSTANCE,
+                ask=functools.partial(ask_crossing, socket_path=sock.path))
+    yield args, sock
+    sock.close()
+
+
+def test_a_remote_item_is_delivered_with_its_ref(remote):
+    args, sock = remote
+    result = neighbors.neighbor_arm(**args)
+    assert [i["content"] for i in result["delivered"]] == [REMOTE_TEXT]
+    assert result["delivered"][0]["publisher"] == SHIP_REF and result["degraded"] is False
+    assert [r["frame"]["kind"] for r in sock.requests] == ["recall", "read"]
+    recall, read = sock.requests
+    assert (recall["receiver_instance"], recall["receiver_ship"], recall["destination"], recall["publisher_ship"]) == (
+        INSTANCE, "e" * 32, PEER, SHIP)
+    assert recall["frame"]["k"] == 20 and read["frame"]["turnId"] == "remote-turn"
+    assert 100 <= recall["deadline_ms"] <= 2000
+
+
+def test_the_receipt_keeps_each_reads_disclosure_id(remote):
+    args, sock = remote
+    neighbors.neighbor_arm(**args)
+    receipt = args["storage"].entries[0]["context"]["receipt"]
+    validate_receipt(receipt)
+    assert receipt["extensions"]["engram:readDisclosures"] == [{"publisher": SHIP_REF, "disclosureId": "remote-read"}]
+    assert receipt["extensions"]["engram:traceSnapshots"][0]["disclosureId"] == "remote-trace"
+
+
+def test_the_local_reads_disclosure_id_is_kept_too(crossing):
+    args, calls, content, _ = crossing
+    neighbors.neighbor_arm(**args)
+    receipt = args["storage"].entries[0]["context"]["receipt"]
+    assert receipt["extensions"]["engram:readDisclosures"] == [{"publisher": "urn:engram:why",
+                                                                "disclosureId": "disclosure-2"}]
+
+
+def test_a_remote_publisher_is_never_asked_when_the_receiver_denies_recall(remote):
+    args, sock = remote
+    remote_policy(args["policy_path"], local=(), remote=("read", "inject_context"))
+    result = neighbors.neighbor_arm(**args)
+    assert sock.requests == [] and result["delivered"] == []
+
+
+def test_a_remote_publisher_is_never_read_when_the_receiver_denies_inject_context(remote):
+    args, sock = remote
+    remote_policy(args["policy_path"], local=(), remote=("recall", "read"))
+    result = neighbors.neighbor_arm(**args)
+    assert [r["frame"]["kind"] for r in sock.requests] == ["recall"] and result["delivered"] == []
+
+
+def test_a_slow_remote_publisher_past_the_deadline_delivers_nothing_and_is_degraded(remote):
+    args, sock = remote
+    sock.delay = 1.0
+    started = time.monotonic()
+    result = neighbors.neighbor_arm(**{**args, "timeout_s": 0.4})
+    assert time.monotonic() - started < 1.5
+    assert result["delivered"] == [] and result["degraded"] is True
+    assert {"publisher": SHIP_REF, "code": "TIMEOUT"} in result["diagnostics"]
+
+
+@pytest.mark.parametrize("code", ["REFUSED_403", "REFUSED_429", "NOT_HOSTED", "NOT_PAIRED", "BAD_ANSWER", "UNAVAILABLE"])
+def test_a_refusing_remote_publisher_is_in_diagnostics_by_its_ref(remote, code):
+    args, sock = remote
+    sock.answer = lambda request: {"ok": False, "code": code}
+    result = neighbors.neighbor_arm(**args)
+    assert result["delivered"] == [] and result["degraded"] is True
+    assert {"publisher": SHIP_REF, "code": code} in result["diagnostics"]
+
+
+def test_another_contexts_remote_publisher_is_never_asked(remote):
+    args, sock = remote
+    args["remote_publishers"] = [dict(peer_id=PEER, ship=SHIP, context="memory/other")]
+    assert neighbors.neighbor_arm(**args) is None
+    assert sock.requests == []
+
+
+def test_with_only_remote_publishers_no_lighthouse_client_is_built(remote, monkeypatch):
+    """B5: no local publisher and no socket_path, so no LighthouseClient; the remote one is asked and delivers."""
+    args, sock = remote
+
+    def built(*a, **k):
+        raise AssertionError("a LighthouseClient was built with no local publisher")
+    monkeypatch.setattr(neighbors, "LighthouseClient", built)
+    assert [i["content"] for i in neighbors.neighbor_arm(**args)["delivered"]] == [REMOTE_TEXT]
+
+
+def test_with_only_remote_publishers_and_their_recall_denied_it_answers_as_all_denied_local_does(remote, crossing):
+    """B5: `attempted` is set by a remote publisher whose recall grant passed, as by a local one, so an all-denied
+    remote configuration answers as an all-denied local one: today an empty result naming the decision code."""
+    args, sock = remote
+    remote_policy(args["policy_path"], local=(), remote=())
+    remote_result = neighbors.neighbor_arm(**args)
+    local_args = crossing[0]
+    policy(local_args["policy_path"], actions=())
+    local_result = neighbors.neighbor_arm(**local_args)
+    assert remote_result["delivered"] == local_result["delivered"] == [] and sock.requests == []
+    assert remote_result["diagnostics"][0] == local_result["diagnostics"][0] == {"code": "NO_MATCHING_ALLOW"}
+    assert remote_result["diagnostics"][1] == {"publisher": SHIP_REF, "code": "NO_MATCHING_ALLOW"}
+
+
+def test_a_recording_ask_with_no_socket_delivers_so_the_caller_can_be_swapped(remote, monkeypatch):
+    """P19, condition 1: neighbor_arm reaches a remote publisher only through `ask`, never a socket of its own."""
+    import lighthouse_client
+    args, sock = remote
+    asked = []
+
+    def ask(receiver_instance, receiver_ship, publisher, frame, deadline_ms):
+        asked.append((receiver_instance, receiver_ship, publisher, frame["kind"]))
+        return remote_answer({"frame": frame})["frame"]
+
+    def no_client(*a, **k):
+        raise AssertionError("neighbor_arm opened a CrossingClient itself")
+    monkeypatch.setattr(lighthouse_client, "CrossingClient", no_client)
+    result = neighbors.neighbor_arm(**{**args, "ask": ask})
+    assert [i["content"] for i in result["delivered"]] == [REMOTE_TEXT]
+    assert asked == [(INSTANCE, "e" * 32, SHIP_REF, "recall"), (INSTANCE, "e" * 32, SHIP_REF, "read")]
+    assert sock.requests == []
+
+
+def test_with_no_ask_a_remote_publisher_is_no_asker_and_no_socket_is_opened(remote, monkeypatch):
+    import lighthouse_client
+    args, sock = remote
+    monkeypatch.setattr(lighthouse_client, "CrossingClient",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("a socket was opened")))
+    result = neighbors.neighbor_arm(**{**args, "ask": None})
+    assert result["delivered"] == [] and result["degraded"] is True
+    assert {"publisher": SHIP_REF, "code": "NO_ASKER"} in result["diagnostics"]
+    assert sock.requests == []
+
+
+def test_attach_neighbors_asks_with_the_stores_instance_and_ship_outside_any_transaction(tmp_path, monkeypatch):
+    from storage import Storage
+    instance = tmp_path / ".engram" / "instances" / "engram"
+    instance.mkdir(parents=True)
+    remote_policy(instance / "policy.json", local=())
+    (instance / "lighthouse-receiver.toml").write_text(
+        'enabled = true\npublishers = []\npolicy_path = "policy.json"\ncrossing_socket = "../../peer/crossing.sock"\n'
+        f'receiver_ship = "{"e" * 32}"\n[[remote_publishers]]\npeer_id = "{PEER}"\nship = "{SHIP}"\n'
+        'context = "memory/technical"\n')
+    storage = Storage(str(instance / "graph.db"))
+    asked = []
+
+    def ask_crossing(receiver_instance, receiver_ship, publisher, frame, deadline_ms, *, socket_path):
+        asked.append((receiver_instance, receiver_ship, publisher, socket_path, storage.conn.in_transaction))
+        return remote_answer({"frame": frame})["frame"]
+    monkeypatch.setattr(neighbors, "ask_crossing", ask_crossing)
+    try:
+        response = neighbors.attach_neighbors({"results": [], "recall_id": "r"}, query="rivers",
+                                              context_id="memory/technical", purpose="session-recall", storage=storage,
+                                              session_id="s", receiver="engram", engram_home=tmp_path)
+        instance_id = storage.instance_identity()["instance_id"]
+    finally:
+        storage.close()
+    assert [i["content"] for i in response["neighbors"]["delivered"]] == [REMOTE_TEXT]
+    assert asked and all(a == (instance_id, "e" * 32, SHIP_REF, (tmp_path / ".engram" / "peer" / "crossing.sock"), False)
+                         for a in asked)
+
+
+def write_settings(tmp_path, text):
+    path = tmp_path / "receiver.toml"
+    path.write_text(text)
+    return path
+
+
+REMOTE_TABLE = f'[[remote_publishers]]\npeer_id = "{PEER}"\nship = "{SHIP}"\ncontext = "memory/technical"\n'
+REMOTE_TOP = f'enabled = true\npublishers = []\npolicy_path = "p.json"\ncrossing_socket = "c.sock"\nreceiver_ship = "{"e" * 32}"\n'
+
+
+def test_settings_take_remote_publishers_with_their_socket_and_ship(tmp_path):
+    from lighthouse_receiver_config import load_settings
+    settings = load_settings(write_settings(tmp_path, REMOTE_TOP + REMOTE_TABLE))
+    assert settings["publishers"] == [] and settings["socket_path"] is None
+    assert settings["remote_publishers"] == [dict(peer_id=PEER, ship=SHIP, context="memory/technical")]
+    assert settings["crossing_socket"] == (tmp_path / "c.sock").resolve() and settings["receiver_ship"] == "e" * 32
+    local = load_settings(write_settings(tmp_path, 'enabled = true\npublishers = ["why"]\nsocket_path = "s"\n'
+                                                   'policy_path = "p.json"\n'))
+    assert local["remote_publishers"] == [] and local["crossing_socket"] is None and local["receiver_ship"] is None
+
+
+@pytest.mark.parametrize("text", [
+    REMOTE_TOP + REMOTE_TABLE.replace('context = "memory/technical"\n', 'context = "memory/technical"\nweight = 2\n'),
+    REMOTE_TOP + REMOTE_TABLE.replace(PEER, "C" * 64),
+    REMOTE_TOP + REMOTE_TABLE.replace(PEER, PEER[:-1]),
+    REMOTE_TOP + REMOTE_TABLE.replace(SHIP, "has space"),
+    REMOTE_TOP + REMOTE_TABLE.replace('"memory/technical"', '"../escape"'),
+    REMOTE_TOP.replace('crossing_socket = "c.sock"\n', "") + REMOTE_TABLE,
+    REMOTE_TOP.replace(f'receiver_ship = "{"e" * 32}"\n', "") + REMOTE_TABLE,
+    REMOTE_TOP + REMOTE_TABLE + REMOTE_TABLE,
+    REMOTE_TOP.replace("publishers = []", 'publishers = ["a", "b", "c", "d", "e", "f", "g", "h"]').replace(
+        'policy_path', 'socket_path = "s"\npolicy_path') + REMOTE_TABLE,
+    'enabled = true\npublishers = []\npolicy_path = "p.json"\n',
+    'enabled = true\npublishers = ["why"]\npolicy_path = "p.json"\n',
+], ids=["unknown key", "upper peer", "short peer", "bad ship", "bad context", "no socket", "no ship", "duplicate",
+        "nine in all", "none at all", "local without socket_path"])
+def test_bad_remote_settings_fail_closed(tmp_path, text):
+    from lighthouse_receiver_config import load_settings
+    with pytest.raises(ValueError):
+        load_settings(write_settings(tmp_path, text))
+
+
+
+# Section 2 review, S3 (probe E7): a publisher's own refusal (an expired grant: OUTSIDE_VALIDITY) is seen, never silence.
+# The receipt's source entry is closed by the vendored Lighthouse schema (its policyDecision is the receiver's own), so
+# the publisher's code goes into neighbors.diagnostics, which the receipt carries as engram:diagnostics.
+
+def publisher_denies(frame, code="OUTSIDE_VALIDITY"):
+    return dict(protocolVersion="0.1", kind="recall_result", turnId="remote-turn",
+                queryDigest=content_digest(frame["query"]), context=frame["context"], candidates=[],
+                decision={"effect": "deny", "ruleId": None, "code": code}, disclosureId="remote-trace")
+
+
+def test_e7_a_remote_publishers_expired_grant_shows_its_code_and_degrades(remote):
+    args, sock = remote
+    sock.answer = lambda request: {"ok": True, "frame": publisher_denies(request["frame"])}
+    result = neighbors.neighbor_arm(**args)
+    assert result["delivered"] == [] and result["degraded"] is True
+    assert {"publisher": SHIP_REF, "code": "OUTSIDE_VALIDITY"} in result["diagnostics"]
+    [source] = result["sources"]
+    assert source["traceOutcome"] == "policy-denied"
+    receipt = args["storage"].entries[0]["context"]["receipt"]
+    assert {"publisher": SHIP_REF, "code": "OUTSIDE_VALIDITY"} in receipt["extensions"]["engram:diagnostics"]
+
+
+def test_a_local_publishers_refusal_shows_its_code_too(crossing, monkeypatch):
+    args, calls, content, _ = crossing
+
+    def call(self, frame, *, deadline=None):
+        calls.append(frame)
+        return publisher_denies(frame, "EXPLICIT_DENY")
+    monkeypatch.setattr(neighbors.LighthouseClient, "call", call)
+    result = neighbors.neighbor_arm(**args)
+    assert result["degraded"] is True
+    assert {"publisher": "urn:engram:why", "code": "EXPLICIT_DENY"} in result["diagnostics"]
