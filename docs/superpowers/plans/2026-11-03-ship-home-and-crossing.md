@@ -1091,7 +1091,12 @@ items are decided here, and it said none needs another re-read.
 0 `shared_memories`, and 7 work-lane episodes. So before step (b):
 - rio-grande migrates its file memories into its store;
 - it runs the publisher daemon for its instance;
-- it shares a first set of its own work-lane memories to the `tardis` store's exact ref through `share`.
+- it shares **chosen memories only**, to the `tardis` store's exact ref through `share`: memories it put in itself with
+  `remember(work=True)`, shared one by one, each read before it's shared. **Never a lane-wide set** (Serenity and Rio
+  Grande, all hands 2069b049 and 22ac1dd4). The work lane isn't "fit to share": the nudge hook files any novel typed
+  prompt there as `source='auto'`, a person's own words (hooks/nudge.py:543-547).
+- **This step waits on `fix:share-refuses-captured-memories`** (Rio Grande, d07bff9a, safety code), so `share` refuses
+  a captured memory, and any semantic built from one, before anything crosses.
 
 That's the ship's own act on its own memories, and before the gate is raised `share` answers the ship. Otherwise the
 first crossing would answer "absent", and teach nothing about receipts or lighthouse_sheaf.
