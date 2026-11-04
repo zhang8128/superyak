@@ -798,7 +798,95 @@ def test_each_read_mode_asks_for_a_page(station):
     assert read_queries(fake, tools, room=room, start=x, limit=7) == [f'start={x}&limit=8']
     assert read_queries(fake, tools, room=room, after=x, limit=7) == [f'after={x}&limit=8']
     assert read_queries(fake, tools, room=room, message=x) == [f'start={x}&limit=1']
-    assert read_queries(fake, tools, room=room, thread=x) == ['']
+    assert read_queries(fake, tools, room=room, thread=x) == [f'start={x}&limit=200']
+
+
+def reply(fake, room, author, body, to):
+    message = fake.say(room, author, body)
+    fake.replies[message['id']] = to['id']
+    return message
+
+
+def test_a_thread_read_pages_on_from_its_root_and_never_reads_the_whole_room(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(10):
+        fake.say(room, jenn, f'chatter {n}')
+    root = fake.say(room, andy, 'the question')
+    for n in range(150):
+        fake.say(room, jenn, f'chatter after {n}')
+    first = reply(fake, room, serenity, 'an answer on the first page ' + 'long ' * 900, root)
+    between = [fake.say(room, jenn, f'more chatter {n}') for n in range(150)]
+    reply(fake, room, andy, 'a reply to the answer, on a later page ' + 'long ' * 900, first)
+    tools = tools_for(fake)
+    assert read_queries(fake, tools, room=room, thread=root['id']) == [f'start={root["id"]}&limit=200',
+                                                                       f'after={between[47]["id"]}&limit=200']
+    paged = call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 200})
+    assert 'the question' in paged and 'an answer on the first page' in paged and 'a reply to the answer' in paged
+    assert 'chatter' not in paged
+    fake.pages = False
+    assert call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 200}) == paged
+
+
+def test_a_thread_reads_position_is_the_rooms_not_its_pages(station):
+    """A cut message with an odd id is read on by its position, which must count from the room's first message."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(7):
+        fake.say(room, jenn, f'chatter {n}')
+    root = fake.say(room, andy, 'the question')
+    odd = reply(fake, room, serenity, 'a long answer ' + 'long ' * 900, root)
+    fake.replies['x y`z'] = fake.replies.pop(odd['id'])
+    odd['id'] = 'x y`z'
+    tools = tools_for(fake)
+    paged = call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 200})
+    assert 'at=8' in paged and 'at=1' not in paged
+    fake.pages = False
+    assert call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 200}) == paged
+
+
+def test_a_thread_read_stops_reading_at_its_size_cap(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    root = fake.say(room, andy, 'the question')
+    for n in range(60):
+        reply(fake, room, jenn, f'answer {n} ' + 'long ' * 400, root)
+    for n in range(400):
+        fake.say(room, jenn, f'chatter {n}')
+    tools = tools_for(fake)
+    assert read_queries(fake, tools, room=room, thread=root['id'], max_chars=2000) == [f'start={root["id"]}&limit=200']
+    paged = call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 2000})
+    assert '[more replies follow' in paged
+    fake.pages = False
+    assert call_text(tools, {'room': room, 'thread': root['id'], 'max_chars': 2000}) == paged
+
+
+def test_a_thread_of_a_room_that_doesnt_page_is_read_whole_as_before(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    root = fake.say(room, andy, 'the question')
+    fake.say(room, jenn, 'chatter')
+    reply(fake, room, serenity, 'the answer', root)
+    fake.pages = False
+    tools = tools_for(fake)
+    assert read_queries(fake, tools, room=room, thread=root['id']) == [f'start={root["id"]}&limit=200']
+    text = call_text(tools, {'room': room, 'thread': root['id']})
+    assert 'the question' in text and 'the answer' in text and 'chatter' not in text
+
+
+def test_a_thread_root_that_isnt_there_keeps_todays_words_paged_or_not(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'a note')
+    other = fake.say(fake.room('Elsewhere', andy, jenn, serenity), jenn, 'in another room')
+    tools = tools_for(fake)
+    for root, words in (('nope', "No message 'nope' in this room"), ('', "No message 'unknown' in this room"),
+                        (5, "No message '5' in this room"), (other['id'], f'No message {other["id"]!r} in this room')):
+        for pages in (True, False):
+            fake.pages = pages
+            answer = call(tools, 'station_read', room=room, thread=root)
+            assert answer.get('isError') is True, (root, pages)
+            assert answer['content'][0]['text'].endswith(words), (root, pages, answer)
 
 
 def test_paged_and_full_reads_print_the_same(station):

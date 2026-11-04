@@ -17,6 +17,7 @@ from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE,
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
 NOTE_ROOM = 500  # the header and the note, counted in the total
+THREAD_PAGE = 200  # messages a thread read asks for at a time; most threads are recent, so most read one page
 MENTION_PAGE = 50  # the station returns at most this many mentions per call
 
 
@@ -237,9 +238,8 @@ class Tools:
 
     def station_read(self, args):
         room_id = resolve_room(self.client, args['room'])
-        if args.get('thread') is not None:  # a thread needs the whole room
-            room = self.client.room(room_id)
-            return room_header(room) + self._thread(room, room['messages'], [m['id'] for m in room['messages']], args)
+        if args.get('thread') is not None:
+            return self._read_thread(room_id, args)
         limit = self._limit(args)  # None when it will not parse: the whole-room read reports that where it always has
         oldest, at = args.get('oldest') in (True, 'true'), args.get('at')
         modes = sum(x is not None and x is not False and x != '' for x in (args.get('message'), args.get('start'), args.get('after'), oldest or None, at))
@@ -323,20 +323,47 @@ class Tools:
         top = header + brief_top(room)
         return top + render_newest(room, messages, limit, max_chars(args), len(top))
 
-    def _thread(self, room, messages, ids, args):
-        """A message and every reply under it, oldest first, from this room only."""
+    def _read_thread(self, room_id, args):
+        """A message and every reply under it, oldest first, from this room only. Replies come after what they answer, so
+        this reads from the root on, a page at a time, and stops at the size cap: a recent root costs a page, where it
+        once cost the whole room. A room that doesn't page (an older station, a paired peer's) sends itself whole."""
         root = args['thread']
-        if not isinstance(root, str) or root not in ids:
-            raise ValueError(f'No message {label(str(root), 100)!r} in this room')
+        missing = ValueError(f'No message {label(str(root), 100)!r} in this room')
+        if not isinstance(root, str) or not root:
+            self.client.room(room_id, limit=1)  # the room's own refusal comes first, as it always has
+            raise missing
+        try:
+            room = self.client.room(room_id, start=root, limit=THREAD_PAGE)
+        except StationError as exc:  # the station's refusals, in the words this tool has always used
+            if exc.status == 404 or (exc.status == 400 and exc.message.endswith('is the id of a message')):
+                raise missing from None
+            raise
+        if room.get('paged') is True:
+            positioned = self._from_root(room_id, room)
+        elif root in (m['id'] for m in room['messages']):
+            positioned = enumerate(room['messages'])
+        else:
+            raise missing
+        return room_header(room) + self._thread(room, positioned, root, args)
+
+    def _from_root(self, room_id, room):
+        """(position in the room, message), from a paged read's first page on; a later page is read only when it's reached."""
+        while True:
+            yield from enumerate(room['messages'], room['first_position'])
+            if not room['messages'] or room['first_position'] + len(room['messages']) >= room['total']:
+                return
+            room = self.client.room(room_id, after=room['messages'][-1]['id'], limit=THREAD_PAGE)
+
+    @staticmethod
+    def _thread(room, positioned, root, args):
         members, chars, keep = authors(room), max_chars(args), {root}
-        for m in messages:  # replies come after what they answer, so one pass collects nested replies too
-            if m.get('reply_to') in keep:
-                keep.add(m['id'])
         blocks, size = [], NOTE_ROOM
-        for k, m in enumerate(messages):
+        for position, m in positioned:
+            if m.get('reply_to') in keep:  # one pass collects nested replies too
+                keep.add(m['id'])
             if m['id'] not in keep:
                 continue
-            block = _block(room, members, m, chars, k)
+            block = _block(room, members, m, chars, position)
             if blocks and size + len(block) + 2 > TOTAL_CHARS:
                 how = f'; `station_read room={room["id"]} message=<id>` shows any one whole' if plain_id(room['id']) else ''
                 blocks.append(f'[more replies follow{how}]')
