@@ -90,6 +90,14 @@ def _load_runtime_config(path: Path) -> tuple[Path, str, Path | None]:
     return memory_home, instance, Path(embedder_value)
 
 
+# The receiver settings' keys, as lighthouse_receiver_config.SETTINGS_KEYS has them (this file is stdlib-only, so it
+# keeps its own copy; engram/tests/test_runtime_installation.py holds the two equal).
+RECEIVER_KEYS = frozenset({
+    "enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s",
+    "remote_publishers", "crossing_socket", "receiver_ship",   # crossings between peers (ship home and crossing)
+})
+
+
 def _valid_publishers(value: object) -> bool:
     return (
         isinstance(value, list)
@@ -307,15 +315,7 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     timeout = settings.get("timeout_s", 2.0)
     if (
         settings.get("enabled") is not True
-        or set(settings)
-        - {
-            "enabled",
-            "publishers",
-            "socket_path",
-            "policy_path",
-            "limit",
-            "timeout_s",
-        }
+        or set(settings) - RECEIVER_KEYS
         or not _valid_publishers(publishers)
         or not isinstance(socket_value, str)
         or not socket_value

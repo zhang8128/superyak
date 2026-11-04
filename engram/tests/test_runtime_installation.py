@@ -1012,3 +1012,24 @@ def test_status_warns_of_an_already_ended_sibling_rule(tmp_path):
     assert result.returncode == 0 and status["ok"] is True
     assert len(status["warnings"]) == 1
     assert status["warnings"][0].startswith("publisher lighthouse rule old-rule ended 20")
+
+
+
+def test_the_runtimes_receiver_keys_are_the_receivers_own():
+    """runtime.py is stdlib-only, so it keeps its own copy of the receiver settings' keys (Serenity, all hands
+    bdc8870f). A key the receiver takes that the runtime doesn't would make `status` call a working receiver invalid;
+    this holds the two equal. (The ship home and crossing branch added remote_publishers, crossing_socket and
+    receiver_ship; Serenity's default-crossing spec needs the same test, and the branch that merges second keeps it.)"""
+    from lighthouse_receiver_config import SETTINGS_KEYS
+    assert runpy.run_path(str(RUNTIME), run_name="runtime_keys")["RECEIVER_KEYS"] == SETTINGS_KEYS
+
+
+def test_status_reads_a_receiver_with_remote_publishers_as_enabled(tmp_path):
+    _, launcher, memory_home, config, _ = _healthy_status_tree(tmp_path)
+    settings = memory_home / ".engram" / "instances" / "engram" / "lighthouse-receiver.toml"
+    settings.write_text(settings.read_text() + 'crossing_socket = "crossing.sock"\nreceiver_ship = "' + "e" * 32
+                        + '"\n[[remote_publishers]]\npeer_id = "' + "c" * 64 + '"\nship = "' + "d" * 32
+                        + '"\ncontext = "memory/technical"\n')
+    result = _run_launcher(launcher, config, "status")
+    status = json.loads(result.stdout)
+    assert status["receiver"]["state"] == "enabled", status["receiver"]
