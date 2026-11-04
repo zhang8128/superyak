@@ -522,32 +522,78 @@ def _dummy(schema):
         schema.get("type"), None)
 
 
-def test_every_registered_tool_is_read_only_or_refuses_a_delivered_item_in_every_string_argument(guarded):
-    """Built from the server's own MCP tool registry: each tool is on the read-only list, or refuses a delivered item
-    put into each of its string-bearing arguments (a string, a list of them, an object), one at a time. A new tool fails
-    here until someone places it."""
+def verbatim_in_stores(home, phrase="lighthouse crossing records every delivered passage"):
+    """(file, table) of every row anywhere under the home's .engram holding the phrase, case-folded."""
+    found = []
+    for path in sorted((Path(home) / ".engram").rglob("*.db")):
+        if path.name == "remote-deliveries.db":
+            continue
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                                        " AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'").fetchall():
+                if any(phrase in repr(row).casefold() for row in con.execute(f'SELECT * FROM "{table}"')):
+                    found.append((path.name, table))
+        finally:
+            con.close()
+    return found
+
+
+def calls_with_the_item(schema):
+    """(param, kwargs) for each string-bearing argument of a tool, the delivered item in it and dummies elsewhere."""
+    properties, required = schema.get("properties", {}), set(schema.get("required", []))
+    for param, param_schema in properties.items():
+        value = _sample(param_schema, ITEM)
+        if value is not None:
+            kwargs = {r: _dummy(properties[r]) for r in required if r != param}
+            kwargs[param] = value
+            yield param, kwargs
+
+
+def test_every_registered_tool_is_in_exactly_one_of_the_three_places(guarded):
+    """Built from the server's own MCP tool registry (Rio Grande's three places). Read-only tools store nothing, and
+    log-only ones (recall) log with delivered text replaced by its digest: called with a delivered item in each string
+    argument, neither refuses, and afterwards no store holds the text verbatim. Every other tool stores, and refuses a
+    delivered item put into each of its string-bearing arguments (a string, a list of them, an object), one at a time.
+    A new tool fails here until someone places it."""
     import asyncio
     s = guarded["server"]
     tools = {tool.name: tool.inputSchema for tool in asyncio.run(s.mcp.list_tools())}
-    assert set(s.READ_ONLY_TOOLS) <= set(tools), set(s.READ_ONLY_TOOLS) - set(tools)
-    assert all(isinstance(why, str) and why for why in s.READ_ONLY_TOOLS.values())
+    assert not set(s.READ_ONLY_TOOLS) & set(s.LOG_ONLY_TOOLS)
+    assert set(s.READ_ONLY_TOOLS) | set(s.LOG_ONLY_TOOLS) <= set(tools)
+    assert all(isinstance(why, str) and why for why in {**s.READ_ONLY_TOOLS, **s.LOG_ONLY_TOOLS}.values())
     offenders, checked = [], 0
     for name, schema in sorted(tools.items()):
-        if name in s.READ_ONLY_TOOLS:
-            continue
-        properties, required = schema.get("properties", {}), set(schema.get("required", []))
-        for param, param_schema in properties.items():
-            value = _sample(param_schema, ITEM)
-            if value is None:
-                continue
-            kwargs = {r: _dummy(properties[r]) for r in required if r != param}
-            kwargs[param] = value
-            out = getattr(s, name)(**kwargs)
+        exempt = name in s.READ_ONLY_TOOLS or name in s.LOG_ONLY_TOOLS
+        for param, kwargs in calls_with_the_item(schema):
             checked += 1
-            if out != s._REMOTE_REFUSED:
-                offenders.append((name, param, str(out)[:80]))
+            if exempt:
+                try:
+                    out = getattr(s, name)(**kwargs)
+                except Exception:  # noqa: BLE001 - a dummy argument a read can't use; nothing is stored either way
+                    continue
+                if out == s._REMOTE_REFUSED:
+                    offenders.append((name, param, "refused, though it stores nothing of its text"))
+            else:
+                out = getattr(s, name)(**kwargs)
+                if out != s._REMOTE_REFUSED:
+                    offenders.append((name, param, str(out)[:80]))
     assert offenders == []
+    assert verbatim_in_stores(guarded["home"]) == []
     assert checked >= 40   # the walk reached the tools' string arguments, not none of them
+
+
+def test_a_recall_quoting_a_delivered_sentence_works_and_logs_only_its_digest(guarded):
+    """Rio Grande's third place: recall stores only a log line. It is not refused; its memory_log rows hold the
+    delivered sentence's digest in its place, never the sentence."""
+    s = guarded["server"]
+    s.remember(content="The lighthouse keeper logs every ship that passes the point at night.")
+    out = s.recall(query="What do we know about this? " + LONG)
+    assert out != s._REMOTE_REFUSED and out.get("recall_id") and "error" not in out
+    rows = [r[0] for r in s._storage.conn.execute("SELECT context FROM memory_log WHERE event_type='recall'")]
+    assert rows and all("lighthouse crossing records" not in r.casefold() for r in rows)
+    assert any(rd.digest(rd.normalize(LONG)) in r and "What do we know about this?" in r for r in rows)
+    assert verbatim_in_stores(guarded["home"]) == []
 
 
 
@@ -600,3 +646,13 @@ def test_an_unwrapped_delivered_sentence_copied_wrapped_is_refused(tmp_path):
     rd.record(path, delivered("An opening line. " + UNWRAPPED + " A closing line."), now=NOW)
     copy = "My first note. " + UNWRAPPED.replace(" beside ", " beside\n") + " My last note."
     assert rd.refused(path, [copy], now=NOW)
+
+
+
+def test_redact_puts_a_delivered_items_or_sentences_digest_in_its_place(record):
+    item = rd.redact(record, ITEM, now=NOW)
+    assert item == f"[delivered from another peer, sha256 {rd.digest(rd.normalize(ITEM))}]"
+    mixed = rd.redact(record, "Before it. " + LONG + " After it.", now=NOW)
+    assert mixed == f"Before it. [delivered from another peer, sha256 {rd.digest(rd.normalize(LONG))}] After it."
+    assert rd.redact(record, "Nothing delivered here at all.", now=NOW) == "Nothing delivered here at all."
+    assert rd.redact(record, LONG, now=NOW + 90 * DAY + 1) == LONG          # past 90 days it is no longer recorded

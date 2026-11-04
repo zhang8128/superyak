@@ -176,6 +176,61 @@ def record(path, items, *, now: int) -> None:
         raise _fault(error, path) from error
 
 
+def _recorded(path: Path, wanted, now: int) -> set:
+    """Which of the `wanted` digests are recorded in the last 90 days. RecordBusy or Unreadable when it can't read."""
+    wanted = sorted(set(wanted))
+    if not wanted or not path.exists():
+        return set()
+    try:
+        with closing(_open(path)) as con:
+            columns = {row[1] for row in con.execute("PRAGMA table_info(remote_deliveries)")}
+            if not {"digest", "at", "part"} <= columns:
+                raise Unreadable(f"{path}: it holds no remote_deliveries table")
+            marks = ",".join("?" * len(wanted))
+            return {row[0] for row in con.execute(
+                f"SELECT DISTINCT digest FROM remote_deliveries WHERE digest IN ({marks}) AND at >= ?",
+                (*wanted, now - KEEP_SECONDS))}
+    except sqlite3.Error as error:
+        raise _fault(error, path) from error
+
+
+def _spans(text: str, pattern) -> list[tuple[int, int]]:
+    spans, start = [], 0
+    for found in pattern.finditer(text):
+        spans.append((start, found.start()))
+        start = found.end()
+    return spans + [(start, len(text))]
+
+
+def redact(path, text: str, *, now: int) -> str:
+    """For a tool that stores only a log line (section 2 review, Rio Grande's third place): `text` with a delivered
+    item, or each delivered sentence of 12 words or more (either split), replaced by its digest, so the log holds no
+    remote text and the tool works as normal. RecordBusy or Unreadable when the record can't be read."""
+    path = Path(path)
+    if not isinstance(text, str) or not text.strip() or not path.exists():
+        return text
+    whole = digest(normalize(text))
+    parts = []
+    for pattern in (_SPLIT, _FOLDED_SPLIT):
+        for start, end in _spans(text, pattern):
+            sentence = normalize(text[start:end])
+            if len(sentence.split()) >= MIN_WORDS:
+                parts.append((start, end, digest(sentence)))
+    found = _recorded(path, [whole] + [d for _, _, d in parts], now)
+    if whole in found:
+        return f"[delivered from another peer, sha256 {whole}]"
+    marked = sorted((start, end, d) for start, end, d in parts if d in found)
+    merged = []
+    for start, end, d in marked:
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]), merged[-1][2])
+        else:
+            merged.append((start, end, d))
+    for start, end, d in reversed(merged):
+        text = f"{text[:start]}[delivered from another peer, sha256 {d}]{text[end:]}"
+    return text
+
+
 def refused(path, texts, *, now: int) -> bool:
     """Whether any of `texts` is a copy of a remote item delivered in the last 90 days, whole or by a sentence of 12
     words or more. False when the file is absent. RecordBusy or Unreadable when it can't be read (S7)."""
@@ -188,14 +243,4 @@ def refused(path, texts, *, now: int) -> bool:
         whole, parts = digests(text)
         wanted.add(whole)
         wanted.update(parts)
-    try:
-        with closing(_open(path)) as con:
-            columns = {row[1] for row in con.execute("PRAGMA table_info(remote_deliveries)")}
-            if not {"digest", "at", "part"} <= columns:
-                raise Unreadable(f"{path}: it holds no remote_deliveries table")
-            marks = ",".join("?" * len(wanted))
-            found = con.execute(f"SELECT 1 FROM remote_deliveries WHERE digest IN ({marks}) AND at >= ? LIMIT 1",
-                                (*sorted(wanted), now - KEEP_SECONDS)).fetchone()
-    except sqlite3.Error as error:
-        raise _fault(error, path) from error
-    return found is not None
+    return bool(_recorded(path, wanted, now))

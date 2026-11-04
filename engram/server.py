@@ -693,7 +693,6 @@ def _server_operation(function):
 # Ship home and crossing spec 2.5 (section 2 review, M1, Rio Grande's shape): every tool is checked whole by the remote
 # guard, every string in its whole argument tree, unless it is named here with why none of its strings is stored.
 READ_ONLY_TOOLS = {
-    "recall": "its query goes only to memory_log, a log, not memory (review N5); refusing it would stop the search",
     "recall_cold": "its query is searched, never stored",
     "search_code": "its query is searched, never stored",
     "look": "its query searches the notepads, never stored",
@@ -704,6 +703,11 @@ READ_ONLY_TOOLS = {
     "status": "it takes no text",
     "core_memories": "it takes no text",
     "introspect": "it takes no text",
+}
+# Rio Grande's third place: a tool that stores its text only in a log line. It is never refused; it logs through
+# _loggable, which puts a delivered item's or sentence's digest in its place before the write.
+LOG_ONLY_TOOLS = {
+    "recall": "its query goes only to memory_log (review N5), through _loggable; it still searches with the query",
 }
 
 
@@ -730,7 +734,7 @@ def _remote_guarded(function, name):
     """The remote guard around one tool (spec 2.5's second rule), fail closed: unless the tool is in READ_ONLY_TOOLS,
     every string in its arguments is checked after _init() and before the tool runs, so it writes nothing when one
     copies a remote delivery."""
-    if name in READ_ONLY_TOOLS:
+    if name in READ_ONLY_TOOLS or name in LOG_ONLY_TOOLS:
         return function
     signature = inspect.signature(function)
 
@@ -2072,6 +2076,24 @@ def _remote_texts(values) -> list[str]:
     return out
 
 
+def _loggable(text):
+    """A log-only tool's logged argument (LOG_ONLY_TOOLS): `text` with each delivered item or sentence of 12 words
+    or more replaced by its digest, so a log line keeps no remote text. A record that can't be read gives the whole
+    text's digest instead, fail closed."""
+    import hashlib
+    import remote_deliveries
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        path = remote_deliveries.path_for(_storage.db_path if _storage is not None else DB_PATH)
+    except ValueError:
+        return text
+    try:
+        return remote_deliveries.redact(path, text, now=int(time.time()))
+    except (remote_deliveries.RecordBusy, remote_deliveries.Unreadable):
+        return f"[unchecked text, sha256 {hashlib.sha256(text.encode('utf-8')).hexdigest()}]"
+
+
 def _remote_refusal(*texts) -> dict | None:
     """The remote guard (spec 2.5; P16, S7): the refusing reply when any of `texts` (a tool's raw arguments; lists
     are looked into) copies a remote item delivered here in the last 90 days, whole or by a sentence of 12 words or
@@ -2858,8 +2880,10 @@ def recall(
         lighthouse_purpose: Purpose checked by both receiver and publisher policies.
     """
     _init()
+    # LOG_ONLY_TOOLS: only these go to a log, with a delivered item or sentence's digest in its place
+    logged_query, logged_layer = _loggable(query), _loggable(layer)
     logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d, uninvited=%d)",
-                query[:80], layer, max_results, uninvited)
+                logged_query[:80], logged_layer, max_results, uninvited)
 
     if lane not in (None, "personal", "work"):
         return {"error": f"Invalid lane: {lane!r}"}
@@ -2874,7 +2898,7 @@ def recall(
                 event_type="recall",
                 layer="instinct",
                 target_ids=[],
-                context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+                context={"recall_id": recall_id, "query": logged_query, "session_id": _session_id},
             )
             results = _observe_category_recall(query, [], recall_id)
             return {"results": results, "recall_id": recall_id}
@@ -2953,7 +2977,7 @@ def recall(
             event_type="recall",
             layer="instinct",
             target_ids=[r["id"] for r in results],
-            context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+            context={"recall_id": recall_id, "query": logged_query, "session_id": _session_id},
         )
         results = _observe_category_recall(query, results, recall_id)
         return {"results": results, "recall_id": recall_id}
@@ -3148,14 +3172,14 @@ def recall(
     # The logged margin is the retrieval-time record. `influenced`, set later
     # if category re-ranking changes delivery, is a delivery-time annotation
     # and deliberately absent here.
-    log_context = {"recall_id": recall_id, "query": query, "session_id": _session_id}
+    log_context = {"recall_id": recall_id, "query": logged_query, "session_id": _session_id}
     if margin is not None:
         log_context["margin"] = margin
 
     _storage.add_log_entry(
         id=str(uuid.uuid4()),
         event_type="recall",
-        layer=layer or "all",
+        layer=logged_layer or "all",
         target_ids=result_ids,
         context=log_context,
     )
