@@ -57,9 +57,12 @@ PUBLIC_ROUTES = {
     '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
-# Each public write's whole body, by route template. BrowserBoundary reads no further, so a stranger can't make the home
-# hold MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large" in its own words.
-# A test holds this to PUBLIC_ROUTES' POSTs, so a public write added later needs a line here.
+# These carry no body in this home, whoever sends them, so BrowserBoundary reads none: a stranger's stalled GET held 6 MB.
+BODYLESS_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS'})
+# Each public route that takes a body, its whole body, by route template. BrowserBoundary reads no further, so a stranger
+# can't make the home hold MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large"
+# in its own words, so each route's own check must use this same number: it would otherwise parse the prefix as the whole
+# request. Tests hold this to PUBLIC_ROUTES, and each route's check to its entry, one byte either side.
 ROUTE_BODY_MAX = {
     '/api/login': SIGN_IN_BODY_MAX, '/api/invitations/redeem': SIGN_IN_BODY_MAX, '/register': REGISTER_BODY_MAX,
     '/authorize/signin': REGISTER_BODY_MAX, '/authorize/decision': REGISTER_BODY_MAX, '/token': REGISTER_BODY_MAX,
@@ -91,18 +94,22 @@ def is_public(scope):
         address = address.ipv4_mapped
     return not (address.is_loopback or any(address in network for network in TAILNET))
 
-def route_body_max(router, scope):
-    """The ROUTE_BODY_MAX of the route the router dispatches this request to, found as PublicRoute.allowed finds it: the
-    first full match, else the first partial one. Never by the path's text: a route's pattern ends in `$`, which matches
-    before a trailing newline, so `/api/login%0A` is login to the router and to nothing in a dict."""
+def dispatched(router, scope):
+    """The route the router dispatches this request to, or None. The router (FastAPI's APIRouter.app) takes the first full
+    match, else the first partial one (a 405). Never judge a request by its path's text: a route's pattern ends in `$`, which
+    matches before a trailing newline, so `/api/login%0A` is login to the router and to nothing in a dict."""
     probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
     for route in router.routes:
         match, _ = route.matches(probe)
         if match == Match.FULL:
-            return ROUTE_BODY_MAX.get(getattr(route, 'path', None))
+            return route
         if match == Match.PARTIAL and partial is None:
             partial = route
-    return None if partial is None else ROUTE_BODY_MAX.get(getattr(partial, 'path', None))
+    return partial
+
+
+def route_body_max(router, scope):
+    return ROUTE_BODY_MAX.get(getattr(dispatched(router, scope), 'path', None))
 
 
 class BrowserBoundary:
@@ -121,14 +128,14 @@ class BrowserBoundary:
         method = scope['method']
         # Federation endpoints use separate cryptographic auth; their router must
         # verify signed envelopes and never accept browser session authority.
-        browser_write = (method not in ('GET', 'HEAD', 'OPTIONS') and not scope['path'].startswith('/federation/')
+        browser_write = (method not in BODYLESS_METHODS and not scope['path'].startswith('/federation/')
                          and scope['path'] not in OAUTH_WRITES)
         if browser_write:
             if not origin or origin != request_origin:
                 return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
         route_max, looked = None, False
         body = bytearray()
-        while True:
+        while method not in BODYLESS_METHODS:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 return
@@ -198,16 +205,8 @@ class PublicRoute:
                     or token is not None and self.store.session_is_valid(token))
 
     def allowed(self, scope):
-        """Whether the route the router dispatches this request to is on the allow-list, for this method. The router
-        (FastAPI's APIRouter.app) takes the first full match, else the first partial one (a 405)."""
-        probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
-        for route in self.router.routes:
-            match, _ = route.matches(probe)
-            if match == Match.FULL:
-                return self.listed(route, scope['method'])
-            if match == Match.PARTIAL and partial is None:
-                partial = route
-        return partial is not None and self.listed(partial, scope['method'])
+        """Whether the route the router dispatches this request to is on the allow-list, for this method."""
+        return self.listed(dispatched(self.router, scope), scope['method'])
 
     @staticmethod
     def listed(route, method):
