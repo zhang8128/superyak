@@ -204,6 +204,12 @@ class NomicEmbedProvider:
     def dimension(self) -> int:
         return self.DIMENSION
 
+    def embed_units(self, texts: list[str], prefix: str = "search_document") -> list[list[int]]:
+        """The groups of text indices that embed() runs as single ONNX runs. The shared embedder holds its lane for
+        one unit at a time, so a query waits at most one run; a unit embedded alone pads and computes exactly as it
+        would inside the whole request, so its vectors don't change."""
+        return _token_budget_batches([f"{prefix}: {t}" for t in texts])
+
     def embed(self, texts: list[str], *, prefix: str = "search_document") -> list[list[float]]:
         """Embed texts with a task prefix. Returns L2-normalized vectors.
 

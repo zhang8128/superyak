@@ -3,10 +3,16 @@
 Every Engram server, hook and daemon used to load nomic-embed-text-v1.5
 itself, about 1 GB resident each. Four sessions held four copies, and
 simultaneous startup maintenance OOM-killed a 19 GB machine (2026-10-01).
-This service holds the one model and runs one batch at a time, so the
+This service holds the one model and runs one ONNX run at a time, so the
 machine-wide embedding peak stays bounded however many agents connect. The
 model loads on the first request and is dropped after
 ENGRAM_EMBED_IDLE_SECONDS (default 300) without one.
+
+A large request is embedded unit by unit (the provider's own token-budget
+batches), and a waiting query (prefix search_query) takes the lane before a
+waiting batch unit, so a recall waits at most one unit, not one request (the
+Pi, 2026-11-04: a lighthouse crossing's query waited about 2 minutes behind a
+4,096-text code-index request).
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
 
 Protocol: one request per connection over a Unix socket. Each message is a
@@ -36,12 +42,15 @@ import os
 import socketserver
 import struct
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger("engram.embedder")
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 MAX_TEXTS = 4096
+CHUNK_TEXTS = 16  # texts per lane hold for a provider that names no units of its own
+QUERY_PREFIX = "search_query"
 _HEADER = struct.Struct(">I")
 
 
@@ -86,15 +95,52 @@ class _Handler(socketserver.BaseRequestHandler):
             logger.info("client went away before the response was sent")
 
 
+class _Lane:
+    """One inference at a time; a waiting query goes before a waiting batch unit.
+
+    Queries are one or a few texts, so a steady stream of them can delay a
+    batch but not starve it for long; a batch can never delay a query by
+    more than the one unit already running."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._busy = False
+        self._queries_waiting = 0
+
+    @property
+    def queries_waiting(self) -> int:
+        with self._cond:
+            return self._queries_waiting
+
+    @contextmanager
+    def hold(self, *, query: bool):
+        with self._cond:
+            if query:
+                self._queries_waiting += 1
+            try:
+                while self._busy or (not query and self._queries_waiting):
+                    self._cond.wait()
+            finally:
+                if query:
+                    self._queries_waiting -= 1
+            self._busy = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._busy = False
+                self._cond.notify_all()
+
+
 class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    """Connections are accepted concurrently; inference is serialized."""
+    """Connections are accepted concurrently; inference runs one unit at a time."""
 
     daemon_threads = True
 
     def __init__(self, socket_path: Path, provider) -> None:
         self.provider = provider
         self.model_name = provider.MODEL_NAME
-        self._inference = threading.Lock()
+        self.lane = _Lane()
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         if socket_path.is_socket():
             socket_path.unlink()
@@ -119,8 +165,19 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             return {"ok": False, "error": f"{len(texts)} texts exceeds {MAX_TEXTS} per request"}
         if not isinstance(prefix, str):
             return {"ok": False, "error": "prefix must be a string"}
-        with self._inference:
-            vectors = self.provider.embed(texts, prefix=prefix)
+        units_of = getattr(self.provider, "embed_units", None)
+        if callable(units_of):
+            units = units_of(texts, prefix)
+        else:
+            units = [list(range(start, min(start + CHUNK_TEXTS, len(texts))))
+                     for start in range(0, len(texts), CHUNK_TEXTS)]
+        query = prefix == QUERY_PREFIX
+        vectors: list = [None] * len(texts)
+        for unit in units:
+            with self.lane.hold(query=query):
+                part = self.provider.embed([texts[i] for i in unit], prefix=prefix)
+            for index, vector in zip(unit, part, strict=True):
+                vectors[index] = vector
         return {**info, "vectors": vectors}
 
 
