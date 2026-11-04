@@ -2,19 +2,23 @@
 # It serves the publishers named in lighthouse-daemon.toml under memory_home, on a Unix socket and nothing else.
 # Install: cp scripts/superyak-engram-publisher.service ~/.config/systemd/user/
 #          systemctl --user enable --now superyak-engram-publisher
-# With the shared embedder (superyak-embedder.service) and embedder_socket in runtime.json, it holds no model itself.
+# Run it with the shared embedder (superyak-embedder.service, and embedder_socket in runtime.json): it then holds no
+# model. Without one it loads the model itself, about 1.1 GB, past the cap below.
 [Unit]
 Description=Superyak Engram lighthouse publisher
 After=superyak-embedder.service
 
 [Service]
 ExecStart=%h/.local/bin/superyak-runtime publisher
-Restart=always
-RestartSec=5
 # always, not on-failure: systemd counts SIGTERM as a clean stop, so a stray kill would leave the lighthouse down until
 # the next login, as happened on Tardis on 2026-11-04. `systemctl --user stop` still stops it.
-# Without the shared embedder it loads the model in this process, about the embedder's own size.
-MemoryMax=3G
+Restart=always
+RestartSec=5
+# The wrapper exits 2 on a missing or invalid configuration, which no retry fixes, so that ends the loop.
+RestartPreventExitStatus=2
+# Each Engram process stays under 512 MB (engram/CLAUDE.md, spec 15). This holds only where the user manager has a
+# memory controller, which the Pi's doesn't.
+MemoryMax=512M
 MemorySwapMax=0
 
 [Install]

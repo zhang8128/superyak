@@ -94,8 +94,9 @@ superyak-runtime --config /absolute/path/runtime.json status
 
 The publisher reads the existing
 `<memory_home>/.engram/lighthouse-daemon.toml`. Supervise
-`superyak-runtime publisher` as a long-running user service, such as a macOS
-LaunchAgent with the wrapper and `publisher` as its `ProgramArguments`. Keep
+`superyak-runtime publisher` as a long-running user service: on Linux,
+`scripts/superyak-engram-publisher.service`, whose header says how to install it;
+on macOS, a LaunchAgent with the wrapper and `publisher` as its `ProgramArguments`. Keep
 the existing daemon TOML and publisher policies in the memory home; installation
 does not broaden audiences, extend grants, or republish memories.
 
