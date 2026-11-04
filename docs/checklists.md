@@ -541,9 +541,9 @@ ranking on outcomes (Tardis, all hands 53713a1d, with no receipts yet, so to rev
 "Memoize recursion" for looking narrow, on 2026-11-04, and that was the wrong test: a narrow lesson's trigger is what makes
 it fire.
 
-- [ ] Retract the weakest trigger, not the narrowest claim. In order: no `command`, `file` or `error` value, so only
-      Near can reach it; then one whose mistake a test or guard now makes impossible; then one that only restates a
-      checklist line.
+- [ ] Retract the weakest trigger, not the narrowest claim. In order: one whose trigger values nothing would ever
+      contain; then one whose mistake a test or guard now makes impossible; then one that only restates a checklist
+      line.
 - [ ] Measure "unfired" in other ships' queries, never in days. With no readers, days would retire everything.
 - [ ] A retraction is final for that text. A lesson comes back only reworded, so read it again before retracting.
 
