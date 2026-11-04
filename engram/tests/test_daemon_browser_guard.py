@@ -165,3 +165,91 @@ def test_main_hands_the_handler_its_names(monkeypatch):
     with pytest.raises(Stop):
         daemon.main()
     assert seen["names"] == {"127.0.0.1", "localhost", "100.64.0.7", "pi.tail.net"}
+
+
+# Review round 1 (the fresh Pi reviewer, with real Firefox): framing, Fetch Metadata, the Origin's port, and edges.
+
+def _headers_of(port, method, path, headers, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+    for name, value in headers.items():
+        conn.putheader(name, value)
+    if body is not None:
+        conn.putheader("Content-Length", str(len(body)))
+    conn.endheaders(body)
+    response = conn.getresponse()
+    response.read()
+    conn.close()
+    return response.status, response.headers
+
+
+@pytest.mark.parametrize("method,path", [("GET", "/"), ("GET", "/core"), ("GET", "/nowhere"), ("OPTIONS", "/chat")])
+def test_no_answer_can_be_framed(served, method, path):
+    _, port = served
+    _status, headers = _headers_of(port, method, path, {"Host": f"localhost:{port}"})
+    assert headers["X-Frame-Options"] == "DENY"
+    assert headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site", "CROSS-SITE"])
+@pytest.mark.parametrize("method,path,body", [("GET", "/core", None), ("GET", "/recall?q=x", None),
+                                               ("POST", "/chat", b'{"message": "hello"}')])
+def test_a_cross_site_or_same_site_request_is_refused(served, site, method, path, body):
+    agent, port = served
+    headers = {"Host": f"localhost:{port}", "Sec-Fetch-Site": site, "Sec-Fetch-Mode": "no-cors",
+               "Sec-Fetch-Dest": "image"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    status, _ = _ask(port, method, path, headers, body)
+    assert status == 403 and agent.calls == []
+
+
+@pytest.mark.parametrize("dest,path,expected", [("document", "/", 200), ("document", "/chat", 200),
+                                                ("iframe", "/", 403), ("document", "/core", 403)])
+def test_only_a_top_level_visit_to_the_chat_page_comes_from_another_site(served, dest, path, expected):
+    agent, port = served
+    status, _ = _ask(port, "GET", path, {"Host": f"localhost:{port}", "Sec-Fetch-Site": "cross-site",
+                                         "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest})
+    assert status == expected
+    assert agent.calls == []
+
+
+@pytest.mark.parametrize("site", ["same-origin", "none"])
+def test_the_page_own_requests_and_a_typed_address_are_answered(served, site):
+    _, port = served
+    status, _ = _ask(port, "GET", "/core", {"Host": f"localhost:{port}", "Sec-Fetch-Site": site})
+    assert status == 200
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:8080", "http://127.0.0.1:1", "http://localhost",
+                                    "http://127.0.0.1:{port}"])
+def test_an_origin_on_another_port_or_name_than_the_host_is_refused(served, origin):
+    agent, port = served
+    status, _ = _ask(port, "POST", "/chat", {"Host": f"localhost:{port}", "Content-Type": "application/json",
+                                             "Origin": origin.format(port=port)}, b'{"message": "hello"}')
+    assert status == 403 and agent.calls == []
+
+
+def test_a_get_with_a_foreign_origin_is_refused(served):
+    agent, port = served
+    status, _ = _ask(port, "GET", "/core", {"Host": f"localhost:{port}", "Origin": "http://evil.example"})
+    assert status == 403 and agent.calls == []
+
+
+def test_an_origin_that_cannot_be_parsed_is_refused_with_an_answer(served):
+    agent, port = served
+    status, data = _ask(port, "GET", "/core", {"Host": f"localhost:{port}", "Origin": "http://[evil"})
+    assert status == 403 and b"--allow-host" in data and agent.calls == []
+
+
+def test_a_request_with_no_host_is_answered(served):
+    """Host is a forbidden header: a browser always sends one, so a request without it isn't a page's."""
+    agent, port = served
+    status, _ = _ask(port, "GET", "/core", {})
+    assert status == 200 and agent.calls == ["core"]
+
+
+def test_an_empty_host_binds_like_every_interface_and_allowed_names_lose_their_port():
+    assert daemon.allowed_hosts("", "192.168.1.5") == {"127.0.0.1", "localhost", "192.168.1.5"}
+    assert daemon.allowed_hosts("127.0.0.1", None, ["Pi.Tail.Net:7432"]) == {"127.0.0.1", "localhost",
+                                                                             "pi.tail.net"}

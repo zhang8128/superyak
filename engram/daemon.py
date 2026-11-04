@@ -43,19 +43,46 @@ def allowed_hosts(bound_host: str, local_ip: str | None, extra: list[str] | None
     """The host names a request may carry: loopback, the bound host, the detected local IP when bound to every
     interface, and any --allow-host. A web page can't make a browser send another (DNS rebinding sends its own)."""
     names = {"127.0.0.1", "localhost"}
-    if bound_host == "0.0.0.0":
+    if bound_host in ("0.0.0.0", ""):  # both bind every interface
         if local_ip:
             names.add(local_ip)
     elif bound_host not in LOOPBACK:
         names.add(bound_host)
-    names.update(extra or [])
+    names.update(_host_name(name) for name in extra or [])  # a Host's port is never compared, so drop one here
     return frozenset(name.lower() for name in names)
+
+
+def _split_host(value: str) -> tuple[str, int]:
+    """A Host header's name and port (80 when it names none)."""
+    name, sep, port = value.rpartition(":")
+    if sep and port.isascii() and port.isdigit():
+        return name.lower(), int(port)
+    return value.lower(), 80
 
 
 def _host_name(value: str) -> str:
     """The name in a Host header, without its port."""
-    name, sep, port = value.rpartition(":")
-    return (name if sep and port.isdigit() else value).lower()
+    return _split_host(value)[0]
+
+
+def _same_origin(origin: str, host: str | None, allowed: frozenset[str]) -> bool:
+    """An Origin is ours when it is http and names the request's own host and port (any name we know, with no Host:
+    a forwarded port, `ssh -L 9000:localhost:7432`, still matches its own Host)."""
+    try:
+        parsed = urlparse(origin)
+        port = parsed.port or 80
+    except ValueError:  # an Origin urlparse can't read (``http://[evil``) is not ours
+        return False
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    if host is None:
+        return parsed.hostname.lower() in allowed
+    return (parsed.hostname.lower(), port) == _split_host(host)
+
+
+# Answers no page may frame (the chat page can reach /chat, which can run Claude Code).
+_NO_FRAMING = (("X-Frame-Options", "DENY"), ("Content-Security-Policy", "frame-ancestors 'none'"))
+_CHAT_PAGE_PATHS = ("/", "/chat")
 
 
 class DaemonHandler(BaseHTTPRequestHandler):
@@ -64,16 +91,30 @@ class DaemonHandler(BaseHTTPRequestHandler):
     agent: LocalAgent  # Set by the server
     allowed_hosts: frozenset[str] = frozenset({"127.0.0.1", "localhost"})  # set by main() from the bound host
 
+    def end_headers(self) -> None:
+        for name, value in _NO_FRAMING:
+            self.send_header(name, value)
+        super().end_headers()
+
     def _from_a_page_we_dont_name(self) -> bool:
-        """Refuse (403) a Host or an Origin this daemon doesn't name, before any read or write."""
+        """Refuse (403), before any read or write, what a web page we don't name could send: a Host we don't name
+        (DNS rebinding), an Origin that isn't this request's own scheme, host and port, and a cross-site or same-site
+        request (Fetch Metadata) other than a top-level visit to the chat page. A header a browser always sends but
+        a script or curl may not (Host, Sec-Fetch-Site) is not required."""
         host = self.headers.get("Host")
         refused = host is not None and _host_name(host) not in self.allowed_hosts
         origin = self.headers.get("Origin")
-        if origin is not None and not refused:
-            parsed = urlparse(origin)
-            refused = parsed.scheme != "http" or (parsed.hostname or "") not in self.allowed_hosts
+        if not refused and origin is not None:
+            refused = not _same_origin(origin, host, self.allowed_hosts)
+        if not refused and (self.headers.get("Sec-Fetch-Site") or "").lower() in ("cross-site", "same-site"):
+            visit = (self.command == "GET"
+                     and (self.headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+                     and (self.headers.get("Sec-Fetch-Dest") or "").lower() == "document"
+                     and urlparse(self.path).path in _CHAT_PAGE_PATHS)
+            refused = not visit
         if refused:
-            self._send_json({"error": "this daemon answers only its own host names"}, 403)
+            self._send_json({"error": "this daemon answers only its own pages and host names; a name it should "
+                                      "answer to can be added with --allow-host NAME"}, 403)
         return refused
 
     def log_message(self, format, *args):
@@ -107,7 +148,7 @@ class DaemonHandler(BaseHTTPRequestHandler):
         path = parsed.path
         params = parse_qs(parsed.query)
 
-        if path == "/" or path == "/chat":
+        if path in _CHAT_PAGE_PATHS:
             self._serve_chat_html()
             return
 
