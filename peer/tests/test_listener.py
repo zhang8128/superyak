@@ -286,3 +286,25 @@ def test_the_61st_crossing_in_60_seconds_from_one_origin_gets_429(world):
     assert (refused.value.status, refused.value.message) == (429, 'Too many crossings')
     now[0] = 5000.0 + 60.0  # the first of the sixty is a minute old
     assert world.a[2].serve_crossing(canonical(crossing_request(world)))['kind'] == 'crossing-answer'
+
+
+def test_the_main_app_never_serves_the_crossing_route(tmp_path, monkeypatch):
+    """The crossing route is listener-only (spec 2.3: on federation-listen only). The main app (create_app) answers a
+    POST to /federation/crossing with its own refusal, both as a public request (Funnel's header) and as a tailnet one,
+    and the crossing handler never runs. If the route were ever mounted on the main app, this fails (coordinated with
+    Rio Grande's public-route bound build)."""
+    from fastapi.testclient import TestClient as AppClient
+    from superyak_peer import crossing
+    from superyak_peer.app import create_app
+    monkeypatch.setattr(crossing, 'serve', lambda federation, raw: (_ for _ in ()).throw(
+        AssertionError('the main app reached the crossing handler')))
+    public_origin = 'https://home.example'
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', public_origin], public_origin=public_origin)
+    body = b'{"version": 1, "kind": "crossing"}'
+    tailnet = AppClient(app, base_url='http://testserver', client=('100.70.202.124', 50000))
+    public = AppClient(app, base_url=public_origin, client=('100.70.202.124', 50000),
+                       headers={'Tailscale-Funnel-Request': '?1'})
+    for client in (tailnet, public):
+        answer = client.post('/federation/crossing', content=body, headers={'content-type': 'application/json'})
+        assert answer.status_code in (401, 404), (answer.status_code, answer.text)
+        assert 'crossing-answer' not in answer.text
