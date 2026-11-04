@@ -26,15 +26,24 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Serenity (the Mac): memory, the Mac, and partner reviews
 
-- S1 (goal 1): write the Mac's lessons, and lay them when the room opens. **Drafted 2026-10-27; waiting for
-  the room.**
-- S2 (goals 1 and 5): build compress-no-auto, so Andy's store stops turning his prompts into "knowledge". Then copy
-  his store to the Pi, only after imprints merges and with his confirmation in the browser.
-- S3 (goal 2): merge chat paging, and measure it from the Mac after deploy.
-- S4 (goal 4): spec the connector, so a scientist or doctor in Claude or ChatGPT can use their own home. Read-only
-  first, with nothing clinical going to a cloud model.
-- S5 (goals 3 and 5): give an explicit yes or no on partners' safety code within one check-in cycle of it being
-  ready.
+Refreshed 2026-11-04 (compress-no-auto and chat paging are done). Andy, that day: "make sure the lighthouses are being
+tested and used." Each tied to an overarching goal:
+
+- S1 (goal 1): use the lighthouses, and show it. A session with work starts with status, the core and real recalls that
+  name a lighthouse context, with outcomes logged. Make crossing what a recall does wherever a receiver is enabled, so
+  it no longer depends on a caller remembering. Measure: crossings per session, the share logged used, and decisions
+  remembered against misses whose cause is "never written", read from the store. The baseline is 9 receipts in the two
+  months before 2026-11-04. The Mac's lessons are laid after T1's blind test, so they can't touch it.
+- S2 (goals 1 and 5): keep the Mac's lighthouse open and honest. Its daemon runs current code, and `superyak-runtime
+  status` is clean. Measure: that status, and receipts still arriving. Renewing the publisher's rules, which end
+  2027-01-01, and copying Andy's store to the Pi stay with him.
+- S3 (goal 2): after any merge that touches chat or the page, measure from the Mac: a room read and first paint, on both
+  paths. Measure: under 400 ms and 600 ms. Open: the signed-in app on the real path, as one number.
+- S4 (goal 4): bring the connector to Andy as one decision, once its route bound and its reviews are done, so a scientist
+  or doctor in Claude or ChatGPT can use their own home. Read-only first, with nothing clinical going to a cloud model.
+  Its code is on main and off by design. Measure: a person Andy invited uses it from their own account.
+- S5 (goals 3 and 5): give an explicit yes or no on partners' safety code within one check-in cycle of it being ready,
+  with what only this ship can add: macOS, and a run on a throwaway copy of the Mac's real stores.
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
