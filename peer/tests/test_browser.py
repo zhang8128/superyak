@@ -135,7 +135,7 @@ def signed_in_browser(playwright, peer, username, *, viewport=None):
     context = browser.new_context(viewport=viewport or {"width": 1440, "height": 960})
     page = context.new_page()
     page.goto(peer["base_url"] + "/")
-    expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+    expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
     page.get_by_label("Username", exact=True).fill(username)
     page.get_by_label("Password", exact=True).fill(peer["password"])
     page.get_by_role("button", name="Sign in").click()
@@ -180,6 +180,22 @@ def test_the_sign_in_page_tells_a_stranger_how_to_get_an_account(browser_peer):
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_text("No account? The person who runs this home invites people: ask them for an invitation.",
                                 exact=True)).to_be_visible()
+
+
+def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser_peer):
+    """Tardis's T4 (goal 4), by the visitor-access spec section 3: every peer serves this page, so it stays generic.
+    A stranger reading someone else's station meets "this home", never "your home", and no undefined "peer"."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+        expect(page.get_by_text("Self-hosted: this home runs on a computer its owner keeps.", exact=False)).to_be_visible()
+        expect(page.get_by_text("An account here lives on this home, not with a company.", exact=True)).to_be_visible()
+        words = page.locator("main").inner_text().lower()
+        assert "your home" not in words
+        assert "peer" not in words
+    with urlopen(browser_peer["base_url"] + "/") as response:
+        shell = response.read().decode()
+    assert "Opening your home" not in shell and "Opening this home" in shell
 
 
 def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(browser_peer):
@@ -227,7 +243,7 @@ def test_once_the_app_loads_the_shell_description_is_gone(browser_peer):
     once the app renders its first view, the shell is replaced."""
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
-        expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
         expect(page.get_by_text("Its owner invites the people in it.", exact=False)).to_have_count(0)
 
 
@@ -468,7 +484,7 @@ def test_late_home_refresh_cannot_replace_the_next_accounts_data(browser_peer):
         page.wait_for_function('() => window.__homeHeld === true')
         page.get_by_role('button', name='Account and sign out').click()
         page.get_by_role('button', name='Sign out', exact=True).click()
-        expect(page.get_by_role('heading', name='Sign in to your home')).to_be_visible()
+        expect(page.get_by_role('heading', name='Sign in to this home')).to_be_visible()
         page.get_by_label('Username', exact=True).fill('doctor')
         page.get_by_label('Password', exact=True).fill(browser_peer['password'])
         page.get_by_role('button', name='Sign in', exact=True).click()
@@ -886,7 +902,7 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             page.get_by_label("Your display name").fill("New Person")
             page.get_by_label("New password").fill("another-long-password")
             page.get_by_role("button", name="Create my account").click()
-            expect(page.get_by_text("Account created. Sign in to open your home.")).to_be_visible()
+            expect(page.get_by_text("Account created. Sign in with your new password.")).to_be_visible()
             if browser_peer['local_demo']:
                 expect(page.get_by_text('Sign in with another account', exact=True)).to_be_visible()
                 page.get_by_text('Sign in with another account', exact=True).click()
@@ -1103,7 +1119,7 @@ def test_failed_logout_stays_authenticated_until_server_acknowledges(browser_pee
             expect(page.get_by_role("button", name="Retry sign out")).to_be_visible()
             context.set_offline(False)
             page.get_by_role("button", name="Retry sign out").click()
-            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
 
 
 def test_active_release_read_failure_is_unknown_and_public_off_uses_returned_routes(browser_peer):
@@ -1155,7 +1171,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
             expect(page.get_by_role("heading", name="First audience")).to_be_visible()
             expect(page.get_by_text("Removing someone stops access on this peer")).to_be_visible()
             page.get_by_role("button", name="Remove Sam Family from this room").click()
-            expect(page.get_by_text("Sam Family no longer has access on this peer; remote removal requires acknowledgement")).to_be_visible()
+            expect(page.get_by_text("Sam Family no longer has access on this home; remote removal requires acknowledgement")).to_be_visible()
 
             with signed_in_browser(playwright, browser_peer, "family") as (family, _):
                 family.goto(browser_peer["base_url"] + f"/#chats/{room_id}")
@@ -1394,7 +1410,7 @@ def test_accepted_participant_removal_survives_failed_followup_read(browser_peer
             expect(page.get_by_role("heading", name="Removal boundary")).to_be_visible()
             room_id = decode_fragment_id(page.url)
             page.get_by_role("button", name="Remove Sam Family from this room").click()
-            expect(page.locator("#main-content").get_by_text("Sam Family no longer has access on this peer; remote removal requires acknowledgement. Latest room status is unavailable.")).to_be_visible()
+            expect(page.locator("#main-content").get_by_text("Sam Family no longer has access on this home; remote removal requires acknowledgement. Latest room status is unavailable.")).to_be_visible()
             expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
             with pytest.raises(Problem) as denied:
                 store.get_room(family_id, room_id)
@@ -1508,7 +1524,7 @@ def test_assistant_suggestion_stays_with_initiating_layer_and_is_cleared_on_logo
                 assert entered.wait(5)
                 page.get_by_role('button', name='Account and sign out').click()
                 page.get_by_role('button', name='Sign out', exact=True).click()
-                expect(page.get_by_role('heading', name='Sign in to your home')).to_be_visible()
+                expect(page.get_by_role('heading', name='Sign in to this home')).to_be_visible()
                 page.get_by_label('Username', exact=True).fill('doctor')
                 page.get_by_label('Password', exact=True).fill(browser_peer['password'])
                 page.get_by_role('button', name='Sign in', exact=True).click()
@@ -1716,7 +1732,7 @@ def test_super_admin_activation_and_named_role_preview_in_browser(browser_peer, 
         assert record['token'] not in page.url
         page.get_by_label('New password', exact=True).fill(browser_peer['password'])
         page.get_by_role('button', name='Create my account', exact=True).click()
-        expect(page.get_by_text('Account created. Sign in to open your home.', exact=True)).to_be_visible()
+        expect(page.get_by_text('Account created. Sign in with your new password.', exact=True)).to_be_visible()
         page.get_by_label('Username', exact=True).fill(record['username'])
         page.get_by_label('Password', exact=True).fill(browser_peer['password'])
         page.get_by_role('button', name='Sign in', exact=True).click()
@@ -2303,7 +2319,7 @@ def test_an_expired_session_during_a_board_write_shows_the_sign_in_prompt(browse
             panel.get_by_label("Title").fill("Typed before it ended")
             context.clear_cookies()
             panel.get_by_role("button", name="Post item").click()
-            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
             expect(page.get_by_text("Your session ended. Sign in again; text in an open form has not been sent.")).to_be_visible()
     assert store.room_board(users["patient"]["id"], room["id"]) == []
 
@@ -2329,7 +2345,7 @@ def test_a_board_form_and_view_do_not_follow_a_new_sign_in_in_the_same_tab(brows
             expect(page.locator(".board-room")).to_have_count(2)
             page.get_by_role("button", name="Account and sign out").click()
             page.get_by_role("button", name="Sign out", exact=True).click()
-            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
             page.get_by_label("Username", exact=True).fill("family")
             page.get_by_label("Password", exact=True).fill(browser_peer["password"])
             page.get_by_role("button", name="Sign in").click()
@@ -3572,7 +3588,7 @@ def test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in(browser
                        if posted else route.continue_())
             item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
             expect(page.get_by_text("Your session ended. Sign in again;")).to_be_visible()
-            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
     assert store.list_grants(patient)[0]["revoked"] is not None
 
 

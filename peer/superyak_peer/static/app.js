@@ -133,7 +133,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, { credentials: "same-origin", ...options, headers });
   } catch (_) {
-    throw new ApiError("Connection lost. Try again when this peer is reachable.", 0);
+    throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   }
   const type = response.headers.get("content-type") || "";
   const data = type.includes("application/json") ? await response.json() : await response.text();
@@ -155,7 +155,7 @@ function navLink(route, label, icon) {
 }
 
 function brand() {
-  return `<a class="brand" href="#home" aria-label="Superyak home"><span class="brand-mark" aria-hidden="true">S</span><span><strong>Superyak</strong><span>Your peer, your pace</span></span></a>`;
+  return `<a class="brand" href="#home" aria-label="Superyak home"><span class="brand-mark" aria-hidden="true">S</span><span><strong>Superyak</strong><span>Homes people own</span></span></a>`;
 }
 
 function layout(content) {
@@ -219,12 +219,12 @@ function showLogin(message = "") {
       <section class="login-story">
         ${brand()}
         <div><h1>A home for the parts of your life you choose to share.</h1><p>Write privately, talk with people you trust, and turn on only the version you mean to share.</p></div>
-        <p class="login-note">Self-hosted on your Superyak peer. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
+        <p class="login-note">Self-hosted: this home runs on a computer its owner keeps. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
         <p class="eyebrow">Personal home</p>
-        <h2 id="login-title">Sign in to your home</h2>
-        <p>Your account belongs to this peer.</p>
+        <h2 id="login-title">Sign in to this home</h2>
+        <p>An account here lives on this home, not with a company.</p>
         ${message ? `<div class="notice error" role="alert">${escapeHtml(message)}</div>` : ""}
         ${demoChoices()}
         ${state.demoAccounts.length ? '<details><summary>Sign in with another account</summary>' : ''}
@@ -1674,10 +1674,10 @@ async function renderPublic() {
   } else {
     try {
       const layer = await api(`/public/layers/${pathPart(layerId)}`);
-      content = `<article class="public-article"><p class="eyebrow">Shared from a personal Superyak peer · release ${escapeHtml(layer.revision)}</p><h1>${escapeHtml(layer.title)}</h1><div class="public-body">${escapeHtml(layer.body)}</div>${(layer.attachment_ids || []).length ? `<div class="attachments"><h2>Attachments</h2>${layer.attachment_ids.map((id, index) => `<a class="attachment" href="/public/layers/${pathPart(layer.id)}/files/${pathPart(id)}"><span>Download attachment ${index + 1}</span><span aria-hidden="true">↓</span></a>`).join("")}</div>` : ""}</article>`;
+      content = `<article class="public-article"><p class="eyebrow">Shared from a personal Superyak home · release ${escapeHtml(layer.revision)}</p><h1>${escapeHtml(layer.title)}</h1><div class="public-body">${escapeHtml(layer.body)}</div>${(layer.attachment_ids || []).length ? `<div class="attachments"><h2>Attachments</h2>${layer.attachment_ids.map((id, index) => `<a class="attachment" href="/public/layers/${pathPart(layer.id)}/files/${pathPart(id)}"><span>Download attachment ${index + 1}</span><span aria-hidden="true">↓</span></a>`).join("")}</div>` : ""}</article>`;
       document.title = `${layer.title} · Superyak`;
     } catch (error) {
-      content = error.status === 404 ? `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>` : `<article class="public-article"><h1>This page is unavailable</h1><p>The peer could not be reached or could not load this page. Try again later; its sharing status is unknown.</p></article>`;
+      content = error.status === 404 ? `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>` : `<article class="public-article"><h1>This page is unavailable</h1><p>This home could not be reached or could not load this page. Try again later; its sharing status is unknown.</p></article>`;
     }
   }
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
@@ -2201,7 +2201,7 @@ async function removeParticipant(id) {
   }
   if (state.room?.id === room.id) {
     state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
-    state.transitionNote = `${name} no longer has access on this peer; remote removal requires acknowledgement`;
+    state.transitionNote = `${name} no longer has access on this home; remote removal requires acknowledgement`;
     render();
   }
   try {
@@ -2210,10 +2210,10 @@ async function removeParticipant(id) {
     render();
   } catch (error) {
     if (error.status === 401) {
-      showLogin(`${name} no longer has access on this peer; remote removal requires acknowledgement. Sign in again to continue.`);
+      showLogin(`${name} no longer has access on this home; remote removal requires acknowledgement. Sign in again to continue.`);
       return;
     }
-    setFlash(`${name} no longer has access on this peer; remote removal requires acknowledgement. Latest room status is unavailable.`);
+    setFlash(`${name} no longer has access on this home; remote removal requires acknowledgement. Latest room status is unavailable.`);
     render();
   }
 }
@@ -2418,7 +2418,7 @@ document.addEventListener("submit", async (event) => {
     try {
       await api("/api/invitations/redeem", { method: "POST", json: { token: form.elements.token.value, username: form.elements.username.value, name: form.elements.name.value, password: form.elements.password.value } });
       state.activation = null;
-      showLogin("Account created. Sign in to open your home.");
+      showLogin("Account created. Sign in with your new password.");
     } catch (error) {
       showLogin(error.message);
       const details = document.querySelector(".invitation-redeem");
