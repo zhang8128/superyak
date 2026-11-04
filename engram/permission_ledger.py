@@ -729,7 +729,11 @@ def _full_check(conn: sqlite3.Connection) -> None:
 # the file format bytes are read with `os.pread` on a descriptor this process keeps open while it has a connection on
 # that file: closing any descriptor on a file drops every POSIX lock the process holds on it, SQLite's too (M2).
 MARKER = "permissions.verified"
-APPEND_BUSY_MS = 12000          # a writer waits out a rare full check holding SHARED (the re-check's S1)
+# A writer waits out a reader's rare full check, which holds SHARED for its whole length (the re-check's S1), and that
+# check grows with the file: on a loaded Pi it took 4.8 s at Task 0's 28.7 MB and 19-22 s at U24's 274 MB, about
+# 0.08 s per MB (the section 2 review's S4). So an append waits max(12 s, twice that per MB).
+APPEND_BUSY_MS = 12000
+APPEND_BUSY_MS_PER_MB = 160
 WRITER_TRIES = 3
 _RECHECK_S = 0.05               # the wait before the marker is read once more (S2)
 _MEMO_KEPT = 64
@@ -836,6 +840,12 @@ class _Conn(sqlite3.Connection):
                 self._done.detach()
                 _release(self._key)
                 self._done = None
+
+
+def _append_busy_ms(size: int) -> int:
+    """How long an append waits for the lock on a ledger file of `size` bytes: APPEND_BUSY_MS at least, and
+    APPEND_BUSY_MS_PER_MB for each MB (10**6 bytes), about 44 s at U24's 274 MB."""
+    return max(APPEND_BUSY_MS, int(size / 1_000_000 * APPEND_BUSY_MS_PER_MB))
 
 
 def _held_fd(key: tuple[int, int]) -> int:
@@ -1456,10 +1466,10 @@ class Ledger:
         builder's finding on step 2, in the plan's decided items); an unverified change sends the writer back to step
         1, so no full check runs under the lock, at most WRITER_TRIES times, then `LedgerBusy`. After COMMIT the key
         is read again and marked verified when this write is the one commit since (steps 3 and 4). It waits up to
-        APPEND_BUSY_MS for the lock, since a reader's rare full check holds SHARED for its whole length (S1)."""
+        `_append_busy_ms` for the lock, since a reader's rare full check holds SHARED for its whole length (S1)."""
         text = canonical_json(dict(body))
         busy = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
-        self.conn.execute(f"PRAGMA busy_timeout={APPEND_BUSY_MS}")
+        self.conn.execute(f"PRAGMA busy_timeout={_append_busy_ms(_stat(self.path).st_size)}")
         try:
             for _ in range(WRITER_TRIES):
                 done = self._append_on(self._base_key(), kind, ref, actor, channel, body, text, under_grant,

@@ -268,6 +268,10 @@ steps are Andy's, in the one sitting the crossing plan names:
 - **Writer drift reads as a tear.** The suite-wide conftest check and the drift rules are the guard, and `rebuild` is
   the live recovery.
 - **Descriptors kept open** grow by one per file replacement in a process's life, which is bounded by restores.
+- **A writer behind a rare check waits up to its whole busy timeout** (S4 of the section 2 review): `max(12 s, 0.16 s
+  per MB)`, about 44 s at U24's 274 MB. A command or tool call can stall that long, and when the wait runs out the act
+  fails with nothing written. New readers can queue behind such a pending writer too (the re-check's S1), and the
+  daemon's own wait (`LEDGER_BUSY_MS`, 5 s) is unchanged, so a frame landing then can time out.
 
 ## Plan re-check: decided items (approved)
 
@@ -381,3 +385,11 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
   check. **The Pi's rebuild budget is still to measure** on the Pi.
 - **The suite-wide check sets and restores `_append` itself,** not through the `monkeypatch` fixture, which changed
   every test's fixture order (the whole suite found it: a test's patched `os.open` broke `tmp_path`'s teardown).
+
+### After the section 2 review (the fresh Pi reviewer, changes required; [review](../reviews/2026-11-03-projection-digest-section2-review.md))
+
+- **An append's wait for the lock scales with the file** (S4, the coordinator's decision): `max(12 s, 0.16 s per MB)`,
+  the size read by `os.stat`. On the loaded Pi the rare path took 4.8 s (median) at Task 0's 28.7 MB and 19-22 s at
+  U24's 274 MB (1.21 million projected rows), about 0.08 s per MB, past the fixed 12 s it had: a writer behind a rare
+  check failed at COMMIT with nothing written. 0.16 s per MB is twice the measured rate, as margin, and gives about 44 s
+  at 274 MB and the 12 s floor at Task 0's shape. Its cost is in Risks.

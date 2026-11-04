@@ -1186,3 +1186,23 @@ def test_m2_rebuild_replays_a_whole_log_when_a_table_page_is_malformed(tmp_path,
     out = " ".join(capsys.readouterr().out.split())
     assert "The old tables could not be read (database disk image is malformed)" in out
     assert f"move {ledger_path(tmp_path / 'copy2')} to {ledger_path(tmp_path)}" in out
+
+
+def test_s4_an_append_waits_longer_for_the_lock_on_a_larger_ledger(tmp_path, monkeypatch):
+    """The review's S4: on a loaded Pi the full check at U24's reference shape (274 MB) took 19-22 s, past a fixed
+    12 s, so a writer behind a rare check failed at COMMIT with nothing written. The wait scales with the file's size,
+    read by stat: max(12 s, 0.16 s per MB), twice the 0.08 s per MB measured."""
+    assert permission_ledger._append_busy_ms(274_000_000) >= 40_000
+    assert permission_ledger._append_busy_ms(28_700_000) == 12_000          # Task 0's shape: the floor
+    assert permission_ledger._append_busy_ms(4096) == 12_000
+    real = os.stat
+    monkeypatch.setattr(permission_ledger, "_stat", lambda path: SimpleNamespace(
+        **{f: getattr(real(path), f) for f in ("st_dev", "st_ino", "st_ctime_ns")}, st_size=274_000_000))
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    seen, project = [], Ledger._project
+    monkeypatch.setattr(Ledger, "_project", lambda self, *a, **k: (
+        seen.append(self.conn.execute("PRAGMA busy_timeout").fetchone()[0]), project(self, *a, **k))[1])
+    led._append("note", "x", ANDY, "terminal", {}, at=T("2026-11-02"))
+    assert seen == [permission_ledger._append_busy_ms(274_000_000)] and seen[0] >= 40_000
+    assert led.conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    led.close()
