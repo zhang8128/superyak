@@ -134,7 +134,8 @@ def _projection_follows_every_append():
     def checked(self, *args, **kwargs):
         seq = real(self, *args, **kwargs)
         if os.environ.get("ENGRAM_PROJECTION_CHECK") != "off":
-            _check_projection(self.conn, seq)
+            # a fresh file (rebuild, migrate) carries its parts in memory until `_finish_fresh` writes them
+            _check_projection(self.conn, seq, self._carried if self._fresh else None)
         return seq
 
     permission_ledger.Ledger._append = checked
@@ -144,22 +145,23 @@ def _projection_follows_every_append():
         permission_ledger.Ledger._append = real
 
 
-def _check_projection(conn, seq):
+def _check_projection(conn, seq, carried=None):
     import permission_ledger
     conn.execute("BEGIN")
     try:
         meta = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
         if "projection_parts" not in meta:
             return                                       # a ledger made before the digest keeps none (D5)
-        held = permission_ledger._read_parts(meta["projection_parts"])
+        held = carried if carried is not None else permission_ledger._read_parts(meta["projection_parts"])
         if sum(n for n, _ in held.values()) >= PROJECTION_CHECK_ROWS:
             return
         whole, parts = permission_ledger.projection_now(conn)
     finally:
         conn.execute("COMMIT")
     differs = [p for p in parts if parts[p] != held[p]]
-    assert meta["projection"] == f"{seq}:{whole}" and not differs, (
-        f"meta.projection is not the tables after seq {seq}: {meta['projection']} against {seq}:{whole}, the parts "
+    stored = f"{seq}:{permission_ledger._parts_digest(held)}" if carried is not None else meta["projection"]
+    assert stored == f"{seq}:{whole}" and not differs, (
+        f"meta.projection is not the tables after seq {seq}: {stored} against {seq}:{whole}, the parts "
         f"that differ: {differs}")
 
 

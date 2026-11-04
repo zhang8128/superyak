@@ -409,3 +409,9 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
 - **The Pi's rebuild budget** is 1,340 s: U24's reference ledger rebuilt in 1,070.5 s at 3562a6e1 against main's
   574.1 s (+86%), with peaks of 55.8 and 55.2 MB, inside spec 15's 69.9 MB; plus 25%. U24's rebuild measurement
   asserts it (`REBUILD_REFERENCE_S`, ENGRAM_PI_BUDGET=1).
+- **A fresh file carries its parts in memory** (S6): rebuild and migrate keep the parts from append to append (a copy
+  per append, so one that rolls back leaves them whole) and write `projection` and `projection_parts` once, at
+  `_finish_fresh`, before the one full check, which still catches any slip. The suite-wide check compares the carried
+  parts after each such append. On Tardis, rebuilding U24's reference ledger from the same kept file, quiet: 210.4 s
+  before, 172.6 s after (main: 143.7 s, so +20% where it was +46%). The x86 budget, 263 s, holds; the Pi's was set
+  before this and should only gain.

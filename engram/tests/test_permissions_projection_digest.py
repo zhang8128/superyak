@@ -1254,3 +1254,29 @@ def _raises(call):
     except Exception as e:  # noqa: BLE001 - returned for the test to look at
         return e
     return None
+
+
+def test_s6_a_fresh_file_carries_its_parts_in_memory_and_writes_its_digest_once(tmp_path, monkeypatch):
+    """The review's S6: rebuild and migrate own a fresh file, so its appends carry the parts in memory and write
+    meta.projection and projection_parts once, at `_finish_fresh`, just before its one full check; no append writes
+    them. The copy's digest is the old ledger's, whose tables it replays."""
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    for i in range(5):
+        led._append("register-agent", f"agent:a{i}", ANDY, "terminal", {"insert": [{"table": "agents", "row": {
+            "id": f"agent:a{i}", "acts_for": ANDY, "created_seq": "@seq"}}]}, at=T("2026-11-02") + i)
+    seen, finish = [], Ledger._finish_fresh
+
+    def finishing(self):
+        seen.append(self.conn.execute("SELECT value FROM meta WHERE key = 'projection'").fetchone()[0])
+        return finish(self)
+
+    monkeypatch.setattr(Ledger, "_finish_fresh", finishing)
+    dest = led.rebuild(tmp_path / "copy")
+    assert len(seen) == 1 and seen[0].startswith("0:")                   # the stamp _blank wrote, as it was
+    copy = Ledger.open_read_only(dest)
+    try:
+        assert copy.meta()["projection"] == led.meta()["projection"] and copy.meta()["projection"].startswith("6:")
+        assert _follows(copy)
+    finally:
+        copy.close()
+        led.close()

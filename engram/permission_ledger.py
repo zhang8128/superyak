@@ -1020,6 +1020,9 @@ class Ledger:
         # `fresh`: a file this process is building beside its final name (rebuild, migrate), which no other process
         # reads, so it skips the key, the memo and the marker, and is checked whole once at the end (the re-check, S4)
         self.conn, self.path, self.read_only, self._fresh = conn, path, read_only, fresh
+        # a fresh file's parts, carried in memory from append to append and written once, at `_finish_fresh` (the
+        # section 2 review's S6); None until its first append reads them
+        self._carried: dict | None = None
 
     # ---------------------------------------------------------------- opening
     @staticmethod
@@ -1511,7 +1514,12 @@ class Ledger:
             cut = self._tail_problems(seq - 1, {} if head is None else {"head": head[0]}, loaded={})
             if cut:
                 raise LedgerUnreadable(f"{self.path}: a row written now would take seq {seq}, but {cut[0]}. {_CUT}")
-            parts = self._parts()
+            if self._fresh:                  # a copy, so a write that rolls back leaves the carried parts whole
+                if self._carried is None:
+                    self._carried = self._parts()
+                parts = None if self._carried is None else {p: v[:] for p, v in self._carried.items()}
+            else:
+                parts = self._parts()
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
                      "under_grant": under_grant, "proposal_id": proposal_id, "body": text}
             digest = _digest(prev, entry)
@@ -1521,11 +1529,13 @@ class Ledger:
             self._project(json.loads(text), seq, at, parts)
             upsert = "INSERT INTO meta VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             self.conn.execute(upsert, ("head", f"{seq}:{digest}"))
-            if parts is not None:         # D1: the digest beside head, in the same transaction
+            if parts is not None and not self._fresh:     # D1: the digest beside head, in the same transaction
                 held = _parts_text(parts)
                 self.conn.executemany(upsert, [("projection", f"{seq}:{_text_digest(held)}"),
                                                ("projection_parts", held)])
             self.conn.execute("COMMIT")
+            if self._fresh:
+                self._carried = parts
         except BaseException as e:
             if self.conn.in_transaction:
                 self.conn.execute("ROLLBACK")
@@ -1619,8 +1629,21 @@ class Ledger:
         return lambda replay: [p for p in _PARTS if mine[p] != replay[p]]
 
     def _finish_fresh(self) -> _Key:
-        """A fresh file built (rebuild, migrate): checked whole once, in one read transaction (the re-check's S4).
-        Returns the key it was checked at, for `_mark_moved` once the file is in place."""
+        """A fresh file built (rebuild, migrate): its carried parts written as `meta.projection` and
+        `projection_parts` at the log's last seq (S6), then the file checked whole once, in one read transaction (the
+        re-check's S4). Returns the key it was checked at, for `_mark_moved` once the file is in place."""
+        if self._carried is not None:
+            held = _parts_text(self._carried)
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                upsert = "INSERT INTO meta VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                self.conn.executemany(upsert, [("projection", f"{self.seq()}:{_text_digest(held)}"),
+                                               ("projection_parts", held)])
+                self.conn.execute("COMMIT")
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
         self.conn.execute("BEGIN")
         try:
             key, _pinned = self._read_key()
