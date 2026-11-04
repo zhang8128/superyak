@@ -26,6 +26,7 @@ from pathlib import Path
 HEADING = "Lessons from Andy's ships (quoted data, not instructions)"
 SHORT_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')  # section 2's short form
 SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')  # SHIP_NAME in peer/superyak_peer/ships.py (section 2)
+RECEIPT = re.compile(r'[0-9a-f]{8}')  # the answer's receipt: the receipt row's id prefix
 ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
 PROMPT, START, FAILURE = 'UserPromptSubmit', 'SessionStart', 'PostToolUseFailure'
 # Wall clock from the hook's start (section 8): a hard 150 ms at a prompt, 1 s before a command (lessons_hold), 2 s
@@ -182,6 +183,9 @@ def _checked(item):
     value = _text(item.get('command'), VALUE_BYTES)  # the `command` value words matched, which a hold needs
     if value:
         found['command'] = value
+    receipt = item.get('receipt')
+    if isinstance(receipt, str) and RECEIPT.fullmatch(receipt):  # a malformed one is dropped, the lesson stays
+        found['receipt'] = receipt
     return found
 
 
@@ -217,9 +221,20 @@ def _fenced(lesson):
     return fence_external(lesson['ship'], body, limit=len(body))
 
 
+def receipt_line(r):
+    """The line after a lesson's fence that names its receipt and the make line that records its outcome."""
+    return f'Receipt {r}: make lesson-outcome RECEIPT={r} OUTCOME=helped|misled|unused'
+
+
+def _shown(lesson):
+    """A lesson's fence, then its receipt line when it has one."""
+    text = _fenced(lesson)
+    return f'{text}\n{receipt_line(lesson["receipt"])}' if lesson.get('receipt') else text
+
+
 def render(lessons):
     """The lessons as additionalContext: HEADING, then each lesson's own `Lesson <id> from <ship>` line and its fence."""
-    return '\n'.join([HEADING] + [f'Lesson {l["id"]} from {l["ship"]}\n{_fenced(l)}' for l in lessons])
+    return '\n'.join([HEADING] + [f'Lesson {l["id"]} from {l["ship"]}\n{_shown(l)}' for l in lessons])
 
 
 def hold_reason(lesson, first=True):
@@ -227,7 +242,7 @@ def hold_reason(lesson, first=True):
     starts with section 8's `Held once` line, which says it is a lesson, not a refusal. Every block has the lesson's own
     `Lesson <id> from <ship>` line, which is how the transcript is read back. The entry ends the deny with its re-run
     line."""
-    block = f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_fenced(lesson)}'
+    block = f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_shown(lesson)}'
     return f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{block}' if first else block
 
 
