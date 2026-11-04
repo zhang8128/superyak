@@ -7,8 +7,10 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.routing import Match
 
-from superyak_peer.app import MAX_REQUEST, PUBLIC_ROUTES, ROUTE_BODY_MAX, SIGN_IN_BODY_MAX, BrowserBoundary, create_app
+from superyak_peer.app import (MAX_REQUEST, PUBLIC_ROUTES, ROUTE_BODY_MAX, SIGN_IN_BODY_MAX, BrowserBoundary, create_app,
+                               route_body_max)
 from superyak_peer.connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 
 
@@ -75,6 +77,39 @@ def test_the_cap_follows_what_the_router_dispatches_not_the_paths_text(router, p
 def test_the_cap_holds_for_a_method_the_route_refuses_and_a_body_on_a_get(router):
     assert boundary_run(router, '/register', chunk=1024, method='GET')[0] == REGISTER_BODY_MAX // 1024 + 1
     assert boundary_run(router, '/mcp', chunk=1024, method='GET')[0] == MCP_BODY_MAX // 1024 + 1
+
+
+@pytest.mark.parametrize('path', ['/api/login', '/api/login\n', '/api/invitations/redeem'])
+def test_the_real_app_stops_reading_a_strangers_body_at_the_cap(tmp_path, path):
+    """Through the whole stack as create_app builds it, the guard and the boundary both: the wiring is the point."""
+    app = create_app(tmp_path / 'home', allowed_origins=['http://testserver'])
+    pulled, started = [0], []
+
+    async def receive():
+        pulled[0] += 1
+        return {'type': 'http.request', 'body': b'x' * 1024, 'more_body': True}
+
+    async def send(message):
+        if message['type'] == 'http.response.start':
+            started.append(message['status'])
+
+    scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': 'POST', 'scheme': 'http',
+             'path': path, 'raw_path': path.encode(), 'root_path': '', 'query_string': b'', 'client': ('203.0.113.5', 50000),
+             'server': ('testserver', 80), 'headers': [(b'host', b'testserver'), (b'origin', b'http://testserver'),
+                                                       (b'content-type', b'application/json')]}
+    asyncio.run(app(scope, receive, send))
+    assert pulled[0] == SIGN_IN_BODY_MAX // 1024 + 1 and started == [413]
+
+
+def test_the_first_partial_match_decides_as_it_does_for_the_router():
+    """A method the route doesn't take is still its path: the same rule as PublicRoute.allowed, and a full match wins."""
+    def stub(path, match):
+        return type('Route', (), {'path': path, 'matches': lambda self, scope: (match, {})})()
+    assert route_body_max(type('R', (), {'routes': [stub('/token', Match.PARTIAL), stub('/mcp', Match.PARTIAL)]}), {}) \
+        == REGISTER_BODY_MAX
+    assert route_body_max(type('R', (), {'routes': [stub('/token', Match.PARTIAL), stub('/mcp', Match.FULL)]}), {}) \
+        == MCP_BODY_MAX
+    assert route_body_max(type('R', (), {'routes': [stub('/token', Match.NONE)]}), {}) is None
 
 
 class CountingRouter:
