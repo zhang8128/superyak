@@ -192,7 +192,7 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
         # The second cold walk: "Write privately" beside "its owner can read" read as private from the owner too, and
         # "home" was never said to be anything. "version" of what, it asked as well.
         expect(page.get_by_text("A home is a small server someone runs for the people they invite.", exact=False)).to_be_visible()
-        expect(page.get_by_text("Write where only you and this home's owner can read", exact=False)).to_be_visible()
+        expect(page.get_by_text("Keep notes only you and this home's owner can read", exact=False)).to_be_visible()
         assert "write privately" not in page.locator("main").inner_text().lower()
         assert "the version you mean" not in page.locator("main").inner_text().lower()
         assert "personal home" not in page.locator("main").inner_text().lower()  # personal to whom, it asked
@@ -214,8 +214,8 @@ def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(bro
 
 
 ABOUT = ("A Superyak home: a free, open-source, self-hosted place for the parts of your life you choose to share. Its "
-         "owner invites the people in it and can read what's stored here. A prototype: please don't put real patient "
-         "information in it yet.")
+         "owner invites the people in it and can read what's stored here. Its first use is medical research, and it's a "
+         "prototype: please don't put real patient information in it yet.")
 
 
 def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):

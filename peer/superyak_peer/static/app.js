@@ -218,7 +218,7 @@ function showLogin(message = "") {
     <div class="login-wrap">
       <section class="login-story">
         ${brand()}
-        <div><h1>A home for the parts of your life you choose to share.</h1><p>A home is a small server someone runs for the people they invite. Write where only you and this home's owner can read, talk with people you trust, and publish only what you choose.</p></div>
+        <div><h1>A home for the parts of your life you choose to share.</h1><p>A home is a small server someone runs for the people they invite. Keep notes only you and this home's owner can read, talk with people you trust, and make public only what you choose.</p></div>
         <p class="login-note">Free, open-source and self-hosted: this home runs on a computer its owner keeps. Superyak's first use is medical research, and it's a prototype, so please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
