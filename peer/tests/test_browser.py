@@ -239,8 +239,9 @@ def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
             shell = context.new_page()
             shell.goto(browser_peer["base_url"] + "/")
             expect(shell.get_by_text(ABOUT, exact=False)).to_be_visible()
-            # The second cold walk: "Opening this home…" alone looked stuck, with no way to tell what to do next.
-            expect(shell.get_by_text("Ask the person who runs this home for an invitation.", exact=False)).to_be_visible()
+            # The second cold walk: "Opening this home…" alone looked stuck, with no way to tell what to do next. Read as
+            # inner text, since Playwright's text locators and aria snapshot skip <noscript>, which this browser does show.
+            assert "Ask the person who runs this home for an invitation." in shell.locator("body").inner_text()
             expect(shell.get_by_role("link", name="What is Superyak?")).to_have_attribute(
                 "href", "https://github.com/zhang8128/superyak#readme")
         finally:
