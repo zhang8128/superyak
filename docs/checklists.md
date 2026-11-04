@@ -456,6 +456,8 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] The code path is traced from its callers. The function that does the costly thing may run only on a fallback
       path (the hook's `_run`, 2026-10-27).
 - [ ] The number was measured, and the post says how.
+- [ ] Before a timed window, list your own background tasks and whatever else is running on that machine. (Rio Grande,
+      2026-11-04: a forgotten search from its own session held the Pi's load up, and a measured run refused to start.)
 - [ ] A speed claim names its route (tailnet, Funnel relay, loopback), runs interleaved rounds, and reports the
       spread, not only a median. A target measured on another route is reported as unmeasured (Serenity, 2026-10-27:
       chat paging timed on conference Wi-Fi through the relay, 3x between rooms for no reason in the code).
