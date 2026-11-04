@@ -310,8 +310,9 @@ map.
     - `layer`: `place:home/<owner>` for the first, `place:outside-home` for the second;
     - selector: `audience: ["commons"]`, `requesters: ["agent:remote-stores"]`, `kinds: ["memory"]`, `memories`: the
       shared memories' objects (`mem:<instance>/<layer>/<id>`, `lighthouse_daemon.py:384-388`), `actions:
-      ["recall", "inject_context"]` (the daemon decides a read item as `inject_context`, :618), and `purposes:
-      ["session-recall"]` (`recall`'s default, `server.py:2696`);
+      ["recall", "read", "inject_context"]` (the daemon decides a read item as `inject_context`, :618, and deciding
+      `inject_context` needs `read` in the same layers, or the ledger answers NO_ALLOW: the build's finding 3, section 2
+      review S1), and `purposes: ["session-recall"]` (`recall`'s default, `server.py:2696`);
     - `valid_from` now and `valid_until` at most 366 days later, as an outside-home allow in a home layer must be
       (`permissions.py:3385-3398`).
 
@@ -996,7 +997,8 @@ closed: P10 refuses remote frames outside `enforce`, and `_requester_ok` refuses
    ship's participant id.
 5. **The ledger.** On the Pi, Andy runs `engram-permissions agent remote-stores`, reads the grant it lists (step 4's),
    and types its code. **(S1)** Then he writes P11's two allows, each with `audience: ["commons"]`, `requesters:
-   ["agent:remote-stores"]`, the shared memories by name, `actions: ["recall", "inject_context"]`, `purposes:
+   ["agent:remote-stores"]`, the shared memories by name, `actions: ["recall", "read", "inject_context"]` (all three:
+   without `read` the first crossing answers NO_ALLOW, section 2 review S1), `purposes:
    ["session-recall"]` and at most 366 days: one with `--layer place:home/andy`, one with `--layer
    place:outside-home`. `engram-permissions place show` prints the result. Ships never sign ledger records.
 6. **The receiver** (Tardis, on its own machine, with Andy's yes):
