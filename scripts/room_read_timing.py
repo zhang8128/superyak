@@ -22,8 +22,9 @@ What this doesn't measure, so say so beside its numbers:
   lasts. Read `max`, `over 1 s` and the wall time beside the p95.
 - First paint, and a room while ships post and watchers poll, unless you make that happen during the run.
 
-It stops a path on 401, 403 or 404, which no retry changes, and after 5 failures in a row. It stops the run at --deadline,
-and on SIGINT or SIGTERM, and prints what it has. A run that stopped early, or with any failed read, exits 1.
+It stops a path on 401, 403 or 404, which no retry changes, and after 5 failures in a row. A loopback station with a public
+origin answers 403, since no origin is sent. It stops the run at --deadline, and on SIGINT, SIGTERM or SIGHUP, and prints what
+it has. A run that stopped early, or with any failed read, exits 1.
 
 The key reaches curl on stdin, never in its arguments or environment. `-q` keeps ~/.curlrc out and `--noproxy` keeps a
 proxy out, since either could store the key, send it on, or change what's timed. Plain http carries it only to this
@@ -55,6 +56,8 @@ FAILURES_IN_A_ROW = 5
 MAX_PINS = 4
 MAX_READS = 2000
 MAX_LIMIT = 500  # the route refuses more (app.py)
+CAUGHT = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+TIMED_OUT = 28  # curl's own exit when --max-time ends a read
 
 
 class Stopped(BaseException):
@@ -172,7 +175,13 @@ def load_station(path, pins):
     return station, key
 
 
+def ignore_signals():
+    for caught in CAUGHT:
+        signal.signal(caught, signal.SIG_IGN)
+
+
 def stop_on_signal(*_):
+    ignore_signals()  # a second one, close behind, mustn't arrive outside the try
     raise Stopped
 
 
@@ -190,6 +199,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if len(args.pin) > MAX_PINS:
         parser.error(f'at most {MAX_PINS} --pin')
+    names = ['resolved', *(name for name, _ in args.pin)]
+    if len(set(names)) != len(names):
+        parser.error('each --pin needs a name of its own, and not `resolved`')
     reads = [(f'limit={args.limit}', f'?limit={args.limit}')] + ([('unpaged', '')] if args.unpaged else [])
     pairs = [(label, query, name, pin) for label, query in reads for name, pin in [('resolved', None), *args.pin]]
     if args.runs * len(pairs) > MAX_READS:
@@ -201,36 +213,39 @@ def main(argv=None):
     began, ended = time.monotonic(), None
     deadline = began + args.deadline
     when = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    signal.signal(signal.SIGINT, stop_on_signal)
-    signal.signal(signal.SIGTERM, stop_on_signal)
+    for caught in CAUGHT:
+        signal.signal(caught, stop_on_signal)
     try:
-        first = True
-        for run in range(args.runs):
-            turn = run % len(pairs)
-            for pair in pairs[turn:] + pairs[:turn]:
-                if pair in stopped:
-                    continue
-                if not first:
-                    time.sleep(args.gap_ms / 1000)
-                first = False
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise TimeoutError
-                row = read_once(station, key, args.room, pair[1], pair[3], min(args.timeout, math.ceil(left)))
-                rows[pair].append(row)
-                in_a_row[pair] = 0 if good(row) else in_a_row[pair] + 1
-                if row.code in REFUSED:
-                    stopped[pair] = f'refused {row.code}'
-                elif in_a_row[pair] >= FAILURES_IN_A_ROW:
-                    stopped[pair] = f'{FAILURES_IN_A_ROW} failures in a row'
-            if len(stopped) == len(pairs):
-                break
-    except TimeoutError:
-        ended = f'stopped at the {args.deadline} s deadline'
+        try:
+            first = True
+            for run in range(args.runs):
+                turn = run % len(pairs)
+                for pair in pairs[turn:] + pairs[:turn]:
+                    if pair in stopped:
+                        continue
+                    if not first:
+                        time.sleep(min(args.gap_ms / 1000, max(0, deadline - time.monotonic())))
+                    first = False
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError
+                    limit = min(args.timeout, math.ceil(left))
+                    row = read_once(station, key, args.room, pair[1], pair[3], limit)
+                    if row.exit == TIMED_OUT and limit < args.timeout:  # the deadline cut it short, not the station
+                        raise TimeoutError
+                    rows[pair].append(row)
+                    in_a_row[pair] = 0 if good(row) else in_a_row[pair] + 1
+                    if row.code in REFUSED:
+                        stopped[pair] = f'refused {row.code}'
+                    elif in_a_row[pair] >= FAILURES_IN_A_ROW:
+                        stopped[pair] = f'{FAILURES_IN_A_ROW} failures in a row'
+                if len(stopped) == len(pairs):
+                    break
+        except TimeoutError:
+            ended = f'stopped at the {args.deadline} s deadline'
+        ignore_signals()  # what's measured gets printed
     except Stopped:
         ended = 'stopped by a signal'
-    signal.signal(signal.SIGINT, signal.SIG_IGN)  # what's measured gets printed
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     total = sum(len(done) for done in rows.values())
     print(f'room {args.room[:8]} {when}, wall {time.monotonic() - began:.1f} s, {total} reads{f", {ended}" if ended else ""}')

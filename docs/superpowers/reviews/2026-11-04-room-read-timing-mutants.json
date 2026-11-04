@@ -388,16 +388,6 @@
    ]
   },
   {
-   "name": "no deadline",
-   "file": "scripts/room_read_timing.py",
-   "old": "                if left <= 0:\n                    raise TimeoutError\n",
-   "new": "",
-   "project": "agent",
-   "tests": [
-    "tests/test_room_read_timing.py::test_a_run_stops_at_its_deadline_and_says_so"
-   ]
-  },
-  {
    "name": "a read outlasts the deadline",
    "file": "scripts/room_read_timing.py",
    "old": "min(args.timeout, math.ceil(left))",
@@ -405,16 +395,6 @@
    "project": "agent",
    "tests": [
     "tests/test_room_read_timing.py::test_a_read_never_outlasts_the_deadline"
-   ]
-  },
-  {
-   "name": "SIGTERM not caught",
-   "file": "scripts/room_read_timing.py",
-   "old": "signal.signal(signal.SIGTERM, stop_on_signal)\n",
-   "new": "pass\n",
-   "project": "agent",
-   "tests": [
-    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
    ]
   },
   {
@@ -838,26 +818,6 @@
    ]
   },
   {
-   "name": "gap before the first read",
-   "file": "scripts/room_read_timing.py",
-   "old": "                if not first:\n",
-   "new": "                if True:\n",
-   "project": "agent",
-   "tests": [
-    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
-   ]
-  },
-  {
-   "name": "no gap",
-   "file": "scripts/room_read_timing.py",
-   "old": "time.sleep(args.gap_ms / 1000)",
-   "new": "pass",
-   "project": "agent",
-   "tests": [
-    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
-   ]
-  },
-  {
    "name": "run always good",
    "file": "scripts/room_read_timing.py",
    "old": "return 0 if complete and not ended else 1",
@@ -878,16 +838,6 @@
    ]
   },
   {
-   "name": "SIGINT not caught",
-   "file": "scripts/room_read_timing.py",
-   "old": "signal.signal(signal.SIGINT, stop_on_signal)\n",
-   "new": "pass\n",
-   "project": "agent",
-   "tests": [
-    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
-   ]
-  },
-  {
    "name": "any good path passes the run",
    "file": "scripts/room_read_timing.py",
    "old": "complete = all(good(row) for done in rows.values() for row in done)",
@@ -905,6 +855,186 @@
    "project": "agent",
    "tests": [
     "tests/test_room_read_timing.py::test_one_failed_read_among_good_ones_still_fails_the_run"
+   ]
+  },
+  {
+   "name": "no deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "                    if left <= 0:\n                        raise TimeoutError\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_run_stops_at_its_deadline_and_says_so"
+   ]
+  },
+  {
+   "name": "SIGINT not caught",
+   "file": "scripts/room_read_timing.py",
+   "old": "CAUGHT = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)",
+   "new": "CAUGHT = (signal.SIGTERM, signal.SIGHUP)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "SIGTERM not caught",
+   "file": "scripts/room_read_timing.py",
+   "old": "CAUGHT = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)",
+   "new": "CAUGHT = (signal.SIGINT, signal.SIGHUP)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "SIGHUP not caught",
+   "file": "scripts/room_read_timing.py",
+   "old": "CAUGHT = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)",
+   "new": "CAUGHT = (signal.SIGINT, signal.SIGTERM)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "gap before the first read",
+   "file": "scripts/room_read_timing.py",
+   "old": "                    if not first:\n",
+   "new": "                    if True:\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
+   ]
+  },
+  {
+   "name": "no gap",
+   "file": "scripts/room_read_timing.py",
+   "old": "time.sleep(min(args.gap_ms / 1000, max(0, deadline - time.monotonic())))",
+   "new": "pass",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
+   ]
+  },
+  {
+   "name": "gap past the deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "min(args.gap_ms / 1000, max(0, deadline - time.monotonic()))",
+   "new": "args.gap_ms / 1000",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_gap_never_outlasts_the_deadline"
+   ]
+  },
+  {
+   "name": "key printed on a hung or missing curl",
+   "file": "scripts/room_read_timing.py",
+   "old": "    except (subprocess.TimeoutExpired, OSError, ValueError):  # no curl, a curl that hung, or bytes that aren't text\n",
+   "new": "    except (subprocess.TimeoutExpired, OSError, ValueError):  # no curl, a curl that hung, or bytes that aren't text\n        print(f'failed with {key}', file=sys.stderr)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_no_curl_on_this_machine_is_a_failed_read"
+   ]
+  },
+  {
+   "name": "key printed on a signal",
+   "file": "scripts/room_read_timing.py",
+   "old": "        ended = 'stopped by a signal'\n",
+   "new": "        ended = 'stopped by a signal'\n        print(f'failed with {key}', file=sys.stderr)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "key printed at the deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "            ended = f'stopped at the {args.deadline} s deadline'\n",
+   "new": "            ended = f'stopped at the {args.deadline} s deadline'\n            print(f'failed with {key}', file=sys.stderr)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_run_stops_at_its_deadline_and_says_so"
+   ]
+  },
+  {
+   "name": "key printed on a refusal",
+   "file": "scripts/room_read_timing.py",
+   "old": "                        stopped[pair] = f'refused {row.code}'\n",
+   "new": "                        stopped[pair] = f'refused {row.code}'\n                        print(f'failed with {key}', file=sys.stderr)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_refusal_no_retry_changes_stops_that_path"
+   ]
+  },
+  {
+   "name": "a second signal not ignored",
+   "file": "scripts/room_read_timing.py",
+   "old": "    ignore_signals()  # a second one, close behind, mustn't arrive outside the try\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_first_signal_makes_the_rest_ignored"
+   ]
+  },
+  {
+   "name": "a signal while printing is fatal",
+   "file": "scripts/room_read_timing.py",
+   "old": "        ignore_signals()  # what's measured gets printed\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_signal_while_the_numbers_print_doesnt_lose_them"
+   ]
+  },
+  {
+   "name": "the deadline blames the station",
+   "file": "scripts/room_read_timing.py",
+   "old": "if row.exit == TIMED_OUT and limit < args.timeout:",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_the_deadline_cut_short_isnt_the_stations_failure"
+   ]
+  },
+  {
+   "name": "own timeout blamed on the deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "if row.exit == TIMED_OUT and limit < args.timeout:",
+   "new": "if row.exit == TIMED_OUT:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_past_its_own_timeout_is_still_a_failure"
+   ]
+  },
+  {
+   "name": "wrong curl exit for a timeout",
+   "file": "scripts/room_read_timing.py",
+   "old": "TIMED_OUT = 28",
+   "new": "TIMED_OUT = 27",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_the_deadline_cut_short_isnt_the_stations_failure"
+   ]
+  },
+  {
+   "name": "a repeated pin allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "if len(set(names)) != len(names):",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "a pin named resolved allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "names = ['resolved', *(name for name, _ in args.pin)]",
+   "new": "names = [name for name, _ in args.pin]",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
    ]
   }
  ]

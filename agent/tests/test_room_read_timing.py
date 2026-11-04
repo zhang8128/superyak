@@ -30,8 +30,11 @@ def module():
 
 
 def run(*args, env=None):
-    return subprocess.run([sys.executable, '-I', str(SCRIPT), *args], capture_output=True, text=True, timeout=90,
+    """Every run in this file also checks the key was never printed, whatever path it took."""
+    done = subprocess.run([sys.executable, '-I', str(SCRIPT), *args], capture_output=True, text=True, timeout=90,
                           env=env or os.environ)
+    assert KEY not in done.stdout + done.stderr
+    return done
 
 
 def station_file(tmp_path, station, key=KEY):
@@ -449,13 +452,34 @@ def test_a_run_stops_at_its_deadline_and_says_so(curl_shim, tmp_path):
     assert done.returncode == 1 and 'stopped at the 1 s deadline' in done.stdout and 0 < len(arguments_of(log)) < 100
 
 
+def test_the_gap_never_outlasts_the_deadline(curl_shim, tmp_path):
+    env, _, _, _ = curl_shim
+    started = time.monotonic()
+    done = run('--room', ROOM, '--runs', '3', '--gap-ms', '30000', '--deadline', '1', '--station-file', station_file(tmp_path, 'https://s.example'), env=env)
+    assert time.monotonic() - started < 15 and 'stopped at the 1 s deadline' in done.stdout
+
+
+def test_a_read_the_deadline_cut_short_isnt_the_stations_failure(curl_shim, tmp_path):
+    env, _, feed, _ = curl_shim
+    feed('28|000 0 0 3.0 0')
+    done = run('--room', ROOM, '--runs', '2', '--timeout', '25', '--deadline', '3', '--station-file', station_file(tmp_path, 'https://s.example'), env=env)
+    assert done.returncode == 1 and 'stopped at the 3 s deadline' in done.stdout and 'n=0 ok=0' in done.stdout and 'curl exits' not in done.stdout
+
+
+def test_a_read_past_its_own_timeout_is_still_a_failure(curl_shim, tmp_path):
+    env, _, feed, _ = curl_shim
+    feed('28|000 0 0 3.0 0')
+    done = run('--room', ROOM, '--runs', '1', '--timeout', '3', '--deadline', '100', '--station-file', station_file(tmp_path, 'https://s.example'), env=env)
+    assert done.returncode == 1 and 'curl exits [28]' in done.stdout and 'n=1 ok=0' in done.stdout and 'deadline' not in done.stdout
+
+
 def test_a_read_never_outlasts_the_deadline(curl_shim, tmp_path):
     env, log, _, _ = curl_shim
     run('--room', ROOM, '--runs', '1', '--timeout', '25', '--deadline', '3', '--station-file', station_file(tmp_path, 'https://s.example'), env=env)
     assert '--max-time 3 ' in arguments_of(log)[0]
 
 
-@pytest.mark.parametrize('sent', [signal.SIGTERM, signal.SIGINT], ids=['term', 'int'])
+@pytest.mark.parametrize('sent', [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], ids=['term', 'int', 'hup'])
 def test_a_stopped_run_prints_what_it_measured(curl_shim, tmp_path, sent):
     env, log, _, _ = curl_shim
     command = [sys.executable, '-I', str(SCRIPT), '--room', ROOM, '--runs', '1000', '--gap-ms', '50', '--station-file', station_file(tmp_path, 'https://s.example')]
@@ -465,8 +489,57 @@ def test_a_stopped_run_prints_what_it_measured(curl_shim, tmp_path, sent):
         time.sleep(0.05)
     process.send_signal(sent)
     out, err = process.communicate(timeout=30)
-    assert process.returncode == 1 and 'Traceback' not in err
+    assert process.returncode == 1 and 'Traceback' not in err and KEY not in out + err
     assert re.search(r'n=\d+ ok=\d+ p50', out) and 'stopped by a signal' in out
+
+
+def test_two_signals_close_together_still_print(curl_shim, tmp_path):
+    env, log, _, _ = curl_shim
+    command = [sys.executable, '-I', str(SCRIPT), '--room', ROOM, '--runs', '1000', '--gap-ms', '20', '--station-file', station_file(tmp_path, 'https://s.example')]
+    for _ in range(6):
+        if log.exists():
+            log.unlink()
+        process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        limit = time.monotonic() + 30
+        while time.monotonic() < limit and not (log.exists() and arguments_of(log)):
+            time.sleep(0.01)
+        process.send_signal(signal.SIGTERM)
+        process.send_signal(signal.SIGTERM)
+        out, err = process.communicate(timeout=30)
+        assert 'Traceback' not in err and 'stopped by a signal' in out
+
+
+def test_the_first_signal_makes_the_rest_ignored():
+    loaded = module()
+    saved = {caught: signal.getsignal(caught) for caught in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        with pytest.raises(loaded.Stopped):
+            loaded.stop_on_signal()
+        for caught in saved:
+            assert signal.getsignal(caught) == signal.SIG_IGN
+    finally:
+        for caught, handler in saved.items():
+            signal.signal(caught, handler)
+
+
+def test_a_signal_while_the_numbers_print_doesnt_lose_them(monkeypatch, capsys, tmp_path):
+    """The run ended by itself, so nothing is left to stop: the signal is ignored, and the lines all print."""
+    loaded = module()
+    saved = {caught: signal.getsignal(caught) for caught in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    monkeypatch.setattr(loaded, 'read_once', lambda *_: loaded.Read(200, 0, 1.0, 2.0, 3.0, 2048, '1.2.3.4'))
+    real_report = loaded.report
+
+    def report_under_a_signal(*args):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return real_report(*args)
+    monkeypatch.setattr(loaded, 'report', report_under_a_signal)
+    try:
+        code = loaded.main(['--room', ROOM, '--runs', '1', '--pin', 'b=100.1.2.3', '--station-file', station_file(tmp_path, 'https://s.example')])
+    finally:
+        for caught, handler in saved.items():
+            signal.signal(caught, handler)
+    out = capsys.readouterr().out
+    assert code == 0 and 'resolved' in out and 'n=1 ok=1' in out and ' b ' in out
 
 
 def test_the_gap_falls_between_reads_only(curl_shim, tmp_path):
@@ -488,6 +561,7 @@ def test_the_gap_falls_between_reads_only(curl_shim, tmp_path):
     ['--room', ROOM, '--timeout', '0'], ['--room', ROOM, '--gap-ms', '-1'], ['--room', ROOM, '--deadline', '0'], [],
     ['--room', ROOM, *[f'--pin=p{n}=100.1.2.3' for n in range(5)]],
     ['--room', ROOM, '--runs', '1000', '--unpaged', '--pin', 'a=100.1.2.3', '--pin', 'b=100.1.2.4'],
+    ['--room', ROOM, '--pin', 'a=100.1.2.3', '--pin', 'a=100.1.2.4'], ['--room', ROOM, '--pin', 'resolved=100.1.2.3'],
 ])
 def test_bad_arguments_stop_before_any_read(curl_shim, tmp_path, args):
     env, log, _, _ = curl_shim
