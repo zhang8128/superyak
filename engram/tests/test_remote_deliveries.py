@@ -476,3 +476,75 @@ def test_two_sessions_of_one_ship_each_deliver_and_each_guard_refuses_the_others
                                                                                              "read-bridges"}
     assert rd.refused(record, [texts["bridges"]], now=int(time.time()))   # session rivers' guard, bridges' text
     assert rd.refused(record, [texts["rivers"]], now=int(time.time()))    # and the reverse
+
+
+# ---------------------------------------------------------------- section 2 review, M1: every stored argument is checked
+# Rio Grande's fail-closed shape: the guard walks every string in a storing tool's whole argument tree (dict keys and
+# values, lists, nested), and a tool is checked whole unless it is on the explicit read-only list.
+
+@pytest.mark.parametrize("case", ["remember context", "remember source", "jot tags", "assessment_schedule reason",
+                                  "remember context key", "remember nested"])
+def test_the_reviewers_cases_are_refused_and_store_nothing(guarded, case):
+    s = guarded["server"]
+    own = "A memory of my own, never delivered by anyone at all."
+    calls = {
+        "remember context": lambda: s.remember(content=own, context={"note": ITEM}),
+        "remember source": lambda: s.remember(content=own, source=ITEM),
+        "jot tags": lambda: s.jot("k9", "a harmless value", tags=["fine", ITEM]),
+        "assessment_schedule reason": lambda: s.assessment_schedule(reason=ITEM),
+        "remember context key": lambda: s.remember(content=own, context={ITEM: "x"}),
+        "remember nested": lambda: s.remember(content=own, context={"a": [{"b": [LONG]}]}),
+    }
+    before = snapshot(guarded["home"])
+    assert calls[case]() == s._REMOTE_REFUSED
+    assert snapshot(guarded["home"]) == before
+
+
+def _sample(schema, item):
+    """A value of this JSON schema's type that carries `item` in a string, or None when the type holds no string."""
+    if "anyOf" in schema:
+        return next((v for v in (_sample(s, item) for s in schema["anyOf"]) if v is not None), None)
+    kind = schema.get("type")
+    if kind == "string":
+        return item
+    if kind == "array":
+        inner = _sample(schema.get("items", {}), item)
+        return None if inner is None else [inner]
+    if kind == "object":
+        return {"note": item}
+    return None
+
+
+def _dummy(schema):
+    if "anyOf" in schema:
+        return _dummy(next(s for s in schema["anyOf"] if s.get("type") != "null"))
+    return {"integer": 1, "number": 1.0, "boolean": False, "string": "x", "array": [], "object": {}}.get(
+        schema.get("type"), None)
+
+
+def test_every_registered_tool_is_read_only_or_refuses_a_delivered_item_in_every_string_argument(guarded):
+    """Built from the server's own MCP tool registry: each tool is on the read-only list, or refuses a delivered item
+    put into each of its string-bearing arguments (a string, a list of them, an object), one at a time. A new tool fails
+    here until someone places it."""
+    import asyncio
+    s = guarded["server"]
+    tools = {tool.name: tool.inputSchema for tool in asyncio.run(s.mcp.list_tools())}
+    assert set(s.READ_ONLY_TOOLS) <= set(tools), set(s.READ_ONLY_TOOLS) - set(tools)
+    assert all(isinstance(why, str) and why for why in s.READ_ONLY_TOOLS.values())
+    offenders, checked = [], 0
+    for name, schema in sorted(tools.items()):
+        if name in s.READ_ONLY_TOOLS:
+            continue
+        properties, required = schema.get("properties", {}), set(schema.get("required", []))
+        for param, param_schema in properties.items():
+            value = _sample(param_schema, ITEM)
+            if value is None:
+                continue
+            kwargs = {r: _dummy(properties[r]) for r in required if r != param}
+            kwargs[param] = value
+            out = getattr(s, name)(**kwargs)
+            checked += 1
+            if out != s._REMOTE_REFUSED:
+                offenders.append((name, param, str(out)[:80]))
+    assert offenders == []
+    assert checked >= 40   # the walk reached the tools' string arguments, not none of them

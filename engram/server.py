@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import uuid
 from functools import wraps
+import inspect
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -689,12 +690,70 @@ def _server_operation(function):
     return wrapped
 
 
+# Ship home and crossing spec 2.5 (section 2 review, M1, Rio Grande's shape): every tool is checked whole by the remote
+# guard, every string in its whole argument tree, unless it is named here with why none of its strings is stored.
+READ_ONLY_TOOLS = {
+    "recall": "its query goes only to memory_log, a log, not memory (review N5); refusing it would stop the search",
+    "recall_cold": "its query is searched, never stored",
+    "search_code": "its query is searched, never stored",
+    "look": "its query searches the notepads, never stored",
+    "clipboard_view": "its situation picks what to show, never stored",
+    "reflect": "its focus picks an analysis, never stored",
+    "permissions": "its arguments filter what the ledger shows, never stored",
+    "shares": "its audience filters what the house shows, never stored",
+    "status": "it takes no text",
+    "core_memories": "it takes no text",
+    "introspect": "it takes no text",
+}
+
+
+def _strings_in(values):
+    """Every string in an argument tree: dict keys and values, list, tuple and set members, nested to any depth."""
+    out, stack, seen = [], list(values), set()
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, dict):
+            if id(value) not in seen:
+                seen.add(id(value))
+                stack.extend(value.keys())
+                stack.extend(value.values())
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            if id(value) not in seen:
+                seen.add(id(value))
+                stack.extend(value)
+    return out
+
+
+def _remote_guarded(function, name):
+    """The remote guard around one tool (spec 2.5's second rule), fail closed: unless the tool is in READ_ONLY_TOOLS,
+    every string in its arguments is checked after _init() and before the tool runs, so it writes nothing when one
+    copies a remote delivery."""
+    if name in READ_ONLY_TOOLS:
+        return function
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        _init()
+        try:
+            arguments = signature.bind_partial(*args, **kwargs).arguments
+        except TypeError:
+            arguments = {"args": list(args), "kwargs": dict(kwargs)}
+        refused = _remote_refusal(*_strings_in(arguments.values()))
+        if refused is not None:
+            return refused
+        return function(*args, **kwargs)
+    return guarded
+
+
 def _server_tool(*tool_args, **tool_kwargs):
-    """Register an MCP tool whose full execution participates in fork safety."""
+    """Register an MCP tool whose full execution participates in fork safety, behind the remote guard."""
     register = mcp.tool(*tool_args, **tool_kwargs)
 
     def decorate(function):
-        return register(_server_operation(function))
+        return register(_server_operation(_remote_guarded(function, tool_kwargs.get("name") or function.__name__)))
 
     return decorate
 
@@ -2404,9 +2463,6 @@ def share(
 ) -> dict:
     """Copy a local episode or semantic into the published house."""
     _init()
-    refused = _remote_refusal(reason)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info(
         "Tool called: share(memory_id=%s, audience=%s, layer=%s)",
         memory_id,
@@ -3343,9 +3399,6 @@ def recall(
 def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
     """Log whether recall results were useful. Helps reflection learn what works."""
     _init()
-    refused = _remote_refusal(note)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info("Tool called: log_outcome(recall_id=%s, used=%s)", recall_id, used)
 
     outcome = "used" if used else "not_used"
@@ -3453,9 +3506,6 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
 
     Optionally provide context describing the situation for context-aware learning."""
     _init()
-    refused = _remote_refusal(context)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info("Tool called: instinct_feedback(instinct_id=%s, followed=%s, context=%s)",
                 instinct_id, followed, context[:50] if context else None)
 
@@ -3539,9 +3589,6 @@ def challenge_instinct(instinct_id: str, evidence: str) -> dict:
         evidence: What contradicts it — the names on the paper.
     """
     _init()
-    refused = _remote_refusal(evidence)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info("Tool called: challenge_instinct(instinct_id=%s)", instinct_id)
 
     inst = _storage.get_instinct(instinct_id)
@@ -3594,9 +3641,6 @@ def retire_instinct(instinct_id: str, reason: str) -> dict:
         reason: Why it's being removed.
     """
     _init()
-    refused = _remote_refusal(reason)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info("Tool called: retire_instinct(instinct_id=%s)", instinct_id)
 
     inst = _storage.get_instinct(instinct_id)
@@ -3755,10 +3799,6 @@ def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     Use action="discard" for junk clusters (no signal) — episodes are
     marked compressed but no semantic is created."""
     _init()
-    refused = _remote_refusal(  # spec 2.5: on the raw arguments, before any write
-        [x.get("content") for x in summaries if isinstance(x, dict)] if isinstance(summaries, list) else None)
-    if refused is not None:
-        return refused
     logger.info("Tool called: compress_commit(compress_id=%s, summaries=%d)",
                 compress_id, len(summaries))
 
@@ -3869,9 +3909,6 @@ def add_anchor(type: str, content: str, expected: str, baseline_score: float | N
         baseline_score: For identity anchors, the initial similarity score.
     """
     _init()
-    refused = _remote_refusal(content, expected)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     logger.info("Tool called: add_anchor(type=%s)", type)
     if type not in ("identity", "value", "capability"):
         return {"error": f"Invalid anchor type: {type}. Must be identity, value, or capability."}
@@ -4037,10 +4074,6 @@ def assessment_report(
         notes: Anything else worth keeping.
     """
     _init()
-    refused = _remote_refusal(  # spec 2.5: on the raw arguments, before any write
-        reached_for, missing, felt_absences, instinct_consistent_moments, notes)
-    if refused is not None:
-        return refused
     logger.info("Tool called: assessment_report(function_score=%s)", function_score)
 
     if isinstance(function_score, bool) or not isinstance(function_score, int) \
@@ -4210,9 +4243,6 @@ def task_focus(name: str, content: str | None = None) -> dict:
         content: Markdown describing current scope, plan state, progress. Optional when resuming.
     """
     _init()
-    refused = _remote_refusal(name, content)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     import uuid
 
     existing = _storage.get_task_context_by_name(name)
@@ -4241,9 +4271,6 @@ def task_update(content: str) -> dict:
         content: Updated markdown content for the task context.
     """
     _init()
-    refused = _remote_refusal(content)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     ctx = _storage.update_task_context(content)
     if ctx is None:
         return {"error": "No active task context"}
@@ -4285,9 +4312,6 @@ def dream_capture(reaction: str) -> dict:
         reaction: A raw, terse emotional reaction. Don't polish it.
     """
     _init()
-    refused = _remote_refusal(reaction)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     from dreaming import distill, store_residue
 
     embedding = _embeddings.embed([reaction], prefix="search_document")[0]
@@ -4382,9 +4406,6 @@ def dream_react(residue_id: str, reaction: str) -> dict:
         reaction: Your unpolished reaction. What does this fragment do to you?
     """
     _init()
-    refused = _remote_refusal(reaction)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     from dreaming import record_reaction, distill, store_residue
 
     record_reaction(_storage, residue_id, reaction, session_id=_session_id)
@@ -4448,9 +4469,6 @@ def jot(key: str, value: str, tags: list[str] | None = None,
         due: Optional due date (ISO format).
     """
     _init()
-    refused = _remote_refusal(key, value)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     project_pad, global_pad = _get_notepads()
     pad = global_pad if scope == "global" else project_pad
     result = pad.jot(key, value, tags=tags, session_id=_session_id,
@@ -4665,9 +4683,6 @@ def clipboard_pin(text: str, priority: int = 0) -> dict:
         priority: Higher = more prominent. Default 0.
     """
     _init()
-    refused = _remote_refusal(text)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     if _clipboard is None:
         return {"error": "Clipboard unavailable"}
     pin_id = _clipboard.pin(text, priority=priority)
@@ -4707,9 +4722,6 @@ def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 1
         repeat: Whether the reminder repeats. Default True.
     """
     _init()
-    refused = _remote_refusal(text)  # spec 2.5: on the raw arguments, before any write
-    if refused is not None:
-        return refused
     if _clipboard is None:
         return {"error": "Clipboard unavailable"}
     rem_id = _clipboard.add_reminder(text, trigger_type=trigger, trigger_value=value, repeat=repeat)
