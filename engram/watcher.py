@@ -6,7 +6,9 @@ from pathlib import Path
 from queue import SimpleQueue, Empty
 from threading import Thread, Event, Lock, current_thread
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
+
+from indexer import _should_exclude, in_other_checkout
 
 if TYPE_CHECKING:
     from config import WatcherConfig
@@ -20,7 +22,8 @@ _DEFAULT_EXCLUDE = {"node_modules", ".venv", "__pycache__", "dist", "build"}
 class FileWatcher:
     def __init__(self, project_root: Path, config: "WatcherConfig",
                  storage: "Storage | None", embedding_provider: object | None,
-                 operation_lock: object | None = None):
+                 operation_lock: object | None = None,
+                 exclude: Iterable[str] | None = None):
         self._root = project_root
         self._config = config
         self._storage = storage
@@ -35,7 +38,8 @@ class FileWatcher:
         self._threads: list[Thread] = []
         self._processed = 0
         self._extensions = set(config.extensions)
-        self._exclude_dirs = set(getattr(config, 'exclude', None) or _DEFAULT_EXCLUDE)
+        # [indexing] exclude, as the indexer reads it; the defaults otherwise.
+        self._exclude_dirs = list(_DEFAULT_EXCLUDE if exclude is None else exclude)
 
     def start(self) -> None:
         with self._state_lock:
@@ -106,14 +110,17 @@ class FileWatcher:
         return self._processed
 
     def _should_index(self, path: Path) -> bool:
-        if ".git" in path.parts:
-            return False
         if path.suffix not in self._extensions:
             return False
-        for part in path.parts:
-            if part in self._exclude_dirs:
-                return False
-        return True
+        try:
+            rel = path.relative_to(self._root)
+        except ValueError:
+            return False
+        # Only the parts below the root count, so a project kept under a
+        # directory named build is still indexed.
+        if _should_exclude(rel, self._exclude_dirs):
+            return False
+        return not in_other_checkout(self._root, rel)
 
     def _watch_loop(self) -> None:
         try:
