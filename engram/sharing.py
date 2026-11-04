@@ -310,20 +310,21 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
         else:
             memory_id = str(uuid.uuid4())
             vector = source_storage.get_vector(layer, source_id)
+            lane = row["lane"]  # the copy keeps its source's lane (NOT NULL, personal or work, migration 018)
             if layer == "episode":
                 published_storage.add_episode(id=memory_id, session_id=None, content=content,
-                                              episode_type="shared", embedding=vector)
+                                              episode_type="shared", embedding=vector, lane=lane)
             elif vector is not None:
                 published_storage.add_semantic(id=memory_id, content=content,
                                                kind=row.get("kind", "fact"),
                                                confidence=row.get("confidence", 0.5),
-                                               embedding=vector, source_episode_ids=[])
+                                               embedding=vector, source_episode_ids=[], lane=lane)
             else:
                 published_storage.conn.execute(
                     "INSERT INTO semantics (id, content, kind, confidence, created_at, "
                     "auto_generated, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (memory_id, content, row.get("kind", "fact"),
-                     row.get("confidence", 0.5), _now(), 0, digest_value, "personal"),
+                     row.get("confidence", 0.5), _now(), 0, digest_value, lane),
                 )
 
         record = ShareRecord(
