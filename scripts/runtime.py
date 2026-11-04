@@ -126,7 +126,7 @@ def _valid_context(value: object) -> bool:
 def _parse_toml(path: Path) -> dict:
     try:
         value = tomllib.loads(_bounded_text(path))
-    except tomllib.TOMLDecodeError as error:
+    except (tomllib.TOMLDecodeError, RecursionError) as error:
         raise RuntimeConfigurationError(f"invalid TOML configuration: {path}") from error
     if not isinstance(value, dict):
         raise RuntimeConfigurationError(f"invalid TOML configuration: {path}")

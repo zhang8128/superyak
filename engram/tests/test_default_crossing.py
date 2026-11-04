@@ -159,6 +159,10 @@ def test_a_shorter_configured_timeout_stands(tmp_path, monkeypatch):
     assert calls[0]["timeout_s"] == 0.25
 
 
+HOSTILE_VALUES = ['["memory"]', "true", "1.5", "inf", "1979-05-27", "{a = 1}", '"a\\nb"', '"a\\n"', '"a\\u0000b"', '"a\\ud800"',
+                  '"a\\u202eb"', '"\uff41"', '"a/.."', '"../a"', '"' + "a" * 20000 + '"', "[" * 5000 + "]" * 5000]
+
+
 @pytest.mark.parametrize("value", ['7', '""', '"../up"', '"a b"', '"/rooted"', '"memory//technical"', '["memory"]',
                                    '{ a = 1 }', '"' + "x" * 600 + '"', 'true', '"memory/\\ud7ff"'])
 def test_a_bad_value_is_invalid_config_and_a_recall_says_so(tmp_path, monkeypatch, value):
@@ -173,6 +177,15 @@ def test_a_bad_value_is_invalid_config_and_a_recall_says_so(tmp_path, monkeypatc
     assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
     assert response["neighbors"]["by_default"] is True
     assert response["neighbors"]["context"] is None
+
+
+@pytest.mark.parametrize("value", HOSTILE_VALUES)
+def test_a_hostile_value_never_crosses_and_a_recall_says_so(tmp_path, monkeypatch, value):
+    calls = recording_arm(monkeypatch)
+    _, storage = receiver(tmp_path, f"default_context = {value}")
+    response = attach_default(tmp_path, storage)
+    assert calls == [] and response["results"] == ["local"]
+    assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
 
 
 def test_an_unreadable_toml_says_so_and_keeps_local_results(tmp_path, monkeypatch):
@@ -454,7 +467,7 @@ def test_status_raises_no_error_when_absent(tmp_path):
     assert "default_context" not in status
 
 
-@pytest.mark.parametrize("value", ['7', '""', '"../up"', '"a b"', '"memory//technical"', '"' + "x" * 600 + '"'])
+@pytest.mark.parametrize("value", ['7', '""', '"../up"', '"a b"', '"memory//technical"', '"' + "x" * 600 + '"'] + HOSTILE_VALUES)
 def test_status_calls_a_bad_value_invalid_as_the_receiver_does(tmp_path, value):
     status, _, errors = status_of(tmp_path, f"default_context = {value}")
     assert status["state"] == "invalid"
