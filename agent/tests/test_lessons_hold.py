@@ -221,6 +221,23 @@ def test_a_lesson_over_lesson_bytes_is_not_offered_and_the_next_one_opens_the_de
     assert [(h.key, h.text) for h in ask(rail)] == [(key(COMMAND, B), lh.hold_reason(short))]
 
 
+def test_a_hold_with_a_receipt_carries_the_line_naming_the_peers_data_directory(rail):
+    found = {**lesson(A, ship='serenity', command=GLOB), 'receipt': '0123abcd'}
+    rail.answers(found)
+    [hold] = ask(rail)
+    assert hold.text == lh.hold_reason(found, data_dir=str(rail.data))
+    assert f'LESSONS_DATA={rail.data}' in hold.text and 'OUTCOME=(helped|misled|unused)' in hold.text
+
+
+def test_a_lesson_only_the_receipt_line_pushes_past_lesson_bytes_is_skipped_not_cut(rail, monkeypatch):
+    plain = lesson(A, command=GLOB)
+    with_receipt = {**plain, 'receipt': '0123abcd'}
+    monkeypatch.setattr(holds, 'LESSON_BYTES', len(lh.hold_reason(plain).encode()))
+    assert len(lh.hold_reason(with_receipt, data_dir=str(rail.data)).encode()) > holds.LESSON_BYTES
+    rail.answers(with_receipt)
+    assert ask(rail) == []
+
+
 def test_the_provider_records_what_it_returns_in_its_own_entries(rail):
     """Ruling 33. The entry saves only when it prints, so a hold it drops leaves no trace."""
     rail.answers(lesson(A, command=GLOB))

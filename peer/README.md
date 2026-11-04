@@ -461,6 +461,9 @@ its own sessions' queries; nothing is asked of another peer. The command is
 - `query`: the hook's call, the request on stdin and the answer on stdout.
 - `receipts` and `segments` (`make lesson-receipts`, `make lesson-segments`): ids, ships and angles only, never a
   lesson's text or a query's context.
+- `outcome` and `outcomes` (`make lesson-outcome RECEIPT=… OUTCOME=helped|misled|unused`, `make lesson-outcomes`): a ship
+  says once, within 24 hours of a receipt, whether the lesson shown helped, misled or went unused; the list is newest first
+  with the rail's counts. Ids, ships and words only, never a lesson's text.
 
 ## Checks and source release
 

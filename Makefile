@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats lesson-outcome lesson-outcomes join-machine-plan mutants
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -117,6 +117,8 @@ help:
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
 	@echo "make lesson-repeat LESSON=… HOW=receipt|read HOOK=on|off  Record a repeat after a seen lesson, for this peer's ship"
 	@echo "make lesson-repeats     This peer's repeat records, newest first, verified and unverified apart"
+	@echo "make lesson-outcome RECEIPT=… OUTCOME=helped|misled|unused  Say once whether a lesson shown to this peer's ship helped"
+	@echo "make lesson-outcomes    This peer's outcomes, newest first, with the rail's counts"
 	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
 	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"
 	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"
@@ -511,6 +513,14 @@ lesson-repeat:
 
 lesson-repeats:
 	$(LESSONS) repeats --data-dir "$(LESSONS_DATA)"
+
+# Lesson outcomes spec, section 3: the ship is the one this peer's record names, never a variable.
+lesson-outcome:
+	@test -n "$(RECEIPT)" && test -n "$(OUTCOME)" || { echo 'Usage: make lesson-outcome RECEIPT=<receipt id or a prefix of 6+> OUTCOME=helped|misled|unused [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) outcome --data-dir "$(LESSONS_DATA)" "$(RECEIPT)" "$(OUTCOME)"
+
+lesson-outcomes:
+	$(LESSONS) outcomes --data-dir "$(LESSONS_DATA)"
 
 # The units run from %h/superyak, the station's checkout. A checkout elsewhere is linked there by each target that
 # installs units, so every unit and drop-in runs as written (Tardis, 2026-11-02: from ~/Projects/superyak, federate
