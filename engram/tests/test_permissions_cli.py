@@ -298,3 +298,94 @@ def test_a_busy_ledger_says_nothing_was_written_and_to_try_again(cli_home, fake_
     assert main(["person", "add", "jenn"]) == 1
     assert "the ledger was busy; nothing was written; try again" in capsys.readouterr().err
     assert ledger_bytes(cli_home) == before
+
+
+# Ship home and crossing plan, Task 10 (P11, B6): `agent remote-stores`, the only way in for the reserved agent.
+
+REMOTE_REF = "urn:superyak:" + "a" * 64 + ":store:2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+WORDS = "Every remote store this home's publisher grants may cross, under these audiences"
+
+
+def _house_policy(home, name, rules_for, audiences):
+    import json
+    from tests.permissions_support import connection_policy, house_dir
+    (house_dir(home, name) / "lighthouse-policy.json").write_text(json.dumps(connection_policy(
+        name, rules_for, actions=("recall", "read"), audience_map=audiences)))
+
+
+def _grants_here(home):
+    from tests.permissions_support import house_dir
+    _house_policy(home, "why", [REMOTE_REF, "urn:engram:tardis"], {REMOTE_REF: ["commons", "group:work"],
+                                                                     "urn:engram:tardis": ["commons"]})
+    _house_policy(home, "local", ["urn:engram:tardis"], {"urn:engram:tardis": ["commons"]})
+    (house_dir(home, "broken") / "lighthouse-policy.json").write_text("{not json")
+
+
+def _remote_stores_state(home):
+    led = Ledger.open(home)
+    try:
+        st = led.state()
+        from permissions import _parents
+        place = st.places.get("place:outside-home")
+        agent = st.agents.get("agent:remote-stores")
+        from permissions import agent_place_at
+        return (place is not None, _parents(st, "place:outside-home"), agent and agent.acts_for,
+                agent_place_at(st, "agent:remote-stores", 2**40) if agent else None)
+    finally:
+        led.close()
+
+
+def test_agent_add_of_the_reserved_name_is_refused(cli_home, fake_tty, capsys):
+    before = ledger_bytes(cli_home)
+    assert main(["agent", "add", "remote-stores", "--acts-for", "andy"]) == 1
+    assert "agent remote-stores" in capsys.readouterr().err
+    assert ledger_bytes(cli_home) == before
+
+
+def test_agent_remote_stores_shows_the_grants_then_registers_once(cli_home, fake_tty):
+    _grants_here(cli_home)
+    fake_tty.answer_the_printed_code()
+    assert main(["agent", "remote-stores"]) == 0
+    shown = fake_tty.shown()
+    at = shown.index(WORDS)
+    code = shown.index("code: ", at)
+    assert at < shown.index("why", at) < shown.index(REMOTE_REF, at) < code
+    listed = shown[at:code]
+    assert "commons" in listed and "group:work" in listed
+    assert "broken" in listed and "unreadable" in listed           # B6: the list may be short, and says so
+    assert "urn:engram:tardis" not in listed                       # local receivers aren't remote grants
+    assert _remote_stores_state(cli_home) == (True, [], HOME, "place:outside-home")
+    before = ledger_bytes(cli_home)
+    assert main(["agent", "remote-stores"]) == 1                   # run again: refused, nothing written
+    assert ledger_bytes(cli_home) == before
+
+
+def test_agent_remote_stores_with_no_grant_says_so_and_a_wrong_code_writes_nothing(cli_home, fake_tty):
+    fake_tty.answer("wrong1")
+    before = ledger_bytes(cli_home)
+    assert main(["agent", "remote-stores"]) == 3
+    assert "no remote store is granted" in fake_tty.shown()
+    assert ledger_bytes(cli_home) == before
+
+
+def test_agent_remote_stores_uses_a_place_outside_home_already_registered_as_a_root(cli_home, fake_tty):
+    fake_tty.answer_the_printed_code()
+    assert main(["place", "register", "place:outside-home"]) == 0
+    fake_tty.answer_the_printed_code()
+    assert main(["agent", "remote-stores"]) == 0
+    assert _remote_stores_state(cli_home) == (True, [], HOME, "place:outside-home")
+
+
+def test_agent_remote_stores_refuses_a_place_outside_home_with_a_parent(cli_home, fake_tty, monkeypatch, capsys):
+    """M2's companion: a parented place:outside-home would let the home's `self` allows reach every remote store. The
+    ledger keeps a one-segment place a root (P26), so the parent is simulated in the one function that reads it."""
+    import permissions
+    fake_tty.answer_the_printed_code()
+    assert main(["place", "register", "place:outside-home"]) == 0
+    real = permissions._parents
+    monkeypatch.setattr(permissions, "_parents",
+                        lambda state, place: [HOME] if place == "place:outside-home" else real(state, place))
+    before = ledger_bytes(cli_home)
+    assert main(["agent", "remote-stores"]) == 1
+    assert "parent" in capsys.readouterr().err
+    assert ledger_bytes(cli_home) == before
