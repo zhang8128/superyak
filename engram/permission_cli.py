@@ -755,8 +755,9 @@ def _verify(a) -> int:
         print(f"The ledger verifies: {top} log rows, SQLite's integrity check of the file is ok, the hash chain is "
               f"whole, no table names a seq past the log's last row, and each seq column that row sets holds its "
               f"seq. These tail checks catch a tear of one row per column; a tear across several rows of one "
-              f"column, or a torn index page, is caught by the projection digest, which every reader checks: it "
-              f"matches the tables.")
+              f"column, or a torn index page, is caught by the projection digest, and it matches the tables. A "
+              f"reader checks the digest before it serves a State; the gate's own read and some direct reads, such "
+              f"as the imprint filter's, do not.")
         print(digest)
         return 0
     print(f"The ledger does not verify ({top} log rows):")

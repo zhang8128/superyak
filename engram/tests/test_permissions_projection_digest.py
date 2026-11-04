@@ -971,6 +971,8 @@ def test_5_verify_reports_the_parts_and_names_a_torn_part(tmp_path, monkeypatch,
     assert cli_main(["verify"]) == 0
     out = " ".join(capsys.readouterr().out.split())
     assert f"collection_members {parts['collection_members'][0]}" in out and f"at seq {seq}" in out
+    # the review's S1: not every read checks the digest (the gate's own read, the imprint filter's direct reads)
+    assert "every reader checks" not in out and "the imprint filter's" in out and "before it serves a State" in out
     _tear_m2(tmp_path, seq)
     assert cli_main(["verify"]) == 1
     assert "the projection digest: collection_members differs" in capsys.readouterr().out
