@@ -1,0 +1,911 @@
+{
+ "sync": {
+  "agent": [
+   "--extra",
+   "dev"
+  ]
+ },
+ "timeout": 180,
+ "mutants": [
+  {
+   "name": "p50 and p95 from first byte",
+   "file": "scripts/room_read_timing.py",
+   "old": "times = sorted(row.total for row in kept)",
+   "new": "times = sorted(row.first for row in kept)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "times unsorted",
+   "file": "scripts/room_read_timing.py",
+   "old": "times = sorted(row.total for row in kept)",
+   "new": "times = [row.total for row in kept]",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_p95_comes_from_the_totals_in_order"
+   ]
+  },
+  {
+   "name": "p50 is the first read",
+   "file": "scripts/room_read_timing.py",
+   "old": "p50 {statistics.median(times):.0f} p95",
+   "new": "p50 {kept[0].total:.0f} p95",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "p95 at .5",
+   "file": "scripts/room_read_timing.py",
+   "old": "nearest_rank(times, .95)",
+   "new": "nearest_rank(times, .5)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "max is the first read",
+   "file": "scripts/room_read_timing.py",
+   "old": "max(row.total for row in rows)",
+   "new": "rows[0].total",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "size hard-coded",
+   "file": "scripts/room_read_timing.py",
+   "old": "{size} KB; ip",
+   "new": "0 KB; ip",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "ip hard-coded",
+   "file": "scripts/room_read_timing.py",
+   "old": "ip {ips}{f",
+   "new": "ip none{f",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "only one slow read shown",
+   "file": "scripts/room_read_timing.py",
+   "old": "SLOW_SHOWN = 6",
+   "new": "SLOW_SHOWN = 1",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_up_to_six_slow_reads_are_shown"
+   ]
+  },
+  {
+   "name": "over 1 s means 1.5 s",
+   "file": "scripts/room_read_timing.py",
+   "old": "SLOW_MS = 1000",
+   "new": "SLOW_MS = 1500",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_over_a_second_is_counted_and_shown"
+   ]
+  },
+  {
+   "name": "over 1 s means 999 ms",
+   "file": "scripts/room_read_timing.py",
+   "old": "SLOW_MS = 1000",
+   "new": "SLOW_MS = 999",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_over_a_second_is_counted_and_shown"
+   ]
+  },
+  {
+   "name": "key in curl environment",
+   "file": "scripts/room_read_timing.py",
+   "old": "timeout=timeout + CURL_GRACE_S)",
+   "new": "timeout=timeout + CURL_GRACE_S, env={**os.environ, 'K': key})",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_key_reaches_curl_on_stdin_and_nowhere_else"
+   ]
+  },
+  {
+   "name": "key printed on a failed read",
+   "file": "scripts/room_read_timing.py",
+   "old": "    except ValueError:  # output that isn't its format\n",
+   "new": "    except ValueError:  # output that isn't its format\n        print(f'failed with {key}', file=sys.stderr)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_no_failed_read_prints_the_key"
+   ]
+  },
+  {
+   "name": "follows redirects",
+   "file": "scripts/room_read_timing.py",
+   "old": "'curl', '-q', ",
+   "new": "'curl', '-q', '-L', ",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_redirect_is_a_failed_read_and_never_followed"
+   ]
+  },
+  {
+   "name": "a cut-off 200 is good",
+   "file": "scripts/room_read_timing.py",
+   "old": "return row.code == 200 and row.exit == 0",
+   "new": "return row.code == 200",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_cut_off_200_is_a_failed_read"
+   ]
+  },
+  {
+   "name": "any status with exit 0 is good",
+   "file": "scripts/room_read_timing.py",
+   "old": "return row.code == 200 and row.exit == 0",
+   "new": "return row.exit == 0",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_the_station_refuses_counts_as_failed"
+   ]
+  },
+  {
+   "name": "http anywhere",
+   "file": "scripts/room_read_timing.py",
+   "old": "if parts.scheme == 'http' and not (on_this_machine(parts.hostname) and all(on_this_machine(address) for _, address in pins)):",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_to_another_machine_is_refused"
+   ]
+  },
+  {
+   "name": "http host unchecked",
+   "file": "scripts/room_read_timing.py",
+   "old": "not (on_this_machine(parts.hostname) and all(",
+   "new": "not (all(",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_to_another_machine_is_refused"
+   ]
+  },
+  {
+   "name": "http pin unchecked",
+   "file": "scripts/room_read_timing.py",
+   "old": "not (on_this_machine(parts.hostname) and all(on_this_machine(address) for _, address in pins)):",
+   "new": "not on_this_machine(parts.hostname):",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_pin_cant_send_plain_http_to_another_machine"
+   ]
+  },
+  {
+   "name": "https refused too",
+   "file": "scripts/room_read_timing.py",
+   "old": "if parts.scheme == 'http' and not (",
+   "new": "if not (",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_stays_on_this_machine_and_https_goes_anywhere"
+   ]
+  },
+  {
+   "name": "localhost not loopback",
+   "file": "scripts/room_read_timing.py",
+   "old": "if host == 'localhost':",
+   "new": "if host == 'nothing':",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_stays_on_this_machine_and_https_goes_anywhere"
+   ]
+  },
+  {
+   "name": "every address is loopback",
+   "file": "scripts/room_read_timing.py",
+   "old": "return ipaddress.ip_address(host).is_loopback",
+   "new": "return True",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_to_another_machine_is_refused"
+   ]
+  },
+  {
+   "name": "a name crashes",
+   "file": "scripts/room_read_timing.py",
+   "old": "    except ValueError:\n        return False\n",
+   "new": "    except KeyError:\n        return False\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_plain_http_to_another_machine_is_refused"
+   ]
+  },
+  {
+   "name": "no -q",
+   "file": "scripts/room_read_timing.py",
+   "old": "'curl', '-q', ",
+   "new": "'curl', ",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_curls_own_config_cant_store_the_key"
+   ]
+  },
+  {
+   "name": "-q not first",
+   "file": "scripts/room_read_timing.py",
+   "old": "'curl', '-q', '--noproxy', '*', '-sS',",
+   "new": "'curl', '--noproxy', '*', '-q', '-sS',",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_curls_own_config_cant_store_the_key"
+   ]
+  },
+  {
+   "name": "no --noproxy",
+   "file": "scripts/room_read_timing.py",
+   "old": "'--noproxy', '*', ",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_proxy_in_the_environment_never_sees_the_read"
+   ]
+  },
+  {
+   "name": "order never rotates",
+   "file": "scripts/room_read_timing.py",
+   "old": "turn = run % len(pairs)",
+   "new": "turn = 0",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_paths_are_interleaved_not_in_blocks"
+   ]
+  },
+  {
+   "name": "rounds only",
+   "file": "scripts/room_read_timing.py",
+   "old": "pairs[turn:] + pairs[:turn]",
+   "new": "pairs[turn:]",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_each_round_reads_every_pair_once_and_the_order_rotates"
+   ]
+  },
+  {
+   "name": "401 not a stop",
+   "file": "scripts/room_read_timing.py",
+   "old": "REFUSED = {401, 403, 404}",
+   "new": "REFUSED = {403, 404}",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_refusal_no_retry_changes_stops_that_path"
+   ]
+  },
+  {
+   "name": "403 not a stop",
+   "file": "scripts/room_read_timing.py",
+   "old": "REFUSED = {401, 403, 404}",
+   "new": "REFUSED = {401, 404}",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_refusal_no_retry_changes_stops_that_path"
+   ]
+  },
+  {
+   "name": "404 not a stop",
+   "file": "scripts/room_read_timing.py",
+   "old": "REFUSED = {401, 403, 404}",
+   "new": "REFUSED = {401, 403}",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_refusal_no_retry_changes_stops_that_path"
+   ]
+  },
+  {
+   "name": "a refused path stops the run",
+   "file": "scripts/room_read_timing.py",
+   "old": "stopped[pair] = f'refused {row.code}'",
+   "new": "raise TimeoutError",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_refused_path_stops_alone"
+   ]
+  },
+  {
+   "name": "six failures in a row",
+   "file": "scripts/room_read_timing.py",
+   "old": "FAILURES_IN_A_ROW = 5",
+   "new": "FAILURES_IN_A_ROW = 6",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_five_failures_in_a_row_stop_a_path"
+   ]
+  },
+  {
+   "name": "four failures in a row",
+   "file": "scripts/room_read_timing.py",
+   "old": "FAILURES_IN_A_ROW = 5",
+   "new": "FAILURES_IN_A_ROW = 4",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_good_read_resets_the_count_of_failures"
+   ]
+  },
+  {
+   "name": "a good read keeps the count",
+   "file": "scripts/room_read_timing.py",
+   "old": "in_a_row[pair] = 0 if good(row) else in_a_row[pair] + 1",
+   "new": "in_a_row[pair] = in_a_row[pair] + (not good(row))",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_good_read_resets_the_count_of_failures"
+   ]
+  },
+  {
+   "name": "five pins",
+   "file": "scripts/room_read_timing.py",
+   "old": "MAX_PINS = 4",
+   "new": "MAX_PINS = 5",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "three pins",
+   "file": "scripts/room_read_timing.py",
+   "old": "MAX_PINS = 4",
+   "new": "MAX_PINS = 3",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_edges_of_the_arguments_are_allowed"
+   ]
+  },
+  {
+   "name": "no cap on reads",
+   "file": "scripts/room_read_timing.py",
+   "old": "if args.runs * len(pairs) > MAX_READS:",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "reads cap one lower",
+   "file": "scripts/room_read_timing.py",
+   "old": "MAX_READS = 2000",
+   "new": "MAX_READS = 1999",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_edges_of_the_arguments_are_allowed"
+   ]
+  },
+  {
+   "name": "no deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "                if left <= 0:\n                    raise TimeoutError\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_run_stops_at_its_deadline_and_says_so"
+   ]
+  },
+  {
+   "name": "a read outlasts the deadline",
+   "file": "scripts/room_read_timing.py",
+   "old": "min(args.timeout, math.ceil(left))",
+   "new": "args.timeout",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_never_outlasts_the_deadline"
+   ]
+  },
+  {
+   "name": "SIGTERM not caught",
+   "file": "scripts/room_read_timing.py",
+   "old": "signal.signal(signal.SIGTERM, stop_on_signal)\n",
+   "new": "pass\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "a stopped run exits 0",
+   "file": "scripts/room_read_timing.py",
+   "old": "return 0 if complete and not ended else 1",
+   "new": "return 0 if complete or ended else 1",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "size from every read",
+   "file": "scripts/room_read_timing.py",
+   "old": "sizes = sorted({row.size // 1024 for row in kept})",
+   "new": "sizes = sorted({row.size // 1024 for row in rows})",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_size_comes_from_good_reads_and_every_address_shows"
+   ]
+  },
+  {
+   "name": "ip from the first read",
+   "file": "scripts/room_read_timing.py",
+   "old": "', '.join(sorted({row.ip for row in rows if row.ip}))",
+   "new": "rows[0].ip",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_size_comes_from_good_reads_and_every_address_shows"
+   ]
+  },
+  {
+   "name": "tls p50 hard-coded",
+   "file": "scripts/room_read_timing.py",
+   "old": "tls p50 {statistics.median(row.tls for row in kept):.0f}",
+   "new": "tls p50 0",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "first byte p50 hard-coded",
+   "file": "scripts/room_read_timing.py",
+   "old": "first byte p50 {statistics.median(row.first for row in kept):.0f}",
+   "new": "first byte p50 0",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_line_prints_the_numbers_it_exists_to_print"
+   ]
+  },
+  {
+   "name": "no codes on the line",
+   "file": "scripts/room_read_timing.py",
+   "old": "codes {sorted({row.code for row in failed})}",
+   "new": "codes",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_the_station_refuses_counts_as_failed"
+   ]
+  },
+  {
+   "name": "no curl exit on the line",
+   "file": "scripts/room_read_timing.py",
+   "old": "curl exits {sorted({row.exit for row in failed})}",
+   "new": "curl exits",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_cut_off_200_is_a_failed_read"
+   ]
+  },
+  {
+   "name": "a killed read has no time",
+   "file": "scripts/room_read_timing.py",
+   "old": "return Read(0, DID_NOT_FINISH, 0.0, 0.0, (time.monotonic() - started) * 1000, 0, '')",
+   "new": "return Read(0, DID_NOT_FINISH, 0.0, 0.0, 0.0, 0, '')",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_curl_that_wont_stop_is_killed_and_shows_its_real_time"
+   ]
+  },
+  {
+   "name": "no grace, curl killed at once",
+   "file": "scripts/room_read_timing.py",
+   "old": "timeout=timeout + CURL_GRACE_S)",
+   "new": "timeout=timeout)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_curl_that_wont_stop_is_killed_and_shows_its_real_time"
+   ]
+  },
+  {
+   "name": "hung curl uncaught",
+   "file": "scripts/room_read_timing.py",
+   "old": "(subprocess.TimeoutExpired, OSError, ValueError)",
+   "new": "(OSError, ValueError)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_curl_that_wont_stop_is_killed_and_shows_its_real_time"
+   ]
+  },
+  {
+   "name": "no curl uncaught",
+   "file": "scripts/room_read_timing.py",
+   "old": "(subprocess.TimeoutExpired, OSError, ValueError)",
+   "new": "(subprocess.TimeoutExpired, ValueError)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_no_curl_on_this_machine_is_a_failed_read"
+   ]
+  },
+  {
+   "name": "garbage uncaught",
+   "file": "scripts/room_read_timing.py",
+   "old": "    except ValueError:  # output that isn't its format\n",
+   "new": "    except KeyError:  # output that isn't its format\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_curl_output_that_isnt_its_format_is_a_failed_read"
+   ]
+  },
+  {
+   "name": "ip required",
+   "file": "scripts/room_read_timing.py",
+   "old": "fields[5] if len(fields) > 5 else ''",
+   "new": "fields[5]",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_read_the_station_refuses_counts_as_failed"
+   ]
+  },
+  {
+   "name": "limit over the route",
+   "file": "scripts/room_read_timing.py",
+   "old": "MAX_LIMIT = 500",
+   "new": "MAX_LIMIT = 501",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "limit under the route",
+   "file": "scripts/room_read_timing.py",
+   "old": "MAX_LIMIT = 500",
+   "new": "MAX_LIMIT = 499",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_edges_of_the_arguments_are_allowed"
+   ]
+  },
+  {
+   "name": "bad url crashes",
+   "file": "scripts/room_read_timing.py",
+   "old": "    except ValueError:\n        raise SystemExit(f'room_read_timing: the station address in {path} is not a URL') from None\n",
+   "new": "    except KeyError:\n        raise SystemExit(f'room_read_timing: the station address in {path} is not a URL') from None\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "port unchecked",
+   "file": "scripts/room_read_timing.py",
+   "old": "        parts.port  # noqa: B018  (reading it is what checks it)\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "any scheme",
+   "file": "scripts/room_read_timing.py",
+   "old": "if parts.scheme not in ('http', 'https') or not parts.hostname:",
+   "new": "if not parts.hostname:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "no host",
+   "file": "scripts/room_read_timing.py",
+   "old": "if parts.scheme not in ('http', 'https') or not parts.hostname:",
+   "new": "if parts.scheme not in ('http', 'https'):",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "max of good reads only",
+   "file": "scripts/room_read_timing.py",
+   "old": "max(row.total for row in rows)",
+   "new": "max([row.total for row in kept] or [0])",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_max_covers_a_failed_read_too"
+   ]
+  },
+  {
+   "name": "p95 floor",
+   "file": "scripts/room_read_timing.py",
+   "old": "math.ceil(share * len(ordered)) - 1",
+   "new": "math.floor(share * len(ordered)) - 1",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_p95_is_the_nearest_rank"
+   ]
+  },
+  {
+   "name": "pin ignored",
+   "file": "scripts/room_read_timing.py",
+   "old": "    if pin:\n",
+   "new": "    if False:\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_pin_adds_a_path_forced_to_that_address"
+   ]
+  },
+  {
+   "name": "no ipv6 brackets",
+   "file": "scripts/room_read_timing.py",
+   "old": "f'[{pin}]' if ipaddress.ip_address(pin).version == 6 else pin",
+   "new": "pin",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_pin_adds_a_path_forced_to_that_address"
+   ]
+  },
+  {
+   "name": "port always 443",
+   "file": "scripts/room_read_timing.py",
+   "old": "parts.port or (443 if parts.scheme == 'https' else 80)",
+   "new": "443",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_pin_adds_a_path_forced_to_that_address"
+   ]
+  },
+  {
+   "name": "explicit port ignored",
+   "file": "scripts/room_read_timing.py",
+   "old": "parts.port or (443 if parts.scheme == 'https' else 80)",
+   "new": "(443 if parts.scheme == 'https' else 80)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_pin_adds_a_path_forced_to_that_address"
+   ]
+  },
+  {
+   "name": "no max-time",
+   "file": "scripts/room_read_timing.py",
+   "old": "'--max-time', str(timeout), ",
+   "new": "'--max-time', '25', ",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_limit_and_timeout_reach_the_read"
+   ]
+  },
+  {
+   "name": "key in arguments",
+   "file": "scripts/room_read_timing.py",
+   "old": "'-K', '-', ",
+   "new": "'-H', f'authorization: Bearer {key}', '-K', '-', ",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_key_reaches_curl_on_stdin_and_nowhere_else"
+   ]
+  },
+  {
+   "name": "no key sent",
+   "file": "scripts/room_read_timing.py",
+   "old": "input=f'header = \"authorization: Bearer {key}\"\\n'",
+   "new": "input=''",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_it_reads_the_room_as_the_web_app_does"
+   ]
+  },
+  {
+   "name": "room any text",
+   "file": "scripts/room_read_timing.py",
+   "old": "if not re.fullmatch(r'[0-9a-f]{32}', text):",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "no low bound",
+   "file": "scripts/room_read_timing.py",
+   "old": "if not low <= value <= high:",
+   "new": "if not value <= high:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "no high bound",
+   "file": "scripts/room_read_timing.py",
+   "old": "if not low <= value <= high:",
+   "new": "if not low <= value:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "pin any name",
+   "file": "scripts/room_read_timing.py",
+   "old": "re.fullmatch(r'[A-Za-z0-9_-]{1,20}', name)",
+   "new": "True",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "pin any address",
+   "file": "scripts/room_read_timing.py",
+   "old": "ipaddress.ip_address(address)  # argparse",
+   "new": "pass  # argparse",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_bad_arguments_stop_before_any_read"
+   ]
+  },
+  {
+   "name": "not text allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "if not isinstance(station, str) or not isinstance(key, str):",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "any key",
+   "file": "scripts/room_read_timing.py",
+   "old": "if not re.fullmatch(r'[\\x21\\x23-\\x5b\\x5d-\\x7e]+', key):",
+   "new": "if False:",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "quote allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "[\\x21\\x23-\\x5b\\x5d-\\x7e]+",
+   "new": "[\\x21-\\x5b\\x5d-\\x7e]+",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "backslash allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "[\\x21\\x23-\\x5b\\x5d-\\x7e]+",
+   "new": "[\\x21\\x23-\\x7e]+",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "space allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "[\\x21\\x23-\\x5b\\x5d-\\x7e]+",
+   "new": "[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]+",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "empty key allowed",
+   "file": "scripts/room_read_timing.py",
+   "old": "[\\x21\\x23-\\x5b\\x5d-\\x7e]+'",
+   "new": "[\\x21\\x23-\\x5b\\x5d-\\x7e]*'",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_bad_station_file_stops_with_a_sentence_and_repeats_no_key"
+   ]
+  },
+  {
+   "name": "default limit 30",
+   "file": "scripts/room_read_timing.py",
+   "old": "type=bounded(1, MAX_LIMIT), default=100)",
+   "new": "type=bounded(1, MAX_LIMIT), default=30)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_it_reads_the_room_as_the_web_app_does"
+   ]
+  },
+  {
+   "name": "unpaged ignored",
+   "file": "scripts/room_read_timing.py",
+   "old": " + ([('unpaged', '')] if args.unpaged else [])",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_each_round_reads_every_pair_once_and_the_order_rotates"
+   ]
+  },
+  {
+   "name": "unpaged always",
+   "file": "scripts/room_read_timing.py",
+   "old": "([('unpaged', '')] if args.unpaged else [])",
+   "new": "[('unpaged', '')]",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_unpaged_is_only_read_when_asked"
+   ]
+  },
+  {
+   "name": "gap before the first read",
+   "file": "scripts/room_read_timing.py",
+   "old": "                if not first:\n",
+   "new": "                if True:\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
+   ]
+  },
+  {
+   "name": "no gap",
+   "file": "scripts/room_read_timing.py",
+   "old": "time.sleep(args.gap_ms / 1000)",
+   "new": "pass",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_the_gap_falls_between_reads_only"
+   ]
+  },
+  {
+   "name": "run always good",
+   "file": "scripts/room_read_timing.py",
+   "old": "return 0 if complete and not ended else 1",
+   "new": "return 0",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_one_failed_read_among_good_ones_still_fails_the_run"
+   ]
+  },
+  {
+   "name": "no room in the header",
+   "file": "scripts/room_read_timing.py",
+   "old": "print(f'room {args.room[:8]} {when}, wall",
+   "new": "print(f'room {when}, wall",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_run_says_what_room_when_and_how_long"
+   ]
+  },
+  {
+   "name": "SIGINT not caught",
+   "file": "scripts/room_read_timing.py",
+   "old": "signal.signal(signal.SIGINT, stop_on_signal)\n",
+   "new": "pass\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_stopped_run_prints_what_it_measured"
+   ]
+  },
+  {
+   "name": "any good path passes the run",
+   "file": "scripts/room_read_timing.py",
+   "old": "complete = all(good(row) for done in rows.values() for row in done)",
+   "new": "complete = any(all(good(row) for row in done) for done in rows.values())",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_a_failed_path_before_a_good_one_still_fails_the_run"
+   ]
+  },
+  {
+   "name": "one good read among bad passes",
+   "file": "scripts/room_read_timing.py",
+   "old": "complete = all(good(row) for done in rows.values() for row in done)",
+   "new": "complete = any(good(row) for done in rows.values() for row in done)",
+   "project": "agent",
+   "tests": [
+    "tests/test_room_read_timing.py::test_one_failed_read_among_good_ones_still_fails_the_run"
+   ]
+  }
+ ]
+}
