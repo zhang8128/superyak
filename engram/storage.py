@@ -1219,13 +1219,27 @@ class Storage:
         source_episode_ids: list[str],
         auto_generated: bool = False,
         lane: str = "personal",
+        cluster_episode_ids: list[str] | None = None,
+        inherited_mark: int | None = 0,
+        captures=None,
     ) -> str:
+        """Add a semantic linked to ``source_episode_ids``. ``cluster_episode_ids`` are every episode it was distilled
+        from, linked or not (compression links only those similar to its summary). Its capture mark (migration 030)
+        starts at ``inherited_mark``, what the caller knows from outside this store's episodes (compression passes
+        the mark of the semantic it may restate: 1, None for unknown, or 0), and ``mark_touched_capture`` then raises
+        it over the ids in both lists: to 1 for a capture or a copy of one, to None when cold storage cannot be
+        read. The order is 1 over None over 0, written in the same transaction as the row. ``captures`` is a
+        ``sharing.CaptureDigests`` a caller read once for many writes (one compression commit)."""
+        if inherited_mark not in (0, 1, None):
+            raise ValueError(f"inherited_mark must be 0, 1 or None, not {inherited_mark!r}")
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane),
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane,"
+            " touched_capture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane, inherited_mark),
         )
+        self.mark_touched_capture(id, [*(source_episode_ids or []), *(cluster_episode_ids or [])], captures=captures)
         self.conn.execute(
             "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
             (id, _pack_embedding(embedding)),
@@ -1238,6 +1252,43 @@ class Storage:
         self._commit()
         logger.debug("Semantic added: %s (kind=%s)", id, kind)
         return id
+
+    def mark_touched_capture(self, semantic_id: str, episode_ids: list[str], *, captures=None) -> bool | None:
+        """Whether any of ``episode_ids`` in this store is a captured prompt: an episode with source 'auto' (which
+        hooks/nudge.py writes), or one whose ``content_hash`` is a capture's digest in the store or in its cold
+        storage (``remember``'s copy of a prompt, which share refuses too), judged against ``captures`` (a
+        ``sharing.CaptureDigests`` the caller read once) or, without it, against ``sharing.capture_digests`` read
+        now. Cold storage is read read-only and never created. When one is, the semantic's capture mark (migration
+        030) is set to 1 and True is returned. When none is but cold storage exists and cannot be read, whether an
+        episode with no source of its own copies a capture cannot be told: a mark of 0 becomes NULL (unknown) and
+        None is returned. The order is 1 over NULL over 0, so the mark never goes down. Writes in the caller's transaction
+        and does not commit: every caller commits with its own write."""
+        ids = list(dict.fromkeys(eid for eid in episode_ids or () if eid))
+        captured, digests = False, set()
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            for row in self.conn.execute(
+                f"SELECT source, content_hash, content FROM episodes WHERE id IN ({', '.join('?' * len(chunk))})",
+                chunk,
+            ):
+                if row["source"] == "auto":
+                    captured = True
+                    break
+                digests.add(row["content_hash"] or hashlib.sha256((row["content"] or "").encode()).hexdigest())
+            if captured:
+                break
+        if not captured and digests:
+            if captures is None:
+                from sharing import capture_digests  # deferred: sharing's read-only cold access
+                captures = capture_digests(self)
+            captured = captures.copies(digests)
+            if captured is None:
+                self.conn.execute(
+                    "UPDATE semantics SET touched_capture = NULL WHERE id = ? AND touched_capture = 0", (semantic_id,))
+                return None
+        if captured:
+            self.conn.execute("UPDATE semantics SET touched_capture = 1 WHERE id = ?", (semantic_id,))
+        return captured
 
     def get_semantic(self, id: str) -> dict | None:
         row = self.conn.execute(
@@ -1252,7 +1303,7 @@ class Storage:
         result["source_episode_ids"] = [r[0] for r in source_rows]
         return result
 
-    def reinforce_semantic(self, id: str, additional_episode_ids: list[str]) -> None:
+    def reinforce_semantic(self, id: str, additional_episode_ids: list[str], *, captures=None) -> None:
         self.conn.execute(
             "UPDATE semantics SET confidence = MIN(1.0, confidence + 0.1), "
             "reinforced_count = reinforced_count + 1, last_reinforced = ? WHERE id = ?",
@@ -1263,6 +1314,7 @@ class Storage:
                 "INSERT OR IGNORE INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
                 [(id, eid) for eid in additional_episode_ids],
             )
+            self.mark_touched_capture(id, additional_episode_ids, captures=captures)
         self._commit()
 
     def get_semantic_neighbors(self, semantic_id: str) -> list[dict]:

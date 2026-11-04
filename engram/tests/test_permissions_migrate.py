@@ -104,9 +104,12 @@ def _store(path, ids, embed):
 
 
 def _semantic(store, sid, text):
+    # Marked as touching no capture: share refuses a semantic whose mark is unknown (migration 030,
+    # fix:share-refuses-captured-memories). Built from a chosen source episode.
     store.conn.execute(
-        "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) "
-        "VALUES (?, ?, 'fact', 0.5, ?, 0, 'h', 'personal')", (sid, text, CREATED))
+        "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane, "
+        "touched_capture) VALUES (?, ?, 'fact', 0.5, ?, 0, 'h', 'personal', 0)", (sid, text, CREATED))
+    store.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, 'c1')", (sid,))
     store.conn.commit()
 
 

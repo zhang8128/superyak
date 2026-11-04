@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import logging
 import random
@@ -488,6 +489,10 @@ class Compressor:
     ) -> dict:
         """Apply a pre-validated compression request inside one transaction."""
         compress_id = state["compress_id"]
+        # The capture digests, read once for the whole commit: inside its transaction no other session can add a
+        # capture, and each read scans cold storage while the write lock is held.
+        from sharing import capture_digests
+        captures = capture_digests(self._storage)
 
         clusters = state["clusters"]
         episodes_processed = 0
@@ -541,7 +546,7 @@ class Compressor:
             if action == "reinforce":
                 semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
                 if semantic_id:
-                    self._storage.reinforce_semantic(semantic_id, all_episode_ids)
+                    self._storage.reinforce_semantic(semantic_id, all_episode_ids, captures=captures)
                     semantics_reinforced += 1
                 else:
                     logger.warning("Reinforce requested but no semantic_id found, falling back to new")
@@ -573,6 +578,11 @@ class Compressor:
                     source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
                     lane=lane,
+                    # the summary may draw on any episode of the cluster, linked or not, and on the match whose
+                    # content compress showed the model: the capture mark sees them all
+                    cluster_episode_ids=all_episode_ids,
+                    inherited_mark=self._inherited_capture_mark(cluster, captures),
+                    captures=captures,
                 )
                 semantics_created += 1
                 # Track sibling semantics from the same split_group
@@ -709,9 +719,9 @@ class Compressor:
             if sid:
                 cluster_semantic_ids.append(sid)
 
-        multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids)
+        multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids, captures=captures)
 
-        singletons_created = self._promote_singletons()
+        singletons_created = self._promote_singletons(captures=captures)
 
         # Log compression event
         self._storage.add_log_entry(
@@ -1226,7 +1236,7 @@ class Compressor:
             logger.debug("Instinct dedup check failed", exc_info=True)
         return False
 
-    def _promote_singletons(self) -> int:
+    def _promote_singletons(self, *, captures=None) -> int:
         """Promote core episodes with no semantic links to singleton semantics.
 
         Candidates: core episodes not in semantic_sources.
@@ -1278,6 +1288,7 @@ class Compressor:
                 embedding=embedding,
                 source_episode_ids=[ep_id],
                 auto_generated=True,
+                captures=captures,
             )
             # Update the source link with similarity = 1.0 (exact match)
             self._storage.conn.execute(
@@ -1293,6 +1304,8 @@ class Compressor:
         self,
         episodes: list[dict],
         exclude_semantic_ids: list[str],
+        *,
+        captures=None,
     ) -> int:
         """Link episodes to all matching semantics above threshold.
 
@@ -1321,6 +1334,7 @@ class Compressor:
         ep_embeddings = self._embeddings.embed(ep_texts, prefix="clustering")
 
         links_created = 0
+        linked: dict[str, list[str]] = {}
         for ep, ep_emb in zip(episodes, ep_embeddings):
             if ep_emb is None:
                 continue
@@ -1349,8 +1363,12 @@ class Compressor:
                             "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
                             (sid, ep["id"], sim),
                         )
+                        linked.setdefault(sid, []).append(ep["id"])
                         links_created += 1
 
+        # The capture mark, once per semantic linked: one read of the capture digests each, not one per link.
+        for sid, linked_ids in linked.items():
+            self._storage.mark_touched_capture(sid, linked_ids, captures=captures)
         if links_created:
             self._storage._commit()
         return links_created
@@ -1392,6 +1410,49 @@ class Compressor:
             logger.debug("Semantic vector search failed (table may be empty)")
 
         return "new", None, None
+
+    def _inherited_capture_mark(self, cluster: dict, captures=None) -> int | None:
+        """The capture mark (migration 030) a "new" semantic for ``cluster`` starts from, before ``add_semantic``
+        looks the cluster's episodes up in the store, which can only raise it to 1. The order is 1 over None
+        (unknown) over 0, so a restatement can't launder a mark:
+        - 1 when the cluster state records an episode's source as 'auto' (even one another session deleted since),
+          or an episode's text as the state holds it is a capture's text word for word, in the store or in cold
+          storage (remember's copy of a prompt), or the cluster's match is marked 1. compress shows the model the
+          match's content, whichever way the summary reaches "new": the model's choice, the lane-override fallback,
+          or refine;
+        - None when the match's mark is NULL or the match is gone, or an episode is gone from the store and the
+          state records no source for it, or cold storage exists and cannot be read, so whether an episode with no
+          source of its own copies a capture cannot be told;
+        - otherwise 0."""
+        unknown = False
+        episodes = cluster.get("episodes") or []
+        for ep in episodes:
+            if "source" in ep:
+                if ep["source"] == "auto":
+                    return 1
+            elif self._storage.get_episode(ep["id"]) is None:
+                unknown = True
+        digests = {ep.get("content_hash") or hashlib.sha256((ep.get("content") or "").encode()).hexdigest()
+                   for ep in episodes}
+        if digests:
+            if captures is None:
+                from sharing import capture_digests  # deferred: sharing's read-only cold access
+                captures = capture_digests(self._storage)
+            copied = captures.copies(digests)
+            if copied:
+                return 1
+            if copied is None:
+                unknown = True
+        match = cluster.get("match")
+        match_id = match.get("id") if isinstance(match, dict) else None
+        if match_id:
+            row = self._storage.conn.execute(
+                "SELECT touched_capture FROM semantics WHERE id = ?", (match_id,)).fetchone()
+            if row is None or row[0] is None:
+                unknown = True
+            elif row[0] != 0:
+                return 1
+        return None if unknown else 0
 
     def _filter_relevant_sources(
         self, episodes: list[dict], semantic_content: str,
