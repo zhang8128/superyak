@@ -148,6 +148,18 @@ stolen owner-trust key. Per-job keys bound the damage in time, not in number.
     station B.
   - So the ship assertion gains an optional `destination` (a station's peer id), checked by `pair-trusted` when
     present. `export-ship --destination` sets it, and a cluster station's exports always set it.
+- **Cluster ships crossing, decided on purpose** (the partners' ruling on the crossing's stage 2 finding 1, all hands
+  e42ead72).
+  - **What stage 2 does:** the lighthouse crossing refuses a ship confirmed only by owner trust, with no typed code
+    (check 5). As Serenity put it, pairing lets a ship talk, but a crossing lets it read Andy's memories.
+  - **So widening it is its own act, here:** a trust-made ship may ask a crossing while its trust is **live**. Live has
+    one written meaning: `trust_state` says live, so a full window counts, and held, revoked, expired and paused
+    don't.
+  - **Check 5 reads that state on every crossing,** never a cached "paired".
+  - **The test:** a revoke between two crossings refuses the second with its own code, so revoking the trust in the
+    browser stops its ships from crossing at once.
+  - Without this, no cluster ship could ever read across, and every one would need a typed code: Andy as the blocker
+    again.
   - It's a small, compatible change to the record kind, under that spec's own review.
 
 ## 5. The law revision Andy signs once
