@@ -833,13 +833,11 @@ class _Conn(sqlite3.Connection):
     _done = None
 
     def close(self) -> None:
-        try:
-            super().close()
-        finally:
-            if self._done is not None:
-                self._done.detach()
-                _release(self._key)
-                self._done = None
+        super().close()             # one that raises (another thread's close) leaves the connection open, and counted
+        if self._done is not None:
+            self._done.detach()
+            _release(self._key)
+            self._done = None
 
 
 def _append_busy_ms(size: int) -> int:
@@ -928,8 +926,8 @@ def _write_marker(path: Path, key: _Key) -> None:
 
 def _mark_moved(path: Path, checked: _Key) -> None:
     """A fresh file checked whole at `checked` and then renamed to `path` (rebuild, migrate): marked verified when it
-    is still that file at that state, the same inode, counter and head; a rename changes only its ctime. Otherwise
-    no marker, and its first reader runs one full check."""
+    is still that file at that state, the same inode, size, counter and head; a rename changes only its ctime.
+    Otherwise no marker, and its first reader runs one full check."""
     try:
         conn = Ledger._connect(path, read_only=True)
     except LedgerUnreadable:
@@ -944,8 +942,8 @@ def _mark_moved(path: Path, checked: _Key) -> None:
         return
     finally:
         conn.close()
-    if pinned and (key.dev, key.ino, key.counter, key.head) == (checked.dev, checked.ino, checked.counter,
-                                                                checked.head):
+    if pinned and (key.dev, key.ino, key.size, key.counter, key.head) == (checked.dev, checked.ino, checked.size,
+                                                                          checked.counter, checked.head):
         _remember(key)
         _write_marker(path, key)
 

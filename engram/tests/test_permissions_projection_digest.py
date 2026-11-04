@@ -1004,6 +1004,7 @@ def test_5_unstamp_is_the_way_back_and_asks_the_persons_yes(tmp_path, monkeypatc
     assert ledger_path(tmp_path).read_bytes() == before and _marker(tmp_path).exists()
     shown = " ".join(fake_tty.shown().split())
     assert "set schema_version to 1" in shown and "delete meta.projection and meta.projection_parts" in shown
+    assert "a gate at enforce then reads closed" in shown              # the review's nit
     fake_tty.answer_the_printed_code()
     assert unstamp_ledger.main([]) == 0
     led = Ledger.open_read_only(tmp_path)
@@ -1219,3 +1220,37 @@ def test_s5_d9s_append_timing_takes_the_two_ledgers_appends_in_turn(tmp_path, mo
     got = digest_timings(tmp_path / "home", runs=1, appends=6)
     assert order == ["home", "home-unstamped"] * 6
     assert set(got) == {"rare", "match", "append"}
+
+
+def test_nit_a_moved_file_is_marked_only_at_the_size_it_was_checked_at(tmp_path):
+    """The review's nit on `_mark_moved`: the inode, counter and head, and the size too."""
+    _created(tmp_path)
+    _marker(tmp_path).unlink()
+    key = _key_now(tmp_path)
+    permission_ledger._mark_moved(ledger_path(tmp_path), dataclasses.replace(key, size=key.size + 4096))
+    assert not _marker(tmp_path).exists()
+    permission_ledger._mark_moved(ledger_path(tmp_path), key)                   # the control
+    assert json.loads(_marker(tmp_path).read_text())["size"] == key.size
+
+
+def test_nit_a_close_that_fails_keeps_the_connections_count(tmp_path):
+    """The review's nit on `_Conn.close`: a connection still open after a close that raised (here, from another
+    thread) keeps its count, so its file's descriptor stays open under its locks."""
+    _created(tmp_path)
+    led = Ledger.open_read_only(tmp_path)
+    errors = []
+    other = threading.Thread(target=lambda: errors.append(_raises(led.conn.close)))
+    other.start()
+    other.join()
+    assert errors and isinstance(errors[0], sqlite3.ProgrammingError)
+    assert led.conn._key in permission_ledger._HELD
+    led.close()
+    assert led.conn._key not in permission_ledger._HELD
+
+
+def _raises(call):
+    try:
+        call()
+    except Exception as e:  # noqa: BLE001 - returned for the test to look at
+        return e
+    return None

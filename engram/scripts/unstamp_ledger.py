@@ -39,7 +39,8 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
     words = (f"Unstamp the permission ledger at {path}, so that code from before the projection digest reads it again. "
-             "Nothing checks the ledger's digest after this. Stop every Engram process first.")
+             "Nothing checks the ledger's digest after this, and while this code runs a gate at enforce then reads "
+             "closed. Stop every Engram process first.")
     change = "\n".join([f"change: in {path}", "  set schema_version to 1",
                         "  delete meta.projection and meta.projection_parts", f"  remove {path.with_name(MARKER)}"])
     try:
