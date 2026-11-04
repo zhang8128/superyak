@@ -248,9 +248,29 @@ def _verify_reused_copy(*, source_row, published_storage, layer, memory_id) -> N
         raise ValueError("shared memory digest mismatch")
 
 
+def _mend_lane(published_storage, layer: str, memory_id: str, lane: str) -> str | None:
+    """A copy made before copies kept their source's lane, or before its source moved lanes, takes the source's lane
+    when it is shared again. Returns what changed, for the answer, or None."""
+    table = "episodes" if layer == "episode" else "semantics"
+    found = published_storage.conn.execute(f"SELECT lane FROM {table} WHERE id = ?", (memory_id,)).fetchone()
+    if found is None or found["lane"] == lane:
+        return None
+    published_storage.conn.execute(f"UPDATE {table} SET lane = ? WHERE id = ?", (lane, memory_id))
+    return f"the house copy's lane was {found['lane']}; it now follows its source: {lane}"
+
+
 def share(*, source_storage, published_storage, source_id, layer, audience, reason,
           source_instance, now=None, source_instance_id=None, record_id=None) -> ShareRecord:
-    """Copy one episode or semantic into the published house.
+    """Copy one episode or semantic into the published house: share_noting's record, without its note."""
+    return share_noting(source_storage=source_storage, published_storage=published_storage, source_id=source_id,
+                        layer=layer, audience=audience, reason=reason, source_instance=source_instance, now=now,
+                        source_instance_id=source_instance_id, record_id=record_id)[0]
+
+
+def share_noting(*, source_storage, published_storage, source_id, layer, audience, reason,
+                 source_instance, now=None, source_instance_id=None,
+                 record_id=None) -> tuple[ShareRecord, str | None]:
+    """Copy one episode or semantic into the published house, with a note when a reused copy's lane was mended.
 
     The source vector is carried with the copy when present. A semantic with no
     vector is copied without one and becomes searchable after maintenance fills
@@ -289,7 +309,7 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
                     published_storage.conn.execute(
                         f"UPDATE shared_memories SET {column} = ? WHERE share_id = ? AND {column} IS NULL",
                         (value, existing["share_id"]))
-            return _record(existing)
+            return _record(existing), _mend_lane(published_storage, layer, existing["memory_id"], row["lane"])
 
         placed = published_storage.conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0]
         if placed >= MAX_PLACEMENTS:
@@ -299,6 +319,7 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
             "SELECT memory_id FROM shared_memories WHERE source_instance = ? AND source_id = ? LIMIT 1",
             (source_instance, source_id),
         ).fetchone()
+        mended = None
         if sibling is not None:
             memory_id = sibling["memory_id"]
             _verify_reused_copy(
@@ -307,6 +328,7 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
                 layer=layer,
                 memory_id=memory_id,
             )
+            mended = _mend_lane(published_storage, layer, memory_id, row["lane"])
         else:
             memory_id = str(uuid.uuid4())
             vector = source_storage.get_vector(layer, source_id)
@@ -340,7 +362,7 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
              record.layer, record.audience, record.reason, record.content_digest, record.shared_at,
              source_instance_id, record_id),
         )
-    return record
+    return record, mended
 
 
 def unshare(*, published_storage, share_id) -> bool:
