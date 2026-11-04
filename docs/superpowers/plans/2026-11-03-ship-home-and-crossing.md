@@ -1095,3 +1095,10 @@ items are decided here, and it said none needs another re-read.
 
 That's the ship's own act on its own memories, and before the gate is raised `share` answers the ship. Otherwise the
 first crossing would answer "absent", and teach nothing about receipts or lighthouse_sheaf.
+
+## After approval: an expiry someone will see (Serenity, all hands 6915cfbf)
+
+The Mac's lighthouse receiver rule expired 2026-10-15, and recall fell back to local with no word for three weeks. Every publisher rule there ends 2027-01-01. So `grant-remote` (P24) never writes an open-ended grant:
+- It sets `validUntil` explicitly. The default is 90 days, and `--until` sets it, up to 366 days. The date is printed in its output.
+- Rio Grande's fix:lighthouse-expired-rule-silent makes runtime status warn 14 days ahead and names `OUTSIDE_VALIDITY` in a recall's diagnostics. A crossing that hits an expired publisher rule shows that code in `neighbors`, never silence. Task 10 tests the default date and the `--until` cap.
+- Deploy step 4 records the date in the room, so a person sees it.
