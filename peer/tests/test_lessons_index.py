@@ -241,6 +241,44 @@ def test_words_first_then_near_with_a_receipt_each_and_one_query_row(lessons_sta
     assert 'grep' not in json.dumps([dict(r) for r in receipts] + [dict(row)])   # no context in any record
 
 
+def written_receipts(store):
+    with store.transaction() as db:
+        return [r['id'] for r in db.execute('SELECT id FROM lesson_receipts ORDER BY rowid')]
+
+
+def test_each_lesson_in_the_answer_names_its_receipts_short_id(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    two_lessons(store, ids, room, fake_embedder)
+    answer, _ = ask(store, clock, fake_embedder.path, command='grep --include=*.py x')
+    assert [list(e) for e in answer['lessons']] == [['id', 'ship', 'claim', 'why', 'match', 'command', 'receipt'],
+                                                    ['id', 'ship', 'claim', 'why', 'match', 'receipt']]
+    first = written_receipts(store)
+    assert {e['receipt'] for e in answer['lessons']} == {k[:lessons.RECEIPT_SHORT] for k in first} and len(first) == 2
+    near, _ = ask(store, clock, fake_embedder.path, command='grep --include=*.py x', seen=[answer['lessons'][0]['id']])
+    assert [list(e) for e in near['lessons']] == [['id', 'ship', 'claim', 'why', 'match', 'receipt']]
+    second = [k for k in written_receipts(store) if k not in first]
+    assert {e['receipt'] for e in near['lessons']} == {k[:lessons.RECEIPT_SHORT] for k in second} and len(second) == 1
+
+
+def test_a_lesson_the_fit_drops_has_no_receipt_and_its_id_is_never_written(lessons_station):
+    store, clock, ids, room = lessons_station
+    for n in range(3):
+        store.send_message(ids['tardis'], room, f'c{n}', lesson_body(claim=f'Claim {n} ' + 'x' * 140, why='y' * 300, command=(f'{n}' + 'z' * 89,)))
+    store.lessons_index(None)
+    answer, _ = ask(store, clock, command=' '.join(f'{n}' + 'z' * 89 for n in range(3)))
+    assert len(answer['lessons']) == 2 and len(json.dumps(answer, ensure_ascii=False).encode()) <= 2000
+    keys = written_receipts(store)
+    assert len(keys) == 2 and {e['receipt'] for e in answer['lessons']} == {k[:lessons.RECEIPT_SHORT] for k in keys}
+
+
+def test_the_prompt_path_names_no_receipt(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
+    store.lessons_index(None)
+    got = prompt(store, clock, 'no matches found at all')
+    assert len(got['lessons']) == 1 and all('receipt' not in e for e in got['lessons']) and written_receipts(store) == []
+
+
 def test_a_vector_of_another_size_is_near_unavailable_never_a_crash(lessons_station, fake_embedder):
     """Final review N2: an embedder that answers with the index's model name but vectors of another size gives Near
     nothing to measure. At a failure the query answers words alone, and "embedder unavailable" when that leaves it empty
@@ -401,7 +439,7 @@ def test_the_query_and_the_list_write_utf8_whatever_the_locale(lessons_station):
 
 def test_query_stdout_keeps_to_the_agreed_contract(lessons_station, fake_embedder, tmp_path):
     """The output Tardis's hook is built against (the plan's Interfaces): exactly {"lessons": [...]}, each lesson exactly
-    id, ship, claim, why and match, in that order; match "words" or a Kahan angle rounded to 4 places; words first, then
+    id, ship, claim, why, match and receipt, in that order; match "words" or a Kahan angle rounded to 4 places; words first, then
     Near; at most 3 and 2,000 bytes; "answers nothing" is {"lessons": []} with exit 0; a real failure exits non-zero
     with nothing on stdout."""
     store, clock, ids, room = lessons_station
@@ -421,10 +459,13 @@ def test_query_stdout_keeps_to_the_agreed_contract(lessons_station, fake_embedde
     assert done.stdout == json.dumps(answer, ensure_ascii=False) and len(done.stdout.encode()) <= 2000
     assert list(answer) == ['lessons'] and 1 <= len(answer['lessons']) <= 3
     for entry in answer['lessons']:
-        assert list(entry) in (['id', 'ship', 'claim', 'why', 'match'], ['id', 'ship', 'claim', 'why', 'match', 'command'])
+        assert list(entry) in (['id', 'ship', 'claim', 'why', 'match', 'receipt'], ['id', 'ship', 'claim', 'why', 'match', 'command', 'receipt'])
         assert lessons.SHORT.fullmatch(entry['id']) and ('command' in entry) == (entry['claim'] == 'Words.')
         assert entry['match'] == 'words' or (type(entry['match']) is float and entry['match'] == round(entry['match'], 4)
                                              and 0 <= entry['match'] <= math.pi)
+    with store.transaction() as db:
+        written = {r['id'][:8] for r in db.execute('SELECT id FROM lesson_receipts')}
+    assert {entry['receipt'] for entry in answer['lessons']} == written and len(written) == 2   # read back from the table
     matches = [entry['match'] for entry in answer['lessons']]
     assert matches == ['words', round(math.acos(0.9), 4)]   # an angle in radians, never the cosine 0.9
     assert answer['lessons'][0]['command'] == '--include=*'   # the value exactly as the lesson holds it; Near carries none

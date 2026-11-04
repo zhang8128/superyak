@@ -549,13 +549,16 @@ def dumps(answer):
     return json.dumps(answer, ensure_ascii=False)
 
 
-def shown(item, match, command=None):
+def shown(item, match, command=None, receipt=None):
     """One lesson of the answer, with exactly the contract's keys, in its order; `command` only for a words match
-    through one of its `command` values, that value exactly."""
+    through one of its `command` values, that value exactly; `receipt` (last) only on the query's answer, never at a
+    prompt."""
     entry = {'id': short_lesson_id(item['id']), 'ship': item['ship'], 'claim': item['claim'], 'why': item['why'],
              'match': match}
     if command is not None:
         entry['command'] = command
+    if receipt is not None:
+        entry['receipt'] = receipt
     return entry
 
 
@@ -1313,19 +1316,20 @@ class Lessons:
                     if (found is None or found.author == full or found.lesson.learned_from == request['ship']
                             or short_lesson_id(found.id) in request['seen']):
                         continue
-                    kept.append((found, shown(item, match, command)))
+                    key = uid()  # drawn before the fit, so the answer's receipt and the row written for it agree
+                    kept.append((found, key, shown(item, match, command, key[:RECEIPT_SHORT])))
                     if len(kept) == request['limit']:
                         break
-                answer = fit([entry for _, entry in kept])
+                answer = fit([entry for _, _, entry in kept])
                 if deadline is not None:
                     left = deadline - monotonic()
                     if left <= 0:  # nobody waits for it: no receipt nobody saw
                         raise _Late
                     db.execute(f'PRAGMA busy_timeout={max(1, min(BUSY_MS, int(left * 1000)))}')
                 now = self.clock()
-                for found, entry in kept:
+                for found, key, entry in kept:
                     if entry in answer['lessons']:  # a receipt only for a lesson shown
-                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
+                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
                                                                                         None if entry['match'] == 'words' else entry['match']))
                 db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
                            (now, ship['id'], nearest, len(answer['lessons'])))
