@@ -10,6 +10,7 @@ of this peer to the daemon publisher serving its house, and `[[hosted]]` names t
 interim, until the store host lands)."""
 import collections
 from contextlib import contextmanager
+import http.client
 import json
 import logging
 import os
@@ -22,8 +23,10 @@ import threading
 import time
 import tomllib
 
-from .common import Problem
-from .identity import ANSWERS, UUID_FORM, canonical, crossing_digest, crossing_shape_ok, parse, verify_crossing
+from .common import Problem, uid
+from .identity import (ANSWERS, HEX64, PARTICIPANT_ID, UUID_FORM, canonical, crossing_digest, crossing_frame_ok,
+                       crossing_shape_ok, parse, verify_crossing, verify_crossing_answer)
+from .transport import PeerAnswer, PinMismatch, crossing_pinned
 
 log = logging.getLogger(__name__)
 CROSSING_REQUEST_MAX = 16 * 1024  # spec 2.3; the listener's cap for the route too
@@ -312,3 +315,107 @@ def _answer(federation, value, house):
         log.error('a crossing answer was withheld: its crossings row could not be written: %s', error)
         raise Problem(503, 'Crossing could not be recorded') from None
     return answer
+
+
+class AskBound:
+    """Plan P6, the asking side: at most `per_destination` crossings in flight to one destination. A further one waits
+    for a slot only within its own deadline, so this peer's own load never earns a 429."""
+
+    def __init__(self, per_destination=2):
+        self.per_destination, self._slots, self._lock = per_destination, {}, threading.Lock()
+
+    @contextmanager
+    def slot(self, destination, deadline):
+        with self._lock:
+            slots = self._slots.setdefault(destination, threading.BoundedSemaphore(self.per_destination))
+        if not slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise TimeoutError('No crossing slot to that peer within the deadline')
+        try:
+            yield
+        finally:
+            slots.release()
+
+
+LOCAL_KEYS = frozenset({'receiver_instance', 'receiver_ship', 'destination', 'publisher_ship', 'frame', 'deadline_ms'})
+# The local line may hold anything P4 allows (a 4,096-character query is up to 16 KiB of UTF-8 alone), so it is read up
+# to 32 KiB, and P17's 16 KiB rule is measured on the canonical signed request, where it can answer QUERY_TOO_LARGE. A
+# 16 KiB local cap (P8's first wording) would refuse that request as BAD_REQUEST before P17 could measure it.
+LOCAL_REQUEST_MAX = 32 * 1024
+
+
+def _local_ok(value):
+    """Plan P8: the local hop's request, exactly LOCAL_KEYS, each of its type, with P4's frame."""
+    try:
+        return (isinstance(value, dict) and set(value) == LOCAL_KEYS
+                and isinstance(value['receiver_instance'], str) and UUID_FORM.fullmatch(value['receiver_instance'])
+                is not None
+                and all(isinstance(value[k], str) and PARTICIPANT_ID.fullmatch(value[k])
+                        for k in ('receiver_ship', 'publisher_ship'))
+                and isinstance(value['destination'], str) and HEX64.fullmatch(value['destination']) is not None
+                and crossing_frame_ok(value['frame'])
+                and type(value['deadline_ms']) is int and 0 <= value['deadline_ms'] <= 10_000)
+    except (TypeError, KeyError):
+        return False
+
+
+def _no(code):
+    return {'ok': False, 'code': code}
+
+
+def ask(federation, raw):
+    """Plan P8, the asking side of the local hop: one request line from crossing.sock in, one reply out. In order: the
+    request's shape (BAD_REQUEST); the store hosted here for that ship, by crossings.toml's [[hosted]] (NOT_HOSTED; 1.1's
+    same-uid caveat applies); the destination a paired push peer with an endpoint (NOT_PAIRED); under 100 ms left
+    (TIMEOUT, no dial); the canonical signed request over 16 KiB (QUERY_TOO_LARGE, no dial; P17); a slot to that
+    destination within the deadline (TIMEOUT). Then the request, signed as this peer with a fresh nonce, goes over the
+    pinned dial, and the answer must verify (BAD_ANSWER) before its frame is handed back. A refusal is REFUSED_<status>;
+    a dial that fails is UNAVAILABLE, or TIMEOUT at the deadline. Engram never holds a peer key."""
+    started = time.monotonic()
+    try:
+        value = parse(raw, limit=LOCAL_REQUEST_MAX)
+    except Problem:
+        return _no('BAD_REQUEST')
+    if not _local_ok(value):
+        return _no('BAD_REQUEST')
+    deadline = started + value['deadline_ms'] / 1000
+    store = federation.store
+    try:
+        settings = load_settings(store.data_dir)
+    except SettingsInvalid as error:
+        log.error('crossings.toml refused, so no crossing is asked: %s', error)
+        return _no('UNAVAILABLE')
+    if not hosted_store(store, settings, value['receiver_ship'], value['receiver_instance']):
+        return _no('NOT_HOSTED')
+    with store.reading() as db:
+        row = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (value['destination'],)).fetchone()
+    card = json.loads(row['card']) if row is not None else None
+    if card is None or card.get('delivery', 'push') != 'push' or not card.get('endpoint'):
+        return _no('NOT_PAIRED')
+    left_ms = int((deadline - time.monotonic()) * 1000)
+    if left_ms < 100:
+        return _no('TIMEOUT')
+    me = federation.identity.peer_id
+    signed = federation.identity.sign_crossing({
+        'version': 1, 'kind': 'crossing', 'origin': me, 'destination': value['destination'],
+        'receiver_instance': value['receiver_instance'], 'receiver_ship': value['receiver_ship'],
+        'publisher_ship': value['publisher_ship'], 'frame': value['frame'], 'deadline_ms': min(left_ms, 10_000),
+        'nonce': uid(), 'at': int(store.clock())})
+    body = canonical(signed)
+    if len(body) > CROSSING_REQUEST_MAX:
+        return _no('QUERY_TOO_LARGE')
+    try:
+        with federation.crossing_asks.slot(value['destination'], deadline):
+            answer = crossing_pinned(card, body, deadline=deadline)
+    except PeerAnswer as refusal:
+        return _no(f'REFUSED_{refusal.status}')
+    except TimeoutError:
+        return _no('TIMEOUT')
+    except (OSError, ValueError, PinMismatch, http.client.HTTPException) as error:
+        log.warning('a crossing to %s could not be dialled: %s', value['destination'][:8], type(error).__name__)
+        return _no('UNAVAILABLE')
+    try:
+        verify_crossing_answer(card, answer, me=me, digest=crossing_digest(signed), nonce=signed['nonce'],
+                               kind=value['frame']['kind'])
+    except ValueError:
+        return _no('BAD_ANSWER')
+    return {'ok': True, 'frame': answer['frame']}
