@@ -534,7 +534,7 @@ CHECKOUT_LINK = here="$$(cd "$(CURDIR)" && pwd -P)"; link="$(HOME)/superyak"; \
 # First rail section 4: the index timer on this peer. The directory is resolved in the shell: make's abspath splits a
 # path on its spaces.
 lessons-units:
-	@test -f "$(LESSONS_DATA)/peer.sqlite3" || { echo 'No peer database at $(LESSONS_DATA)/peer.sqlite3: set LESSONS_DATA to this peer data directory'; exit 2; }
+	@test -s "$(LESSONS_DATA)/peer.sqlite3" || { echo 'No peer database at $(LESSONS_DATA)/peer.sqlite3: set LESSONS_DATA to this peer data directory'; exit 2; }
 	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(LESSONS_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done

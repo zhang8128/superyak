@@ -3,6 +3,8 @@
 `make lessons-where` on a machine with no peer used to create `peer.sqlite3` at the default path and then say "No lessons room is
 recorded on this peer", and `make lesson-receipts` said "No receipts yet". Both were true of a store made a moment before, and
 two ships nearly read that as a measure of the rail (2026-11-04)."""
+from pathlib import Path
+
 import pytest
 
 from superyak_peer.db import Store
@@ -49,6 +51,17 @@ def test_a_real_store_still_answers(tmp_path, capsys):
     assert 'No lessons room is recorded on this peer.' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('verb', OPENING)
+def test_an_empty_file_named_like_the_store_isnt_one_and_stays_empty(tmp_path, capsys, verb):
+    """A torn restore or a `touch`: a Store would build a whole schema inside it, which makes a store out of nothing."""
+    (tmp_path / 'peer').mkdir()
+    (tmp_path / 'peer' / 'peer.sqlite3').touch()
+    with pytest.raises(SystemExit) as stopped:
+        main(argv(verb, tmp_path / 'peer'))
+    assert stopped.value.code == 1 and 'no peer' in capsys.readouterr().err
+    assert (tmp_path / 'peer' / 'peer.sqlite3').stat().st_size == 0
+
+
 def test_a_directory_named_like_the_store_isnt_one(tmp_path, capsys):
     (tmp_path / 'peer' / 'peer.sqlite3').mkdir(parents=True)
     with pytest.raises(SystemExit) as stopped:
@@ -84,3 +97,9 @@ def test_rows_are_always_listed_and_only_nothing_with_no_room_says_so():
     assert _no_room(peer(None), []) == WORDS
     assert _no_room(peer(None), ['a row']) is None, 'a row is a row, whatever the room'
     assert _no_room(peer('p:r'), []) is None
+
+
+def test_make_lessons_units_refuses_an_empty_file_too():
+    makefile = (Path(__file__).resolve().parents[2] / 'Makefile').read_text()
+    target = makefile[makefile.index('\nlessons-units:'):]
+    assert 'test -s "$(LESSONS_DATA)/peer.sqlite3"' in target[:300]

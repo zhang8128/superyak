@@ -1591,7 +1591,11 @@ def main(argv=None):
     try:
         store = None
         if opens:
-            if not (args.data_dir / 'peer.sqlite3').is_file():  # a Store would make one, and answer for a peer that isn't
+            # A Store would make one, and answer for a peer that isn't. It builds a whole schema in an empty file too (a torn
+            # restore, a `touch`). The file vanishing between this and the Store is left open: closing it needs a no-create
+            # flag on Store, for a window as narrow as a restore's swap.
+            path = args.data_dir / 'peer.sqlite3'
+            if not path.is_file() or path.stat().st_size == 0:
                 parser.exit(1, f'There is no peer here: {args.data_dir} holds no peer.sqlite3, and this never makes one. If '
                                "this machine's peer is elsewhere, name it: --data-dir, or make's LESSONS_DATA.\n")
             from .db import Store
