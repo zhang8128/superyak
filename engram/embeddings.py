@@ -91,6 +91,11 @@ def _return_freed_heap() -> None:
         pass
 
 
+def _prefixed(texts: list[str], prefix: str) -> list[str]:
+    """The text the model sees. embed() and embed_units() both build it here, so a unit stays one of embed()'s runs."""
+    return [f"{prefix}: {t}" for t in texts]
+
+
 def _token_budget_batches(texts: list[str]) -> list[list[int]]:
     """Group text indices into batches of similar length under a token budget."""
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
@@ -204,11 +209,11 @@ class NomicEmbedProvider:
     def dimension(self) -> int:
         return self.DIMENSION
 
-    def embed_units(self, texts: list[str], prefix: str = "search_document") -> list[list[int]]:
+    def embed_units(self, texts: list[str], *, prefix: str = "search_document") -> list[list[int]]:
         """The groups of text indices that embed() runs as single ONNX runs. The shared embedder holds its lane for
         one unit at a time, so a query waits at most one run; a unit embedded alone pads and computes exactly as it
         would inside the whole request, so its vectors don't change."""
-        return _token_budget_batches([f"{prefix}: {t}" for t in texts])
+        return _token_budget_batches(_prefixed(texts, prefix))
 
     def embed(self, texts: list[str], *, prefix: str = "search_document") -> list[list[float]]:
         """Embed texts with a task prefix. Returns L2-normalized vectors.
@@ -222,7 +227,7 @@ class NomicEmbedProvider:
 
         if not texts:
             return []  # nothing to embed loads nothing
-        prefixed = [f"{prefix}: {t}" for t in texts]
+        prefixed = _prefixed(texts, prefix)
         with self._loading:
             model = self._load_locked()
             self._busy += 1

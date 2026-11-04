@@ -10,7 +10,8 @@ ENGRAM_EMBED_IDLE_SECONDS (default 300) without one.
 
 A large request is embedded unit by unit (the provider's own token-budget
 batches), and a waiting query (prefix search_query) takes the lane before a
-waiting batch unit, so a recall waits at most one unit, not one request (the
+waiting batch unit, so a recall waits at most one unit, not one request. Batch
+requests still run one at a time in arrival order (the
 Pi, 2026-11-04: a lighthouse crossing's query waited about 2 minutes behind a
 4,096-text code-index request).
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
@@ -36,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import logging
 import os
@@ -96,33 +98,86 @@ class _Handler(socketserver.BaseRequestHandler):
 
 
 class _Lane:
-    """One inference at a time; a waiting query goes before a waiting batch unit.
+    """One inference at a time. A waiting query goes before a waiting batch
+    unit, and batch requests take their units in arrival order, one request at
+    a time, as they ran before the lane.
 
-    Queries are one or a few texts, so a steady stream of them can delay a
-    batch but not starve it for long; a batch can never delay a query by
-    more than the one unit already running."""
+    After QUERY_RUN_MAX query holds in a row while a batch unit waits, that
+    unit goes next: a query stream can't hold a batch off for ever, and a
+    query still waits at most one unit. Because only the oldest batch request
+    runs, one request's partial vectors are held at a time."""
+
+    QUERY_RUN_MAX = 8
 
     def __init__(self) -> None:
         self._cond = threading.Condition()
         self._busy = False
         self._queries_waiting = 0
+        self._batches: collections.deque[int] = collections.deque()  # unfinished batch requests, oldest first
+        self._next_ticket = 0
+        self._waiting: set[int] = set()  # batch requests with a unit waiting for the lane
+        self._query_run = 0
 
     @property
     def queries_waiting(self) -> int:
         with self._cond:
             return self._queries_waiting
 
-    @contextmanager
-    def hold(self, *, query: bool):
+    @property
+    def batches_waiting(self) -> int:
         with self._cond:
-            if query:
+            return len(self._waiting)
+
+    @contextmanager
+    def batch_request(self):
+        """A batch request's place in line; its units run only at the front."""
+        with self._cond:
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            self._batches.append(ticket)
+        try:
+            yield ticket
+        finally:
+            with self._cond:
+                self._batches.remove(ticket)
+                self._cond.notify_all()
+
+    def _head_waiting(self) -> bool:
+        return bool(self._batches) and self._batches[0] in self._waiting
+
+    def _may_take(self, ticket: int | None) -> bool:
+        if self._busy:
+            return False
+        if ticket is None:  # a query
+            return not (self._query_run >= self.QUERY_RUN_MAX and self._head_waiting())
+        if self._batches[0] != ticket:
+            return False
+        return self._queries_waiting == 0 or self._query_run >= self.QUERY_RUN_MAX
+
+    @contextmanager
+    def hold(self, ticket: int | None = None):
+        """Hold the lane for one unit: a query's (ticket None) or a batch request's."""
+        with self._cond:
+            if ticket is None:
                 self._queries_waiting += 1
+            else:
+                self._waiting.add(ticket)
+            took = False
             try:
-                while self._busy or (not query and self._queries_waiting):
+                while not self._may_take(ticket):
                     self._cond.wait()
+                took = True
             finally:
-                if query:
+                if ticket is None:
                     self._queries_waiting -= 1
+                else:
+                    self._waiting.discard(ticket)
+                if not took:  # left by an exception: let the next waiter re-check
+                    self._cond.notify_all()
+            if ticket is None:
+                self._query_run = self._query_run + 1 if self._head_waiting() else 0
+            else:
+                self._query_run = 0
             self._busy = True
         try:
             yield
@@ -165,20 +220,31 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             return {"ok": False, "error": f"{len(texts)} texts exceeds {MAX_TEXTS} per request"}
         if not isinstance(prefix, str):
             return {"ok": False, "error": "prefix must be a string"}
+        if not texts:
+            return {**info, "vectors": []}
         units_of = getattr(self.provider, "embed_units", None)
         if callable(units_of):
-            units = units_of(texts, prefix)
+            units = units_of(texts, prefix=prefix)
         else:
             units = [list(range(start, min(start + CHUNK_TEXTS, len(texts))))
                      for start in range(0, len(texts), CHUNK_TEXTS)]
-        query = prefix == QUERY_PREFIX
+        if sorted(i for unit in units for i in unit) != list(range(len(texts))):
+            return {"ok": False, "error": "the provider's units don't cover each text exactly once"}
+        if prefix == QUERY_PREFIX:
+            vectors = self._embed_units(texts, prefix, units, None)
+        else:
+            with self.lane.batch_request() as ticket:
+                vectors = self._embed_units(texts, prefix, units, ticket)
+        return {**info, "vectors": vectors}
+
+    def _embed_units(self, texts: list[str], prefix: str, units: list[list[int]], ticket: int | None) -> list:
         vectors: list = [None] * len(texts)
         for unit in units:
-            with self.lane.hold(query=query):
+            with self.lane.hold(ticket):
                 part = self.provider.embed([texts[i] for i in unit], prefix=prefix)
             for index, vector in zip(unit, part, strict=True):
                 vectors[index] = vector
-        return {**info, "vectors": vectors}
+        return vectors
 
 
 def main(argv: list[str] | None = None) -> int:
