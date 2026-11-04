@@ -6,6 +6,10 @@
 -- share refuses it.
 ALTER TABLE semantics ADD COLUMN touched_capture INTEGER CHECK (touched_capture IN (0, 1));
 
+-- The digest of every capture's text, so the writers, share and the shares listing read the store's half by index
+-- instead of scanning every episode. Cold storage has no such index and is scanned, once per read.
+CREATE INDEX IF NOT EXISTS episodes_capture_digest ON episodes(content_hash) WHERE source = 'auto';
+
 -- Every link to a capture raises the mark, whichever code writes the link: a server still running code from before
 -- this migration, or a future link path. The writers still mark the cluster episodes they never link, and copies of
 -- a capture's text (matched by digest, which this trigger does not do).

@@ -58,65 +58,44 @@ def _read_cold(source_storage, read, absent):
             opened.close()
 
 
-def _cold_holds_capture(source_storage, digest: str) -> bool | None:
-    """Whether the store's cold storage holds a capture whose text has this digest, read-only. None when cold
-    storage exists but cannot be read."""
-    return _read_cold(source_storage, lambda conn: _holds_capture(conn, digest), False)
+def _capture_digests_in(conn) -> frozenset[str]:
+    # The literal 'auto' lets the store's read use migration 030's partial index; cold storage has none and is scanned.
+    return frozenset(r[0] for r in conn.execute(
+        "SELECT content_hash FROM episodes WHERE source = 'auto' AND content_hash IS NOT NULL"))
 
 
-def _holds_capture(conn, digest: str) -> bool:
-    return conn.execute("SELECT 1 FROM episodes WHERE source = ? AND content_hash = ? LIMIT 1",
-                        (CAPTURED_SOURCE, digest)).fetchone() is not None
+@dataclass(frozen=True, slots=True)
+class CaptureDigests:
+    """The digest of every capture's text (`content_hash` where source is 'auto') in a store and in its cold storage,
+    each read once. `cold` is None when cold storage exists but cannot be read."""
+    store: frozenset[str]
+    cold: frozenset[str] | None
+
+    def copies(self, digests) -> bool | None:
+        """Whether any of `digests` is a capture's: True when the store or its cold storage holds one, False when
+        neither does, None when the store holds none and cold storage cannot be read (1 over NULL over 0)."""
+        digests = set(digests)
+        if not digests:
+            return False
+        if not digests.isdisjoint(self.store):
+            return True
+        if self.cold is None:
+            return None
+        return not digests.isdisjoint(self.cold)
 
 
-def _capture_digests_in(conn) -> set[str]:
-    return {r[0] for r in conn.execute(
-        "SELECT content_hash FROM episodes WHERE source = ? AND content_hash IS NOT NULL", (CAPTURED_SOURCE,))}
+def capture_digests(source_storage) -> CaptureDigests:
+    """The store's capture digests (an index read, migration 030) and its cold storage's (a read-only scan), read
+    once, for a caller judging many rows: the `shares` tool, one compression commit, one sheaf split, or one share.
+    Cold storage is never created."""
+    return CaptureDigests(_capture_digests_in(source_storage.conn),
+                          _read_cold(source_storage, _capture_digests_in, frozenset()))
 
 
-def capture_digests(source_storage) -> frozenset[str] | None:
-    """The digest of every capture's text (`content_hash` where source is 'auto'), in the store and in its cold
-    storage, each read once and read-only, for a caller judging many rows at once, as the `shares` tool does. Cold
-    storage is never created. None when cold storage exists but cannot be read."""
-    cold = _read_cold(source_storage, _capture_digests_in, set())
-    if cold is None:
-        return None
-    return frozenset(_capture_digests_in(source_storage.conn) | cold)
-
-
-def copies_capture(source_storage, digests) -> bool | None:
-    """Whether any of `digests` is a capture's text digest: True when the store or its cold storage holds such a
-    capture, False when neither does, None when the store holds none and cold storage exists but cannot be read. Each
-    is read once and read-only, and cold storage is never created. The capture mark (migration 030) uses it to count
-    `remember`'s copy of a prompt as a capture."""
-    digests = set(digests)
-    if not digests:
-        return False
-    if not digests.isdisjoint(_capture_digests_in(source_storage.conn)):
-        return True
-    cold = _read_cold(source_storage, _capture_digests_in, set())
-    return None if cold is None else not digests.isdisjoint(cold)
-
-
-_LOOK_UP = object()     # captured_reason looks the text up in the store and its cold storage itself
-
-
-def _verbatim_capture(source_storage, text: str, captures=_LOOK_UP) -> bool | None:
-    """Whether `text` is a capture's text word for word, in the store or in its cold storage (read-only), or in
-    `captures` when one is given. None when that cannot be told: the store holds none and its cold storage exists but
-    cannot be read, or `captures` is None (capture_digests could not read cold storage)."""
-    digest = content_digest(text)["value"]
-    if captures is not _LOOK_UP:
-        return None if captures is None else digest in captures
-    if _holds_capture(source_storage.conn, digest):
-        return True
-    return _cold_holds_capture(source_storage, digest)
-
-
-def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP) -> str | None:
+def captured_reason(source_storage, layer: str, row: dict, *, captures: CaptureDigests | None = None) -> str | None:
     """Why `row` must not be shared because it is, or may be built from, a captured prompt; None when it may be.
-    `captures`, from `capture_digests`, answers the word-for-word rule from digests read once; without it each call
-    reads the store and its cold storage.
+    `captures` is `capture_digests(source_storage)` read once by a caller judging many rows; without it this call
+    reads it.
 
     An episode is refused when its source is 'auto', and when its text is a capture's text word for word, in the
     store or in its cold storage (`remember` strips a prompt as the nudge does, so a copy has the capture's digest).
@@ -126,24 +105,31 @@ def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP)
     `touched_capture` (migration 030) when the semantic is made, reinforced or linked, in a column no cascade touches:
     1 when a capture, or a copy of a capture's text, was in its cluster or among its sources, or the semantic it
     restates was marked 1; NULL when that semantic's mark is unknown, or cold storage could not be read; 0
-    otherwise. It never goes down, and 030's trigger raises it for every link to a capture, whatever code writes the
-    link. A semantic is refused when:
+    otherwise. It never goes down. A semantic is refused when:
     - `auto_generated` is not 0, NULL included: automatic compression wrote it from its episodes' own text;
     - a link names an episode that is gone (the nudge hard-deletes weak captures without foreign keys, so the link
       stays);
     - a linked episode is a capture;
     - its text is a capture's text word for word, in the store or in its cold storage;
     - `touched_capture` is NULL: it was made before migration 030, or by a path that doesn't record the mark;
-    - `touched_capture` is 1: a capture was in its cluster or among its sources, or reinforced or linked it.
+    - `touched_capture` is 1: a capture was in its cluster or among its sources, or reinforced or linked it;
+    - a linked episode holds a capture's text word for word, in the store or in its cold storage.
     A semantic stamped 0 whose source episodes have since moved to cold storage is known clean, and shares.
-    When cold storage exists but cannot be read, an episode or semantic that passes every other rule is refused."""
+    When cold storage exists but cannot be read, an episode or semantic that passes every other rule is refused.
+
+    A known limit. 030's trigger raises the mark for a link to a capture (source 'auto') whatever code writes the
+    link, but it doesn't match a copy of a capture's text: only this code's writers do, by digest. So code from before
+    030, still running during the upgrade, can link a copy to a semantic marked 0 without raising the mark. The last
+    rule above catches that while the link exists. If that copy then moves to cold storage before any share, the
+    cascade takes the link and the semantic shares. That needs old code, a verbatim copy and a cascade at once."""
     remedy = "remember what you mean to share, in your own words, and share that"
     if layer == "episode":
         eid = row.get("id")
         if (row.get("source") or "") == CAPTURED_SOURCE:
             return (f"episode {eid} is a captured prompt (source 'auto'): what a person typed, never shared; "
                     f"{remedy}")
-        verbatim = _verbatim_capture(source_storage, row.get("content", ""), captures)
+        captures = captures or capture_digests(source_storage)
+        verbatim = captures.copies({content_digest(row.get("content", ""))["value"]})
         if verbatim is None:
             return (f"episode {eid}: its store's cold storage cannot be read, so whether its text is a captured "
                     f"prompt's cannot be told; {remedy}")
@@ -160,17 +146,18 @@ def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP)
     found = {}
     if ids:
         placeholders = ", ".join("?" * len(ids))
-        found = {r[0]: r[1] for r in source_storage.conn.execute(
-            f"SELECT id, source FROM episodes WHERE id IN ({placeholders})", ids)}
+        found = {r[0]: (r[1], r[2] or content_digest(r[3] or "")["value"]) for r in source_storage.conn.execute(
+            f"SELECT id, source, content_hash, content FROM episodes WHERE id IN ({placeholders})", ids)}
     for eid in ids:
         if eid not in found:
             return (f"semantic {sid}: its source episode {eid} is gone, so whether it was a captured prompt cannot "
                     f"be told; {remedy}")
-        if (found[eid] or "") == CAPTURED_SOURCE:
+        if (found[eid][0] or "") == CAPTURED_SOURCE:
             return f"semantic {sid} is built from captured prompt {eid} (source 'auto'); {remedy}"
+    captures = captures or capture_digests(source_storage)
     # Before the mark: unreadable cold storage also leaves the mark of a semantic made meanwhile NULL, and these words
     # name that cause.
-    verbatim = _verbatim_capture(source_storage, row.get("content", ""), captures)
+    verbatim = captures.copies({content_digest(row.get("content", ""))["value"]})
     if verbatim is None:
         return (f"semantic {sid}: its store's cold storage cannot be read, so whether its text is a captured "
                 f"prompt's cannot be told; {remedy}")
@@ -182,6 +169,11 @@ def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP)
                 f"that doesn't record it, so that cannot be told; {remedy}")
     if mark != 0:
         return f"semantic {sid} was built from or reinforced by a captured prompt; {remedy}"
+    # Last, so it answers when the mark reads 0: a link to a copy that no writer marked (the limit below).
+    for eid in ids:
+        if captures.copies({found[eid][1]}):        # None (cold storage unreadable) was refused above
+            return (f"semantic {sid} is built from episode {eid}, which holds a captured prompt's text word for word; "
+                    f"{remedy}")
     return None
 
 

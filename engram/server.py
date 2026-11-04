@@ -2653,7 +2653,7 @@ def _listed_shares(records) -> list[dict]:
     from sharing import capture_digests
     here = _instance_name or "default"
     mine = [r.source_instance == here and r.layer in ("episode", "semantic") for r in records]
-    captures = capture_digests(_storage) if any(mine) else frozenset()
+    captures = capture_digests(_storage) if any(mine) else None
     listed = []
     for record, own in zip(records, mine):
         item = asdict(record)
@@ -2667,8 +2667,9 @@ def _listed_shares(records) -> list[dict]:
 def _refused_now(record, captures) -> str | None:
     """Why a placement from this instance would be refused now, or None. When its source row is still here, the
     words are share's own refusal. Whether or not the row is here (a capture soon moves to cold storage or is deleted
-    by the nudge), a placed text that is a capture's text word for word is named. `captures` is None when the store's
-    cold storage exists but cannot be read, and then every such placement is named, failing closed."""
+    by the nudge), a placed text that is a capture's text word for word is named. When the store holds no such
+    capture and its cold storage exists but cannot be read (`captures.cold` is None), the placement is named, failing
+    closed."""
     from sharing import captured_reason
     getter = _storage.get_episode if record.layer == "episode" else _storage.get_semantic
     row = getter(record.source_id)
@@ -2676,10 +2677,11 @@ def _refused_now(record, captures) -> str | None:
         refused = captured_reason(_storage, record.layer, row, captures=captures)
         if refused is not None:
             return refused
-    if captures is None:
+    copied = captures.copies({record.content_digest})
+    if copied is None:
         return ("its store's cold storage cannot be read, so whether this placement's text is a captured prompt's "
                 "cannot be told; unshare it")
-    if record.content_digest in captures:
+    if copied:
         return "this placement's text is a captured prompt's, word for word; unshare it"
     return None
 

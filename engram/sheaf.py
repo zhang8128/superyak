@@ -189,6 +189,7 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
     peer_ids = [str(uuid.uuid4()) for _ in verdict.parts]
     # Embed outside any partial writes so an embedder failure aborts cleanly
     peer_vecs = [embed_fn(c) for c in peer_contents]
+    captures = None
     try:
         # Raw SQL throughout: the Storage helpers (add_semantic_peer,
         # log_subdivision_event, ...) each commit, which would break this
@@ -219,8 +220,12 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
                     " VALUES (?, ?)", (pid, eid))
             # 030's trigger marks a link to a capture (source 'auto') only;
             # this also marks a link to a copy of a capture's text. It
-            # writes in this transaction and never commits.
-            storage.mark_touched_capture(pid, list(part))
+            # writes in this transaction and never commits. The capture
+            # digests are read once per split, after its first write.
+            if captures is None:
+                from sharing import capture_digests
+                captures = capture_digests(storage)
+            storage.mark_touched_capture(pid, list(part), captures=captures)
             conn.execute(
                 "INSERT INTO semantic_peers (peer_id, parent_id,"
                 " residual_energy, created_at) VALUES (?, ?, ?, ?)",

@@ -178,6 +178,47 @@ def test_a_link_to_a_capture_written_without_the_helper_raises_the_mark(tmp_path
         _share(src, pub, sid, "semantic")
 
 
+@pytest.mark.parametrize("capture_in_cold", [False, True])
+def test_a_copy_linked_by_old_code_to_a_semantic_marked_clean_is_refused_at_share(tmp_path, capture_in_cold):
+    # Round 4, probe P5: old code links remember's copy of a capture without marking, and 030's trigger matches
+    # source 'auto' only, so the mark stays 0. Share's link check refuses it while the link exists.
+    src, pub = _stores(tmp_path)
+    text = "Andy typed this about a friend's surgery on Tuesday"
+    captured = _capture(src, text)
+    sid = _semantic(src, "a week of appointments", [_chosen(src)])
+    copy = _chosen(src, text)
+    if capture_in_cold:
+        assert src.prune_episode_ids([captured]) == 1
+    src.conn.execute("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", (sid, copy))
+    src.conn.commit()
+    assert _mark(src, sid) == 0
+    with pytest.raises(CapturedRefused) as caught:
+        _share(src, pub, sid, "semantic")
+    assert str(caught.value) == (f"semantic {sid} is built from episode {copy}, which holds a captured prompt's text "
+                                 "word for word; remember what you mean to share, in your own words, and share that")
+    assert _placed(pub) == (0, 0, 0)
+
+
+def test_030_indexes_capture_digests_and_runs_again_harmlessly(tmp_path):
+    # Round 4: the store's half of the capture digests is an index read, not a scan of every episode.
+    src, _ = _stores(tmp_path)
+    query = "SELECT content_hash FROM episodes WHERE source = 'auto' AND content_hash IS NOT NULL"
+
+    def index_sql():
+        return [r[0] for r in src.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'episodes_capture_digest'")]
+
+    (sql,) = index_sql()
+    assert "ON episodes(content_hash) WHERE source = 'auto'" in sql
+    assert any("episodes_capture_digest" in r[-1] for r in src.conn.execute(f"EXPLAIN QUERY PLAN {query}"))
+    src.conn.execute("DELETE FROM schema_version WHERE version = 30")
+    src.conn.commit()
+    src.close()
+    src = Storage(str(tmp_path / "src" / "graph.db"), migrations_dir=MIGRATIONS)
+    assert src.conn.execute("SELECT COUNT(*) FROM schema_version WHERE version = 30").fetchone()[0] == 1
+    assert len(index_sql()) == 1
+
+
 def test_030_runs_again_harmlessly(tmp_path):
     src, _ = _stores(tmp_path)
     chosen, captured = _chosen(src), _capture(src)

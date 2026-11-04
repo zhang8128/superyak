@@ -2385,6 +2385,40 @@ def test_with_unreadable_cold_storage_a_new_semantic_from_episodes_with_no_sourc
     assert "cannot be read" in _refusal(tmp_db, tmp_path, sem["id"])
 
 
+def test_a_commit_reads_the_capture_digests_once(tmp_db, compressor, embedder, monkeypatch):
+    # Round 4: the digests are read once per commit, inside its transaction, not once per semantic: each read scans
+    # cold storage while compress_commit holds the write lock.
+    import sharing
+    _raw_capture(tmp_db)
+    moved = _add_sourced(tmp_db, embedder, "once: a note that moves to cold storage", None, _unit(30))
+    tmp_db.mark_episodes_compressed([moved])
+    assert tmp_db.prune_episode_ids([moved]) == 1
+    tmp_db._cold_conn.close()
+    tmp_db._cold_conn = None                          # as a server started later finds it
+    chosen = _add_sourced(tmp_db, embedder, "once: a remembered note", None, _unit(21))
+    tmp_db.mark_episodes_compressed([chosen])
+    tmp_db.add_semantic("s-once", "a week of appointments", "fact", 0.6, _unit(22), [chosen])
+    for i in range(3):
+        _add_sourced(tmp_db, embedder, f"once: new note {i}", None, _unit(23 + i))
+    _add_sourced(tmp_db, embedder, COPIED, None, _unit(22))  # a copy that reinforces s-once
+    result = compressor.cluster_episodes()
+    assert len(result["clusters"]) == 4
+    opened, real = [], sharing.sqlite3.connect
+
+    def counting(database, *args, **kwargs):
+        if "cold.db" in str(database):
+            opened.append(str(database))
+        return real(database, *args, **kwargs)
+
+    monkeypatch.setattr(sharing.sqlite3, "connect", counting)
+    compressor.commit(result["compress_id"], [
+        {"content": f"summary {i}", "kind": "fact", "action": c["action"]} for i, c in enumerate(result["clusters"])])
+
+    assert len(opened) == 1
+    assert _mark(tmp_db, "s-once") == 1
+    assert sorted(_mark(tmp_db, s["id"]) for s in tmp_db.get_active_semantics() if s["id"] != "s-once") == [0, 0, 0]
+
+
 def test_with_unreadable_cold_storage_a_capture_in_the_cluster_still_marks_1(tmp_db, compressor, embedder,
                                                                              monkeypatch):
     kept = _add_sourced(tmp_db, embedder, "unreadable: a remembered note", None, _unit(20))

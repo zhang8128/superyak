@@ -187,6 +187,27 @@ class TestApplySubdivision:
         assert "ep-0" in first["source_episode_ids"] and first["touched_capture"] == 1
         assert second["touched_capture"] == 0
 
+    def test_a_split_reads_the_capture_digests_once(self, tmp_db, fake_embedding, monkeypatch):
+        # Round 4: one read of cold storage per split, not one per peer.
+        import sharing
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        tmp_db.add_episode(id="moved", session_id="s", content="a note that moves", embedding=fake_embedding())
+        assert tmp_db.prune_episode_ids(["moved"]) == 1
+        tmp_db._cold_conn.close()
+        tmp_db._cold_conn = None
+        opened, real = [], sharing.sqlite3.connect
+
+        def counting(database, *args, **kwargs):
+            if "cold.db" in str(database):
+                opened.append(str(database))
+            return real(database, *args, **kwargs)
+
+        monkeypatch.setattr(sharing.sqlite3, "connect", counting)
+        result = sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                         hub_content="the shared residue",
+                                         embed_fn=lambda t: fake_embedding(), site="sleep")
+        assert len(result["peer_ids"]) == 2 and len(opened) == 1
+
     def test_hub_vector_kept_when_content_untouched(self, tmp_db, fake_embedding):
         eps = _seed_semantic(tmp_db, fake_embedding)
         v = _verdict(eps)

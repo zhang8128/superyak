@@ -489,6 +489,10 @@ class Compressor:
     ) -> dict:
         """Apply a pre-validated compression request inside one transaction."""
         compress_id = state["compress_id"]
+        # The capture digests, read once for the whole commit: inside its transaction no other session can add a
+        # capture, and each read scans cold storage while the write lock is held.
+        from sharing import capture_digests
+        captures = capture_digests(self._storage)
 
         clusters = state["clusters"]
         episodes_processed = 0
@@ -542,7 +546,7 @@ class Compressor:
             if action == "reinforce":
                 semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
                 if semantic_id:
-                    self._storage.reinforce_semantic(semantic_id, all_episode_ids)
+                    self._storage.reinforce_semantic(semantic_id, all_episode_ids, captures=captures)
                     semantics_reinforced += 1
                 else:
                     logger.warning("Reinforce requested but no semantic_id found, falling back to new")
@@ -577,7 +581,8 @@ class Compressor:
                     # the summary may draw on any episode of the cluster, linked or not, and on the match whose
                     # content compress showed the model: the capture mark sees them all
                     cluster_episode_ids=all_episode_ids,
-                    inherited_mark=self._inherited_capture_mark(cluster),
+                    inherited_mark=self._inherited_capture_mark(cluster, captures),
+                    captures=captures,
                 )
                 semantics_created += 1
                 # Track sibling semantics from the same split_group
@@ -714,9 +719,9 @@ class Compressor:
             if sid:
                 cluster_semantic_ids.append(sid)
 
-        multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids)
+        multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids, captures=captures)
 
-        singletons_created = self._promote_singletons()
+        singletons_created = self._promote_singletons(captures=captures)
 
         # Log compression event
         self._storage.add_log_entry(
@@ -1231,7 +1236,7 @@ class Compressor:
             logger.debug("Instinct dedup check failed", exc_info=True)
         return False
 
-    def _promote_singletons(self) -> int:
+    def _promote_singletons(self, *, captures=None) -> int:
         """Promote core episodes with no semantic links to singleton semantics.
 
         Candidates: core episodes not in semantic_sources.
@@ -1283,6 +1288,7 @@ class Compressor:
                 embedding=embedding,
                 source_episode_ids=[ep_id],
                 auto_generated=True,
+                captures=captures,
             )
             # Update the source link with similarity = 1.0 (exact match)
             self._storage.conn.execute(
@@ -1298,6 +1304,8 @@ class Compressor:
         self,
         episodes: list[dict],
         exclude_semantic_ids: list[str],
+        *,
+        captures=None,
     ) -> int:
         """Link episodes to all matching semantics above threshold.
 
@@ -1360,7 +1368,7 @@ class Compressor:
 
         # The capture mark, once per semantic linked: one read of the capture digests each, not one per link.
         for sid, linked_ids in linked.items():
-            self._storage.mark_touched_capture(sid, linked_ids)
+            self._storage.mark_touched_capture(sid, linked_ids, captures=captures)
         if links_created:
             self._storage._commit()
         return links_created
@@ -1403,7 +1411,7 @@ class Compressor:
 
         return "new", None, None
 
-    def _inherited_capture_mark(self, cluster: dict) -> int | None:
+    def _inherited_capture_mark(self, cluster: dict, captures=None) -> int | None:
         """The capture mark (migration 030) a "new" semantic for ``cluster`` starts from, before ``add_semantic``
         looks the cluster's episodes up in the store, which can only raise it to 1. The order is 1 over None
         (unknown) over 0, so a restatement can't launder a mark:
@@ -1427,8 +1435,10 @@ class Compressor:
         digests = {ep.get("content_hash") or hashlib.sha256((ep.get("content") or "").encode()).hexdigest()
                    for ep in episodes}
         if digests:
-            from sharing import copies_capture  # deferred: sharing's read-only cold access
-            copied = copies_capture(self._storage, digests)
+            if captures is None:
+                from sharing import capture_digests  # deferred: sharing's read-only cold access
+                captures = capture_digests(self._storage)
+            copied = captures.copies(digests)
             if copied:
                 return 1
             if copied is None:
