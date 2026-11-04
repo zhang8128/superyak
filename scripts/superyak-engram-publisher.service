@@ -9,8 +9,10 @@ After=superyak-embedder.service
 
 [Service]
 ExecStart=%h/.local/bin/superyak-runtime publisher
-Restart=on-failure
+Restart=always
 RestartSec=5
+# always, not on-failure: systemd counts SIGTERM as a clean stop, so a stray kill would leave the lighthouse down until
+# the next login, as happened on Tardis on 2026-11-04. `systemctl --user stop` still stops it.
 # Without the shared embedder it loads the model in this process, about the embedder's own size.
 MemoryMax=3G
 MemorySwapMax=0
