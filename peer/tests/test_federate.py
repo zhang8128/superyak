@@ -145,11 +145,12 @@ def test_federate_runs_its_passes_and_sigterm_ends_it_cleanly(tmp_path):
     proc = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federate', '--data-dir', str(mac[0].data_dir)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(3)
+    running_without_a_socket = proc.poll() is None and not (mac[0].data_dir / 'crossing.sock').exists()
     proc.send_signal(signal.SIGTERM)
     out, err = proc.communicate(timeout=30)
     assert proc.returncode == 0, err
     assert 'Traceback (most recent call last)' not in err.split('A pull from')[0]  # only a logged pull failure, if any
-    assert not (mac[0].data_dir / 'crossing.sock').exists()  # no --crossing-socket, no socket (crossing plan P9)
+    assert running_without_a_socket  # no --crossing-socket, no crossing.sock while it runs (crossing plan P9)
 
 
 # Task 8e: "Check delivery now", POST /api/sync (plan P11, nit 9)

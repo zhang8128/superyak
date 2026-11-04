@@ -146,7 +146,7 @@ def test_receiver_ref_maps_local_names_as_today_and_keeps_a_store_ref():
 def test_a_malformed_remote_receiver_is_refused_before_any_read(tmp_path, receiver):
     d = remote_daemon(tmp_path)
     reply = recall_as(d, receiver)
-    assert (reply["kind"], reply["code"]) == ("error", "MALFORMED_FRAME")
+    assert (reply["kind"], reply.get("code")) == ("error", "MALFORMED_FRAME")
     assert disclosures(tmp_path) == []
 
 
@@ -241,7 +241,7 @@ def test_a_remote_frame_outside_enforce_is_publisher_unavailable_with_no_disclos
     else:
         d = remote_daemon(tmp_path, mode)
     for reply in (recall_as(d), read_as(d, "turn-1", [M1_ID])):
-        assert (reply["kind"], reply["code"]) == ("error", "PUBLISHER_UNAVAILABLE")
+        assert (reply["kind"], reply.get("code")) == ("error", "PUBLISHER_UNAVAILABLE")
     assert disclosures(tmp_path) == []
 
 
@@ -253,14 +253,14 @@ def test_an_imprint_house_refuses_a_remote_frame(tmp_path):
     con.commit()
     con.close()
     reply = recall_as(d)
-    assert (reply["kind"], reply["code"]) == ("error", "PUBLISHER_UNAVAILABLE")
+    assert (reply["kind"], reply.get("code")) == ("error", "PUBLISHER_UNAVAILABLE")
     assert disclosures(tmp_path) == []
 
 
 def test_a_remote_read_of_six_ids_is_malformed(tmp_path):
     d = remote_daemon(tmp_path)
     reply = read_as(d, "turn-1", [str(uuid.UUID(int=n)) for n in range(1, 7)])
-    assert (reply["kind"], reply["code"]) == ("error", "MALFORMED_FRAME")
+    assert (reply["kind"], reply.get("code")) == ("error", "MALFORMED_FRAME")
     assert disclosures(tmp_path) == []
 
 
@@ -271,7 +271,7 @@ def test_a_local_frame_whose_receiver_is_remote_stores_is_malformed(tmp_path):
     house_dir(tmp_path, "remote-stores")
     assert (house_dir(tmp_path, "remote-stores")).is_dir()
     for reply in (recall_as(d, "remote-stores"), read_as(d, "turn-1", [M1_ID], "remote-stores")):
-        assert (reply["kind"], reply["code"]) == ("error", "MALFORMED_FRAME")
+        assert (reply["kind"], reply.get("code")) == ("error", "MALFORMED_FRAME")
     assert disclosures(tmp_path) == []
 
 

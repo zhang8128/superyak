@@ -169,12 +169,14 @@ def test_a_file_held_past_the_busy_timeout_is_busy_for_the_guard_and_the_record(
     monkeypatch.setattr(rd, "BUSY_MS", 200)
     holder = held_exclusively(record)
     try:
-        with pytest.raises(rd.RecordBusy):
+        with pytest.raises((rd.RecordBusy, rd.Unreadable)) as read:
             rd.refused(record, [ITEM], now=NOW)
-        with pytest.raises(rd.RecordBusy):
+        with pytest.raises((rd.RecordBusy, rd.Unreadable)) as write:
             rd.record(record, delivered("Another delivery that waits on the lock for good."), now=NOW)
     finally:
         holder.close()
+    assert (read.type, write.type) == (rd.RecordBusy, rd.RecordBusy)   # busy, never unreadable
+    assert str(read.value) == "busy, try again"
     assert rd.BUSY_MS == 200 and rd.refused(record, [ITEM], now=NOW)
 
 
