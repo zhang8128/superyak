@@ -1,5 +1,5 @@
-"""First rail, section 3: an outcome per receipt (helped, misled or unused, once, within 24 h), its verb and its list
-with section 5's counts. The records hold no text and echo nothing typed."""
+"""Lesson outcomes spec (2026-11-03-lesson-outcomes-design), sections 3 and 5: an outcome per receipt (helped, misled or
+unused, once, within 24 h), its verb and its list with section 5's counts. The records hold no text and echo nothing typed."""
 import json
 import sqlite3
 from contextlib import closing, contextmanager

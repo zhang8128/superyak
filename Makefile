@@ -514,7 +514,7 @@ lesson-repeat:
 lesson-repeats:
 	$(LESSONS) repeats --data-dir "$(LESSONS_DATA)"
 
-# First rail section 3: the ship is the one this peer's record names, never a variable.
+# Lesson outcomes spec, section 3: the ship is the one this peer's record names, never a variable.
 lesson-outcome:
 	@test -n "$(RECEIPT)" && test -n "$(OUTCOME)" || { echo 'Usage: make lesson-outcome RECEIPT=<receipt id or a prefix of 6+> OUTCOME=helped|misled|unused [LESSONS_DATA=…]'; exit 2; }
 	$(LESSONS) outcome --data-dir "$(LESSONS_DATA)" "$(RECEIPT)" "$(OUTCOME)"

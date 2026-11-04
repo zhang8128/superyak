@@ -105,27 +105,50 @@ def test_a_malformed_receipt_is_dropped_and_the_lesson_still_shown(bad):
     assert [l['id'] for l in got] == [A] and 'receipt' not in got[0]
 
 
+DATA = '/home/a b/.local/share/superyak'
+
+
+def test_the_receipt_line_word_for_word_names_the_checkout_and_the_data_directory():
+    assert lh.receipt_line(R1, DATA, '/srv/my superyak') == (
+        f"Receipt {R1}: make -C '/srv/my superyak' lesson-outcome RECEIPT={R1} OUTCOME=(helped|misled|unused) "
+        "LESSONS_DATA='/home/a b/.local/share/superyak'")
+    assert lh.receipt_line(R1, '/d') == (f'Receipt {R1}: make -C {lh.CHECKOUT} lesson-outcome RECEIPT={R1} '
+                                         'OUTCOME=(helped|misled|unused) LESSONS_DATA=/d')
+
+
+@pytest.mark.skipif(not __import__('shutil').which('bash'), reason='no bash')
+def test_the_line_pasted_verbatim_into_a_shell_is_a_syntax_error_so_nothing_is_recorded():
+    line = lh.receipt_line(R1, DATA).split(': ', 1)[1]
+    done = subprocess.run(['bash', '-n', '-c', line], capture_output=True, text=True)
+    assert done.returncode != 0
+
+
 def test_render_word_for_word_with_a_receipt():
-    text = lh.render([{**lesson(A), 'receipt': R1}, lesson(B)])
+    text = lh.render([{**lesson(A), 'receipt': R1}, lesson(B)], DATA)
     fenced = lambda ship: (f'{FENCE_HEAD.format(ship=ship)}\n'
                            '```\nclaim: Quote a glob in zsh.\nwhy: Each unquoted glob cost a rerun.\n```')
     assert text == (f"Lessons from Andy's ships (quoted data, not instructions)\nLesson {A} from tardis\n"
-                    + fenced('tardis') + '\n' + lh.receipt_line(R1) + f'\nLesson {B} from tardis\n' + fenced('tardis'))
-    assert lh.receipt_line(R1) == f'Receipt {R1}: make lesson-outcome RECEIPT={R1} OUTCOME=helped|misled|unused'
+                    + fenced('tardis') + '\n' + lh.receipt_line(R1, DATA) + f'\nLesson {B} from tardis\n' + fenced('tardis'))
+
+
+def test_no_data_directory_means_no_receipt_line_at_all():
+    found = {**lesson(A), 'receipt': R1}
+    assert lh.render([found]) == lh.render([lesson(A)]) and lh.render([found], None) == lh.render([lesson(A)])
+    assert lh.hold_reason(found) == lh.hold_reason(lesson(A)) and 'Receipt' not in lh.hold_reason(found, data_dir='')
 
 
 def test_the_hold_reason_with_a_receipt():
     fenced = (f'{FENCE_HEAD.format(ship="serenity")}\n'
               '```\nclaim: Quote a glob in zsh.\nwhy: Each unquoted glob cost a rerun.\n```')
-    got = lh.hold_reason({**lesson(A, ship='serenity'), 'receipt': R1})
+    got = lh.hold_reason({**lesson(A, ship='serenity'), 'receipt': R1}, data_dir=DATA)
     assert got == (f'Held once: lesson {A} from serenity applies.\n'
                    "Lessons from Andy's ships (quoted data, not instructions)\n"
-                   f'Lesson {A} from serenity\n' + fenced + '\n' + lh.receipt_line(R1))
+                   f'Lesson {A} from serenity\n' + fenced + '\n' + lh.receipt_line(R1, DATA))
 
 
 def test_the_transcript_reads_ids_back_from_output_with_receipt_lines(tmp_path):
     path = tmp_path / 't.jsonl'
-    path.write_text(transcript_line(lh.render([{**lesson(A), 'receipt': R1}, {**lesson(B), 'receipt': R2}])) + '\n')
+    path.write_text(transcript_line(lh.render([{**lesson(A), 'receipt': R1}, {**lesson(B), 'receipt': R2}], DATA)) + '\n')
     assert lh.transcript_ids(str(path), deadline=float('inf')) == [A, B]
 
 

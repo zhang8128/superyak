@@ -67,7 +67,7 @@ RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
 # Section 7.1: the only values a repeat record takes beside its ids and its time.
 REPEAT_HOW = ('receipt', 'read')
 REPEAT_HOOK = ('on', 'off')
-# Section 3: the only values an outcome record takes beside its ids and its time.
+# Lesson outcomes spec, section 3: the only values an outcome record takes beside its ids and its time.
 OUTCOMES = ('helped', 'misled', 'unused')
 OUTCOME_SECONDS = 24 * 3600
 RECEIPT_PREFIX = re.compile(r'[0-9a-f]{6,32}')
@@ -110,7 +110,7 @@ REPEAT_OWN = "A ship's own lesson is never its repeat: the query never shows a s
 REPEAT_NO_RECEIPT = ("This peer holds no receipt of that lesson for this ship, so the repeat can't be verified; record it "
                      'with --how read')
 
-# Section 3's refusals: each names its rule and never echoes what was typed.
+# Lesson outcomes spec, section 3's refusals: each names its rule and never echoes what was typed.
 OUTCOME_WORD = 'Say what the lesson did: helped, misled or unused'
 OUTCOME_ID = 'Name the receipt by its full id (32 hex) or a prefix of at least 6, in lowercase'
 OUTCOME_UNKNOWN = 'No receipt of this ship on this peer matches that id'
@@ -904,8 +904,8 @@ def describe_repeats(rows, counts):
 
 
 def describe_outcomes(rows, counts):
-    """`make lesson-outcomes` (section 3): newest first, each with its ids, ship, lesson and outcome; no text. The
-    counts line is section 5's, over the whole peer, even when the list is cut at its limit."""
+    """`make lesson-outcomes` (lesson outcomes spec, section 3): newest first, each with its ids, ship, lesson and outcome; no text. The
+    counts line is that spec's section 5, over the whole peer, even when the list is cut at its limit."""
     if not rows:
         return 'No outcomes on this peer yet.'
     n = RECEIPT_SHORT
@@ -1438,7 +1438,7 @@ class Lessons:
         return rows, {'verified': counts.get('receipt', 0), 'unverified': counts.get('read', 0)}
 
     def lesson_outcome(self, receipt, outcome):
-        """`lessons outcome`, section 3: this peer's ship says once, within 24 hours of a receipt, whether the lesson shown
+        """`lessons outcome` (lesson outcomes spec, section 3): this peer's ship says once, within 24 hours of a receipt, whether the lesson shown
         helped, misled or went unused. `receipt` is the receipt's id or a prefix of at least 6; the ship is derived as for
         repeats, never an argument, and only its own receipts match. Each refusal names its rule, never the value, and
         writes nothing. A retracted lesson's receipt still takes its outcome. No text reaches the record."""
@@ -1691,7 +1691,7 @@ def _repeats(store, args):
     return describe_repeats(*store.lesson_repeats(args.limit))
 
 
-@verb('outcome', "Section 3: say once, within 24 h, whether a lesson shown to this peer's ship helped, misled or went unused",
+@verb('outcome', "Lesson outcomes spec, section 3: say once, within 24 h, whether a lesson shown to this peer's ship helped, misled or went unused",
       ('receipt', {'help': 'a receipt id, or a prefix of at least 6'}), ('outcome', {'help': 'helped, misled or unused'}))
 def _outcome(store, args):
     made = store.lesson_outcome(args.receipt, args.outcome)
@@ -1700,7 +1700,7 @@ def _outcome(store, args):
             f"{made['outcome']}.")
 
 
-@verb('outcomes', "Section 3: this peer's outcome records, newest first, with section 5's counts",
+@verb('outcomes', "Lesson outcomes spec, section 3: this peer's outcome records, newest first, with that spec's section 5 counts",
       ('--limit', {'type': int, 'default': 50}))
 def _outcomes(store, args):
     return describe_outcomes(*store.lesson_outcomes(args.limit))
