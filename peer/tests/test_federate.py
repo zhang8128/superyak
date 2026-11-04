@@ -141,7 +141,7 @@ def test_federate_runs_its_passes_and_sigterm_ends_it_cleanly(tmp_path):
     fails, is logged and backs off), and SIGTERM ends it between steps with exit 0 and no traceback."""
     import signal
     import time
-    clock, a, mac = puller(tmp_path)
+    clock, a, mac = short_puller()  # short enough for a Unix socket, so one opened by mistake would bind and show
     proc = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federate', '--data-dir', str(mac[0].data_dir)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(3)
@@ -151,6 +151,7 @@ def test_federate_runs_its_passes_and_sigterm_ends_it_cleanly(tmp_path):
     assert proc.returncode == 0, err
     assert 'Traceback (most recent call last)' not in err.split('A pull from')[0]  # only a logged pull failure, if any
     assert running_without_a_socket  # no --crossing-socket, no crossing.sock while it runs (crossing plan P9)
+    assert 'crossing.sock' not in err  # nor any attempt at one
 
 
 # Task 8e: "Check delivery now", POST /api/sync (plan P11, nit 9)
