@@ -145,7 +145,9 @@ def run_pilot(output: Path) -> dict:
                 if not daemon.wait_ready(timeout=5):
                     raise RuntimeError("PUBLISHER_START_FAILED")
 
-                def crossing(name, selected_count, delivered_count):
+                def crossing(name, selected_count, delivered_count, publisher_code=None):
+                    """`publisher_code`: the publisher refuses, and the receiver must say so by that code, degraded
+                    (crossing review S3: a publisher's refusal is seen, never silence)."""
                     before = publisher.db_path.read_bytes()
                     result = neighbor_arm(
                         query=QUERY, context=CONTEXT, purpose=PURPOSE, k=1,
@@ -153,7 +155,9 @@ def run_pilot(output: Path) -> dict:
                         receiver=RECEIVER, publishers=[PUBLISHER],
                         socket_path=daemon.socket_path, policy_path=receiver_policy,
                     )
-                    if (result is None or result["degraded"]
+                    said = publisher_code is None or (result is not None and result["degraded"] and dict(
+                        publisher=f"urn:engram:{PUBLISHER}", code=publisher_code) in result["diagnostics"])
+                    if (result is None or not said or (publisher_code is None and result["degraded"])
                             or len(result["selected"]) != selected_count
                             or len(result["delivered"]) != delivered_count):
                         raise RuntimeError("CROSSING_FAILED")
@@ -181,7 +185,7 @@ def run_pilot(output: Path) -> dict:
                 crossing("denied", 1, 0)
                 receiver_grant()
                 publisher_grant(effect="deny")
-                crossing("policy_withdrawn", 0, 0)
+                crossing("policy_withdrawn", 0, 0, publisher_code="EXPLICIT_DENY")
                 publisher_grant()
                 writer = Storage(str(publisher.db_path))
                 try:

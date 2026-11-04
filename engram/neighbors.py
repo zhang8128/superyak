@@ -121,6 +121,8 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                                 purpose=purpose, query=query, k=20, at=clock().isoformat()), deadline=deadline)
             snapshot = validate_trace(reply, publisher=publisher, query=query, context=context, k=20)
             snapshots.append(snapshot)
+            if snapshot["decision"]["effect"] != "allow":   # the publisher's own refusal is seen (review S3)
+                diagnostics.append(dict(publisher=publisher, code=snapshot["decision"]["code"] or "PUBLISHER_DENIED"))
             outcome = ("policy-denied" if snapshot["decision"]["effect"] != "allow"
                        else "matched" if snapshot["candidates"] else "absent")
             sources.append(dict(publisher=publisher, role="remote", weight=weight,
@@ -163,6 +165,8 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                                      query=query, k=20, at=clock().isoformat()), left_ms())
             snapshot = validate_trace(reply, publisher=publisher, query=query, context=context, k=20)
             snapshots.append(snapshot)
+            if snapshot["decision"]["effect"] != "allow":   # the publisher's own refusal is seen (review S3)
+                diagnostics.append(dict(publisher=publisher, code=snapshot["decision"]["code"] or "PUBLISHER_DENIED"))
             outcome = ("policy-denied" if snapshot["decision"]["effect"] != "allow"
                        else "matched" if snapshot["candidates"] else "absent")
             sources.append(dict(publisher=publisher, role="remote", weight=weight,

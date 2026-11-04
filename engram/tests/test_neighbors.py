@@ -637,3 +637,38 @@ def test_bad_remote_settings_fail_closed(tmp_path, text):
     from lighthouse_receiver_config import load_settings
     with pytest.raises(ValueError):
         load_settings(write_settings(tmp_path, text))
+
+
+
+# Section 2 review, S3 (probe E7): a publisher's own refusal (an expired grant: OUTSIDE_VALIDITY) is seen, never silence.
+# The receipt's source entry is closed by the vendored Lighthouse schema (its policyDecision is the receiver's own), so
+# the publisher's code goes into neighbors.diagnostics, which the receipt carries as engram:diagnostics.
+
+def publisher_denies(frame, code="OUTSIDE_VALIDITY"):
+    return dict(protocolVersion="0.1", kind="recall_result", turnId="remote-turn",
+                queryDigest=content_digest(frame["query"]), context=frame["context"], candidates=[],
+                decision={"effect": "deny", "ruleId": None, "code": code}, disclosureId="remote-trace")
+
+
+def test_e7_a_remote_publishers_expired_grant_shows_its_code_and_degrades(remote):
+    args, sock = remote
+    sock.answer = lambda request: {"ok": True, "frame": publisher_denies(request["frame"])}
+    result = neighbors.neighbor_arm(**args)
+    assert result["delivered"] == [] and result["degraded"] is True
+    assert {"publisher": SHIP_REF, "code": "OUTSIDE_VALIDITY"} in result["diagnostics"]
+    [source] = result["sources"]
+    assert source["traceOutcome"] == "policy-denied"
+    receipt = args["storage"].entries[0]["context"]["receipt"]
+    assert {"publisher": SHIP_REF, "code": "OUTSIDE_VALIDITY"} in receipt["extensions"]["engram:diagnostics"]
+
+
+def test_a_local_publishers_refusal_shows_its_code_too(crossing, monkeypatch):
+    args, calls, content, _ = crossing
+
+    def call(self, frame, *, deadline=None):
+        calls.append(frame)
+        return publisher_denies(frame, "EXPLICIT_DENY")
+    monkeypatch.setattr(neighbors.LighthouseClient, "call", call)
+    result = neighbors.neighbor_arm(**args)
+    assert result["degraded"] is True
+    assert {"publisher": "urn:engram:why", "code": "EXPLICIT_DENY"} in result["diagnostics"]
