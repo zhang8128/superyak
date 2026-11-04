@@ -1,7 +1,7 @@
 # A recall crosses wherever a receiver is enabled
 
-Serenity, 2026-11-04, revision 1. Board `spec:recall-crosses-by-default`. Law section 3: a fresh reviewer approves; Andy
-can veto.
+Serenity, 2026-11-04, revision 2, folding in a fresh reviewer's APPROVE WITH CHANGES on revision 1. Board
+`spec:recall-crosses-by-default`. Law section 3: a fresh reviewer approves; Andy can veto.
 
 ## Why
 
@@ -30,6 +30,13 @@ twice each. Mac only: the Pi is untested, and its embedder is slower and busier.
 Delivered text: p50 584 characters, p90 3,090. Four real questions on 2026-11-04 delivered 4 different memories: 2 useful,
 1 a repeat of a local result, 1 noise.
 
+**What it adds to the logs,** read from the Mac's store. A `lighthouse_receipt` row's context averages 6,669 bytes (max
+8,638), against 382 for a recall. Recalls run at 4.2 a day since 2026-09-02, so every recall crossing adds about 28 KB a
+day, about 10 MB a year, to a `memory_log` holding 2.2 MB of context today. A disclosure row adds about 800 bytes on the
+publisher's side. Nothing prunes either: `log_retention_days` is defined and read nowhere, and the oldest log row is from
+2026-03-21. That's fine on a machine with a person's sessions. It isn't known to be fine at a cluster's rate, so a
+cluster ship doesn't set `default_context` until its spec has a bound.
+
 ## Decisions
 
 1. **A new optional key, `default_context`, in `lighthouse-receiver.toml`.** When it is set and the receiver is enabled, a
@@ -50,20 +57,31 @@ Delivered text: p50 584 characters, p90 3,090. Four real questions on 2026-11-04
    instinct-only recall staying local. The publisher's rule is still the grant. This changes who asks, never what may be
    answered. Delivered text stays in `neighbors.delivered`, apart from local results, as today.
 6. **Hooks don't cross.** `wake` and `nudge` keep to the local store: they run on every session and prompt, with a hard
-   time budget. Only the `recall` tool gets the default.
+   time budget. Only the `recall` tool gets the default. `attach_neighbors`' docstring ("a recall that names no context
+   is inert") changes with it.
 7. **The answer says it was a default:** `neighbors.context` holds the context used, and `neighbors.by_default` is true,
    so a reader and a test can tell the two apart.
 8. **`superyak-runtime status` reports `default_context`** beside the receiver's state. Its absence is not an error.
+   `scripts/runtime.py` keeps its own list of the receiver's keys (:310-318), because it is standard-library only and
+   can't import Engram. An unlisted key reads "invalid receiver configuration" even when recall works, so this change
+   adds the key there, and a test holds that list equal to `lighthouse_receiver_config`'s, so the two can't drift.
 
 ## Rollout, and how it can come off
 
 - The Mac sets `default_context = "memory/technical"` once this merges and that machine's Engram sessions have restarted.
   The Pi and Tardis set it when each has a local publisher, which they don't yet.
 - Rollback: delete the line. Nothing else depends on it.
-- **Measure:** crossings per session and the share logged used, read from `memory_log`, against the baseline of 9 in two
-  months. After 50 default crossings with an outcome logged, a used share under 1 in 5 takes the line back off the Mac and
-  reopens the question. Both numbers are provisional. A crossing with no logged outcome tells us nothing, so the count is
-  of logged ones.
+- **Measure, and what it can't see.** Crossings per session come from `lighthouse_receipt` rows, against the baseline of 9
+  in two months. Whether a crossing helped can only come from an explicit `log_outcome`: the sleep hook's automatic marks
+  (`auto_capture_outcomes`, hooks/sleep.py) read `recall` rows and local `target_ids`, and delivered text never becomes
+  either. So most default crossings will carry no outcome, and that count will be reported, not read as "unused". Of 16
+  receipts on 2026-11-04, 7 have an outcome, all logged by hand. No automatic mark is built here: a sentence matching
+  delivered text against later output would measure echoing, not use, and the first thing to learn is whether the plain
+  count moves.
+- **The check.** Serenity posts crossings, outcomes logged and the share used, at 50 logged outcomes or on 2026-12-04,
+  whichever comes first. With 50 logged and a used share under 1 in 5, the line comes off the Mac and the question
+  reopens. With fewer than 50 by that date, the report says the use is unknown, not that it worked. Both numbers are
+  provisional.
 
 ## What it doesn't do
 
@@ -77,8 +95,10 @@ Delivered text: p50 584 characters, p90 3,090. Four real questions on 2026-11-04
 - Set: a recall with no context crosses, `neighbors.by_default` is true, and a receipt is written.
 - Explicit context with the default set: explicit wins, `by_default` is false, and the deadline is `timeout_s`.
 - A bad value is `INVALID_CONFIG`, as every other bad key is; a recall then says so in `neighbors`, with local results kept.
-- **A default crossing never asks a remote publisher:** with `remote_publishers` configured and a recording `ask`, the
-  recording stays empty, while the same recall with an explicit context asks. It lands with whichever branch merges second.
+- **A default crossing never asks a remote publisher,** in the case that would otherwise ask: a `[[remote_publishers]]`
+  entry whose `context` equals `default_context`, with a recording `ask`. The recording stays empty, while the same recall
+  naming that context explicitly asks. It lands with whichever branch merges second.
+- `scripts/runtime.py`'s key list equals `lighthouse_receiver_config`'s.
 - A hung publisher on a default crossing returns within the deadline plus a small margin, with local results kept and
   `TIMEOUT` named; an explicit crossing still waits `timeout_s`.
 - A stopped daemon: local results kept, `UNAVAILABLE` named.
