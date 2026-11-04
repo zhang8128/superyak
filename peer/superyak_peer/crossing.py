@@ -144,7 +144,7 @@ def _ship_ids(store, usernames):
     """B2: each username's users.id, for users of kind `ship` only."""
     if not usernames:
         return {}
-    with store.reading() as db:
+    with store.transaction() as db:
         marks = ','.join('?' * len(usernames))
         return {row[0]: row[1] for row in db.execute(
             f"SELECT username, id FROM users WHERE kind='ship' AND username IN ({marks})", list(usernames))}
@@ -178,7 +178,7 @@ def serve(federation, raw):
     if value['destination'] != federation.identity.peer_id:
         raise Problem(403, 'Not addressed to this peer')
     origin = value['origin']
-    with store.reading() as db:
+    with store.transaction() as db:
         peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (origin,)).fetchone()
     if not peer:
         raise Problem(403, 'Unknown or unpaired peer')
@@ -188,7 +188,7 @@ def serve(federation, raw):
         raise Problem(403, CLOCKS_DIFFER)
     if not federation.take_nonce(origin, value['nonce'], value['at'], now):
         raise Problem(409, 'Replay')
-    with store.reading() as db:
+    with store.transaction() as db:
         if contact_current(db, origin, value['receiver_ship']) is None:
             raise Problem(403, NOT_CONTACT)
     try:
@@ -388,7 +388,7 @@ def ask(federation, raw):
         return _no('UNAVAILABLE')
     if not hosted_store(store, settings, value['receiver_ship'], value['receiver_instance']):
         return _no('NOT_HOSTED')
-    with store.reading() as db:
+    with store.transaction() as db:
         row = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (value['destination'],)).fetchone()
     card = json.loads(row['card']) if row is not None else None
     if card is None or card.get('delivery', 'push') != 'push' or not card.get('endpoint'):
@@ -570,7 +570,7 @@ def report(store):
     """`crossings` (P18): recent `crossings` rows, then, for each [[published]] sidecar opened read-only, every
     disclosure to a remote ref with no `crossings` row: the daemon recorded it and no answer was sent. Read-only."""
     lines = [f'crossing.sock: {"served by a running process" if lock_held(store.data_dir) else "not served here"}']
-    with store.reading() as db:
+    with store.transaction() as db:
         rows = db.execute('SELECT * FROM crossings ORDER BY at DESC, disclosure_id LIMIT 50').fetchall()
         sent = {r[0] for r in db.execute('SELECT disclosure_id FROM crossings')}
     lines.append('Recent crossings (newest first):')
@@ -604,13 +604,13 @@ def contact_report(store, peer_id):
     """`crossings --contacts PEER_ID` (nit 6): each contact from that peer, by name and participant id, and whether
     check 5 accepts it, by contact_current, the rule `serve` uses. It prints no pairing code."""
     from .federation import contact_current
-    from .owner_trust import code_current
+    from .owner_trust import code_current, plain_name
     lines = [f'Contacts from {peer_id[:12]} as check 5 reads them:']
-    with store.reading() as db:
-        contacts = db.execute('SELECT c.id, c.user_id, c.name, p.paired, '
+    with store.transaction() as db:
+        contacts = db.execute('SELECT c.id, c.user_id, l.label AS name, p.paired, '  # shown by its label (owner trust)
                               'EXISTS(SELECT 1 FROM contact_holds h WHERE h.contact_id=c.id) AS held '
-                              'FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.peer_id=? ORDER BY c.name',
-                              (peer_id,)).fetchall()
+                              'FROM remote_contacts c JOIN contact_labels l ON l.id=c.id JOIN peers p USING(peer_id) '
+                              'WHERE c.peer_id=? ORDER BY l.label', (peer_id,)).fetchall()
         for row in contacts:
             if contact_current(db, peer_id, row['user_id']) is not None:
                 verdict = 'accepted'
@@ -618,5 +618,5 @@ def contact_report(store, peer_id):
                 why = [w for w, bad in (('peer unpaired', not row['paired']), ('held', row['held']),
                                         ('no current typed code', not code_current(db, row['id']))) if bad]
                 verdict = f'refused ({", ".join(why)})'
-            lines.append(f'  {row["name"]} ({row["user_id"]}): {verdict}')
+            lines.append(f'  {plain_name(row["name"])} ({row["user_id"]}): {verdict}')
     return lines + ([] if contacts else ['  none'])
