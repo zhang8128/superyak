@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats lesson-outcome lesson-outcomes join-machine-plan mutants
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats lesson-outcome lesson-outcomes join-machine-plan mutants station-connector-rotate-key
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -455,6 +455,9 @@ station-backup:
 station-journal:
 	@test -n "$(MODE)" || { echo 'Usage: make station-journal MODE=wal|delete (with every station unit stopped: runbook step 3)'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer station-journal --data-dir "$(STATION_DATA)" --mode "$(MODE)"
+
+station-connector-rotate-key:
+	uv run --locked --project peer python -m superyak_peer station-connector-rotate-key --data-dir "$(STATION_DATA)"$(if $(END_CONNECTIONS), --end-connections)
 
 station-restore-test:
 	uv run --locked --project peer python -m superyak_peer station-restore-test --backup-dir "$(STATION_BACKUPS)"$(if $(BACKUP), --backup "$(BACKUP)")

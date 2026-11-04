@@ -710,6 +710,11 @@ def main(argv=None):
     journal_cmd = commands.add_parser('station-journal', help='Trusted local: switch the store between WAL and rollback journal, every station unit stopped (store-wal-mode D1)')
     journal_cmd.add_argument('--data-dir', type=Path, required=True)
     journal_cmd.add_argument('--mode', required=True, choices=('wal', 'delete'))
+    rotate_cmd = commands.add_parser('station-connector-rotate-key', help="Trusted local, with every station unit stopped: "
+                                     "replace the connector's key. It ends no connection unless told to")
+    rotate_cmd.add_argument('--data-dir', type=Path, required=True)
+    rotate_cmd.add_argument('--end-connections', action='store_true',
+                            help='Also end every live connection, for when more than this key may have left')
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
@@ -925,6 +930,10 @@ def main(argv=None):
             from . import journal_mode
             before, after = journal_mode.switch_journal(args.data_dir, args.mode, active=journal_mode.units_active)
             print(f'Journal mode: {before} -> {after}')
+        elif args.command == 'station-connector-rotate-key':
+            from .key_rotation import report_lines, rotate
+            report = rotate(args.data_dir, end_connections=args.end_connections)
+            print('\n'.join(report_lines(report, end_connections=args.end_connections)))
         elif args.command == 'station-restore-reconcile':
             from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
                                   refuse_unstaged_db)

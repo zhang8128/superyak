@@ -50,13 +50,13 @@ def units_active():
     return active
 
 
-def _store_path(data_dir):
+def _store_path(data_dir, command='station-journal'):
     data_dir = Path(data_dir).absolute()
     if data_dir.is_symlink() or any((data_dir / name).is_symlink() for name in NAMES + ('dispatch.lock',)):
         raise ValueError('Symlinked state is not allowed')
     database = data_dir / 'peer.sqlite3'
     if not database.is_file():
-        raise ValueError(f'There is no station database at {database}, and station-journal never makes one')
+        raise ValueError(f'There is no station database at {database}, and {command} never makes one')
     if not (data_dir / 'dispatch.lock').is_file():
         raise ValueError(f'{data_dir} holds no dispatch.lock, so no station has run there; station-journal never makes one')
     return database

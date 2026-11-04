@@ -132,6 +132,17 @@ class ConnectorApps:
                    (self.clock(), why, grant_id))
         db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (REVOKED, grant_id, REVOKED))
 
+    def end_every_connection(self, why):
+        """Every connection still live ended for `why`, its tokens with it, and how many. One that already ended keeps its
+        reason (the key rotation's --end-connections)."""
+        with self.transaction() as db:
+            now = self.clock()
+            live = [row['id'] for row in db.execute('SELECT * FROM connector_grants WHERE revoked IS NULL').fetchall()
+                    if self._ended(row, now) is None]
+            for grant_id in live:
+                self._end_connection(db, grant_id, why)
+        return len(live)
+
     def connected_app_revoke(self, actor, grant_id):
         with self.transaction() as db:
             row = self._connection(db, actor, grant_id)

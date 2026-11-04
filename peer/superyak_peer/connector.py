@@ -49,6 +49,13 @@ CLIENT_NAME_MAX, CLIENT_NAME_BYTES = 100, 200
 GRANT_TYPES = ('authorization_code', 'refresh_token')
 CLIENT_VERSION = 1
 KEY_NAME = 'connector_client_key'  # in system_meta: it protects what an id says, not a secret, so it is backed up
+_KEY_SHAPE = re.compile(r'[0-9a-fA-F]{64}')
+BAD_KEY = ("This store's connector key is not 64 hex characters, so the station won't start. Something unexpected wrote to "
+           'it. With every station unit stopped, run make station-connector-rotate-key.')
+
+
+def key_is_good(value):
+    return isinstance(value, str) and _KEY_SHAPE.fullmatch(value) is not None
 
 
 class OAuthError(Exception):
@@ -168,8 +175,10 @@ class Connector:
         table and takes no lock."""
         with self.transaction() as db:
             db.execute('INSERT OR IGNORE INTO system_meta VALUES(?, ?)', (KEY_NAME, secrets.token_hex(32)))
-            self._connector_key = bytes.fromhex(db.execute('SELECT value FROM system_meta WHERE key=?',
-                                                           (KEY_NAME,)).fetchone()[0])
+            value = db.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone()[0]
+            if not key_is_good(value):
+                raise ValueError(BAD_KEY)
+            self._connector_key = bytes.fromhex(value)
 
     def register_client(self, metadata, callback):
         """Dynamic client registration (RFC 7591), stateless: exactly the one callback, a public client with no secret,

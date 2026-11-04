@@ -388,3 +388,27 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 10; done && echo 'Clock synced; the federation units start in 10 minutes' && sleep 600 && for unit in $(awk '$2 == "enabled=enabled" && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done && for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
        ```
        The lighthouse, the door, the ships and the timers needn't wait.
+
+## Rotating the connector's key
+
+Only when Andy asks at this terminal. It is for a key that may have left the Pi, in a copied backup or on a disk, and for a
+station that won't start because "This store's connector key is not 64 hex characters". Spec:
+`docs/superpowers/specs/2026-10-30-connector-key-rotation-design.md`.
+
+1. **Stop every station unit,** the ones step 3 stops, and leave them stopped. The command refuses while one runs and names it.
+2. **Check nothing else holds the store.** The command checks the station's units by name, so it can't see a `serve` started by
+   hand, which would keep signing with the old key until it stops. This must show nothing:
+   ```bash
+   fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3*
+   ```
+3. **Rotate.** It prints counts only, and never a key:
+   ```bash
+   make station-connector-rotate-key
+   ```
+   By default every connection stays, refreshes included, since a leaked key yields no code or token. An app that registered
+   and never reached consent registers again by itself, and a person in the middle of a sign-in signs in again. If more than
+   the key may have left, run it with `END_CONNECTIONS=1`. Every live connection then ends, each person's Connected apps says
+   why, and each person connects again.
+4. **Start the units again.**
+
+A restore from before a rotation doesn't bring the old key back: the replaced file's key is kept when the two differ (step 6).

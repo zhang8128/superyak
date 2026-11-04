@@ -332,6 +332,8 @@ beside it, and holds CLAUDE.md's IMPRINT rules. Its long form:
   for a room he owns (law section 7, CLAUDE.md). `make station-journal` is asked for only as a restore's step 6b
   (docs/station-restore.md) or as the WAL switch Andy said yes to (store-wal-mode spec D1, plan Task 9), with every
   station unit stopped.
+  `make station-connector-rotate-key` is asked for only by Andy at this terminal, with every station unit stopped
+  (docs/station-restore.md, "Rotating the connector's key").
 - killer: For an approval or a denial, Andy named the item and confirmed its short id matches what the requesting
   machine showed (law section 1).
 - killer: `make station-add-ship` and `make station-moderate` are Rio Grande's to run, only when Andy asks, for a room

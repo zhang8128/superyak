@@ -1444,6 +1444,7 @@ const APP_ENDED = new Map([
   ["code_reused", "Its sign-in code was used twice, which can mean it was copied, so the home ended it."],
   ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
+  ["key_rotated", "The home's connector key was changed, so this connection ended. Connect again if you still want it."],
   ["unknown", "Why it ended wasn't recorded."]]);  // a NULL reason, from before 9a recorded one (9a's N1)
 const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
 const RECEIPT_PAGE = 20;
