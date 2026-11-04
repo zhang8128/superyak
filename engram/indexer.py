@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -406,10 +407,28 @@ def _is_git_repo(project_root: Path) -> bool:
     return result.returncode == 0
 
 
+# Never indexed, whatever the config lists: git's own directory, and the
+# repository's worktrees (each one a whole other copy of the code).
+ALWAYS_EXCLUDE = frozenset({".git", ".worktrees"})
+
+
 def _should_exclude(path: Path, exclude_patterns: list[str]) -> bool:
     parts = path.parts
+    if ALWAYS_EXCLUDE.intersection(parts):
+        return True
     for pattern in exclude_patterns:
         if pattern in parts:
+            return True
+    return False
+
+
+def in_other_checkout(project_root: Path, rel: Path) -> bool:
+    """True when rel lies inside another git checkout nested in this one: a
+    worktree, a submodule or a vendored repository, whose top holds .git."""
+    directory = project_root
+    for part in rel.parts[:-1]:
+        directory = directory / part
+        if (directory / ".git").exists():
             return True
     return False
 
@@ -464,15 +483,22 @@ def incremental_index(storage, embedding_provider, project_root: Path, config) -
 def full_reindex(storage, embedding_provider, project_root: Path, config) -> int:
     """Full reindex of all source files. Returns count of files indexed."""
     count = 0
-    for ext, lang in EXTENSION_MAP.items():
-        for fpath in project_root.rglob(f"*{ext}"):
-            try:
-                rel = fpath.relative_to(project_root)
-            except ValueError:
+    exclude = list(config.indexing.exclude)
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        here = Path(dirpath)
+        # Prune before descending: an excluded name, or another checkout.
+        dirnames[:] = sorted(
+            name for name in dirnames
+            if not _should_exclude(Path(name), exclude)
+            and not (here / name / ".git").exists()
+        )
+        for name in sorted(filenames):
+            lang = EXTENSION_MAP.get(Path(name).suffix)
+            if lang is None:
                 continue
-            if _should_exclude(rel, config.indexing.exclude):
+            fpath = here / name
+            if _should_exclude(fpath.relative_to(project_root), exclude):
                 continue
-
             index_file(storage, embedding_provider, fpath, lang, project_root)
             count += 1
 

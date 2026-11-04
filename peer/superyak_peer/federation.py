@@ -145,6 +145,25 @@ def _held_ship_may_return(db, contact_id, station, owner_id, grant_id):
                            'brings it back')
 
 
+def contact_current(db, peer_id, user_id):
+    """Crossings, check 5 (spec 2.2, plan P5): the contact's id when `user_id` is a contact from `peer_id`, that peer is
+    paired, the contact isn't held, and a typed code confirms it by code_current, the rule connections() uses (the
+    code is still the stored card's). Otherwise None. A contact only an owner trust confirmed has no typed code and
+    doesn't pass: spec 2.2 asks for a current typed confirmation."""
+    row = db.execute('SELECT c.id FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.peer_id=? AND c.user_id=? '
+                     'AND p.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds)', (peer_id, user_id)).fetchone()
+    return row['id'] if row is not None and code_current(db, row['id']) else None
+
+
+def contact_trust_only(db, peer_id, user_id):
+    """Whether `user_id` is a contact from `peer_id`, on a paired peer and not held, that only an owner trust
+    confirmed: check 5 refuses it in words of its own (the section 2 review's M2; the partners' ruling stands)."""
+    return db.execute('SELECT 1 FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.peer_id=? AND c.user_id=? '
+                      'AND p.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds) '
+                      'AND EXISTS(SELECT 1 FROM trust_confirmations t WHERE t.contact_id=c.id)',
+                      (peer_id, user_id)).fetchone() is not None
+
+
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
         self.store, self.endpoint = store, endpoint
@@ -155,6 +174,9 @@ class Federation:
         self._between_rows = lambda key: None  # a test hook between the walk's rows (plan Task 6, 8a and 8b)
         self._pull_owed = {}  # the puller's acks and refusals per listener, until a pull carries them (spec §6)
         self._started = store.clock()  # the replay floor's fallback for a damaged restore mark (_replay_floor)
+        from .crossing import AskBound, Limiter
+        self.crossing_limiter = Limiter()  # crossings' load on the publisher's side (crossing plan P6)
+        self.crossing_asks = AskBound()  # and on the asking side: two in flight per destination
 
     def card(self, actor):
         """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""
@@ -616,6 +638,26 @@ class Federation:
         restored = self._restored_at(db)
         return (self._started if restored is None else restored) + 300
 
+    def take_nonce(self, origin, nonce, at, now):
+        """A verified request's nonce, kept in pull_nonces by its own `at`: True when it is fresh and now kept, False for
+        a replay (seen before, or an `at` at or below the restore floor). Pulls and crossings share the table (crossing
+        plan P3), so carry_pull_nonces and the restore floor cover both; their kinds keep them apart. Pruned by the
+        request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock, unless the clock
+        steps back more than NONCE_KEEP - 300 s between a prune and the replay, as _replay_floor says
+        (fix:pull-nonces-prune-margin)."""
+        with self.store.transaction() as db:
+            db.execute(PRUNE_NONCES, (now - NONCE_KEEP,))
+            replay = (at <= self._replay_floor(db)
+                      or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?', (origin, nonce)).fetchone())
+            if not replay:
+                db.execute('INSERT INTO pull_nonces VALUES(?,?,?)', (origin, nonce, at))
+        return not replay
+
+    def serve_crossing(self, raw):
+        """POST /federation/crossing (ship home and crossing spec 2.3), on federation-listen only: crossing.serve."""
+        from .crossing import serve
+        return serve(self, raw)
+
     def serve_pull(self, raw):
         """POST /federation/pull (spec §4), on federation-listen only. Checks, in order: the shape (400); the destination
         (403, before any nonce is stored, so one listener can't replay a puller's request at another); a paired pull
@@ -639,17 +681,7 @@ class Federation:
         now = self.store.clock()
         if abs(value['at'] - now) > 300:
             raise Problem(403, 'Clocks differ by more than 5 minutes')
-        with self.store.transaction() as db:
-            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock,
-            # unless the clock steps back more than NONCE_KEEP - 300 s between a prune and the replay, as _replay_floor
-            # says (fix:pull-nonces-prune-margin)
-            db.execute(PRUNE_NONCES, (now - NONCE_KEEP,))
-            replay = (value['at'] <= self._replay_floor(db)
-                      or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',
-                                    (origin, value['nonce'])).fetchone())
-            if not replay:
-                db.execute('INSERT INTO pull_nonces VALUES(?,?,?)', (origin, value['nonce'], value['at']))
-        if replay:
+        if not self.take_nonce(origin, value['nonce'], value['at'], now):
             raise Problem(409, 'Replay')
         with self._pull_guard:
             busy = self._pull_locks.setdefault(origin, threading.Lock())

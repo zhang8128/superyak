@@ -144,6 +144,30 @@ continues. One process delivers for a data directory: `serve --sync`, or `federa
 beside a `serve` without it. Connections' "Check delivery now" makes every peer due,
 and dials only from that process.
 
+### Lighthouse crossings between peers
+
+A store's home can ask another peer's published house a lighthouse recall, as `peer/PROTOCOL.md`'s Crossing section
+says. Only a listening (push) peer can be asked; the asking peer opens `crossing.sock` for its own Engram only under
+`--crossing-socket` (`make federation-units FEDERATION_DATA=<dir> FEDERATE_ARGS=--crossing-socket` for
+`superyak-federate`; rerunning it without `FEDERATE_ARGS` turns the socket off). Both sides read `crossings.toml`
+in the peer data directory, at each request, refusing a symlink and any unknown key:
+
+```toml
+[[published]]          # on the answering peer: a ship of this peer, and the daemon publisher serving its house
+ship = "rio-grande"
+publisher = "rio-grande"
+daemon_socket = "/abs/path/lighthouse.sock"   # never a store host's host.sock
+sidecar = "/abs/path/lighthouse-disclosures.db"
+
+[[hosted]]             # on the asking peer: the stores this home hosts, each for its ship
+ship = "tardis"
+instance_id = "<the store's instance_id>"
+```
+
+`python -m superyak_peer crossings --data-dir D` (trusted local, read-only) lists recent crossings, any disclosure the
+daemon recorded for a remote store with no answer sent, and whether `crossing.sock` is served; `--contacts PEER_ID`
+says which of that peer's contacts a crossing accepts as its receiving ship. It prints no pairing code.
+
 ### Owner trust: pairing a person's ships with no code each
 
 A person you have paired by code (both sides typed it) can have their ships paired without a code per ship. An

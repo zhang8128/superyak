@@ -2551,6 +2551,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     # (fix:restore-keeps-pull-nonces). The backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
+    'crossings',  # ship home and crossing (plan Task 2): the network half of each answered crossing, a record only
     }
 
 

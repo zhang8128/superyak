@@ -42,11 +42,14 @@ CREATE TABLE IF NOT EXISTS peer_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pull_nonces(origin TEXT NOT NULL, nonce TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(origin, nonce));
 CREATE INDEX IF NOT EXISTS pull_nonces_at ON pull_nonces(at);
 CREATE TABLE IF NOT EXISTS peer_delivery(peer_id TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('push','pull')), failures INTEGER NOT NULL DEFAULT 0, next_attempt REAL, last_success REAL, last_pull REAL, failing_since REAL, last_problem TEXT);
+CREATE TABLE IF NOT EXISTS crossings(disclosure_id TEXT PRIMARY KEY, origin_peer TEXT NOT NULL, receiver_ref TEXT NOT NULL, request_digest TEXT NOT NULL, nonce TEXT NOT NULL, at INTEGER NOT NULL);
 '''
 # Federation pull (plan P2, P3): peer_meta holds federation's own settings, apart from system_meta, which belongs to the
 # system author and which the restore reconcile writes. pull_nonces is a listener's replay guard (spec §4, check 6).
 # peer_delivery is each paired peer's delivery mode and backoff (spec §7), with failing_since and last_problem beside
 # the spec's columns, so `connections` in another process can say why and since when.
+# crossings (ship home and crossing spec 2.3, S-c) is the network half of each answered crossing, beside the publisher
+# daemon's sidecar disclosure of the same disclosureId: a row means an answer was sent. Rows are not pruned (plan Risks).
 
 class PeerStore:
     def federation_mode(self):

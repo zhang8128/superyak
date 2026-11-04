@@ -1,6 +1,7 @@
-"""federation-listen (federation pull plan, Task 8): a push peer's federation listener, two routes and nothing else,
+"""federation-listen (federation pull plan, Task 8): a push peer's federation listener, three routes and nothing else,
 served on loopback behind the identity's own certificate. POST /federation/events goes to `receive` (one envelope,
-MAX_ENVELOPE at most) and POST /federation/pull to `serve_pull` (16 KiB at most). Bodies are capped as they stream,
+MAX_ENVELOPE at most), POST /federation/pull to `serve_pull` (16 KiB at most) and POST /federation/crossing to
+`serve_crossing` (16 KiB at most; ship home and crossing spec 2.3). Bodies are capped as they stream,
 and a larger Content-Length is refused unread with 413. Both handlers run in a worker thread, so a 5 s walk never
 holds a push back and "busy" can happen (nit 11). Every other method and path is 404, and there is no Host check
 (nit 20): a pinned peer dials the name its card gives. Plain HTTP is refused, as the lighthouse refuses it."""
@@ -11,7 +12,9 @@ from .common import Problem
 from .identity import MAX_ENVELOPE
 
 PULL_REQUEST_MAX = 16 * 1024
-ROUTES = {'/federation/events': ('receive', MAX_ENVELOPE), '/federation/pull': ('serve_pull', PULL_REQUEST_MAX)}
+CROSSING_REQUEST_MAX = 16 * 1024
+ROUTES = {'/federation/events': ('receive', MAX_ENVELOPE), '/federation/pull': ('serve_pull', PULL_REQUEST_MAX),
+          '/federation/crossing': ('serve_crossing', CROSSING_REQUEST_MAX)}
 
 
 async def _reply(send, status, value):

@@ -735,11 +735,17 @@ def main(argv=None):
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
     door.add_argument('--port', type=int, default=7436)
-    listen = commands.add_parser('federation-listen', help="A push peer's federation listener: events and pulls, on "
-                                 'loopback, behind its own certificate (federation pull)')
+    listen = commands.add_parser('federation-listen', help="A push peer's federation listener: events, pulls and "
+                                 'crossings, on loopback, behind its own certificate (federation pull)')
     listen.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     listen.add_argument('--host', default='127.0.0.1')
     listen.add_argument('--port', type=int, default=7437)
+    listen.add_argument('--crossing-socket', action='store_true',
+                        help='Also open crossing.sock, the Unix socket this home asks crossings through (crossings)')
+    crossings_cmd = commands.add_parser('crossings', help='Trusted local, read-only: recent crossings, and disclosures '
+                                        'the daemon recorded with no answer sent; --contacts says what check 5 accepts')
+    crossings_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    crossings_cmd.add_argument('--contacts', metavar='PEER_ID', help="That peer's contacts, each accepted or refused")
     ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
     ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship.add_argument('--username', required=True)
@@ -751,6 +757,8 @@ def main(argv=None):
     federate = commands.add_parser('federate', help='Deliver for this data directory: pull in pull mode, then collect and '
                                    'push, every 5 s (federation pull)')
     federate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    federate.add_argument('--crossing-socket', action='store_true',
+                          help='Also open crossing.sock, a Unix socket on its own thread, to ask crossings (no network listener)')
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -1100,9 +1108,16 @@ def main(argv=None):
             from .federate import Federate
             from .federation import Federation
             store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            federation = Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))
+            sockets = None
             try:
-                Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+                if args.crossing_socket:  # crossing plan P9: after federation_lock and keep_open, before run()
+                    from .crossing import start_crossing_socket
+                    sockets = start_crossing_socket(federation)
+                Federate(federation).run()
             finally:
+                if sockets is not None:
+                    sockets.stop()
                 store.close_keeper()
         elif args.command == 'federation-listen':
             # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
@@ -1127,14 +1142,29 @@ def main(argv=None):
             from .federation import Federation
             from .listener import create_listener
             import uvicorn
-            app = create_listener(None, federation=Federation(store, endpoint=None, identity=identity))
+            federation = Federation(store, endpoint=None, identity=identity)
+            app = create_listener(None, federation=federation)
             store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            sockets = None
             try:
+                if args.crossing_socket:  # crossing plan P9: only when asked, before uvicorn.run
+                    import logging
+                    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
+                    from .crossing import start_crossing_socket
+                    sockets = start_crossing_socket(federation)
                 uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
                             ssl_keyfile=str(identity.key_path), access_log=False,
                             timeout_graceful_shutdown=SHUTDOWN_GRACE)
             finally:
+                if sockets is not None:
+                    sockets.stop()
                 store.close_keeper()
+        elif args.command == 'crossings':
+            from .crossing import contact_report, report
+            if not (args.data_dir / 'peer.sqlite3').is_file():
+                raise ValueError(f'No peer database at {args.data_dir / "peer.sqlite3"}')
+            store = Store(args.data_dir)
+            print('\n'.join(contact_report(store, args.contacts) if args.contacts else report(store)))
         elif args.command == 'door':
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback

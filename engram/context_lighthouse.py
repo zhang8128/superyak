@@ -8,6 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+from pathlib import PurePath
 import sqlite3
 import time
 import uuid
@@ -40,7 +41,7 @@ def _version(item):
 
 
 def _settings_digest(settings):
-    return hashlib.sha256(canonical_json({k: str(v) if k.endswith('_path') else v
+    return hashlib.sha256(canonical_json({k: str(v) if k.endswith('_path') or isinstance(v, PurePath) else v
                                          for k, v in settings.items()}).encode()).hexdigest()
 
 
@@ -123,10 +124,15 @@ class LighthouseSource:
 
         log = ReceiptLog()
         timeout = min(settings['timeout_s'], self._deadline(settings) - time.monotonic())
+        # P14: no remote publisher here. Its later re-reads by turnId would fail the publisher's 30 s binding, and
+        # spec 2.5's first rule puts remote text in a session only through that turn's recall.
+        local = {k: v for k, v in settings.items() if k not in ('crossing_socket', 'remote_publishers', 'receiver_ship')}
+        if not local['publishers']:
+            return []
         result = neighbor_arm(query=query, context=self.context, purpose=self.purpose,
                               storage=log, session_id=self.thread, recall_id=self.turn_id or str(uuid.uuid4()),
-                              receiver=self.receiver, **{**settings, 'k': min(settings['k'], max(1, limit)),
-                                                        'timeout_s': timeout})
+                              receiver=self.receiver, **{**local, 'k': min(settings['k'], max(1, limit)),
+                                                        'timeout_s': timeout}, remote_publishers=(), ask=None)
         if result is None:
             return []
         self.coverage.update(receipt_id=result['receipt_id'], diagnostics=result['diagnostics'])

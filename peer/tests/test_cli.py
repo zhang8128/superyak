@@ -599,3 +599,76 @@ def test_the_cli_says_nothing_for_an_unlisted_peer(adds, tmp_path):
     code, shown, prompted = _pair_on_the_pi(adds, tmp_path, adds.card_of('defiant', on='other'))
     assert prompted and code == 0, shown
     assert 'lessons room' not in shown and _last_confirmation(adds.pi)['lessons_line'] == 0
+
+
+# Ship home and crossing plan, Task 7: `crossings` (P18, nit 6), trusted local and read-only.
+
+SIDECAR_SCHEMA = ('CREATE TABLE disclosures (id TEXT PRIMARY KEY, at TEXT NOT NULL, receiver TEXT NOT NULL, '
+                  'action TEXT NOT NULL, context_id TEXT NOT NULL, purpose TEXT NOT NULL, effect TEXT NOT NULL, '
+                  'rule_id TEXT, code TEXT, memory_ids TEXT NOT NULL)')  # lighthouse_daemon._SIDECAR_SCHEMA
+
+
+def test_crossings_lists_rows_and_a_sidecar_disclosure_with_no_row_as_unsent(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from test_federation_outcomes import Clock, station
+    store = station(tmp_path / 'a', 'alice', Clock())[0]
+    origin = 'f' * 64
+    ref = f'urn:superyak:{origin}:store:2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d'
+    with store.transaction() as db:
+        db.execute('INSERT INTO crossings VALUES(?,?,?,?,?,?)', ('sent-1', origin, ref, 'a' * 64, 'b' * 32, 1_000_000))
+    sidecar = tmp_path / 'sidecar.db'
+    with closing(sqlite3.connect(sidecar)) as db:
+        db.execute(SIDECAR_SCHEMA)
+        for key, receiver in (('sent-1', ref), ('unsent-2', ref), ('local-3', 'tardis')):
+            db.execute('INSERT INTO disclosures VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (key, '2026-11-03T12:00:00+00:00', receiver, 'read', 'work', 'session-recall', 'allow', 'r1',
+                        None, '[]'))
+        db.commit()
+    before = sidecar.read_bytes()
+    (store.data_dir / 'crossings.toml').write_text(
+        f'[[published]]\nship = "rio-grande"\npublisher = "rio-grande"\ndaemon_socket = "/run/x.sock"\n'
+        f'sidecar = "{sidecar}"\n')
+    result = run('crossings', '--data-dir', store.data_dir)
+    assert result.returncode == 0, result.stderr
+    sent, unsent = result.stdout.split('Unsent')
+    assert 'sent-1' in sent and ref in sent
+    assert 'unsent-2' in unsent and 'sent-1' not in unsent and 'local-3' not in result.stdout
+    assert 'crossing.sock: not served' in result.stdout
+    assert sidecar.read_bytes() == before
+
+
+def test_crossings_says_when_a_sidecar_cannot_be_read(tmp_path):
+    from test_federation_outcomes import Clock, station
+    store = station(tmp_path / 'a', 'alice', Clock())[0]
+    (store.data_dir / 'crossings.toml').write_text(
+        '[[published]]\nship = "rio-grande"\npublisher = "rio-grande"\ndaemon_socket = "/run/x.sock"\n'
+        f'sidecar = "{tmp_path / "missing.db"}"\n')
+    result = run('crossings', '--data-dir', store.data_dir)
+    assert result.returncode == 0 and 'cannot be read' in result.stdout and 'rio-grande' in result.stdout
+
+
+def test_crossings_contacts_says_which_ships_check_5_accepts_and_prints_no_code(tmp_path):
+    from conftest import lesson_ship, paired
+    from test_federation_outcomes import Clock, station
+    clock = Clock()
+    a = station(tmp_path / 'a', 'alice', clock)
+    m = station(tmp_path / 'm', 'mo', clock, mode='pull')
+    codes, contacts = [], {}
+    for name in ('tardis', 'held-ship', 'stale-ship'):
+        ship = lesson_ship(m[0], m[1], name)
+        pairing = paired(a[2], a[1], m[2].card(ship['id']))
+        codes.append(pairing['pairing_code'])
+        contacts[name] = (pairing['id'], ship['id'])
+    with a[0].transaction() as db:
+        db.execute('INSERT INTO contact_holds VALUES(?,?)', (contacts['held-ship'][0], clock()))
+        db.execute('UPDATE pairing_confirmations SET code=? WHERE contact_id=?', ('0' * 32, contacts['stale-ship'][0]))
+    result = run('crossings', '--data-dir', a[0].data_dir, '--contacts', m[2].identity.peer_id)
+    assert result.returncode == 0, result.stderr
+    lines = {name: next(line for line in result.stdout.splitlines() if ship in line)
+             for name, (_, ship) in contacts.items()}
+    assert lines['tardis'].rstrip().endswith('accepted') and 'Tardis' in lines['tardis']
+    assert 'refused' in lines['held-ship'] and 'held' in lines['held-ship']
+    assert 'refused' in lines['stale-ship'] and 'typed code' in lines['stale-ship']
+    for code in codes:
+        assert code not in result.stdout and code.replace(' ', '') not in result.stdout

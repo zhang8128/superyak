@@ -99,3 +99,128 @@ def test_receiver_permutations_have_identical_digest_and_bytes(tmp_path):
     write_receiver_policy(a, first)
     write_receiver_policy(b, second)
     assert a.read_bytes() == b.read_bytes()
+
+
+# Ship home and crossing plan, Task 10 (P24, S6, "an expiry someone will see"): remote grants, through one helper.
+
+import fcntl
+import os
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from lighthouse_protocol import verify_artifact_digest
+from lighthouse_validation import load_owned_policy
+
+REF = "urn:superyak:" + "a" * 64 + ":store:2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+ENGRAM = Path(__file__).resolve().parent.parent
+
+
+def test_a_generated_policy_takes_a_remote_receiver_by_its_exact_ref(tmp_path):
+    from policy_gen import remote_grant
+    artifact = build_publisher_policy(publisher="house", receivers=["tardis"], groups={}, issued_at="2026-11-03T00:00:00Z",
+                                      valid_from="2026-11-03T00:00:00Z", valid_until="2027-01-01T00:00:00Z",
+                                      remote_receivers={REF: ["commons"]})
+    [remote] = [r for r in artifact["payload"]["rules"] if REF in r["publishers"]]
+    assert remote["publishers"] == [REF] and remote["effect"] == "allow"
+    assert artifact["extensions"]["engram:audiences"][REF] == ["commons"]
+    path = tmp_path / "policy.json"
+    write_receiver_policy(path, artifact)
+    assert load_owned_policy(path, "house").rules
+    for bad in ("urn:superyak:" + "a" * 64 + ":ship:x", "urn:engram:tardis", REF + "x", "*"):
+        with pytest.raises(ValueError):
+            build_publisher_policy(publisher="house", receivers=[], groups={}, issued_at="2026-11-03T00:00:00Z",
+                                   valid_from="2026-11-03T00:00:00Z", valid_until="2027-01-01T00:00:00Z",
+                                   remote_receivers={bad: ["commons"]})
+    with pytest.raises(ValueError):
+        remote_grant(REF, ["not an audience"], context="memory/technical", purpose="session-recall",
+                     valid_from="2026-11-03T00:00:00Z", valid_until="2027-01-01T00:00:00Z")
+
+
+def _fixture_house(home):
+    """instances/why/lighthouse-policy.json as build_publisher_policy writes one, for the local receiver tardis."""
+    inst = home / ".engram" / "instances" / "why"
+    inst.mkdir(parents=True)
+    artifact = build_publisher_policy(publisher="why", receivers=["tardis"], groups={}, issued_at="2026-11-01T00:00:00Z",
+                                      valid_from="2026-11-01T00:00:00Z", valid_until="2027-01-01T00:00:00Z")
+    write_receiver_policy(inst / "lighthouse-policy.json", artifact)
+    return inst / "lighthouse-policy.json"
+
+
+def grant(home, *extra, ref=REF, audiences=("commons",)):
+    args = [sys.executable, "-I", "-m", "policy_gen", "grant-remote", "--engram-home", str(home), "--house", "why",
+            "--ref", ref, "--context", "memory/technical", "--purpose", "session-recall"]
+    for audience in audiences:
+        args += ["--audience", audience]
+    return subprocess.run(args + list(extra), cwd=ENGRAM, capture_output=True, text=True, timeout=60)
+
+
+def test_grant_remote_adds_one_rule_and_one_audience_entry_and_keeps_a_bak(tmp_path):
+    path = _fixture_house(tmp_path)
+    old = path.read_bytes()
+    before = json.loads(old)
+    done = grant(tmp_path, audiences=("commons", "group:work"))
+    assert done.returncode == 0, done.stderr
+    after = json.loads(path.read_text())
+    added = [r for r in after["payload"]["rules"] if r not in before["payload"]["rules"]]
+    assert len(after["payload"]["rules"]) == len(before["payload"]["rules"]) + 1 and len(added) == 1
+    [rule] = added
+    assert rule["id"] == "remote:" + "a" * 12 + ":2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+    assert (rule["publishers"], rule["actions"], rule["contexts"], rule["purposes"], rule["audiences"]) == (
+        [REF], ["recall", "read"], ["memory/technical"], ["session-recall"], ["self"])
+    audiences = after["extensions"]["engram:audiences"]
+    assert audiences[REF] == ["commons", "group:work"]
+    assert {k: v for k, v in audiences.items() if k != REF} == before["extensions"]["engram:audiences"]
+    assert load_owned_policy(path, "why").rules and verify_artifact_digest(after)
+    assert (path.parent / "lighthouse-policy.json.bak").read_bytes() == old
+    start = datetime.fromisoformat(rule["validFrom"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(rule["validUntil"].replace("Z", "+00:00"))
+    assert abs((start - datetime.now(timezone.utc)).total_seconds()) < 120   # validFrom is now
+    assert end - start == timedelta(days=90)                                 # never open-ended: 90 days by default
+    assert rule["validUntil"] in done.stdout                                  # the date is printed
+
+
+def test_grant_remote_until_sets_the_end_up_to_366_days(tmp_path):
+    path = _fixture_house(tmp_path)
+    until = (datetime.now(timezone.utc) + timedelta(days=300)).strftime("%Y-%m-%d")
+    assert grant(tmp_path, "--until", until).returncode == 0
+    [rule] = [r for r in json.loads(path.read_text())["payload"]["rules"] if REF in r["publishers"]]
+    assert rule["validUntil"].startswith(until)
+    other = _fixture_house(tmp_path / "far")
+    before = other.read_bytes()
+    too_far = (datetime.now(timezone.utc) + timedelta(days=367)).strftime("%Y-%m-%d")
+    done = grant(tmp_path / "far", "--until", too_far)
+    assert done.returncode == 1 and "366" in done.stderr and other.read_bytes() == before
+
+
+@pytest.mark.parametrize("case", ["malformed ref", "a ship ref", "invalid audience", "already granted"])
+def test_grant_remote_refuses_and_leaves_the_file_unchanged(tmp_path, case):
+    path = _fixture_house(tmp_path)
+    if case == "already granted":
+        assert grant(tmp_path).returncode == 0
+    before = path.read_bytes()
+    if case == "malformed ref":
+        done = grant(tmp_path, ref=REF[:-1])
+    elif case == "a ship ref":
+        done = grant(tmp_path, ref="urn:superyak:" + "a" * 64 + ":ship:abc")
+    elif case == "invalid audience":
+        done = grant(tmp_path, audiences=("Not One",))
+    else:
+        done = grant(tmp_path)
+    assert done.returncode == 1, done.stdout
+    assert path.read_bytes() == before
+
+
+def test_a_second_grant_remote_while_one_edits_is_refused(tmp_path):
+    path = _fixture_house(tmp_path)
+    before = path.read_bytes()
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # as a running grant-remote holds it
+        done = grant(tmp_path)
+    finally:
+        os.close(fd)
+    assert done.returncode == 1 and "another" in done.stderr
+    assert path.read_bytes() == before
+    assert grant(tmp_path).returncode == 0

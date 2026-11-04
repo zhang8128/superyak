@@ -441,8 +441,67 @@ def _acts_for(value: str) -> str:
 
 
 def _agent_add(a):
+    from sharing import RESERVED_AGENT
+    if _qualify("agent", a.name) == f"agent:{RESERVED_AGENT}":
+        raise RuleError("P11 the reserved agent", "use `engram-permissions agent remote-stores`, which shows what "
+                        "this home grants remote stores before it registers the agent")
     return _write(lambda led, st, owner: (
         [Act("register-agent", {"agent": _qualify("agent", a.name), "acts_for": _acts_for(a.acts_for)})], []))
+
+
+REMOTE_STORES_WORDS = "Every remote store this home's publisher grants may cross, under these audiences"
+OUTSIDE_HOME_PLACE = "place:outside-home"
+
+
+def _remote_grants(root: Path) -> list[str]:
+    """B6: every rule and audience entry naming a remote ref, by house, from each `instances/*/lighthouse-policy.json`
+    found as `migrate` finds them and read with load_owned_policy. A policy that can't be read is named, so the list
+    is known to be short. The daemon's config isn't read: it changes with no ledger act."""
+    from lighthouse_validation import load_owned_policy
+    from sharing import is_remote
+    lines: list[str] = []
+    instances = root / ".engram" / "instances"
+    for policy_path in sorted(instances.glob("*/lighthouse-policy.json")) if instances.is_dir() else []:
+        house = policy_path.parent.name
+        try:
+            policy = load_owned_policy(policy_path, house)
+        except Exception as e:                                   # PolicyError, and whatever a hostile file raises
+            lines.append(f"  {_clean(house)}: its policy is unreadable ({_clean(str(getattr(e, 'code', e)))}), so "
+                         "this list may be short")
+            continue
+        audiences = (policy.artifact.get("extensions") or {}).get("engram:audiences") or {}
+        refs = {ref for rule in policy.rules for ref in rule.get("publishers") or () if is_remote(ref)}
+        refs |= {ref for ref in audiences if is_remote(ref)}
+        for ref in sorted(refs):
+            rules = [rule["id"] for rule in policy.rules if ref in (rule.get("publishers") or ())]
+            granted = audiences.get(ref)
+            lines.append(f"  {_clean(house)}: {_clean(ref)}, audiences "
+                         f"{', '.join(map(_clean, granted)) if isinstance(granted, list) and granted else 'none'}; "
+                         f"rules {', '.join(map(_clean, rules)) or 'none'}")
+    return lines or ["  no remote store is granted now"]
+
+
+def _agent_remote_stores(a):
+    """P11: register the reserved agent once, after showing the remote grants read now (Rio Grande's words, 77dec36f).
+    Under one typed code: `place:outside-home` with no parents (only if absent), `agent:remote-stores` acting for the
+    owner's home, and its place there. Refused when the agent exists, or when the place has a parent (M2)."""
+    from permissions import _parents
+    from sharing import RESERVED_AGENT
+    agent = f"agent:{RESERVED_AGENT}"
+    with _ledger() as led:
+        owner = led.meta()["owner"]
+        state = led.state()
+        if agent in state.agents:
+            raise RuleError("P11 the reserved agent", f"{agent} is registered already")
+        if OUTSIDE_HOME_PLACE in state.places and _parents(state, OUTSIDE_HOME_PLACE):
+            raise RuleError("P11 the reserved agent", f"{OUTSIDE_HOME_PLACE} has a parent, so the home would dominate "
+                            "it and its self allows would reach every remote store")
+        acts = [] if OUTSIDE_HOME_PLACE in state.places else [
+            Act("register-place", {"place": OUTSIDE_HOME_PLACE, "name": "Outside home"})]
+        acts += [Act("register-agent", {"agent": agent, "acts_for": home_of(owner)}),
+                 Act("put-agent", {"agent": agent, "place": OUTSIDE_HOME_PLACE})]
+        words = REMOTE_STORES_WORDS + ":\n" + "\n".join(_remote_grants(_home()))
+        return _perform(led, owner, acts, [], words=words)
 
 
 def _agent_place(kind):
@@ -1448,6 +1507,8 @@ def build_parser() -> argparse.ArgumentParser:
         p = leaf(agents, verb, _agent_place(kind))
         p.add_argument("name")
         p.add_argument("place")
+    leaf(agents, "remote-stores", _agent_remote_stores,
+         "register the one agent every remote store crosses as, after showing what this home grants them")
 
     stores = group("store", "register a store")
     p = leaf(stores, "add", _store_add)

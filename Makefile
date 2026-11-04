@@ -72,6 +72,9 @@ ALERTED_SERVICES = superyak-lighthouse superyak-door superyak-ship superyak-odo 
 # Federation pull plan SF10, SF11: make federation-units installs these on any peer, apart from station-units, which
 # would start the station's own backups and restore tests on Tardis.
 FEDERATION_UNITS := superyak-federate.service superyak-federation-listen.service
+# Ship home and crossing plan P9: --crossing-socket or nothing, from the command line only (an exported value is ignored,
+# so a rollback that reruns make federation-units without it always turns the socket off).
+FEDERATE_ARGS =
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -587,17 +590,20 @@ station-units-remove:
 # runs where.
 federation-units:
 	@test -f "$(FEDERATION_DATA)/peer.sqlite3" || { echo 'No peer database at $(FEDERATION_DATA)/peer.sqlite3: set FEDERATION_DATA to this peer data directory'; exit 2; }
+	@case "$(FEDERATE_ARGS)" in ""|--crossing-socket) ;; *) echo 'FEDERATE_ARGS is --crossing-socket or nothing'; exit 2;; esac
 	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(FEDERATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	data="$$(cd "$(FEDERATION_DATA)" && pwd | sed 's/%/%%/g')" && for unit in $(FEDERATION_UNITS); do d="$(SYSTEMD_USER)/$$unit.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && printf '[Service]\nEnvironment="FEDERATION_DATA=%s"\n' "$$data" > "$$d/20-federation-data.conf" && chmod 644 "$$d/20-federation-data.conf" || exit 1; done
 	if [ -f "$(SYSTEMD_USER)/superyak-alert@.service" ]; then for unit in $(FEDERATION_UNITS); do install -m 644 peer/systemd/50-alerts.conf "$(SYSTEMD_USER)/$$unit.d/50-alerts.conf" || exit 1; done; fi
+	@# crossing plan P9, nit 5: FEDERATE_ARGS=--crossing-socket opens crossing.sock in federate; a run without it removes the drop-in
+	d="$(SYSTEMD_USER)/superyak-federate.service.d" && if [ -n "$(FEDERATE_ARGS)" ]; then printf '[Service]\nEnvironment="FEDERATE_ARGS=%s"\n' "$(FEDERATE_ARGS)" > "$$d/30-federate-args.conf" && chmod 644 "$$d/30-federate-args.conf" || exit 1; else rm -f "$$d/30-federate-args.conf"; fi
 	systemctl --user daemon-reload
 
 federation-units-remove:
 	-systemctl --user disable --now $(FEDERATION_UNITS)
 	-systemctl --user reset-failed $(FEDERATION_UNITS)
-	for unit in $(FEDERATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit" "$(SYSTEMD_USER)/$$unit.d/20-federation-data.conf" "$(SYSTEMD_USER)/$$unit.d/50-alerts.conf"; rmdir "$(SYSTEMD_USER)/$$unit.d" 2>/dev/null || true; done
+	for unit in $(FEDERATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit" "$(SYSTEMD_USER)/$$unit.d/20-federation-data.conf" "$(SYSTEMD_USER)/$$unit.d/30-federate-args.conf" "$(SYSTEMD_USER)/$$unit.d/50-alerts.conf"; rmdir "$(SYSTEMD_USER)/$$unit.d" 2>/dev/null || true; done
 	systemctl --user daemon-reload
 
 wormhole-personas:

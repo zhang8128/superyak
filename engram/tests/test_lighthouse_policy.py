@@ -187,3 +187,61 @@ def test_prefix_selector_scores_below_exact(tmp_path):
         )
     )
     assert decision == Decision("allow", "allow-exact", None)
+
+
+# Ship home and crossing plan, Task 8 (P12, S4, the plan re-check's item 1): a wildcard or prefix ALLOW never matches a
+# remote ref (urn:superyak:...), while wildcard and prefix DENY rules still do. A deny wins only a specificity tie.
+
+from lighthouse_policy import Policy
+
+PEER = "a" * 64
+REF = f"urn:superyak:{PEER}:store:2f1c8a64-3b7e-4d2a-9c11-5e8f0a7b6c3d"
+AT = datetime(2026, 11, 3, tzinfo=timezone.utc)
+
+
+def _rule(rule_id, effect, publishers, purposes=("session-recall",)):
+    return {"id": rule_id, "effect": effect, "publishers": list(publishers),
+            "profiles": ["urn:lighthouse:profile:engram-recall-trace"], "domains": ["memory.recall"],
+            "actions": ["recall"], "contexts": ["memory/technical"],
+            "claimMediaTypes": ["application/vnd.engram.recall-rank-claim+json"], "purposes": list(purposes),
+            "audiences": ["self"], "validFrom": "2026-01-01T00:00:00Z", "validUntil": "2027-01-01T00:00:00Z"}
+
+
+def _decide(rules, publisher=REF):
+    policy = Policy({"issuer": "urn:engram:house", "payload": {"rules": rules}})
+    return policy.decide(PolicyRequest(
+        publisher=publisher, profile="urn:lighthouse:profile:engram-recall-trace", domain="memory.recall",
+        action="recall", context_id="memory/technical", claim_type="application/vnd.engram.recall-rank-claim+json",
+        purpose="session-recall", audience="self", at=AT))
+
+
+@pytest.mark.parametrize("pattern", ["*", "urn:engram:*", "urn:superyak:*", f"urn:superyak:{PEER}:*",
+                                     f"urn:superyak:{PEER}:store:*"])
+def test_no_wildcard_or_prefix_allow_matches_a_remote_ref(pattern):
+    assert _decide([_rule("wide", "allow", [pattern])]) == Decision("deny", None, "NO_MATCHING_ALLOW")
+
+
+def test_only_an_exact_allow_matches_a_remote_ref():
+    assert _decide([_rule("exact", "allow", [REF])]) == Decision("allow", "exact", None)
+    assert _decide([_rule("exact", "allow", [REF])], publisher=REF[:-1] + "e").effect == "deny"
+
+
+def test_local_prefix_matching_is_unchanged():
+    assert _decide([_rule("wide", "allow", ["urn:engram:*"])], publisher="urn:engram:tardis").effect == "allow"
+    assert _decide([_rule("any", "allow", ["*"])], publisher="urn:engram:tardis").effect == "allow"
+
+
+@pytest.mark.parametrize("pattern", ["*", f"urn:superyak:{PEER}:*"])
+def test_a_wildcard_deny_still_refuses_a_remote_ref(pattern):
+    assert _decide([_rule("no", "deny", [pattern])]) == Decision("deny", "no", "EXPLICIT_DENY")
+
+
+def test_an_exact_allow_beats_a_wildcard_deny_as_today():
+    assert _decide([_rule("no", "deny", ["*"]), _rule("exact", "allow", [REF])]) == Decision("allow", "exact", None)
+
+
+def test_a_wildcard_deny_wins_a_tie_with_an_exact_allow():
+    """The plan re-check's item 1: a *-publisher deny with an exact purpose (1 + 2) ties an exact-ref allow with
+    purposes [*] (2 + 1), and a deny wins a tie. Were denies disarmed too, the allow would win."""
+    rules = [_rule("no", "deny", ["*"], purposes=["session-recall"]), _rule("exact", "allow", [REF], purposes=["*"])]
+    assert _decide(rules) == Decision("deny", "no", "EXPLICIT_DENY")
