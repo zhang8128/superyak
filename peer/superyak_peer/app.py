@@ -21,12 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
+from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
 MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
+SIGN_IN_BODY_MAX = 8 * 1024  # a name, a password and an invitation token, as JSON
 COOKIE = 'superyak_session'
 DEVICE_COOKIE = 'superyak_device'  # public route spec 3: the known-device cookie, kept at logout
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
@@ -55,6 +57,18 @@ PUBLIC_ROUTES = {
     '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
+# These carry no body in this home, whoever sends them, so BrowserBoundary reads none: a stranger's stalled GET held 6 MB.
+BODYLESS_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS'})
+# Each public route that takes a body, its whole body, by route template. BrowserBoundary reads no further, so a stranger
+# can't make the home hold MAX_REQUEST for a route that takes 8 KB. It hands on what it read, and the route says "too large"
+# in its own words, so each route's own check must use this same number: it would otherwise parse the prefix as the whole
+# request. Tests hold this to PUBLIC_ROUTES, and each route's check to its entry, one byte either side.
+ROUTE_BODY_MAX = {
+    '/api/login': SIGN_IN_BODY_MAX, '/api/invitations/redeem': SIGN_IN_BODY_MAX, '/register': REGISTER_BODY_MAX,
+    '/authorize/signin': REGISTER_BODY_MAX, '/authorize/decision': REGISTER_BODY_MAX, '/token': REGISTER_BODY_MAX,
+    '/mcp': MCP_BODY_MAX,
+}
+SMALLEST_ROUTE_BODY = min(ROUTE_BODY_MAX.values())  # under this no route's cap can matter, so no route is looked up
 # The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
 # dot, and a port only when it isn't the default, without a leading zero. Anything else stops serve, rather than
 # leaving a typo to turn the connector off quietly (Rio Grande's section 2 of connector-config, S1).
@@ -80,10 +94,28 @@ def is_public(scope):
         address = address.ipv4_mapped
     return not (address.is_loopback or any(address in network for network in TAILNET))
 
+def dispatched(router, scope):
+    """The route the router dispatches this request to, or None. The router (FastAPI's APIRouter.app) takes the first full
+    match, else the first partial one (a 405). Never judge a request by its path's text: a route's pattern ends in `$`, which
+    matches before a trailing newline, so `/api/login%0A` is login to the router and to nothing in a dict."""
+    probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
+    for route in router.routes:
+        match, _ = route.matches(probe)
+        if match == Match.FULL:
+            return route
+        if match == Match.PARTIAL and partial is None:
+            partial = route
+    return partial
+
+
+def route_body_max(router, scope):
+    return ROUTE_BODY_MAX.get(getattr(dispatched(router, scope), 'path', None))
+
+
 class BrowserBoundary:
     """Bound input before JSON parsing; check origins for browser writes."""
-    def __init__(self, app, *, allowed_origins=()):
-        self.app, self.allowed_origins = app, set(allowed_origins)
+    def __init__(self, app, *, router, allowed_origins=()):
+        self.app, self.router, self.allowed_origins = app, router, set(allowed_origins)
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
@@ -96,17 +128,22 @@ class BrowserBoundary:
         method = scope['method']
         # Federation endpoints use separate cryptographic auth; their router must
         # verify signed envelopes and never accept browser session authority.
-        browser_write = (method not in ('GET', 'HEAD', 'OPTIONS') and not scope['path'].startswith('/federation/')
+        browser_write = (method not in BODYLESS_METHODS and not scope['path'].startswith('/federation/')
                          and scope['path'] not in OAUTH_WRITES)
         if browser_write:
             if not origin or origin != request_origin:
                 return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
+        route_max, looked = None, False
         body = bytearray()
-        while True:
+        while method not in BODYLESS_METHODS:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 return
             body.extend(message.get('body', b''))
+            if not looked and len(body) > SMALLEST_ROUTE_BODY:
+                looked, route_max = True, route_body_max(self.router, scope)
+            if route_max is not None and len(body) > route_max:
+                break
             if len(body) > MAX_REQUEST:
                 return await JSONResponse({'error': 'Request too large'}, 413)(scope, receive, send)
             if not message.get('more_body', False):
@@ -168,16 +205,8 @@ class PublicRoute:
                     or token is not None and self.store.session_is_valid(token))
 
     def allowed(self, scope):
-        """Whether the route the router dispatches this request to is on the allow-list, for this method. The router
-        (FastAPI's APIRouter.app) takes the first full match, else the first partial one (a 405)."""
-        probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
-        for route in self.router.routes:
-            match, _ = route.matches(probe)
-            if match == Match.FULL:
-                return self.listed(route, scope['method'])
-            if match == Match.PARTIAL and partial is None:
-                partial = route
-        return partial is not None and self.listed(partial, scope['method'])
+        """Whether the route the router dispatches this request to is on the allow-list, for this method."""
+        return self.listed(dispatched(self.router, scope), scope['method'])
 
     @staticmethod
     def listed(route, method):
@@ -200,7 +229,9 @@ class SignInLane:
         finally:
             self.inside -= 1
 
-async def body(request):
+async def body(request, limit=None):
+    if limit is not None and len(await request.body()) > limit:
+        raise Problem(413, 'Request too large')
     try:
         value = await request.json()
     except (ValueError, UnicodeDecodeError, RecursionError):
@@ -324,7 +355,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         from .connector_routes import install as install_connector
         install_connector(app, public_origin, connector_callback or DEFAULT_CALLBACK)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
-    app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
+    app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins)
     app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
@@ -378,7 +409,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/login')
     async def login(request: Request):
-        data = await body(request)
+        data = await body(request, SIGN_IN_BODY_MAX)
         return await login_response(request, data.get('username'), data.get('password'))
 
     if local_demo:
@@ -557,7 +588,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
-        data = await body(request)
+        data = await body(request, SIGN_IN_BODY_MAX)
         # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
         return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
 
