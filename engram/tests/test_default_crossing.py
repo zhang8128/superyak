@@ -4,6 +4,7 @@ The remote case, a `[[remote_publishers]]` entry whose context equals `default_c
 tardis/crossing merges second: neither branch alone has both halves."""
 from datetime import datetime, timezone
 import importlib.util
+import os
 from pathlib import Path
 import socket
 import time
@@ -12,6 +13,7 @@ import pytest
 
 import neighbors
 import lighthouse_receiver_config as receiver_config
+from lighthouse_validation import bounded_read, load_owned_policy
 from tests.test_neighbors import policy
 from tests.test_recall_margins import engram_server_env, seed  # noqa: F401  (the fixture)
 
@@ -56,6 +58,9 @@ def attach_explicit(tmp_path, storage, context=CONTEXT):
 
 def test_without_the_key_a_recall_stays_as_it_is_and_makes_no_call(tmp_path, monkeypatch):
     calls = recording_arm(monkeypatch)
+
+    def fail(*a, **kw): raise AssertionError("nothing asked, so no neighbor call")
+    monkeypatch.setattr(neighbors, "attach_neighbors", fail)
     _, storage = receiver(tmp_path)
     response = attach_default(tmp_path, storage)
     assert response == dict(recall_id="turn", results=["local"])
@@ -150,6 +155,49 @@ def test_an_unreadable_toml_says_so_and_keeps_local_results(tmp_path, monkeypatc
     response = attach_default(tmp_path, storage)
     assert calls == [] and response["results"] == ["local"]
     assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_a_toml_path_that_is_no_file_says_so_and_never_hangs(tmp_path, monkeypatch, kind):
+    """Every recall now reads this path: a FIFO with no writer would hang every recall, with no deadline over it."""
+    calls = recording_arm(monkeypatch)
+    instance, storage = receiver(tmp_path)
+    path = instance / "lighthouse-receiver.toml"
+    path.unlink()
+    path.mkdir() if kind == "directory" else os.mkfifo(path)
+    response = attach_default(tmp_path, storage)
+    assert calls == [] and response["results"] == ["local"]
+    assert response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
+
+
+def test_a_policy_that_is_a_fifo_refuses_rather_than_hangs(tmp_path):
+    """The same read serves every policy, the daemon's too. A writer holding the FIFO open changes nothing."""
+    path = tmp_path / "policy.json"
+    os.mkfifo(path)
+    writer = os.open(path, os.O_RDWR)
+    try:
+        with pytest.raises(ValueError):
+            load_owned_policy(path, "engram")
+    finally:
+        os.close(writer)
+
+
+def test_bounded_read_keeps_its_contract(tmp_path):
+    path = tmp_path / "f"
+    path.write_bytes(b"x" * 8)
+    assert bounded_read(path, 8) == b"x" * 8
+    with pytest.raises(ValueError, match="INPUT_TOO_LARGE"):
+        bounded_read(path, 7)
+    with pytest.raises(FileNotFoundError):
+        bounded_read(tmp_path / "absent", 8)
+
+
+def test_too_big_a_toml_says_so(tmp_path, monkeypatch):
+    calls = recording_arm(monkeypatch)
+    instance, storage = receiver(tmp_path)
+    (instance / "lighthouse-receiver.toml").write_bytes(b"#" * 20000)
+    response = attach_default(tmp_path, storage)
+    assert calls == [] and response["neighbors"]["diagnostics"] == [{"code": "RECEIVER_CONFIG_INVALID"}]
 
 
 def test_the_answer_says_why_when_the_store_is_not_the_receivers(tmp_path, monkeypatch):
