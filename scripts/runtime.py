@@ -99,6 +99,15 @@ def _load_runtime_config(path: Path) -> tuple[Path, str, Path | None]:
     return memory_home, instance, Path(embedder_value)
 
 
+# The receiver settings' keys, as lighthouse_receiver_config.SETTINGS_KEYS has them (this file is stdlib-only, so it
+# keeps its own copy; engram/tests/test_runtime_installation.py holds the two equal).
+RECEIVER_KEYS = frozenset({
+    "enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s",
+    "default_context",
+    "remote_publishers", "crossing_socket", "receiver_ship",   # crossings between peers (ship home and crossing)
+})
+
+
 def _valid_publishers(value: object) -> bool:
     return (
         isinstance(value, list)
@@ -108,19 +117,8 @@ def _valid_publishers(value: object) -> bool:
     )
 
 
-# engram/lighthouse_receiver_config.py's SETTINGS_KEYS and context_ref, kept here because this file is standard library
-# only; tests/test_default_crossing.py holds them equal.
-RECEIVER_KEYS = frozenset(
-    {
-        "enabled",
-        "publishers",
-        "socket_path",
-        "policy_path",
-        "limit",
-        "timeout_s",
-        "default_context",
-    }
-)
+# engram/lighthouse_receiver_config.py's context_ref, kept here because this file is standard library only;
+# tests/test_default_crossing.py holds them equal.
 _CONTEXT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 

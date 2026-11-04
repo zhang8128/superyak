@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import uuid
 from functools import wraps
+import inspect
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from resonance import (
 )
 from scoring import score_candidate
 from permissions import selector_json
-from sharing import (list_shares as _list_shares, share as _share_memory,
+from sharing import (list_shares as _list_shares, share_noting as _share_memory,
                      unshare as _unshare_memory)
 from storage import vec0_distance_to_similarity, _pack_embedding
 from transitions import TransitionGraph
@@ -689,12 +690,74 @@ def _server_operation(function):
     return wrapped
 
 
+# Ship home and crossing spec 2.5 (section 2 review, M1, Rio Grande's shape): every tool is checked whole by the remote
+# guard, every string in its whole argument tree, unless it is named here with why none of its strings is stored.
+READ_ONLY_TOOLS = {
+    "recall_cold": "its query is searched, never stored",
+    "search_code": "its query is searched, never stored",
+    "look": "its query searches the notepads, never stored",
+    "clipboard_view": "its situation picks what to show, never stored",
+    "reflect": "its focus picks an analysis, never stored",
+    "permissions": "its arguments filter what the ledger shows, never stored",
+    "shares": "its audience filters what the house shows, never stored",
+    "status": "it takes no text",
+    "core_memories": "it takes no text",
+    "introspect": "it takes no text",
+}
+# Rio Grande's third place: a tool that stores its text only in a log line. It is never refused; it logs through
+# _loggable, which puts a delivered item's or sentence's digest in its place before the write.
+LOG_ONLY_TOOLS = {
+    "recall": "its query goes only to memory_log (review N5), through _loggable; it still searches with the query",
+}
+
+
+def _strings_in(values):
+    """Every string in an argument tree: dict keys and values, list, tuple and set members, nested to any depth."""
+    out, stack, seen = [], list(values), set()
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, dict):
+            if id(value) not in seen:
+                seen.add(id(value))
+                stack.extend(value.keys())
+                stack.extend(value.values())
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            if id(value) not in seen:
+                seen.add(id(value))
+                stack.extend(value)
+    return out
+
+
+def _remote_guarded(function, name):
+    """The remote guard around one tool (spec 2.5's second rule), fail closed: unless the tool is in READ_ONLY_TOOLS,
+    every string in its arguments is checked after _init() and before the tool runs, so it writes nothing when one
+    copies a remote delivery."""
+    if name in READ_ONLY_TOOLS or name in LOG_ONLY_TOOLS:
+        return function
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        _init()
+        try:
+            arguments = signature.bind_partial(*args, **kwargs).arguments
+        except TypeError:
+            arguments = {"args": list(args), "kwargs": dict(kwargs)}
+        refused = _remote_refusal(*_strings_in(arguments.values()))
+        if refused is not None:
+            return refused
+        return function(*args, **kwargs)
+    return guarded
+
+
 def _server_tool(*tool_args, **tool_kwargs):
-    """Register an MCP tool whose full execution participates in fork safety."""
+    """Register an MCP tool whose full execution participates in fork safety, behind the remote guard."""
     register = mcp.tool(*tool_args, **tool_kwargs)
 
     def decorate(function):
-        return register(_server_operation(function))
+        return register(_server_operation(_remote_guarded(function, tool_kwargs.get("name") or function.__name__)))
 
     return decorate
 
@@ -1483,6 +1546,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
         _storage,
         _embeddings,
         operation_lock=_server_lifecycle_lock,
+        exclude=_config.indexing.exclude,
     )
     _register_server_cleanup(_watcher, _watcher.stop, "watcher")
 
@@ -1998,6 +2062,63 @@ def remember(
 
 
 _KEEP_REFUSED = {"error": "keeping this content is not allowed", "layer": "rejected"}
+# Ship home and crossing spec 2.5, the second rule (plan P16): text delivered from another peer's store is never kept.
+_REMOTE_REFUSED = {"error": "this text was delivered from another peer's store and is never kept here",
+                   "layer": "rejected", "code": "REMOTE_DELIVERY"}
+
+
+def _remote_texts(values) -> list[str]:
+    out = []
+    for value in values:
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, (list, tuple)):
+            out.extend(v for v in value if isinstance(v, str))
+    return out
+
+
+def _loggable(text):
+    """A log-only tool's logged argument (LOG_ONLY_TOOLS): `text` with each delivered item or sentence of 12 words
+    or more replaced by its digest, so a log line keeps no remote text. A record that can't be read gives the whole
+    text's digest instead, fail closed."""
+    import hashlib
+    import remote_deliveries
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        path = remote_deliveries.path_for(_storage.db_path if _storage is not None else DB_PATH)
+    except ValueError:
+        return text
+    try:
+        return remote_deliveries.redact(path, text, now=int(time.time()))
+    except (remote_deliveries.RecordBusy, remote_deliveries.Unreadable):
+        return f"[unchecked text, sha256 {hashlib.sha256(text.encode('utf-8')).hexdigest()}]"
+
+
+def _remote_refusal(*texts) -> dict | None:
+    """The remote guard (spec 2.5; P16, S7): the refusing reply when any of `texts` (a tool's raw arguments; lists
+    are looked into) copies a remote item delivered here in the last 90 days, whole or by a sentence of 12 words or
+    more, else None. It runs in every gate mode. A record that stays busy refuses with "busy, try again"; one that
+    can't be read refuses with its cause. A missing record refuses nothing: a failed record delivers nothing."""
+    import remote_deliveries
+    candidates = _remote_texts(texts)
+    if not candidates:
+        return None
+    try:
+        path = remote_deliveries.path_for(_storage.db_path if _storage is not None else DB_PATH)
+    except ValueError:
+        return None          # a store with no file never received a crossing: attach_neighbors needs its graph.db
+    try:
+        if remote_deliveries.refused(path, candidates, now=int(time.time())):
+            return dict(_REMOTE_REFUSED)
+        return None
+    except remote_deliveries.RecordBusy:
+        return {"error": "the record of text delivered from other peers is busy, so nothing was kept; try again",
+                "layer": "rejected", "code": "REMOTE_DELIVERY_BUSY", "cause": "busy, try again"}
+    except remote_deliveries.Unreadable as exc:
+        logger.warning("The remote deliveries record cannot be read: %s", exc)
+        return {"error": "the record of text delivered from other peers cannot be read, so nothing is kept",
+                "layer": "rejected", "code": "REMOTE_DELIVERY_UNREADABLE", "cause": str(exc)}
 _GENOME_REFUSED = {"error": "delivered content cannot be written to the genome: remember it without genome=True to "
                             "keep it in this store", "layer": "rejected"}
 
@@ -2082,7 +2203,11 @@ def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None
     """The `remember` guard (P 10; R10, R11). It acts only when the digest of the stripped or the raw content is
     that of a delivery receipt of `agent` in the last 24 hours (the newest 200), and it asks the ledger layers
     alone whether `imprint` of that item is allowed. A `genome` keep of delivered content is refused under
-    `enforce` before anything is decided (Tardis's T2), so it writes no `imprint` receipt (Serenity's item 3)."""
+    `enforce` before anything is decided (Tardis's T2), so it writes no `imprint` receipt (Serenity's item 3).
+    First of all, in every gate mode and before either early return, the remote guard (spec 2.5)."""
+    remote = _remote_refusal(content, raw)
+    if remote is not None:
+        return _Keep(reply=remote)
     try:
         gate = _permission_gate()
     except Exception as exc:
@@ -2334,7 +2459,7 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
                 return _needs_allow(state, owner, obj, mapped, reason, now)
             legacy = placement_audience(state, state.records[cover])
         try:
-            record = _share_memory(
+            record, mended = _share_memory(
                 source_storage=_storage, published_storage=house, source_id=memory_id, layer=layer,
                 audience=legacy, reason=reason, source_instance=_instance_name or "default",
                 source_instance_id=sid, record_id=cover)
@@ -2346,7 +2471,7 @@ def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str,
                                     store_id=sid, now=now)
             except Exception:
                 logger.warning("Could not write the first lane note of %s", obj, exc_info=True)
-        return asdict(record)
+        return _share_answer(record, mended)
     finally:
         led.close()
 
@@ -2380,7 +2505,7 @@ def share(
             _after_share()
             return out
         try:
-            record = _share_memory(
+            record, mended = _share_memory(
                 source_storage=_storage,
                 published_storage=published_storage,
                 source_id=memory_id,
@@ -2393,7 +2518,7 @@ def share(
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
         _after_share()
-        return asdict(record)
+        return _share_answer(record, mended)
 
 
 def _acts_for_owner() -> bool | None:
@@ -2647,6 +2772,14 @@ def shares(audience: str | None = None) -> dict:
         return {"shares": _listed_shares(records)}
 
 
+def _share_answer(record, mended: str | None) -> dict:
+    """share's answer: the record, and `lane_mended` when a reused copy took its source's lane (never silently)."""
+    out = asdict(record)
+    if mended is not None:
+        out["lane_mended"] = mended
+    return out
+
+
 def _listed_shares(records) -> list[dict]:
     """The placements as `shares` lists them. A placement made before share refused captured prompts stays served
     until it is unshared, so each one from this server's instance that would now be refused carries `refused_now`,
@@ -2757,8 +2890,10 @@ def recall(
         lighthouse_purpose: Purpose checked by both receiver and publisher policies.
     """
     _init()
+    # LOG_ONLY_TOOLS: only these go to a log, with a delivered item or sentence's digest in its place
+    logged_query, logged_layer = _loggable(query), _loggable(layer)
     logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d, uninvited=%d)",
-                query[:80], layer, max_results, uninvited)
+                logged_query[:80], logged_layer, max_results, uninvited)
 
     if lane not in (None, "personal", "work"):
         return {"error": f"Invalid lane: {lane!r}"}
@@ -2773,7 +2908,7 @@ def recall(
                 event_type="recall",
                 layer="instinct",
                 target_ids=[],
-                context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+                context={"recall_id": recall_id, "query": logged_query, "session_id": _session_id},
             )
             results = _observe_category_recall(query, [], recall_id)
             return {"results": results, "recall_id": recall_id}
@@ -2852,7 +2987,7 @@ def recall(
             event_type="recall",
             layer="instinct",
             target_ids=[r["id"] for r in results],
-            context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+            context={"recall_id": recall_id, "query": logged_query, "session_id": _session_id},
         )
         results = _observe_category_recall(query, results, recall_id)
         return {"results": results, "recall_id": recall_id}
@@ -3047,14 +3182,14 @@ def recall(
     # The logged margin is the retrieval-time record. `influenced`, set later
     # if category re-ranking changes delivery, is a delivery-time annotation
     # and deliberately absent here.
-    log_context = {"recall_id": recall_id, "query": query, "session_id": _session_id}
+    log_context = {"recall_id": recall_id, "query": logged_query, "session_id": _session_id}
     if margin is not None:
         log_context["margin"] = margin
 
     _storage.add_log_entry(
         id=str(uuid.uuid4()),
         event_type="recall",
-        layer=layer or "all",
+        layer=logged_layer or "all",
         target_ids=result_ids,
         context=log_context,
     )

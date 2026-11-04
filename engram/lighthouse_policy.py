@@ -75,18 +75,26 @@ def _parse_rfc3339(text: str) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _pattern_score(pattern: str, value: str) -> int | None:
+REMOTE_PREFIX = "urn:superyak:"  # a remote store or ship ref (ship home and crossing spec 2.2; sharing.REMOTE_STORE_REF)
+
+
+def _pattern_score(pattern: str, value: str, allow: bool = False) -> int | None:
+    """2 for an exact match, 1 for a `*`-suffixed prefix match, else None. An allow rule's wildcard or prefix never
+    matches a remote ref, so only a rule naming the exact ref allows one; a deny rule's still does, since a deny wins
+    only a tie and disarming denies too would let any allow through (crossing plan P12, S4)."""
     if pattern == value:
         return 2
     if pattern.endswith("*") and value.startswith(pattern[:-1]):
+        if allow and value.startswith(REMOTE_PREFIX):
+            return None
         return 1
     return None
 
 
-def _selector_score(patterns: list[str], value: str) -> int | None:
+def _selector_score(patterns: list[str], value: str, allow: bool = False) -> int | None:
     best: int | None = None
     for pattern in patterns:
-        score = _pattern_score(pattern, value)
+        score = _pattern_score(pattern, value, allow)
         if score is not None and (best is None or score > best):
             best = score
     return best
@@ -94,8 +102,9 @@ def _selector_score(patterns: list[str], value: str) -> int | None:
 
 def _rule_score(rule: dict, request: PolicyRequest) -> int | None:
     total = 0
+    allow = rule["effect"] == "allow"
     for rule_key, request_key in _DIMENSIONS:
-        score = _selector_score(rule[rule_key], getattr(request, request_key))
+        score = _selector_score(rule[rule_key], getattr(request, request_key), allow)
         if score is None:
             return None
         total += score

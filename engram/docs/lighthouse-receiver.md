@@ -87,6 +87,48 @@ with open("lighthouse-receiver-policy.json", "x") as stream:
 
 Weights are receiver preferences keyed by publisher URN in the artifact's extension; unspecified weights are 1, zero excludes a publisher's candidates from selection. There is no transitive discovery or shared reputation. Receiver policies use the unchanged Lighthouse 0.1 ConnectionPolicy schema, plus bounded validation of selectors and weights. Reseal the artifact with `artifact_digest` after edits. Replace complete policy files atomically to avoid temporarily invalid JSON.
 
+## Remote publishers: crossings between peers
+
+A receiver can also ask a publisher on another peer, through its own home peer's `crossing.sock` (the peer runs
+`federate --crossing-socket` or `federation-listen --crossing-socket`; `peer/PROTOCOL.md`, Crossing). Only a
+listening (push) peer can be asked. In the receiver's settings:
+
+```toml
+enabled = true
+publishers = []                       # may be empty when remote publishers are set
+policy_path = "lighthouse-receiver-policy.json"
+crossing_socket = "/path/to/peer-data/crossing.sock"
+receiver_ship = "<this ship's participant id on its home peer>"
+
+[[remote_publishers]]
+peer_id = "<the publisher's peer id, 64 hex>"
+ship = "<the publishing ship's participant id on that peer>"
+context = "memory/technical"           # asked only for a recall in this context
+```
+
+`socket_path` is needed only for local publishers; local and remote together are 1 to 8. The receiver's policy names a
+remote publisher by its exact ref, `urn:superyak:<peer id>:ship:<participant id>`, and grants it `recall`, `read`
+and `inject_context`, as for a local one. No wildcard or prefix **allow** matches a `urn:superyak:` ref, on either
+side: only a rule naming the exact ref allows one (a wildcard **deny** still refuses one). Remote publishers carry no
+weight; weights stay local. A remote publisher is asked only from a live `recall`, never by `context` re-reads, and
+an unreachable or refusing one shows in `neighbors` and `degraded` by its ref, with the peer's code (`NOT_HOSTED`,
+`NOT_PAIRED`, `TIMEOUT`, `REFUSED_<status>`, ...).
+
+On the publishing side, the publisher's policy grants the receiving **store**, by
+`urn:superyak:<asking peer id>:store:<receiving instance id>`, with `python -m policy_gen grant-remote`, which never
+writes an open-ended grant (90 days by default, at most 366). The publisher home serves a remote frame only with its
+permissions gate at `enforce`, judging every remote store in the ledger as the one agent `remote-stores` at the
+root place `place:outside-home`, which its owner registers once with `engram-permissions agent remote-stores`.
+
+**Remote text is never kept here.** Each delivered remote item is recorded in `remote-deliveries.db` beside the store,
+by the digests of its normalized text and of each sentence of 12 words or more, for 90 days. Every tool that stores
+text refuses a copy of one, in every gate mode, on its raw arguments: `remember`, `jot`, `task_focus`,
+`task_update`, `dream_capture`, `dream_react`, `clipboard_pin`, `clipboard_remind`, `add_anchor`,
+`challenge_instinct`, `retire_instinct`, `compress_commit`, `log_outcome`, `instinct_feedback`, `share` and
+`assessment_report`. It catches verbatim whole items and verbatim sentences of 12 words or more, after leading Markdown
+markers are stripped, and nothing else: not a paraphrase, not a copy after 90 days, not a delivered sentence under 12
+words, and not a long sentence carried with other words on its line. The wake and nudge hooks never ask a neighbor.
+
 ## Recall and inspect
 
 An MCP process started from this checkout exposes two additional recall arguments:

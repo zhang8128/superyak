@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import functools
 from pathlib import Path
 import time
 
-from lighthouse_client import LighthouseClient, NeighborUnavailable, fuse_traces, validate_read, validate_trace
+from lighthouse_client import (LighthouseClient, NeighborUnavailable, ask_crossing, fuse_traces, validate_read,
+                               validate_trace)
 from lighthouse_policy import PolicyRequest
 from lighthouse_protocol import artifact_digest, canonical_json, content_digest, recall_frame, read_frame
 from permissions import annotation_line
+import remote_deliveries
 from lighthouse_receipts import build_receipt, write_receipt
-from lighthouse_receiver_config import (NAME, context_ref, default_context_of, load_receiver_policy, load_settings,
-                                        valid_publishers)
+from lighthouse_receiver_config import (MAX_PUBLISHERS, NAME, context_ref, default_context_of, load_receiver_policy,
+                                        load_settings, valid_publishers, valid_remote_publishers)
 
 PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 CLAIM_TYPE = "application/vnd.engram.recall-rank-claim+json"
 MAX_CONTENT_BYTES = 32768
+MIN_CROSSING_MS = 100          # a crossing with less time left than this is a TIMEOUT, never asked (P8)
 # A default crossing's deadline in seconds, under the receiver's own `timeout_s`: a hung publisher must not add 5 s to
 # every recall. Provisional: measured on the Mac only, where a crossing adds about 31 ms. Each machine checks it under its
 # own load before it sets `default_context` (spec, Rollout).
@@ -39,9 +43,19 @@ def _say_unreached(response, code, **said):
     return response
 
 
+def remote_ref(remote):
+    """A remote publisher's ref, as the receiver's policy names it (spec 2.4)."""
+    return f"urn:superyak:{remote['peer_id']}:ship:{remote['ship']}"
+
+
 def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
-                 receiver, publishers, socket_path, policy_path, timeout_s=2.0, now=None, by_default=False):
+                 receiver, publishers, socket_path=None, policy_path, timeout_s=2.0, now=None,
+                 remote_publishers=(), receiver_ship=None, receiver_instance=None, ask=None, by_default=False):
     """Consult only explicit peers and persist a content-free receipt before delivery.
+
+    A remote publisher (`remote_publishers`, P14) is asked only when the recall's context is its own, and only
+    through `ask(receiver_instance, receiver_ship, publisher, frame, deadline_ms)`, the store host's call shape
+    (P19, condition 1): this function never opens a socket for one. With no `ask`, each shows as NO_ASKER.
 
     ``now`` is an injectable clock, never a wire-supplied authorization time.
     A recall grant denied for every publisher returns an empty result naming each publisher's decision code
@@ -49,8 +63,11 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
     the per-publisher entries follow it; other failures return diagnostics.
     """
     import math
+    remote_publishers = list(remote_publishers or ())
     if (not isinstance(receiver, str) or not NAME.fullmatch(receiver)
-            or not valid_publishers(publishers)
+            or not valid_publishers(publishers, allow_empty=bool(remote_publishers))
+            or not valid_remote_publishers(remote_publishers)
+            or not 1 <= len(publishers) + len(remote_publishers) <= MAX_PUBLISHERS
             or not isinstance(query, str) or not 1 <= len(query) <= 4096
             or not isinstance(purpose, str) or not 1 <= len(purpose) <= 256
             or type(k) is not int or not 1 <= k <= 5
@@ -64,8 +81,9 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
         return _empty("INVALID_CONTEXT")
     clock = now or (lambda: datetime.now(timezone.utc))
     deadline = time.monotonic() + timeout_s
-    client = LighthouseClient(socket_path, timeout_s=timeout_s)
+    client = LighthouseClient(socket_path, timeout_s=timeout_s) if publishers else None   # B5: none for remotes only
     sources, snapshots, unavailable, decisions, diagnostics = [], [], [], [], []
+    read_disclosures = []
     traces, lookup = {}, {}
     selected, delivered = [], []
 
@@ -112,6 +130,52 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                                 purpose=purpose, query=query, k=20, at=clock().isoformat()), deadline=deadline)
             snapshot = validate_trace(reply, publisher=publisher, query=query, context=context, k=20)
             snapshots.append(snapshot)
+            if snapshot["decision"]["effect"] != "allow":   # the publisher's own refusal is seen (review S3)
+                diagnostics.append(dict(publisher=publisher, code=snapshot["decision"]["code"] or "PUBLISHER_DENIED"))
+            outcome = ("policy-denied" if snapshot["decision"]["effect"] != "allow"
+                       else "matched" if snapshot["candidates"] else "absent")
+            sources.append(dict(publisher=publisher, role="remote", weight=weight,
+                                storeDigest=content_digest(canonical_json(snapshot)),
+                                policyDecision=decision.to_json(), traceOutcome=outcome))
+            traces[publisher] = (weight, snapshot["candidates"])
+            for candidate in snapshot["candidates"]:
+                lookup[(publisher, candidate["memoryId"])] = candidate
+        except Exception as error:
+            code = getattr(error, "code", "NEIGHBOR_ERROR")
+            diagnostics.append(dict(publisher=publisher, code=code))
+            if decision is not None and decision.effect == "allow":
+                unavailable.append(dict(publisher=publisher, weight=weight,
+                                        policyDecision=decision.to_json(), code=code))
+
+    def left_ms():
+        ms = int((deadline - time.monotonic()) * 1000)
+        if ms < MIN_CROSSING_MS:
+            raise NeighborUnavailable("TIMEOUT")
+        return ms
+
+    remote_names = set()
+    for remote in remote_publishers:
+        if remote["context"] != context["id"]:
+            continue                                   # P14: asked only for its own context
+        publisher = remote_ref(remote)
+        remote_names.add(publisher)
+        decision, weight = None, 1                     # P14: weights stay local; a remote publisher weighs 1
+        try:
+            _, grants = authorize(publisher, ["recall"], "query")
+            decision = grants["recall"]
+            if not permits(grants):
+                denied.append(dict(publisher=publisher, code=decision.code or "NO_MATCHING_ALLOW"))
+                continue
+            attempted = True
+            if ask is None:
+                raise NeighborUnavailable("NO_ASKER")
+            reply = ask(receiver_instance, receiver_ship, publisher,
+                        recall_frame(receiver=receiver, publisher=publisher, context=context, purpose=purpose,
+                                     query=query, k=20, at=clock().isoformat()), left_ms())
+            snapshot = validate_trace(reply, publisher=publisher, query=query, context=context, k=20)
+            snapshots.append(snapshot)
+            if snapshot["decision"]["effect"] != "allow":   # the publisher's own refusal is seen (review S3)
+                diagnostics.append(dict(publisher=publisher, code=snapshot["decision"]["code"] or "PUBLISHER_DENIED"))
             outcome = ("policy-denied" if snapshot["decision"]["effect"] != "allow"
                        else "matched" if snapshot["candidates"] else "absent")
             sources.append(dict(publisher=publisher, role="remote", weight=weight,
@@ -150,11 +214,19 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                 if not permits(grants):
                     continue
                 remaining()
-                reply = client.call(read_frame(receiver=receiver, publisher=publisher.removeprefix("urn:engram:"),
-                                    context=context, purpose=purpose, turn_id=snapshot["turnId"],
-                                    memory_ids=[item["memoryId"] for item in chosen]), deadline=deadline)
+                if publisher in remote_names:
+                    reply = ask(receiver_instance, receiver_ship, publisher,
+                                read_frame(receiver=receiver, publisher=publisher, context=context, purpose=purpose,
+                                           turn_id=snapshot["turnId"], memory_ids=[i["memoryId"] for i in chosen]),
+                                left_ms())
+                else:
+                    reply = client.call(read_frame(receiver=receiver, publisher=publisher.removeprefix("urn:engram:"),
+                                        context=context, purpose=purpose, turn_id=snapshot["turnId"],
+                                        memory_ids=[item["memoryId"] for item in chosen]), deadline=deadline)
                 verified = validate_read(reply, selected=chosen)
                 delivered.extend(verified)
+                # P15: the read's disclosureId reaches the receipt, so all four records link by it
+                read_disclosures.append(dict(publisher=publisher, disclosureId=reply["disclosureId"]))
             except Exception as error:
                 diagnostics.append(dict(publisher=publisher, code=getattr(error, "code", "NEIGHBOR_ERROR")))
 
@@ -184,6 +256,21 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
         permitted = [i["permission"] for i in delivered if isinstance(i.get("permission"), dict)]
         delivered = [{**i, "permission": annotation_line(i["permission"])} if isinstance(i.get("permission"), dict) else i
                      for i in delivered]
+        # P16: what came from another peer is recorded beside the store first, then the receipt. A failed record
+        # returns nothing, as a failed receipt does; a record left by a receipt that then fails guards unseen text.
+        remote_items = [item for item in delivered if item["publisher"] in remote_names]
+        if remote_items:
+            read_ids = {d["publisher"]: d["disclosureId"] for d in read_disclosures}
+            try:
+                remote_deliveries.record(
+                    remote_deliveries.path_for(storage.db_path),
+                    [dict(disclosureId=read_ids.get(i["publisher"]) or "", publisher=i["publisher"],
+                          memoryId=i["memoryId"], content=i["content"]) for i in remote_items],
+                    now=int(clock().timestamp()))
+            except remote_deliveries.RecordBusy:
+                return dict(_empty("RECORD_BUSY"), sources=sources, selected=selected)
+            except Exception:
+                return dict(_empty("RECORD_FAILED"), sources=sources, selected=selected)
         recall_rules = {source["policyDecision"]["ruleId"] for source in sources}
         receipt = build_receipt(receiver=receiver, turn_id=recall_id, context=context, purpose=purpose,
                                 sources=sources, selected=selected,
@@ -195,6 +282,7 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                                  "engram:unavailableSources": unavailable,
                                  "engram:receiverDecisions": decisions,
                                  "engram:diagnostics": diagnostics,
+                                 "engram:readDisclosures": read_disclosures,
                                  "engram:sourceDigestBasis": "canonical-received-trace-v1"}
         if permitted:
             receipt["extensions"]["engram:permissions"] = {
@@ -237,6 +325,11 @@ def attach_neighbors(response, *, query, context_id, purpose, storage, session_i
         # The server may fall back to its default DB when a named store is absent.
         if Path(storage.db_path).resolve() != (instance / "graph.db").resolve():
             raise ValueError("RECEIVER_STORE_MISMATCH")
+        # P19: today's caller of ask_crossing. The store host, when it lands, passes its own `ask` of the same shape.
+        crossing_socket = settings.pop("crossing_socket", None)
+        if settings.get("remote_publishers") and not by_default:
+            settings.update(ask=functools.partial(ask_crossing, socket_path=crossing_socket),
+                            receiver_instance=storage.instance_identity().get("instance_id"))
         arm_settings = {key: settings[key] for key in LOCAL_ARM_KEYS} if by_default else settings
         result = neighbor_arm(query=query, context=context, purpose=purpose, storage=storage,
                               session_id=session_id, recall_id=response["recall_id"], receiver=receiver,

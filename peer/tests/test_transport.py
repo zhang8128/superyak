@@ -376,7 +376,7 @@ def other_leaf_server(tmp_path):
     return root, sock.getsockname()[1], received, stop
 
 
-@pytest.mark.parametrize('dial', ['send_pinned', 'pull_pinned'])
+@pytest.mark.parametrize('dial', ['send_pinned', 'pull_pinned', 'crossing_pinned'])
 def test_no_byte_is_written_before_the_pin_is_compared(tmp_path, dial):
     """Review MF1: a pull request is authorised only by its signature, so one written to the wrong server could be
     replayed for the pull peer's envelopes. Push and pull share one pinned dial, and neither writes a byte first."""
@@ -387,6 +387,8 @@ def test_no_byte_is_written_before_the_pin_is_compared(tmp_path, dial):
         with pytest.raises(transport.PinMismatch):
             if dial == 'send_pinned':
                 transport.send_pinned(card, lambda: b'{"signed":"secret"}')
+            elif dial == 'crossing_pinned':
+                transport.crossing_pinned(card, b'{"signed":"secret"}', deadline=time.monotonic() + 3)
             else:
                 transport.pull_pinned(card, b'{"signed":"secret"}')
     finally:
@@ -564,5 +566,109 @@ def test_a_handshake_with_no_certificate_is_a_pin_mismatch(tmp_path, monkeypatch
     try:
         with pytest.raises(transport.PinMismatch):
             transport.pull_pinned(card, b'{}')
+    finally:
+        stop()
+
+
+# Ship home and crossing plan, Task 6: crossing_pinned, the asking side's one POST, bounded by one monotonic deadline.
+
+def answer_body(size=3000):
+    from superyak_peer.identity import canonical
+    return canonical({'kind': 'crossing-answer', 'pad': 'x' * size})
+
+
+def test_a_crossing_answer_arrives_and_its_path_is_the_crossing_route(tmp_path):
+    from superyak_peer.transport import crossing_pinned
+    body, paths = answer_body(), []
+    def respond(handler):
+        paths.append(handler.path)
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    card, stop = pull_server(tmp_path, respond)
+    try:
+        assert crossing_pinned(card, b'{}', deadline=time.monotonic() + 3) == {'kind': 'crossing-answer', 'pad': 'x' * 3000}
+    finally:
+        stop()
+    assert paths == ['/federation/crossing']
+
+
+def test_a_crossing_answer_over_the_cap_or_without_a_length_is_refused_unread(tmp_path):
+    from superyak_peer.transport import CROSSING_ANSWER_CAP, PeerAnswer, crossing_pinned
+    assert CROSSING_ANSWER_CAP == 128 * 1024
+    def over(handler):
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(CROSSING_ANSWER_CAP + 1))
+        handler.end_headers()
+        time.sleep(3)
+    def unmeasured(handler):
+        handler.send_response(200)
+        handler.end_headers()
+        handler.wfile.write(answer_body())
+    for respond in (over, unmeasured):
+        card, stop = pull_server(tmp_path / respond.__name__, respond)
+        started = time.monotonic()
+        try:
+            with pytest.raises(PeerAnswer) as refused:
+                crossing_pinned(card, b'{}', deadline=time.monotonic() + 5)
+            assert refused.value.status == 200 and time.monotonic() - started < 2  # refused unread
+        finally:
+            stop()
+
+
+def test_a_short_crossing_answer_is_a_timeout(tmp_path):
+    from superyak_peer.transport import crossing_pinned
+    body = answer_body()
+    def respond(handler):
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(len(body) + 10))
+        handler.end_headers()
+        handler.wfile.write(body)
+        handler.wfile.flush()
+        handler.close_connection = True
+    card, stop = pull_server(tmp_path, respond)
+    try:
+        with pytest.raises(TimeoutError):
+            crossing_pinned(card, b'{}', deadline=time.monotonic() + 3)
+    finally:
+        stop()
+
+
+def test_a_crossing_ends_by_its_deadline(tmp_path):
+    from superyak_peer.transport import crossing_pinned
+    body = answer_body()
+    def respond(handler):
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(len(body)))
+        handler.end_headers()
+        for at in range(20):  # a byte every 0.1 s: never idle long, so only the deadline ends it
+            handler.wfile.write(body[at:at + 1])
+            handler.wfile.flush()
+            time.sleep(.1)
+    card, stop = pull_server(tmp_path, respond)
+    started = time.monotonic()
+    try:
+        with pytest.raises(OSError):  # TimeoutError, or the shut-down socket's own error
+            crossing_pinned(card, b'{}', deadline=time.monotonic() + 0.6)
+        assert time.monotonic() - started < 1.2
+    finally:
+        stop()
+
+
+def test_a_crossing_refusal_is_a_peer_answer_with_its_status(tmp_path):
+    import json
+    from superyak_peer.transport import PeerAnswer, crossing_pinned
+    def respond(handler):
+        raw = json.dumps({'error': 'Too many crossings'}).encode()
+        handler.send_response(429)
+        handler.send_header('Content-Length', str(len(raw)))
+        handler.end_headers()
+        handler.wfile.write(raw)
+    card, stop = pull_server(tmp_path, respond)
+    try:
+        with pytest.raises(PeerAnswer) as answered:
+            crossing_pinned(card, b'{}', deadline=time.monotonic() + 3)
+        assert (answered.value.status, answered.value.message) == (429, 'Too many crossings')
     finally:
         stop()

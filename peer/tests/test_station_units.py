@@ -73,8 +73,10 @@ EXPECTED = {
     },
     'superyak-federate.service': {  # federation pull plan SF10: long-running, restarted; the data dir from a drop-in
         'Unit': {'After': 'network-online.target superyak-lighthouse.service', 'Wants': 'network-online.target'},
-        'Service': {'Type': 'simple', 'WorkingDirectory': '%h/superyak/peer', 'Environment': 'FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1',
-                    'ExecStart': f'{PYTHON} federate --data-dir ${{FEDERATION_DATA}}',
+        'Service': {'Type': 'simple', 'WorkingDirectory': '%h/superyak/peer',
+                    'Environment': 'FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1 FEDERATE_ARGS=',
+                    # crossing plan P9: unbraced, so an empty FEDERATE_ARGS adds no argument
+                    'ExecStart': f'{PYTHON} federate --data-dir ${{FEDERATION_DATA}} $FEDERATE_ARGS',
                     'Restart': 'on-failure', 'RestartSec': '30', 'MemoryMax': '256M', 'MemorySwapMax': '0'},
         'Install': {'WantedBy': 'default.target'},
     },
@@ -459,3 +461,33 @@ def test_station_lessons_room_refuses_anything_but_full_peer_ids(tmp_path, peers
                           cwd=REPO, capture_output=True, text=True, timeout=60)
     assert done.returncode != 0 and 'PEERS takes full peer ids' in done.stdout + done.stderr
     assert peers not in done.stdout + done.stderr  # never printed back: a word typed there by mistake may be a code
+
+
+def test_federate_args_drop_in_turns_the_crossing_socket_on_and_a_plain_rerun_turns_it_off(tmp_path):
+    """Ship home and crossing plan, Task 14 (P9, nit 5): make federation-units FEDERATE_ARGS=--crossing-socket writes
+    30-federate-args.conf for the federate unit only; run without FEDERATE_ARGS it removes it, so a rollback that reruns
+    it turns the flag off; federation-units-remove removes it too. Nothing but --crossing-socket is taken."""
+    units, data, home, shim = tmp_path / 'systemd-user', tmp_path / 'tardis peer', tmp_path / 'home', tmp_path / 'bin'
+    for directory in (units, data, home, shim):
+        directory.mkdir()
+    (data / 'peer.sqlite3').write_bytes(b'')
+    (shim / 'systemctl').write_text('#!/bin/sh\nexit 0\n')
+    (shim / 'systemctl').chmod(0o755)
+    env = {**os.environ, 'HOME': str(home), 'PATH': f'{shim}:{os.environ["PATH"]}'}
+    env['FEDERATE_ARGS'] = '--crossing-socket'  # exported: ignored, only the command line counts
+
+    def make(target, *extra):
+        return subprocess.run(['make', '-s', target, f'SYSTEMD_USER={units}', f'FEDERATION_DATA={data}', *extra],
+                              cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+    drop = units / 'superyak-federate.service.d' / '30-federate-args.conf'
+    assert make('federation-units', 'FEDERATE_ARGS=--crossing-socket').returncode == 0
+    assert drop.read_text() == '[Service]\nEnvironment="FEDERATE_ARGS=--crossing-socket"\n'
+    assert stat.S_IMODE(drop.stat().st_mode) == 0o644
+    assert not (units / 'superyak-federation-listen.service.d' / '30-federate-args.conf').exists()
+    assert make('federation-units').returncode == 0 and not drop.exists()
+    assert make('federation-units', 'FEDERATE_ARGS=--crossing-socket').returncode == 0 and drop.exists()
+    refused = make('federation-units', 'FEDERATE_ARGS=--crossing-socket --data-dir /elsewhere')
+    assert refused.returncode != 0 and 'crossing-socket' in refused.stdout + refused.stderr
+    assert drop.read_text() == '[Service]\nEnvironment="FEDERATE_ARGS=--crossing-socket"\n'
+    assert make('federation-units-remove').returncode == 0
+    assert not drop.exists() and not drop.parent.exists()

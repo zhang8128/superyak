@@ -16,6 +16,10 @@ def fork_instance(name: str, engram_dir: Path | None = None, from_source: str = 
     """Fork a new instance from the genome or another instance."""
     if engram_dir is None:
         engram_dir = ENGRAM_DIR
+    from sharing import RESERVED_AGENT
+    if name == RESERVED_AGENT:  # ship home and crossing spec 2.2: the ledger's one agent for every remote store
+        print(f"Error: '{RESERVED_AGENT}' is reserved for remote stores; no local instance takes it", file=sys.stderr)
+        sys.exit(1)
 
     # Determine source DB
     if from_source == "genome":

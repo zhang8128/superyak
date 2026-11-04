@@ -106,7 +106,8 @@ def test_load_settings_keeps_its_shape_for_every_other_caller(tmp_path):
     """context_lighthouse.py, lighthouse_daemon.py and neighbor_arm's **settings take what load_settings returns."""
     instance, _ = receiver(tmp_path, f'default_context = "{CONTEXT}"')
     settings = receiver_config.load_settings(instance / "lighthouse-receiver.toml")
-    assert set(settings) == {"publishers", "socket_path", "policy_path", "k", "timeout_s"}
+    assert set(settings) == {"publishers", "socket_path", "policy_path", "k", "timeout_s",
+                             "remote_publishers", "crossing_socket", "receiver_ship"}
     assert receiver_config.load_settings(instance / "absent.toml") is None
     (instance / "off.toml").write_text("enabled = false\n")
     assert receiver_config.load_settings(instance / "off.toml") is None
@@ -180,6 +181,29 @@ def test_an_explicit_crossing_still_takes_every_setting(tmp_path, monkeypatch):
     monkeypatch.setattr(neighbors, "load_settings", lambda path: settings_with_remotes())
     attach_explicit(tmp_path, storage)
     assert {"remote_publishers", "receiver_ship"} <= set(calls[0]) and calls[0]["timeout_s"] == 5.0
+
+
+def test_a_default_crossing_never_asks_a_remote_publisher_and_the_same_recall_naming_it_does(tmp_path, monkeypatch):
+    """The spec's end-to-end case, on real settings and a real policy: a remote whose context is the default's own."""
+    from tests.test_neighbors import PEER, SHIP, SHIP_REF, remote_policy
+    asked = []
+
+    def ask(instance, ship, publisher, frame, deadline_ms, *, socket_path):
+        asked.append((publisher, frame["kind"], frame.get("query")))
+        raise neighbors.NeighborUnavailable("UNAVAILABLE")
+    monkeypatch.setattr(neighbors, "ask_crossing", ask)
+    instance, storage = receiver(tmp_path, f'default_context = "{CONTEXT}"', 'crossing_socket = "c.sock"',
+                                 f'receiver_ship = "{"e" * 32}"', "[[remote_publishers]]", f'peer_id = "{PEER}"',
+                                 f'ship = "{SHIP}"', f'context = "{CONTEXT}"')
+    remote_policy(instance / "policy.json")
+    storage.add_log_entry = lambda **kw: None
+    default = neighbors.attach_default(dict(recall_id="turn", results=["local"]), query="private query", storage=storage,
+                                       session_id="s", receiver="engram", engram_home=tmp_path)
+    assert default["neighbors"]["by_default"] is True and asked == []
+    neighbors.attach_neighbors(dict(recall_id="turn", results=["local"]), query="private query", context_id=CONTEXT,
+                               purpose="session-recall", storage=storage, session_id="s", receiver="engram",
+                               engram_home=tmp_path)
+    assert asked == [(SHIP_REF, "recall", "private query")]
 
 
 def test_a_default_with_no_local_publisher_says_so_and_asks_nobody(tmp_path, monkeypatch):

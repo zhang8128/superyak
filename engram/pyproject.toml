@@ -110,6 +110,7 @@ py-modules = [
     "persistence",
     "policy_gen",
     "reflection",
+    "remote_deliveries",
     "resonance",
     "resources",
     "scoring",
