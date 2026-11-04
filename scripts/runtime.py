@@ -99,6 +99,30 @@ def _valid_publishers(value: object) -> bool:
     )
 
 
+# engram/lighthouse_receiver_config.py's SETTINGS_KEYS and context_ref, kept here because this file is standard library
+# only; tests/test_default_crossing.py holds them equal.
+RECEIVER_KEYS = frozenset(
+    {
+        "enabled",
+        "publishers",
+        "socket_path",
+        "policy_path",
+        "limit",
+        "timeout_s",
+        "default_context",
+    }
+)
+_CONTEXT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+
+
+def _valid_context(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= 512
+        and all(_CONTEXT_SEGMENT.fullmatch(part) for part in value.split("/"))
+    )
+
+
 def _parse_toml(path: Path) -> dict:
     try:
         value = tomllib.loads(_bounded_text(path))
@@ -307,15 +331,8 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     timeout = settings.get("timeout_s", 2.0)
     if (
         settings.get("enabled") is not True
-        or set(settings)
-        - {
-            "enabled",
-            "publishers",
-            "socket_path",
-            "policy_path",
-            "limit",
-            "timeout_s",
-        }
+        or set(settings) - RECEIVER_KEYS
+        or ("default_context" in settings and not _valid_context(settings["default_context"]))
         or not _valid_publishers(publishers)
         or not isinstance(socket_value, str)
         or not socket_value
@@ -341,6 +358,8 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
         "publishers": publishers,
         "policy": {"path": str(policy_path), "parseable": policy_parseable},
     }
+    if "default_context" in settings:
+        status["default_context"] = settings["default_context"]
     if not policy_parseable:
         status["error"] = "receiver policy is missing or not parseable"
         errors.append("receiver policy is unavailable")

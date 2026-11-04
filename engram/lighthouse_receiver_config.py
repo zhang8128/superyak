@@ -29,7 +29,14 @@ def valid_publishers(publishers):
             and len(set(publishers)) == len(publishers))
 
 
-def load_settings(path):
+# scripts/runtime.py is standard library only, so it keeps this list as RECEIVER_KEYS, and a test holds the two equal: a
+# key only one of them knows reads a working receiver as invalid, or an invalid one as working.
+SETTINGS_KEYS = frozenset({"enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s",
+                           "default_context"})
+
+
+def _read_settings(path):
+    """The toml as checked, or None when it is absent or disabled. ValueError when it is not valid, whole."""
     path = Path(path)
     if not path.exists():
         return None
@@ -37,9 +44,26 @@ def load_settings(path):
     if data.get("enabled") is False:
         return None
     if (data.get("enabled") is not True
-            or set(data) - {"enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s"}
+            or set(data) - SETTINGS_KEYS
             or not valid_publishers(data.get("publishers"))):
         raise ValueError("INVALID_CONFIG")
+    if "default_context" in data:
+        context_ref(data["default_context"])
+    return data
+
+
+def default_context_of(path):
+    """The context an enabled receiver's owner set for recalls that name none (`default_context`), or None. ValueError
+    when the settings are not valid."""
+    data = _read_settings(path)
+    return None if data is None else data.get("default_context")
+
+
+def load_settings(path):
+    path = Path(path)
+    data = _read_settings(path)
+    if data is None:
+        return None
     limit, timeout = data.get("limit", 1), data.get("timeout_s", 2.0)
     if type(limit) is not int or not 1 <= limit <= 5:
         raise ValueError("INVALID_CONFIG")

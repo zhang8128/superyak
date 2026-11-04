@@ -69,7 +69,9 @@ cluster ship doesn't set `default_context` until its spec has a bound.
 ## Rollout, and how it can come off
 
 - The Mac sets `default_context = "memory/technical"` once this merges and that machine's Engram sessions have restarted.
-  The Pi and Tardis set it when each has a local publisher, which they don't yet.
+  Any other machine sets it only once a crossing there, under its usual load, comes in under the deadline, measured. On
+  the Pi a batch on the shared embedder held a query embed for about 2 minutes (Rio Grande, 2026-11-04): a deadline
+  bounds that harm, and doesn't fix the queue.
 - Rollback: delete the line. Nothing else depends on it.
 - **Measure, and what it can't see.** Crossings per session come from `lighthouse_receipt` rows, against the baseline of 9
   in two months. Whether a crossing helped can only come from an explicit `log_outcome`: the sleep hook's automatic marks
