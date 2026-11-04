@@ -218,11 +218,11 @@ function showLogin(message = "") {
     <div class="login-wrap">
       <section class="login-story">
         ${brand()}
-        <div><h1>A home for the parts of your life you choose to share.</h1><p>Write privately, talk with people you trust, and turn on only the version you mean to share.</p></div>
-        <p class="login-note">Self-hosted: this home runs on a computer its owner keeps. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
+        <div><h1>A home for the parts of your life you choose to share.</h1><p>A home is a small server someone runs for the people they invite. Write where only you and this home's owner can read, talk with people you trust, and publish only what you choose.</p></div>
+        <p class="login-note">Free, open-source and self-hosted: this home runs on a computer its owner keeps. Superyak's first use is medical research, and it's a prototype, so please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
-        <p class="eyebrow">Personal home</p>
+        <p class="eyebrow">A Superyak home</p>
         <h2 id="login-title">Sign in to this home</h2>
         <p>An account here lives on this home, not with a company.</p>
         ${message ? `<div class="notice error" role="alert">${escapeHtml(message)}</div>` : ""}

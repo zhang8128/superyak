@@ -166,7 +166,7 @@ def test_the_sign_in_page_says_it_is_a_prototype_and_links_what_superyak_is(brow
     whose home it is is left to a station's own welcome."""
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
-        expect(page.get_by_text("A prototype, being built and tested")).to_be_visible()
+        expect(page.get_by_text("Superyak's first use is medical research, and it's a prototype", exact=False)).to_be_visible()
         expect(page.get_by_text("please don't put real patient information in it yet", exact=False)).to_be_visible()
         link = page.get_by_role("link", name="What is Superyak?")
         expect(link).to_be_visible()
@@ -188,7 +188,14 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
-        expect(page.get_by_text("Self-hosted: this home runs on a computer its owner keeps.", exact=False)).to_be_visible()
+        expect(page.get_by_text("Free, open-source and self-hosted: this home runs on a computer its owner keeps.", exact=False)).to_be_visible()
+        # The second cold walk: "Write privately" beside "its owner can read" read as private from the owner too, and
+        # "home" was never said to be anything. "version" of what, it asked as well.
+        expect(page.get_by_text("A home is a small server someone runs for the people they invite.", exact=False)).to_be_visible()
+        expect(page.get_by_text("Write where only you and this home's owner can read", exact=False)).to_be_visible()
+        assert "write privately" not in page.locator("main").inner_text().lower()
+        assert "the version you mean" not in page.locator("main").inner_text().lower()
+        assert "personal home" not in page.locator("main").inner_text().lower()  # personal to whom, it asked
         expect(page.get_by_text("An account here lives on this home, not with a company.", exact=True)).to_be_visible()
         words = page.locator("main").inner_text().lower()
         assert "your home" not in words
@@ -207,7 +214,8 @@ def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(bro
 
 
 ABOUT = ("A Superyak home: a free, open-source, self-hosted place for the parts of your life you choose to share. Its "
-         "owner invites the people in it.")
+         "owner invites the people in it and can read what's stored here. A prototype: please don't put real patient "
+         "information in it yet.")
 
 
 def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
@@ -231,6 +239,8 @@ def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
             shell = context.new_page()
             shell.goto(browser_peer["base_url"] + "/")
             expect(shell.get_by_text(ABOUT, exact=False)).to_be_visible()
+            # The second cold walk: "Opening this home…" alone looked stuck, with no way to tell what to do next.
+            expect(shell.get_by_text("Ask the person who runs this home for an invitation.", exact=False)).to_be_visible()
             expect(shell.get_by_role("link", name="What is Superyak?")).to_have_attribute(
                 "href", "https://github.com/zhang8128/superyak#readme")
         finally:
@@ -244,7 +254,7 @@ def test_once_the_app_loads_the_shell_description_is_gone(browser_peer):
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
-        expect(page.get_by_text("Its owner invites the people in it.", exact=False)).to_have_count(0)
+        expect(page.get_by_text("Its owner invites the people in it", exact=False)).to_have_count(0)
 
 
 def test_source_library_import_pause_and_private_review(browser_peer):
