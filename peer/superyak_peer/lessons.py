@@ -1591,6 +1591,9 @@ def main(argv=None):
     try:
         store = None
         if opens:
+            if not (args.data_dir / 'peer.sqlite3').is_file():  # a Store would make one, and answer for a peer that isn't
+                parser.exit(1, f'There is no peer here: {args.data_dir} holds no peer.sqlite3, and this never makes one. If '
+                               "this machine's peer is elsewhere, name it: --data-dir, or make's LESSONS_DATA.\n")
             from .db import Store
             store = Store(args.data_dir, signing=False)
         said = run(store, args)
