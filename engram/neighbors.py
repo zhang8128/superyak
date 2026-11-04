@@ -13,13 +13,22 @@ from lighthouse_protocol import artifact_digest, canonical_json, content_digest,
 from permissions import annotation_line
 import remote_deliveries
 from lighthouse_receipts import build_receipt, write_receipt
-from lighthouse_receiver_config import (MAX_PUBLISHERS, NAME, context_ref, load_receiver_policy, load_settings,
-                                        valid_publishers, valid_remote_publishers)
+from lighthouse_receiver_config import (MAX_PUBLISHERS, NAME, context_ref, default_context_of, load_receiver_policy,
+                                        load_settings, valid_publishers, valid_remote_publishers)
 
 PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 CLAIM_TYPE = "application/vnd.engram.recall-rank-claim+json"
 MAX_CONTENT_BYTES = 32768
 MIN_CROSSING_MS = 100          # a crossing with less time left than this is a TIMEOUT, never asked (P8)
+# A default crossing's deadline in seconds, under the receiver's own `timeout_s`: a hung publisher must not add 5 s to
+# every recall. Provisional: measured on the Mac only, where a crossing adds about 31 ms. Each machine checks it under its
+# own load before it sets `default_context` (spec, Rollout).
+DEFAULT_DEADLINE_S = 1.0
+DEFAULT_PURPOSE = "session-recall"
+# All a default crossing may take from the receiver's settings, by name. An allow-list, at the call: a setting that reaches
+# another machine, whoever adds it later, can't reach a default crossing, so a recall's text leaves only when that call
+# names a context (spec, decision 2).
+LOCAL_ARM_KEYS = ("publishers", "socket_path", "policy_path", "k", "timeout_s")
 
 
 def _empty(code):
@@ -27,9 +36,9 @@ def _empty(code):
                 degraded=True, diagnostics=[{"code": code}])
 
 
-def _say_unreached(response, code):
+def _say_unreached(response, code, **said):
     """An asked-for neighbor that couldn't be consulted: an empty result naming why, and `neighbors` in degraded."""
-    response["neighbors"] = _empty(code)
+    response["neighbors"] = dict(_empty(code), **said)
     response.setdefault("degraded", []).append("neighbors")
     return response
 
@@ -41,7 +50,7 @@ def remote_ref(remote):
 
 def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                  receiver, publishers, socket_path=None, policy_path, timeout_s=2.0, now=None,
-                 remote_publishers=(), receiver_ship=None, receiver_instance=None, ask=None):
+                 remote_publishers=(), receiver_ship=None, receiver_instance=None, ask=None, by_default=False):
     """Consult only explicit peers and persist a content-free receipt before delivery.
 
     A remote publisher (`remote_publishers`, P14) is asked only when the recall's context is its own, and only
@@ -280,22 +289,27 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                 "receipts": sorted({p["receipt"] for p in permitted}),
                 "records": sorted({r for p in permitted for e in p["allowed_by"] for r in e["records"]})}
         receipt["digest"] = artifact_digest(receipt)
-        receipt_id = write_receipt(storage, receipt, session_id=session_id, recall_id=recall_id)
+        receipt_id = write_receipt(storage, receipt, session_id=session_id, recall_id=recall_id, by_default=by_default)
     except Exception:
         return dict(_empty("RECEIPT_FAILED"), sources=sources, selected=selected)
     return dict(sources=sources, selected=selected, delivered=delivered, receipt_id=receipt_id,
                 degraded=bool(diagnostics), diagnostics=diagnostics)
 
 
-def attach_neighbors(response, *, query, context_id, purpose, storage, session_id, receiver, engram_home):
-    """Final MCP response seam; opt-in settings and declared context are both required. A recall that names no
-    context is inert. One that names a context but reaches no neighbor, because this server has no named receiver
-    or that receiver isn't enabled, says so in `neighbors` and `degraded`, so a caller never takes local results
-    alone for a search of shared memory (Rio Grande's Engram test, 2026-11-03)."""
+def attach_neighbors(response, *, query, context_id, purpose, storage, session_id, receiver, engram_home,
+                     by_default=False):
+    """Final MCP response seam; opt-in settings and a context are both required. With no context this does nothing:
+    `attach_default` is what looks for the owner's. One that names a context but reaches no neighbor, because this
+    server has no named receiver or that receiver isn't enabled, says so in `neighbors` and `degraded`, so a caller
+    never takes local results alone for a search of shared memory (Rio Grande's Engram test, 2026-11-03).
+
+    `by_default` is `attach_default`'s call. It takes the shorter deadline and only LOCAL_ARM_KEYS of the settings: a
+    recall's text never leaves the machine unless that call names a context."""
     if context_id is None:
         return response
+    said = dict(context=context_id, by_default=by_default)
     if not receiver:
-        return _say_unreached(response, "NO_RECEIVER")
+        return _say_unreached(response, "NO_RECEIVER", **said)
     try:
         if not isinstance(receiver, str) or not NAME.fullmatch(receiver):
             raise ValueError("INVALID_RECEIVER")
@@ -303,21 +317,46 @@ def attach_neighbors(response, *, query, context_id, purpose, storage, session_i
         instance = Path(engram_home) / ".engram" / "instances" / receiver
         settings = load_settings(instance / "lighthouse-receiver.toml")
         if settings is None:
-            return _say_unreached(response, "RECEIVER_DISABLED")
+            return _say_unreached(response, "RECEIVER_DISABLED", **said)
+        if by_default:
+            if not settings["publishers"]:
+                return _say_unreached(response, "NO_LOCAL_PUBLISHER", **said)
+            settings["timeout_s"] = min(settings["timeout_s"], DEFAULT_DEADLINE_S)
         # The server may fall back to its default DB when a named store is absent.
         if Path(storage.db_path).resolve() != (instance / "graph.db").resolve():
             raise ValueError("RECEIVER_STORE_MISMATCH")
         # P19: today's caller of ask_crossing. The store host, when it lands, passes its own `ask` of the same shape.
         crossing_socket = settings.pop("crossing_socket", None)
-        if settings.get("remote_publishers"):
+        if settings.get("remote_publishers") and not by_default:
             settings.update(ask=functools.partial(ask_crossing, socket_path=crossing_socket),
                             receiver_instance=storage.instance_identity().get("instance_id"))
+        arm_settings = {key: settings[key] for key in LOCAL_ARM_KEYS} if by_default else settings
         result = neighbor_arm(query=query, context=context, purpose=purpose, storage=storage,
-                              session_id=session_id, recall_id=response["recall_id"], receiver=receiver, **settings)
+                              session_id=session_id, recall_id=response["recall_id"], receiver=receiver,
+                              by_default=by_default, **arm_settings)
     except Exception:
         result = _empty("RECEIVER_CONFIG_INVALID")
     if result is not None:
-        response["neighbors"] = result
+        response["neighbors"] = dict(result, **said)
         if result["degraded"]:
             response.setdefault("degraded", []).append("neighbors")
     return response
+
+
+def attach_default(response, *, query, storage, session_id, receiver, engram_home):
+    """A recall that names no context, when its receiver's owner set `default_context`: it crosses with that, by
+    `attach_neighbors`, as session-recall, under the shorter deadline. With no receiver, no settings, a disabled receiver
+    or no key, this does nothing, and nobody is told anything, since nobody asked. A file that can't be read does say so,
+    since nobody can tell the key isn't in it: an owner who set this up would otherwise lose every crossing in silence,
+    which is how a rule lapsed unseen for 20 days."""
+    if not isinstance(receiver, str) or not NAME.fullmatch(receiver):
+        return response
+    path = Path(engram_home) / ".engram" / "instances" / receiver / "lighthouse-receiver.toml"
+    try:
+        context_id = default_context_of(path)
+    except Exception:
+        return _say_unreached(response, "RECEIVER_CONFIG_INVALID", context=None, by_default=True)
+    if context_id is None:
+        return response
+    return attach_neighbors(response, query=query, context_id=context_id, purpose=DEFAULT_PURPOSE, storage=storage,
+                            session_id=session_id, receiver=receiver, engram_home=engram_home, by_default=True)

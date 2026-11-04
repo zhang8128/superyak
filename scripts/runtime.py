@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+from stat import S_ISREG
 import sys
 import tempfile
 import tomllib
@@ -38,8 +39,16 @@ class SnapshotLimitError(OSError):
 
 def _bounded_text(path: Path, limit: int = MAX_CONFIG_BYTES) -> str:
     try:
-        with path.open("rb") as stream:
-            content = stream.read(limit + 1)
+        # Non-blocking, and the check is on what was opened: a FIFO at a configured path must not hang `status`.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            if not S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeConfigurationError(f"configuration is not a regular file: {path}")
+            content = b""
+            while chunk := os.read(descriptor, limit + 1 - len(content)):
+                content += chunk
+        finally:
+            os.close(descriptor)
     except FileNotFoundError as error:
         raise RuntimeConfigurationError(f"configuration does not exist: {path}") from error
     except OSError as error:
@@ -94,6 +103,7 @@ def _load_runtime_config(path: Path) -> tuple[Path, str, Path | None]:
 # keeps its own copy; engram/tests/test_runtime_installation.py holds the two equal).
 RECEIVER_KEYS = frozenset({
     "enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s",
+    "default_context",
     "remote_publishers", "crossing_socket", "receiver_ship",   # crossings between peers (ship home and crossing)
 })
 
@@ -107,10 +117,23 @@ def _valid_publishers(value: object) -> bool:
     )
 
 
+# engram/lighthouse_receiver_config.py's context_ref, kept here because this file is standard library only;
+# tests/test_default_crossing.py holds them equal.
+_CONTEXT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+
+
+def _valid_context(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= 512
+        and all(_CONTEXT_SEGMENT.fullmatch(part) for part in value.split("/"))
+    )
+
+
 def _parse_toml(path: Path) -> dict:
     try:
         value = tomllib.loads(_bounded_text(path))
-    except tomllib.TOMLDecodeError as error:
+    except (tomllib.TOMLDecodeError, RecursionError) as error:
         raise RuntimeConfigurationError(f"invalid TOML configuration: {path}") from error
     if not isinstance(value, dict):
         raise RuntimeConfigurationError(f"invalid TOML configuration: {path}")
@@ -296,7 +319,7 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     errors: list[str] = []
     settings_path = instance_dir / "lighthouse-receiver.toml"
     base = {"config": str(settings_path), "publishers": []}
-    if not settings_path.is_file():
+    if not settings_path.exists():
         return {**base, "state": "disabled"}, None, errors
     try:
         settings = _parse_toml(settings_path)
@@ -316,6 +339,7 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     if (
         settings.get("enabled") is not True
         or set(settings) - RECEIVER_KEYS
+        or ("default_context" in settings and not _valid_context(settings["default_context"]))
         or not _valid_publishers(publishers)
         or not isinstance(socket_value, str)
         or not socket_value
@@ -341,6 +365,8 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
         "publishers": publishers,
         "policy": {"path": str(policy_path), "parseable": policy_parseable},
     }
+    if "default_context" in settings:
+        status["default_context"] = settings["default_context"]
     if not policy_parseable:
         status["error"] = "receiver policy is missing or not parseable"
         errors.append("receiver policy is unavailable")

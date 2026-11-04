@@ -2,7 +2,8 @@
 from __future__ import annotations
 import json
 import math
-from pathlib import Path
+import os
+import stat
 import jsonschema
 from lighthouse_policy import Policy, PolicyError, _DIMENSIONS, _parse_rfc3339
 from lighthouse_protocol import verify_artifact_digest
@@ -15,8 +16,17 @@ _POLICY_VALIDATOR = jsonschema.Draft202012Validator(
 
 
 def bounded_read(path, cap):
-    with Path(path).open("rb") as stream:
-        data = stream.read(cap + 1)
+    """At most `cap` bytes of a regular file. A recall reads through here with no deadline over it, so a FIFO or a
+    device at the path refuses at once: non-blocking open, and the check is on what was opened, not on the name."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("NOT_A_REGULAR_FILE")
+        data = b""
+        while chunk := os.read(fd, cap + 1 - len(data)):
+            data += chunk
+    finally:
+        os.close(fd)
     if len(data) > cap:
         raise ValueError("INPUT_TOO_LARGE")
     return data

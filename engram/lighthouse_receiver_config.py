@@ -28,7 +28,7 @@ PEER_ID = re.compile(r"[0-9a-f]{64}\Z")
 PARTICIPANT = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")   # a peer card's participant id
 REMOTE_KEYS = frozenset({"peer_id", "ship", "context"})
 SETTINGS_KEYS = frozenset({"enabled", "publishers", "socket_path", "policy_path", "limit", "timeout_s",
-                           "remote_publishers", "crossing_socket", "receiver_ship"})
+                           "remote_publishers", "crossing_socket", "receiver_ship", "default_context"})
 
 
 def valid_publishers(publishers, *, allow_empty=False):
@@ -66,6 +66,10 @@ def _path(path, value):
     return (path.parent / value).resolve()
 
 
+def _read_toml(path):
+    return tomllib.loads(bounded_read(path, 16384).decode("utf-8"))
+
+
 def load_settings(path):
     """The receiver's settings, or None when absent or disabled. Local `publishers` need `socket_path`; remote ones
     (`[[remote_publishers]]`, P14) need `crossing_socket` and `receiver_ship`, and `publishers` may then be empty.
@@ -73,7 +77,7 @@ def load_settings(path):
     path = Path(path)
     if not path.exists():
         return None
-    data = tomllib.loads(bounded_read(path, 16384).decode("utf-8"))
+    data = _read_toml(path)
     if data.get("enabled") is False:
         return None
     remotes = data.get("remote_publishers", [])
@@ -82,6 +86,8 @@ def load_settings(path):
             or not valid_remote_publishers(remotes)
             or not 1 <= len(data["publishers"]) + len(remotes) <= MAX_PUBLISHERS):
         raise ValueError("INVALID_CONFIG")
+    if "default_context" in data:
+        context_ref(data["default_context"])
     limit, timeout = data.get("limit", 1), data.get("timeout_s", 2.0)
     if type(limit) is not int or not 1 <= limit <= 5:
         raise ValueError("INVALID_CONFIG")
@@ -98,6 +104,20 @@ def load_settings(path):
                 policy_path=_path(path, data.get("policy_path")), k=limit, timeout_s=timeout,
                 remote_publishers=[dict(r) for r in remotes], crossing_socket=crossing_socket,
                 receiver_ship=receiver_ship)
+
+
+def default_context_of(path):
+    """The context an enabled receiver's owner set for recalls that name none (`default_context`). None with no file, a
+    disabled one or no key, whatever else that file holds: a recall that asked for nothing is told nothing, as before the
+    key existed, and an explicit crossing and `superyak-runtime status` name what's wrong with it. ValueError when the file
+    can't be read as TOML, since nobody can then say the key isn't in it, or when its value is no context."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    data = _read_toml(path)
+    if data.get("enabled") is False or "default_context" not in data:
+        return None
+    return context_ref(data["default_context"])["id"]
 
 
 def load_receiver_policy(path, receiver):

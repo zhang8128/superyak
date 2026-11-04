@@ -2885,7 +2885,8 @@ def recall(
         max_results: Maximum matched results.
         uninvited: Number of random distant memories to append (0 to disable).
         lane: Filter to a lane ('personal' or 'work'). Default spans both.
-        lighthouse_context: Explicit neighbor context, e.g. 'memory/technical'. Requires receiver opt-in.
+        lighthouse_context: Explicit neighbor context, e.g. 'memory/technical'. Requires receiver opt-in. With none, a
+            receiver whose owner set `default_context` crosses with that, to local publishers only.
         lighthouse_purpose: Purpose checked by both receiver and publisher policies.
     """
     _init()
@@ -3413,17 +3414,20 @@ def recall(
         response["degraded"] = search_errors
     if knowledge:
         response["knowledge"] = knowledge
-    if lighthouse_context is not None:
-        try:
-            from neighbors import attach_neighbors
-            attach_neighbors(response, query=query, context_id=lighthouse_context,
-                             purpose=lighthouse_purpose, storage=_storage,
-                             session_id=_session_id, receiver=_instance_name,
-                             engram_home=ENGRAM_HOME)
-        except Exception:
-            # Neighbor failure cannot discard an otherwise complete local recall.
-            response.pop("neighbors", None)
-            response.setdefault("degraded", []).append("neighbors")
+    try:
+        import neighbors
+        if lighthouse_context is not None:
+            neighbors.attach_neighbors(response, query=query, context_id=lighthouse_context,
+                                       purpose=lighthouse_purpose, storage=_storage,
+                                       session_id=_session_id, receiver=_instance_name,
+                                       engram_home=ENGRAM_HOME)
+        else:
+            neighbors.attach_default(response, query=query, storage=_storage, session_id=_session_id,
+                                     receiver=_instance_name, engram_home=ENGRAM_HOME)
+    except Exception:
+        # Neighbor failure cannot discard an otherwise complete local recall.
+        response.pop("neighbors", None)
+        response.setdefault("degraded", []).append("neighbors")
     return response
 
 
