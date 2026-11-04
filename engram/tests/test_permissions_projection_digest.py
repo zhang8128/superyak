@@ -1158,3 +1158,29 @@ def test_m1_a_torn_meta_index_page_never_reads_a_gate_at_enforce_as_off(tmp_path
         led.close()
     with pytest.raises(LedgerUnreadable, match="SQLite's integrity check of the file"):
         _state(tmp_path)
+
+
+def test_m2_rebuild_replays_a_whole_log_when_a_table_page_is_malformed(tmp_path, monkeypatch, capsys):
+    """The review's M2 (its probe_rebuild_malformed.py): the log is whole, one table's root page is not. Rebuild is the
+    recovery path (D7), so it says the old tables could not be read, with SQLite's words, and replays the log anyway;
+    the command prints it."""
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    _uncollected(tmp_path)
+    path = ledger_path(tmp_path)
+    offset, size = _page_at(path, _rootpage(path, "collection_members"))
+    with open(path, "r+b") as f:
+        f.seek(offset)
+        f.write(b"\xff" * size)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        assert led.verify() is None                                       # the chain is whole
+        dest = led.rebuild(tmp_path / "copy")
+        assert isinstance(led.rebuilt_differs, str)
+        assert led.rebuilt_differs.startswith("the old tables could not be read") and "malformed" in led.rebuilt_differs
+    finally:
+        led.close()
+    assert M2 not in _live(_state(dest)) and M3 not in _live(_state(dest))     # the replay holds the uncollect
+    assert cli_main(["rebuild", "--out", str(tmp_path / "copy2")]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "The old tables could not be read (database disk image is malformed)" in out
+    assert f"move {ledger_path(tmp_path / 'copy2')} to {ledger_path(tmp_path)}" in out

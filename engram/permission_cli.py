@@ -724,7 +724,10 @@ def _rebuild(a) -> int:
         differs = led.rebuilt_differs
     print(f"Rebuilt the ledger at {ledger_path(dest)}. Its tables are the log's replay, and it keeps the projection "
           f"digest.")
-    if differs:
+    if isinstance(differs, str):                    # the old tables could not be read (the review's M2)
+        print(f"{differs[0].upper()}{differs[1:]}, so the replay was not compared with them; it is the ledger the "
+              f"log describes.")
+    elif differs:
         print(f"The old tables differ from the replay in {', '.join(differs)}: the log holds what they lost or "
               f"gained, so the replay is the ledger the log describes.")
     else:

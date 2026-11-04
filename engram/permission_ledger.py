@@ -2044,7 +2044,9 @@ class Ledger:
         The new file keeps the projection digest (D5), whatever this ledger's version. It is built fresh, with no key,
         memo or marker per append, checked whole once at the end and marked after its rename (the re-check's S4).
         Rebuild is the recovery path, so it never refuses for a projection that does not match: `rebuilt_differs`
-        names the parts in which this ledger's tables differ from the replay (D7), its version left aside."""
+        names the parts in which this ledger's tables differ from the replay (D7), its version left aside. When the old
+        tables can't be read at all (a malformed page; the log is all a rebuild needs), it is a sentence saying so,
+        with SQLite's words, and the log is replayed anyway (the section 2 review's M2)."""
         final = ledger_path(dest)
         if final.exists():
             raise FileExistsError(str(final))
@@ -2052,7 +2054,13 @@ class Ledger:
         if broken is not None:
             raise _bad(f"the log does not verify from seq {broken}; it cannot be rebuilt")
         self.rebuilt_differs = None
-        differs_from = self._differs_from_replay_later()
+        try:
+            differs_from = self._differs_from_replay_later()
+        except sqlite3.Error as e:
+            if self.conn.in_transaction:
+                self.conn.execute("ROLLBACK")
+            unread = f"the old tables could not be read ({e})"
+            differs_from = lambda replay: unread
         made_dir = not final.parent.exists()
         tmp = final.with_name(final.name + ".rebuilding")
         for stale in (tmp, tmp.with_name(tmp.name + "-journal")):
