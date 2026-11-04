@@ -69,6 +69,14 @@ def _decode_reply(wire: bytes, expected_kind: str) -> dict:
             wire.decode("utf-8"), object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
+    except (ValueError, TypeError, RecursionError, OverflowError) as exc:
+        raise NeighborUnavailable("MALFORMED_FRAME") from exc
+    return _check_reply_frame(reply, expected_kind)
+
+
+def _check_reply_frame(reply, expected_kind: str) -> dict:
+    """A decoded reply frame, validated and of the kind that answers the request; an error frame raises its code."""
+    try:
         validate_frame(reply)
         # Detect finite-number overflow (e.g. 1e999) and invalid Unicode too.
         encode(reply)
@@ -141,6 +149,89 @@ class LighthouseClient:
             raise NeighborUnavailable("TIMEOUT") from exc
         except OSError as exc:
             raise NeighborUnavailable("UNAVAILABLE") from exc
+
+
+# Ship home and crossing plan P8: the codes the peer's local hop answers, each shown in diagnostics by name.
+CROSSING_CODES = frozenset({"NOT_HOSTED", "NOT_PAIRED", "TIMEOUT", "UNAVAILABLE", "QUERY_TOO_LARGE", "BAD_ANSWER",
+                            "BAD_REQUEST"})
+_REFUSED = re.compile(r"REFUSED_[1-5][0-9][0-9]\Z")
+MAX_CROSSING_LINE = 160 * 1024     # the answer's 128 KiB and its frame, as one line
+_SHIP_REF = re.compile(r"urn:superyak:([0-9a-f]{64}):ship:([A-Za-z0-9_-]{1,64})\Z")
+
+
+class CrossingClient:
+    """The receiver's side of the local hop (P8): one canonical JSON line to the home peer's crossing.sock and one line
+    back, at most MAX_CROSSING_LINE, within a monotonic deadline. The peer signs, dials, and verifies the publisher's
+    answer; Engram holds no peer key. Returns the inner frame through the checks a local reply gets."""
+
+    def __init__(self, socket_path, timeout_s: float = 2.0):
+        if not _finite_number(timeout_s) or not 0 < timeout_s <= MAX_TIMEOUT_S:
+            raise NeighborUnavailable("TIMEOUT" if _finite_number(timeout_s) and timeout_s <= 0 else "INVALID_TIMEOUT")
+        self.socket_path = Path(socket_path)
+        self.timeout_s = float(timeout_s)
+
+    def call(self, request: dict, *, deadline: float) -> dict:
+        end = min(time.monotonic() + self.timeout_s, deadline) if _finite_number(deadline) else None
+        if end is None:
+            raise ValueError("INVALID_DEADLINE")
+        _remaining(end)
+        try:
+            expected = {"recall": "recall_result", "read": "read_result"}[request["frame"]["kind"]]
+            wire = (canonical_json(request) + "\n").encode("utf-8")
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
+            raise NeighborUnavailable("MALFORMED_FRAME") from exc
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(_remaining(end))
+                connection.connect(str(self.socket_path))
+                connection.settimeout(_remaining(end))
+                connection.sendall(wire)
+                data = bytearray()
+                while b"\n" not in data:
+                    connection.settimeout(_remaining(end))
+                    part = connection.recv(min(65536, MAX_CROSSING_LINE + 1 - len(data)))
+                    if not part:
+                        raise NeighborUnavailable("MALFORMED_FRAME")
+                    data.extend(part)
+                    if len(data) > MAX_CROSSING_LINE:
+                        raise NeighborUnavailable("FRAME_TOO_LARGE")
+        except TimeoutError as exc:
+            raise NeighborUnavailable("TIMEOUT") from exc
+        except OSError as exc:
+            raise NeighborUnavailable("UNAVAILABLE") from exc
+        _remaining(end)
+        if data.find(b"\n") != len(data) - 1:
+            raise NeighborUnavailable("MALFORMED_FRAME")
+        try:
+            reply = json.loads(bytes(data).decode("utf-8"), object_pairs_hook=_unique_object,
+                               parse_constant=_reject_constant)
+        except (ValueError, TypeError, RecursionError, OverflowError) as exc:
+            raise NeighborUnavailable("MALFORMED_FRAME") from exc
+        if isinstance(reply, dict) and set(reply) == {"ok", "code"} and reply["ok"] is False:
+            code = reply["code"]
+            if isinstance(code, str) and (code in CROSSING_CODES or _REFUSED.fullmatch(code)):
+                raise NeighborUnavailable(code)
+            raise NeighborUnavailable("MALFORMED_FRAME")
+        if not (isinstance(reply, dict) and set(reply) == {"ok", "frame"} and reply["ok"] is True):
+            raise NeighborUnavailable("MALFORMED_FRAME")
+        return _check_reply_frame(reply["frame"], expected)
+
+
+def ask_crossing(receiver_instance, receiver_ship, publisher, frame, deadline_ms, *, socket_path) -> dict:
+    """P19, condition 1: the one function every crossing is asked through, with the shape Rio Grande's store host
+    will call. `publisher` is the remote ship ref `urn:superyak:<peer id>:ship:<participant id>`, split into P8's
+    `destination` and `publisher_ship`. Returns the verified frame, or raises NeighborUnavailable with P8's code; a
+    malformed ref raises INVALID_PUBLISHER before anything connects."""
+    found = _SHIP_REF.fullmatch(publisher) if isinstance(publisher, str) else None
+    if found is None:
+        raise NeighborUnavailable("INVALID_PUBLISHER")
+    if type(deadline_ms) is not int or deadline_ms <= 0:
+        raise NeighborUnavailable("TIMEOUT")
+    request = {"receiver_instance": receiver_instance, "receiver_ship": receiver_ship,
+               "destination": found.group(1), "publisher_ship": found.group(2), "frame": frame,
+               "deadline_ms": deadline_ms}
+    seconds = min(deadline_ms / 1000, MAX_TIMEOUT_S)
+    return CrossingClient(socket_path, timeout_s=seconds).call(request, deadline=time.monotonic() + seconds)
 
 
 def _text(value) -> bool:
