@@ -1206,3 +1206,16 @@ def test_s4_an_append_waits_longer_for_the_lock_on_a_larger_ledger(tmp_path, mon
     assert seen == [permission_ledger._append_busy_ms(274_000_000)] and seen[0] >= 40_000
     assert led.conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     led.close()
+
+
+def test_s5_d9s_append_timing_takes_the_two_ledgers_appends_in_turn(tmp_path, monkeypatch):
+    """The review's S5: the append bound flaked once in six runs on the Pi, as a difference of two medians taken one
+    ledger after the other. The appends now alternate between the stamped ledger and its unstamped copy, and the
+    bound is on the median of the paired differences."""
+    _created(tmp_path / "home")
+    order, real = [], Ledger._append
+    monkeypatch.setattr(Ledger, "_append", lambda self, *a, **k: (order.append(self.path.parent.parent.name),
+                                                                  real(self, *a, **k))[1])
+    got = digest_timings(tmp_path / "home", runs=1, appends=6)
+    assert order == ["home", "home-unstamped"] * 6
+    assert set(got) == {"rare", "match", "append"}

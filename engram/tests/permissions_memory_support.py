@@ -129,7 +129,8 @@ def digest_timings(home, *, runs=5, appends=41):
     - "match": what a state() served by this process's memo spends in the key protocol: the key reads, the memo,
       the late connections' checks and the descriptor count (a difference of two 0.35 s state()s can't show 2 ms);
     - "append": an append's time less the same append on a copy made before the digest (version 1, which keeps no
-      digest and no key), both with synchronous=OFF so the disk's fsync is left out.
+      digest and no key), the two taken in turn, the median of those differences; both with synchronous=OFF so the
+      disk's fsync is left out.
     Makes that copy beside `home`."""
     import shutil
     import time
@@ -191,17 +192,20 @@ def digest_timings(home, *, runs=5, appends=41):
         for owner, name, real in wrapped:
             setattr(owner, name, real)
 
-    def append_s(where):
-        led = Ledger.open(where)
-        led.conn.execute("PRAGMA synchronous=OFF")
-        times = []
-        for i in range(appends):
-            start = time.perf_counter()
-            led._append("note", f"n{i}", OWNER, "terminal", {"insert": [{"table": "lane_notes", "row": {
-                "object": f"mem:S/episode/m{i}", "lane": "work", "at": 2_000_000 + i, "seq": "@seq"}}]},
-                at=2_000_000 + i)
-            times.append(time.perf_counter() - start)
-        led.close()
-        return _median(times)
+    def append_s(led, i):
+        start = time.perf_counter()
+        led._append("note", f"n{i}", OWNER, "terminal", {"insert": [{"table": "lane_notes", "row": {
+            "object": f"mem:S/episode/m{i}", "lane": "work", "at": 2_000_000 + i, "seq": "@seq"}}]}, at=2_000_000 + i)
+        return time.perf_counter() - start
 
-    return {"rare": _median(rare), "match": _median(match), "append": append_s(home) - append_s(old)}
+    # the two ledgers' appends in turn, and the median of the paired differences: two medians taken one ledger after
+    # the other flaked on a loaded Pi (the section 2 review's S5)
+    stamped, unstamped = Ledger.open(home), Ledger.open(old)
+    try:
+        for led in (stamped, unstamped):
+            led.conn.execute("PRAGMA synchronous=OFF")
+        paired = [append_s(stamped, i) - append_s(unstamped, i) for i in range(appends)]
+    finally:
+        stamped.close()
+        unstamped.close()
+    return {"rare": _median(rare), "match": _median(match), "append": _median(paired)}

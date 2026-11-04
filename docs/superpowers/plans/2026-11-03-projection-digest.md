@@ -393,3 +393,19 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
   U24's 274 MB (1.21 million projected rows), about 0.08 s per MB, past the fixed 12 s it had: a writer behind a rare
   check failed at COMMIT with nothing written. 0.16 s per MB is twice the measured rate, as margin, and gives about 44 s
   at 274 MB and the 12 s floor at Task 0's shape. Its cost is in Risks.
+- **D9, the Pi's line** (the review, a loaded Pi, load 6-9, six runs at Task 0's shape):
+
+  | Measurement | Budget | Six runs | Median |
+  |---|---|---|---|
+  | rare path | 8 s | 4.49, 5.03, 4.36, 4.37, 5.64, 5.37 s | 4.8 s |
+  | memo match | 2 ms | 1.69, 1.72, 1.20, 1.44, 1.41, 1.35 ms | 1.4 ms |
+  | append over no digest | 2 ms | 0.98, 2.15, 0.83, 1.83, 1.95, 0.44 ms | 1.4 ms |
+
+  At U24's reference shape (274 MB, 1,210,657 projected rows) the rare path took 20.6-22.1 s: `projection_now`
+  9.6-10.2 s, `integrity_check` 1.8 s, the log count 0.1 s; `state()` on a memo match 2.1 s, which predates the branch.
+  The append bound failed once (2.15 ms), as a difference of two medians taken one ledger after the other; the timing
+  now takes the two ledgers' appends in turn and bounds the median of the paired differences (S5). On Tardis that
+  gives +0.28 ms (it was +0.60 ms as two medians).
+- **The Pi's rebuild budget** is 1,340 s: U24's reference ledger rebuilt in 1,070.5 s at 3562a6e1 against main's
+  574.1 s (+86%), with peaks of 55.8 and 55.2 MB, inside spec 15's 69.9 MB; plus 25%. U24's rebuild measurement
+  asserts it (`REBUILD_REFERENCE_S`, ENGRAM_PI_BUDGET=1).

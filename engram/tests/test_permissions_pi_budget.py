@@ -73,6 +73,9 @@ from permissions import MAX_RECORDS
 from tests.permissions_budget_core import PEAK_LIMIT_KB
 from tests.permissions_budget_ledger import ensure_reference, prepare, run_probe
 
+# The projection digest plan's rebuild budget on the Pi (its Task 0c): the reference ledger's rebuild measured by the
+# section 2 review, 1,070.5 s on a loaded Pi (main took 574.1 s), plus 25%.
+REBUILD_REFERENCE_S = 1340
 # Spec 15's budget for each, in MB at the reference ledger and at the bounds (the table's last two columns).
 BUDGET_MB = {"state": (131.8, 171.2), "eligible": (126.8, 150.0), "bulk": (164.1, 187.3), "perform-allow": (190.2, 213.4),
              "perform-collect": (190.2, 213.4), "rebuild": (69.9, 69.9), "check": (183.0, 206.2),
@@ -126,6 +129,8 @@ def test_u24_peak_memory_stays_under_512_mb(reference, op):
         assert got["seconds"] <= BULK_BUDGET_S, f"{got['seconds']} s on the reference ledger"
     if op.startswith("perform"):
         assert d["status"] == "done"
+    if op == "rebuild":
+        assert got["seconds"] <= REBUILD_REFERENCE_S, f"{got['seconds']} s to rebuild the reference ledger"
     if op == "fold":
         assert d["folded"] == 100_000
     if op == "migrate":
