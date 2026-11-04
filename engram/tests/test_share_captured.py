@@ -198,6 +198,59 @@ def test_030_runs_again_harmlessly(tmp_path):
     assert _mark(src, clean) == 1
 
 
+def test_a_copy_of_a_captures_text_counts_as_a_capture_for_the_mark(tmp_path):
+    # Round 3, S1: share refuses remember's copy of a capture's text, so the mark counts the copy as a capture too.
+    src, pub = _stores(tmp_path)
+    text = "Andy typed this about a friend's surgery on Tuesday"
+    _capture(src, text)
+    copy, chosen = _chosen(src, text), _chosen(src)
+    assert src.get_episode(copy)["source"] is None
+    sid = _semantic(src, "what a friend's surgery means for the week", [chosen, copy])
+    assert _mark(src, sid) == 1
+    assert src.mark_touched_capture(_semantic(src, "a clean fact", [chosen]), [copy]) is True
+    clean = _semantic(src, "a fact reinforced by a copy", [chosen])
+    src.reinforce_semantic(clean, [copy])
+    assert _mark(src, clean) == 1
+
+
+def test_a_copy_of_the_text_of_a_capture_in_cold_storage_counts_as_a_capture(tmp_path):
+    src, pub = _stores(tmp_path)
+    text = "Andy typed this about a friend's surgery on Tuesday"
+    assert src.prune_episode_ids([_capture(src, text)]) == 1
+    src.close()                                       # a fresh open has no cold connection, so the file is read
+    src = Storage(str(tmp_path / "src" / "graph.db"), migrations_dir=MIGRATIONS)
+    sid = _semantic(src, "a week of appointments", [_chosen(src), _chosen(src, text)])
+    assert _mark(src, sid) == 1
+    assert getattr(src, "_cold_conn", None) is None   # read-only: Storage._cold_storage was never called
+
+
+def test_with_unreadable_cold_storage_an_episode_with_no_source_of_its_own_gives_an_unknown_mark(tmp_path):
+    src, pub = _stores(tmp_path)
+    chosen, captured = _chosen(src), _capture(src)
+    clean, marked = _semantic(src, "clean before", [chosen]), _semantic(src, "marked before", [chosen, captured])
+    Path(src.db_path).with_name("cold.db").write_bytes(b"not a database, just bytes " * 100)
+    later = _chosen(src, "a chosen note written while cold storage cannot be read")
+
+    assert _mark(src, _semantic(src, "made now", [later])) is None       # never 0
+    assert src.mark_touched_capture(clean, [later]) is None
+    assert _mark(src, clean) is None
+    src.reinforce_semantic(marked, [later])
+    assert _mark(src, marked) == 1                                         # it never goes down
+    assert _mark(src, _semantic(src, "made from a capture now", [later, captured])) == 1   # 1 over NULL
+    assert src.mark_touched_capture(_semantic(src, "no ids", [later]), []) is False
+
+
+def test_with_unreadable_cold_storage_a_copy_of_a_capture_in_the_store_still_marks_1(tmp_path):
+    # 1 over NULL: the store alone shows the copy, whatever cold storage would have said.
+    src, pub = _stores(tmp_path)
+    text = "Andy typed this about a friend's surgery on Tuesday"
+    _capture(src, text)
+    Path(src.db_path).with_name("cold.db").write_bytes(b"not a database, just bytes " * 100)
+    copy = _chosen(src, text)
+    assert _mark(src, _semantic(src, "a week of appointments", [copy])) == 1
+    assert src.mark_touched_capture(_semantic(src, "another fact", [_chosen(src)]), [copy]) is True
+
+
 def test_add_semantic_marks_a_capture_among_its_sources_or_its_cluster(tmp_path):
     src, _ = _stores(tmp_path)
     chosen, captured = _chosen(src), _capture(src)

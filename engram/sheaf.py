@@ -217,6 +217,10 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
                 conn.execute(
                     "INSERT INTO semantic_sources (semantic_id, episode_id)"
                     " VALUES (?, ?)", (pid, eid))
+            # 030's trigger marks a link to a capture (source 'auto') only;
+            # this also marks a link to a copy of a capture's text. It
+            # writes in this transaction and never commits.
+            storage.mark_touched_capture(pid, list(part))
             conn.execute(
                 "INSERT INTO semantic_peers (peer_id, parent_id,"
                 " residual_energy, created_at) VALUES (?, ?, ?, ?)",

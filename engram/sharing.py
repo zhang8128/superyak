@@ -84,6 +84,20 @@ def capture_digests(source_storage) -> frozenset[str] | None:
     return frozenset(_capture_digests_in(source_storage.conn) | cold)
 
 
+def copies_capture(source_storage, digests) -> bool | None:
+    """Whether any of `digests` is a capture's text digest: True when the store or its cold storage holds such a
+    capture, False when neither does, None when the store holds none and cold storage exists but cannot be read. Each
+    is read once and read-only, and cold storage is never created. The capture mark (migration 030) uses it to count
+    `remember`'s copy of a prompt as a capture."""
+    digests = set(digests)
+    if not digests:
+        return False
+    if not digests.isdisjoint(_capture_digests_in(source_storage.conn)):
+        return True
+    cold = _read_cold(source_storage, _capture_digests_in, set())
+    return None if cold is None else not digests.isdisjoint(cold)
+
+
 _LOOK_UP = object()     # captured_reason looks the text up in the store and its cold storage itself
 
 
@@ -110,16 +124,17 @@ def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP)
     A semantic's links can't say what it was built from: compression links only the cluster's episodes similar to the
     summary, and moving an episode to cold storage deletes its links (ON DELETE CASCADE). So each writer stamps
     `touched_capture` (migration 030) when the semantic is made, reinforced or linked, in a column no cascade touches:
-    1 when a capture was in its cluster or among its sources, or the semantic it restates was marked 1; NULL when
-    that semantic's mark is unknown; 0 otherwise. It never goes down, and 030's trigger raises it for every link to a
-    capture, whatever code writes the link. A semantic is refused when:
+    1 when a capture, or a copy of a capture's text, was in its cluster or among its sources, or the semantic it
+    restates was marked 1; NULL when that semantic's mark is unknown, or cold storage could not be read; 0
+    otherwise. It never goes down, and 030's trigger raises it for every link to a capture, whatever code writes the
+    link. A semantic is refused when:
     - `auto_generated` is not 0, NULL included: automatic compression wrote it from its episodes' own text;
     - a link names an episode that is gone (the nudge hard-deletes weak captures without foreign keys, so the link
       stays);
     - a linked episode is a capture;
+    - its text is a capture's text word for word, in the store or in its cold storage;
     - `touched_capture` is NULL: it was made before migration 030, or by a path that doesn't record the mark;
-    - `touched_capture` is 1: a capture was in its cluster or among its sources, or reinforced or linked it;
-    - its text is a capture's text word for word, in the store or in its cold storage.
+    - `touched_capture` is 1: a capture was in its cluster or among its sources, or reinforced or linked it.
     A semantic stamped 0 whose source episodes have since moved to cold storage is known clean, and shares.
     When cold storage exists but cannot be read, an episode or semantic that passes every other rule is refused."""
     remedy = "remember what you mean to share, in your own words, and share that"
@@ -153,18 +168,20 @@ def captured_reason(source_storage, layer: str, row: dict, *, captures=_LOOK_UP)
                     f"be told; {remedy}")
         if (found[eid] or "") == CAPTURED_SOURCE:
             return f"semantic {sid} is built from captured prompt {eid} (source 'auto'); {remedy}"
-    mark = row.get("touched_capture")
-    if mark is None:
-        return (f"semantic {sid} was made before Engram recorded whether a captured prompt went into it, or by a path "
-                f"that doesn't record it, so that cannot be told; {remedy}")
-    if mark != 0:
-        return f"semantic {sid} was built from or reinforced by a captured prompt; {remedy}"
+    # Before the mark: unreadable cold storage also leaves the mark of a semantic made meanwhile NULL, and these words
+    # name that cause.
     verbatim = _verbatim_capture(source_storage, row.get("content", ""), captures)
     if verbatim is None:
         return (f"semantic {sid}: its store's cold storage cannot be read, so whether its text is a captured "
                 f"prompt's cannot be told; {remedy}")
     if verbatim:
         return f"semantic {sid} is a captured prompt's text word for word; {remedy}"
+    mark = row.get("touched_capture")
+    if mark is None:
+        return (f"semantic {sid} was made before Engram recorded whether a captured prompt went into it, or by a path "
+                f"that doesn't record it, so that cannot be told; {remedy}")
+    if mark != 0:
+        return f"semantic {sid} was built from or reinforced by a captured prompt; {remedy}"
     return None
 
 

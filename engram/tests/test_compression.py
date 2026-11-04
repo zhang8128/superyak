@@ -2303,6 +2303,101 @@ def test_a_chosen_episode_gone_at_commit_whose_source_the_state_records_leaves_t
     assert _mark(tmp_db, _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, None)) == 0
 
 
+# Round 3, S1: share refuses an episode holding a capture's text word for word (remember's copy of a prompt), so the
+# mark counts such a copy as a capture too, by its digest in the store or in cold storage.
+
+COPIED = "Andy typed this about a friend's surgery on Tuesday"
+
+
+def _raw_capture(storage, text=COPIED):
+    """A capture as hooks/nudge.py inserts one: never offered to compression, since no used recall returned it."""
+    eid = str(uuid.uuid4())
+    storage.conn.execute(
+        "INSERT INTO episodes (id, content, created_at, source, session_id, content_hash, lane) "
+        "VALUES (?, ?, '2026-11-03T12:00:00Z', 'auto', 's1', ?, 'work')",
+        (eid, text, hashlib.sha256(text.encode()).hexdigest()))
+    storage.conn.commit()
+    return eid
+
+
+def test_a_compressed_copy_of_a_captures_text_gives_a_semantic_marked_1(tmp_db, compressor, embedder, tmp_path):
+    # The verdict's probe P4: the cluster holds only episodes with no source of their own.
+    _raw_capture(tmp_db)
+    copy = _add_sourced(tmp_db, embedder, COPIED, None, _unit(17))
+    result = compressor.cluster_episodes()
+    (cluster,) = result["clusters"]
+    assert [ep["id"] for ep in cluster["episodes"]] == [copy] and cluster["episodes"][0]["source"] is None
+
+    compressor.commit(result["compress_id"],
+                      [{"content": "what a friend's surgery means for the week", "kind": "fact", "action": "new"}])
+
+    (sem,) = tmp_db.get_active_semantics()
+    assert tmp_db.get_semantic(sem["id"])["auto_generated"] == 0 and _mark(tmp_db, sem["id"]) == 1
+    assert "was built from or reinforced by a captured prompt" in _refusal(tmp_db, tmp_path, sem["id"])
+
+
+def test_a_copy_of_a_captures_text_reinforcing_a_semantic_marks_it(tmp_db, compressor, embedder):
+    _raw_capture(tmp_db)
+    chosen = _add_sourced(tmp_db, embedder, "reinforced: a remembered note", None, _unit(18))
+    tmp_db.mark_episodes_compressed([chosen])
+    tmp_db.add_semantic("s-r", "a week of appointments", "fact", 0.6, _unit(18), [chosen])
+    assert _mark(tmp_db, "s-r") == 0
+    copy = _add_sourced(tmp_db, embedder, COPIED, None, _unit(18))
+    result = compressor.cluster_episodes()
+    (cluster,) = result["clusters"]
+    assert [ep["id"] for ep in cluster["episodes"]] == [copy] and cluster["match"]["id"] == "s-r"
+
+    compressor.commit(result["compress_id"], [{"content": "unused", "kind": "fact", "action": "reinforce"}])
+
+    assert copy in tmp_db.get_semantic("s-r")["source_episode_ids"] and _mark(tmp_db, "s-r") == 1
+
+
+def test_the_cross_link_pass_marks_a_semantic_it_links_to_a_copy_of_a_capture(tmp_db, embedder):
+    emb = [0.5] * 768
+    embedder.override_map["cross-link: a week of appointments"] = emb
+    chosen = _add_sourced(tmp_db, embedder, "cross-link copy: a remembered note", None, emb)
+    tmp_db.add_semantic("sem-c", "cross-link: a week of appointments", "fact", 0.7, emb, [chosen])
+    captured = _raw_capture(tmp_db)
+    assert tmp_db.prune_episode_ids([captured]) == 1        # the capture's digest is found in cold storage
+    copy = _add_sourced(tmp_db, embedder, COPIED, None, emb)
+    assert _mark(tmp_db, "sem-c") == 0
+
+    assert Compressor(tmp_db, embedder)._multi_link_episodes([tmp_db.get_episode(copy)], exclude_semantic_ids=[]) == 1
+    assert _mark(tmp_db, "sem-c") == 1
+
+
+def test_a_copy_of_a_capture_deleted_between_compress_and_commit_still_marks_the_new_semantic(
+        tmp_db, compressor, embedder, monkeypatch):
+    # The state records the copy's source as NULL, so only its text, as the state holds it, tells.
+    _raw_capture(tmp_db, "commit race: the episode that goes")
+    assert _mark(tmp_db, _cluster_then_delete(tmp_db, compressor, embedder, monkeypatch, None)) == 1
+
+
+def test_with_unreadable_cold_storage_a_new_semantic_from_episodes_with_no_source_reads_unknown(
+        tmp_db, compressor, embedder, tmp_path):
+    for i in range(2):
+        _add_sourced(tmp_db, embedder, f"unreadable: remembered note {i}", None, _unit(19))
+    Path(tmp_db.db_path).with_name("cold.db").write_bytes(b"not a database, just bytes " * 100)
+    result = compressor.cluster_episodes()
+    compressor.commit(result["compress_id"], [{"content": "a summary", "kind": "fact", "action": "new"}])
+    (sem,) = tmp_db.get_active_semantics()
+    assert _mark(tmp_db, sem["id"]) is None                  # whether a copy went in cannot be told: never 0
+    assert "cannot be read" in _refusal(tmp_db, tmp_path, sem["id"])
+
+
+def test_with_unreadable_cold_storage_a_capture_in_the_cluster_still_marks_1(tmp_db, compressor, embedder,
+                                                                             monkeypatch):
+    kept = _add_sourced(tmp_db, embedder, "unreadable: a remembered note", None, _unit(20))
+    captured = _add_sourced(tmp_db, embedder, "unreadable: a used capture", "auto", _unit(20))
+    _log_recall(tmp_db, [captured], "used")
+    Path(tmp_db.db_path).with_name("cold.db").write_bytes(b"not a database, just bytes " * 100)
+    result = compressor.cluster_episodes()
+    monkeypatch.setattr(compressor, "_filter_relevant_sources", lambda episodes, content: [kept])
+    compressor.commit(result["compress_id"], [{"content": "a summary", "kind": "fact", "action": "new"}])
+    (sem,) = tmp_db.get_active_semantics()
+    assert _mark(tmp_db, sem["id"]) == 1                     # 1 over NULL
+
+
 def test_a_bad_auto_with_scope_full_raises_before_any_reset(tmp_db, compressor, embedder):
     """The check comes before `_reset_all()`, which deletes every semantic: a bad value must leave the store whole."""
     sem_id = str(uuid.uuid4())

@@ -1225,9 +1225,9 @@ class Storage:
         """Add a semantic linked to ``source_episode_ids``. ``cluster_episode_ids`` are every episode it was distilled
         from, linked or not (compression links only those similar to its summary). Its capture mark (migration 030)
         starts at ``inherited_mark``, what the caller knows from outside this store's episodes (compression passes
-        the mark of the semantic it may restate: 1, None for unknown, or 0), and is raised to 1 when any id in either
-        list is a captured prompt in this store. The order is 1 over None over 0, written in the same transaction as
-        the row."""
+        the mark of the semantic it may restate: 1, None for unknown, or 0), and ``mark_touched_capture`` then raises
+        it over the ids in both lists: to 1 for a capture or a copy of one, to None when cold storage cannot be
+        read. The order is 1 over None over 0, written in the same transaction as the row."""
         if inherited_mark not in (0, 1, None):
             raise ValueError(f"inherited_mark must be 0, 1 or None, not {inherited_mark!r}")
         now = _now_iso()
@@ -1251,21 +1251,36 @@ class Storage:
         logger.debug("Semantic added: %s (kind=%s)", id, kind)
         return id
 
-    def mark_touched_capture(self, semantic_id: str, episode_ids: list[str]) -> bool:
-        """Whether any of ``episode_ids`` is a captured prompt (an episode with source 'auto', which hooks/nudge.py
-        writes) in this store. When one is, the semantic's capture mark (migration 030) is set to 1. The mark never
-        goes down, so a NULL (unknown) stays NULL unless a capture comes in. Writes in the caller's transaction and
-        does not commit: every caller commits with its own write."""
+    def mark_touched_capture(self, semantic_id: str, episode_ids: list[str]) -> bool | None:
+        """Whether any of ``episode_ids`` in this store is a captured prompt: an episode with source 'auto' (which
+        hooks/nudge.py writes), or one whose ``content_hash`` is a capture's digest in the store or in its cold
+        storage (``remember``'s copy of a prompt, which share refuses too). Cold storage is read read-only through
+        ``sharing.copies_capture`` and never created. When one is, the semantic's capture mark (migration 030) is
+        set to 1 and True is returned. When none is but cold storage exists and cannot be read, whether an episode
+        with no source of its own copies a capture cannot be told: a mark of 0 becomes NULL (unknown) and None is
+        returned. The order is 1 over NULL over 0, so the mark never goes down. Writes in the caller's transaction
+        and does not commit: every caller commits with its own write."""
         ids = list(dict.fromkeys(eid for eid in episode_ids or () if eid))
-        captured = False
+        captured, digests = False, set()
         for start in range(0, len(ids), 500):
             chunk = ids[start:start + 500]
-            if self.conn.execute(
-                f"SELECT 1 FROM episodes WHERE source = 'auto' AND id IN ({', '.join('?' * len(chunk))}) LIMIT 1",
+            for row in self.conn.execute(
+                f"SELECT source, content_hash, content FROM episodes WHERE id IN ({', '.join('?' * len(chunk))})",
                 chunk,
-            ).fetchone() is not None:
-                captured = True
+            ):
+                if row["source"] == "auto":
+                    captured = True
+                    break
+                digests.add(row["content_hash"] or hashlib.sha256((row["content"] or "").encode()).hexdigest())
+            if captured:
                 break
+        if not captured and digests:
+            from sharing import copies_capture  # deferred: sharing's read-only cold access, one read of each store
+            captured = copies_capture(self, digests)
+            if captured is None:
+                self.conn.execute(
+                    "UPDATE semantics SET touched_capture = NULL WHERE id = ? AND touched_capture = 0", (semantic_id,))
+                return None
         if captured:
             self.conn.execute("UPDATE semantics SET touched_capture = 1 WHERE id = ?", (semantic_id,))
         return captured

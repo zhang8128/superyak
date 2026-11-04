@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import logging
 import random
@@ -1325,6 +1326,7 @@ class Compressor:
         ep_embeddings = self._embeddings.embed(ep_texts, prefix="clustering")
 
         links_created = 0
+        linked: dict[str, list[str]] = {}
         for ep, ep_emb in zip(episodes, ep_embeddings):
             if ep_emb is None:
                 continue
@@ -1353,9 +1355,12 @@ class Compressor:
                             "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
                             (sid, ep["id"], sim),
                         )
-                        self._storage.mark_touched_capture(sid, [ep["id"]])
+                        linked.setdefault(sid, []).append(ep["id"])
                         links_created += 1
 
+        # The capture mark, once per semantic linked: one read of the capture digests each, not one per link.
+        for sid, linked_ids in linked.items():
+            self._storage.mark_touched_capture(sid, linked_ids)
         if links_created:
             self._storage._commit()
         return links_created
@@ -1403,17 +1408,30 @@ class Compressor:
         looks the cluster's episodes up in the store, which can only raise it to 1. The order is 1 over None
         (unknown) over 0, so a restatement can't launder a mark:
         - 1 when the cluster state records an episode's source as 'auto' (even one another session deleted since),
-          or the cluster's match is marked 1. compress shows the model the match's content, whichever way the
-          summary reaches "new": the model's choice, the lane-override fallback, or refine;
+          or an episode's text as the state holds it is a capture's text word for word, in the store or in cold
+          storage (remember's copy of a prompt), or the cluster's match is marked 1. compress shows the model the
+          match's content, whichever way the summary reaches "new": the model's choice, the lane-override fallback,
+          or refine;
         - None when the match's mark is NULL or the match is gone, or an episode is gone from the store and the
-          state records no source for it;
+          state records no source for it, or cold storage exists and cannot be read, so whether an episode with no
+          source of its own copies a capture cannot be told;
         - otherwise 0."""
         unknown = False
-        for ep in cluster.get("episodes") or []:
+        episodes = cluster.get("episodes") or []
+        for ep in episodes:
             if "source" in ep:
                 if ep["source"] == "auto":
                     return 1
             elif self._storage.get_episode(ep["id"]) is None:
+                unknown = True
+        digests = {ep.get("content_hash") or hashlib.sha256((ep.get("content") or "").encode()).hexdigest()
+                   for ep in episodes}
+        if digests:
+            from sharing import copies_capture  # deferred: sharing's read-only cold access
+            copied = copies_capture(self._storage, digests)
+            if copied:
+                return 1
+            if copied is None:
                 unknown = True
         match = cluster.get("match")
         match_id = match.get("id") if isinstance(match, dict) else None

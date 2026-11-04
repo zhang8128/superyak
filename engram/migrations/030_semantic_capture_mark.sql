@@ -7,7 +7,13 @@
 ALTER TABLE semantics ADD COLUMN touched_capture INTEGER CHECK (touched_capture IN (0, 1));
 
 -- Every link to a capture raises the mark, whichever code writes the link: a server still running code from before
--- this migration, or a future link path. The writers still mark the cluster episodes they never link.
+-- this migration, or a future link path. The writers still mark the cluster episodes they never link, and copies of
+-- a capture's text (matched by digest, which this trigger does not do).
+--
+-- A later migration that rebuilds `semantics` (015's pattern: create semantics_new, copy the rows, drop semantics,
+-- rename semantics_new) must drop semantic_sources_mark_capture first and create it again after. While this trigger
+-- names semantics, the rename fails: "error in trigger semantic_sources_mark_capture: no such table: main.semantics"
+-- (checked on sqlite 3.53.1).
 CREATE TRIGGER IF NOT EXISTS semantic_sources_mark_capture AFTER INSERT ON semantic_sources
 WHEN EXISTS (SELECT 1 FROM episodes WHERE id = NEW.episode_id AND source = 'auto')
 BEGIN
