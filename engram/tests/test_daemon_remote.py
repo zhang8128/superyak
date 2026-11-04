@@ -292,3 +292,109 @@ def test_the_sidecar_names_the_store_ref(tmp_path):
     d = remote_daemon(tmp_path)
     delivered(d)
     assert disclosures(tmp_path) == [REF, REF]
+
+
+# ---------------------------------------------------------------- Task 9: the turnId binding (P13, S-f)
+
+class MovingClock:
+    def __init__(self, t=DAEMON_CLOCK):
+        self.t = float(t)
+
+    def __call__(self):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(self.t, tz=timezone.utc)
+
+
+def bound_daemon(root, *, other_house=False):
+    """remote_daemon on a clock the test moves, and with `other_house` a second published house, `other`, granting
+    the same ref."""
+    clock = MovingClock()
+    pub = remote_house(root)
+    pubs = [pub]
+    if other_house:
+        other = make_placed_house(root, name="other", house_id="HOUSE2")
+        (house_dir(root, "other") / "lighthouse-policy.json").write_text(json.dumps(connection_policy(
+            "other", [REF], actions=("recall", "read"), audience_map={REF: ["commons"]})))
+        pubs.append(other)
+    remote_ledger(root)
+    return _daemon_over(root, pubs, clock=clock), clock
+
+
+def unbound(reply):
+    return (reply["kind"], reply.get("code")) == ("error", "TURN_UNBOUND")
+
+
+def test_a_remote_read_inside_30_seconds_succeeds_twice(tmp_path):
+    d, clock = bound_daemon(tmp_path)
+    trace = recall_as(d)
+    clock.t += 30.0
+    for _ in range(2):
+        reply = read_as(d, trace["turnId"], [M1_ID])
+        assert reply["kind"] == "read_result" and reply["items"][0]["content"] == M1_TEXT
+
+
+def test_a_remote_read_of_an_unknown_turn_is_unbound_with_no_disclosure(tmp_path):
+    d, clock = bound_daemon(tmp_path)
+    recall_as(d)
+    before = disclosures(tmp_path)
+    assert unbound(read_as(d, str(uuid.uuid4()), [M1_ID]))
+    assert disclosures(tmp_path) == before
+
+
+def test_a_remote_read_by_another_receiver_ref_is_unbound(tmp_path):
+    d, clock = bound_daemon(tmp_path)
+    trace = recall_as(d)
+    before = disclosures(tmp_path)
+    for other in (f"urn:superyak:{PEER_A}:store:{Y}", f"urn:superyak:{PEER_B}:store:{X}"):
+        assert unbound(read_as(d, trace["turnId"], [M1_ID], receiver=other))
+    assert disclosures(tmp_path) == before
+
+
+def test_a_remote_read_from_another_publisher_is_unbound(tmp_path):
+    d, clock = bound_daemon(tmp_path, other_house=True)
+    trace = recall_as(d)
+    assert unbound(read_as(d, trace["turnId"], [M1_ID], publisher="other"))
+
+
+def test_a_remote_read_of_an_id_not_returned_is_unbound(tmp_path):
+    d, clock = bound_daemon(tmp_path)
+    trace = recall_as(d)
+    assert [c["memoryId"] for c in trace["candidates"]] == [M1_ID]
+    assert unbound(read_as(d, trace["turnId"], [M2_ID]))
+    assert unbound(read_as(d, trace["turnId"], [M1_ID, M2_ID]))
+
+
+def test_a_remote_read_after_30_seconds_is_unbound(tmp_path):
+    d, clock = bound_daemon(tmp_path)
+    trace = recall_as(d)
+    clock.t += 30.001
+    assert unbound(read_as(d, trace["turnId"], [M1_ID]))
+
+
+def test_the_binding_keeps_at_most_1000_turns_dropping_the_oldest(tmp_path, monkeypatch):
+    import lighthouse_daemon
+    assert lighthouse_daemon.TURNS_KEPT == 1000
+    monkeypatch.setattr(lighthouse_daemon, "TURNS_KEPT", 3)
+    d, clock = bound_daemon(tmp_path)
+    first = recall_as(d)
+    later = [recall_as(d) for _ in range(3)]
+    assert unbound(read_as(d, first["turnId"], [M1_ID]))
+    assert read_as(d, later[0]["turnId"], [M1_ID])["kind"] == "read_result"
+
+
+def test_a_local_read_with_an_old_turn_still_succeeds(tmp_path):
+    """The `context` re-read: a local read by turnId minutes after its recall is unchanged (local frames never touch
+    the binding)."""
+    from tests.test_lighthouse_daemon import CONTEXT as LOCAL_CONTEXT
+    clock = MovingClock()
+    pub = make_placed_house(tmp_path)  # its policy grants the local receiver `engram`
+    d = _daemon_over(tmp_path, [pub], clock=clock)
+    trace = d.handle_frame(recall_frame(receiver="engram", publisher=HOUSE_NAME, context=LOCAL_CONTEXT,
+                                        purpose="session-recall", query=M1_TEXT, k=5, at=NOW))
+    clock.t += 31
+    reply = d.handle_frame(read_frame(receiver="engram", publisher=HOUSE_NAME, context=LOCAL_CONTEXT,
+                                      purpose="session-recall", turn_id=trace["turnId"], memory_ids=[M1_ID]))
+    assert reply["kind"] == "read_result" and reply["items"][0]["content"] == M1_TEXT
+    reply = d.handle_frame(read_frame(receiver="engram", publisher=HOUSE_NAME, context=LOCAL_CONTEXT,
+                                      purpose="session-recall", turn_id="never-recalled", memory_ids=[M1_ID]))
+    assert reply["kind"] == "read_result" and reply["items"][0]["content"] == M1_TEXT

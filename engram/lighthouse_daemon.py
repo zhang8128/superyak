@@ -60,6 +60,8 @@ OUTSIDE_HOME = "group:outside-home"
 # root place only; any other place, or this one once it has a parent (M2), is no place, so the ledger refuses it.
 OUTSIDE_HOME_PLACE = "place:outside-home"
 REMOTE_READ_IDS = 5         # a remote read names at most this many memories (spec 2.3)
+TURN_SECONDS = 30.0         # a remote read must follow its recall within this long, on the daemon's clock (P13)
+TURNS_KEPT = 1000           # remote recalls' turns kept for their reads, the oldest dropped first (P13)
 
 PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 DOMAIN = "memory.recall"
@@ -712,6 +714,31 @@ class PublisherDaemon:
         self._build_threads: set = set()
         # At most FRAMES_AT_ONCE frames build or hold a State at once; a frame waits for its turn (P 12.2, 15).
         self._frames = threading.BoundedSemaphore(FRAMES_AT_ONCE)
+        # Remote reads are bound to their recalls (crossing plan P13, spec 2.3 S-f): turnId -> (receiver ref,
+        # publisher name, the candidate ids returned, when). Local frames never touch it.
+        self._turns: collections.OrderedDict = collections.OrderedDict()
+        self._turns_lock = threading.Lock()
+
+    def _seconds(self) -> float:
+        now = self.clock()
+        return (now if now.tzinfo else now.replace(tzinfo=timezone.utc)).timestamp()
+
+    def _bind_turn(self, turn_id: str, frame: dict, publisher: str, ids) -> None:
+        with self._turns_lock:
+            self._turns[turn_id] = (frame["receiver"], publisher, frozenset(ids), self._seconds())
+            while len(self._turns) > TURNS_KEPT:
+                self._turns.popitem(last=False)
+
+    def _turn_bound(self, frame: dict, publisher: str) -> bool:
+        """Whether a remote read names a turn a remote recall bound within TURN_SECONDS, for the same receiver ref and
+        publisher, and only ids that recall returned. The binding isn't consumed, so a retry inside the window works."""
+        with self._turns_lock:
+            entry = self._turns.get(frame["turnId"])
+        if entry is None:
+            return False
+        receiver, bound_publisher, ids, at = entry
+        return (receiver == frame["receiver"] and bound_publisher == publisher and set(frame["memoryIds"]) <= ids
+                and 0 <= self._seconds() - at <= TURN_SECONDS)
 
     def _eligible(self, side: "_LedgerSide"):
         """This frame's eligible set of ``recall`` decisions for the house: from the cache while it is valid,
@@ -978,6 +1005,8 @@ class PublisherDaemon:
                 "memory_ids": [c["memoryId"] for c in candidates],
             }
         )
+        if is_remote(frame["receiver"]):
+            self._bind_turn(turn_id, frame, publisher.name, [c["memoryId"] for c in candidates])
         return recall_result_frame(
             turn_id=turn_id,
             query_digest=content_digest(frame["query"]),
@@ -1034,6 +1063,8 @@ class PublisherDaemon:
     def _read(
         self, publisher: PublisherStore, frame: dict, policy: Policy, gate
     ) -> dict:
+        if is_remote(frame["receiver"]) and not self._turn_bound(frame, publisher.name):
+            return error_frame("TURN_UNBOUND", "a remote read must follow its recall, within 30 s, for its ids")
         decision = policy.decide(self._request(frame, "read"))
         items = []
         delivered: list[str] = []
