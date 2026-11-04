@@ -1,0 +1,931 @@
+{
+ "sync": {
+  "agent": [
+   "--extra",
+   "dev"
+  ]
+ },
+ "timeout": 240,
+ "mutants": [
+  {
+   "name": "no bytes by default",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "LC_ALL=C  # bytes, unless a scan below says characters\nexport LC_ALL\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_bad_byte_alone_pushes"
+   ]
+  },
+  {
+   "name": "replace objects honoured",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "GIT_NO_REPLACE_OBJECTS=1  # what goes up is the real object, whatever refs/replace shows here\nexport GIT_NO_REPLACE_OBJECTS\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_replaced_commit_is_read_as_it_really_is"
+   ]
+  },
+  {
+   "name": "a dead mktemp carries on",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "|| { echo 'pre-push: no temporary directory, so nothing was pushed.' >&2; exit 1; }",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dead_mktemp_says_so"
+   ]
+  },
+  {
+   "name": "no signal trap",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "trap 'exit 1' HUP INT TERM",
+   "new": ":",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_signal_leaves_no_copy_of_the_terms_behind"
+   ]
+  },
+  {
+   "name": "no exit trap",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "trap 'rm -rf \"$tmp\"' EXIT",
+   "new": ":",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_signal_leaves_no_copy_of_the_terms_behind"
+   ]
+  },
+  {
+   "name": "terms comments are terms",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "grep -a -v -e '^#' -e '^$' \"$terms_file\"",
+   "new": "grep -a -v -e '^$' \"$terms_file\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_comments_and_blank_lines_in_the_terms_file_are_not_terms"
+   ]
+  },
+  {
+   "name": "blank lines are terms",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "grep -a -v -e '^#' -e '^$' \"$terms_file\"",
+   "new": "grep -a -v -e '^#' \"$terms_file\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_comments_and_blank_lines_in_the_terms_file_are_not_terms"
+   ]
+  },
+  {
+   "name": "no terms carries on",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    1) echo \"pre-push: $terms_file holds no terms, so nothing was pushed.\" >&2; exit 1 ;;\n",
+   "new": "    1) ;;\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_terms_file_with_only_comments_refuses"
+   ]
+  },
+  {
+   "name": "no whitespace check",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if [ -s \"$tmp/shapes\" ]; then",
+   "new": "if false; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_that_could_never_match_is_refused_by_its_line"
+   ]
+  },
+  {
+   "name": "whitespace check misses a lone space",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "'^[^#].*[[:space:]]$|^[[:space:]]+$'",
+   "new": "'^[^#].*[[:space:]]$'",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_that_could_never_match_is_refused_by_its_line"
+   ]
+  },
+  {
+   "name": "whitespace check reads comments",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "'^[^#].*[[:space:]]$|^[[:space:]]+$'",
+   "new": "'[[:space:]]$'",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_comment_may_end_in_whitespace"
+   ]
+  },
+  {
+   "name": "no locale check",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ -n \"$characters\" ] || {",
+   "new": "false && {",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_machine_with_no_utf8_locale_refuses_the_push"
+   ]
+  },
+  {
+   "name": "only C or en_US",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "; locale -a | grep -iE '\\.UTF-?8$'; }",
+   "new": "; }",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_utf8_locale_will_do"
+   ]
+  },
+  {
+   "name": "a dead grep blames the terms",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ $? -eq 1 ] || return 0\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dead_grep_doesnt_blame_the_terms_file"
+   ]
+  },
+  {
+   "name": "bad line not named",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ $? -gt 1 ] && echo \"pre-push: line $n of",
+   "new": "false && echo \"pre-push: line $n of",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_that_is_a_bad_regex_refuses_the_push_and_names_only_its_line"
+   ]
+  },
+  {
+   "name": "every line named",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "            [ $? -gt 1 ] && echo \"pre-push: line $n of",
+   "new": "            true && echo \"pre-push: line $n of",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_that_is_a_bad_regex_refuses_the_push_and_names_only_its_line"
+   ]
+  },
+  {
+   "name": "cant_run no status",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    name_bad_terms\n    status=1\n",
+   "new": "    name_bad_terms\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a dead grep reads as none",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ \"$found\" -eq 1 ] || return 2\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_scan_that_reads_everything_then_dies_refuses"
+   ]
+  },
+  {
+   "name": "a dead feeder reads as none",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ \"$fed$stripped$filtered\" = 000 ] && return 1\n    return 2\n",
+   "new": "    return 1\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "fed status ignored",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ \"$fed$stripped$filtered\" = 000 ]",
+   "new": "[ \"$stripped$filtered\" = 00 ]",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "stripped status ignored",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ \"$fed$stripped$filtered\" = 000 ]",
+   "new": "[ \"$fed$filtered\" = 00 ]",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_stage_that_reads_everything_then_dies_refuses"
+   ]
+  },
+  {
+   "name": "filtered status ignored",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ \"$fed$stripped$filtered\" = 000 ]",
+   "new": "[ \"$fed$stripped\" = 00 ]",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_cat_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a hit reads as none",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ \"$found\" -eq 0 ] && return 0  # grep",
+   "new": "    false && return 0  # grep",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "status reset each ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "done\n[ $status -ne 0 ]",
+   "new": "    status=0\ndone\n[ $status -ne 0 ]",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_one_dirty_ref_among_many_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a delete ends the loop",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ \"$local_sha\" = \"$zero\" ] && continue",
+   "new": "[ \"$local_sha\" = \"$zero\" ] && break",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_delete_beside_a_dirty_ref_still_refuses"
+   ]
+  },
+  {
+   "name": "delete treated as a push",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ \"$local_sha\" = \"$zero\" ] && continue  # a delete pushes no history\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_delete_pushes_no_history"
+   ]
+  },
+  {
+   "name": "off-base line names the ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "echo \"pre-push: $short isn't built",
+   "new": "echo \"pre-push: $local_ref isn't built",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_branch_off_the_base_is_refused_without_its_name"
+   ]
+  },
+  {
+   "name": "old-history line names the ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "echo \"pre-push: $short carries commits",
+   "new": "echo \"pre-push: $local_ref carries commits",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_old_history_is_refused_without_the_branchs_name"
+   ]
+  },
+  {
+   "name": "dead scan line names the ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "echo \"pre-push: $short: a scan",
+   "new": "echo \"pre-push: $local_ref: a scan",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dead_scan_is_refused_without_the_branchs_name"
+   ]
+  },
+  {
+   "name": "hit line names the ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "echo \"pre-push: $short carries what",
+   "new": "echo \"pre-push: $local_ref carries what",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "hit line names the remote ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "echo \"pre-push: $short carries what",
+   "new": "echo \"pre-push: $remote_ref carries what",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "off base accepted",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if ! git merge-base --is-ancestor \"$SCRUBBED_BASE\" \"$local_sha\" 2>/dev/null; then",
+   "new": "if false; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_an_ancestor_of_the_base_is_refused"
+   ]
+  },
+  {
+   "name": "old-history read status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/new.raw\" || { cant_run; continue; }",
+   "new": "> \"$tmp/new.raw\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_plain_rev_list_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "sort status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "sort \"$tmp/new.raw\" > \"$tmp/new\" || { cant_run; continue; }",
+   "new": "sort \"$tmp/new.raw\" > \"$tmp/new\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "ancestry status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/after.raw\" || { cant_run; continue; }",
+   "new": "> \"$tmp/after.raw\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "second sort status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "sort \"$tmp/after.raw\" > \"$tmp/after\" || { cant_run; continue; }",
+   "new": "sort \"$tmp/after.raw\" > \"$tmp/after\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "comm status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/old\" || { cant_run; continue; }",
+   "new": "> \"$tmp/old\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "old history not refused",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if [ -s \"$tmp/old\" ]; then",
+   "new": "if false; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_old_history_a_merge_hides_is_still_refused"
+   ]
+  },
+  {
+   "name": "no --full-history",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "git log --full-history --format=%h",
+   "new": "git log --format=%h",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_scrubbed_path_behind_an_ours_merge_past_the_base_is_refused"
+   ]
+  },
+  {
+   "name": "path scan trusts tracking refs",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "\"$local_sha\" --not \"$SCRUBBED_BASE\" -- \\",
+   "new": "\"$local_sha\" --not --remotes=origin -- \\",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tracking_ref_vouches_for_nothing"
+   ]
+  },
+  {
+   "name": "path scan status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/touched\" || { cant_run; continue; }",
+   "new": "> \"$tmp/touched\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "check status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/checked\" || { cant_run; continue; }",
+   "new": "> \"$tmp/checked\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a missing object passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "        0) cant_run; continue ;;  # cat-file exits 0 on a missing object, so nothing else would say\n",
+   "new": "        0) ;;\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_missing_object_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a dead missing check passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "        1) ;;\n        *) cant_run; continue ;;\n",
+   "new": "        *) ;;\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "names status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/names\" || { cant_run; continue; }",
+   "new": "> \"$tmp/names\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "names bytes reading dropped",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    grep -a -q -i -E -f \"$tmp/terms\" \"$tmp/names\"\n    answer=$?\n    [ \"$answer\" -gt 1 ] && { cant_run; continue; }\n    [ \"$answer\" -eq 0 ] && named=yes\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_beside_a_bad_byte_in_a_ref_name_is_refused"
+   ]
+  },
+  {
+   "name": "names characters reading dropped",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    LC_ALL=$characters grep -a -q -i -E -f \"$tmp/terms\" \"$tmp/names\"\n    answer=$?\n    [ \"$answer\" -gt 1 ] && { cant_run; continue; }\n    [ \"$answer\" -eq 0 ] && named=yes\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dot_in_a_term_matches_a_letter_outside_ascii"
+   ]
+  },
+  {
+   "name": "no status on a hit",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "        echo >&2\n        status=1\n",
+   "new": "        echo >&2\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "exit always 0",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "\nexit $status\n",
+   "new": "\nexit 0\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "a dead terms read carries on",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    *) unreadable ;;\nesac\nsed",
+   "new": "    *) ;;\nesac\nsed",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_read_of_the_terms_that_dies_partway_refuses"
+   ]
+  },
+  {
+   "name": "no NUL check",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    1) echo \"pre-push: $terms_file holds a NUL byte, so nothing was pushed.\" >&2; exit 1 ;;\n",
+   "new": "    1) ;;\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_nul_in_the_terms_file_refuses"
+   ]
+  },
+  {
+   "name": "a dead NUL read carries on",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "tr -d '\\000' < \"$terms_file\" > \"$tmp/no-nul\" || unreadable",
+   "new": "tr -d '\\000' < \"$terms_file\" > \"$tmp/no-nul\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tr_that_dies_on_the_terms_file_doesnt_call_it_a_nul"
+   ]
+  },
+  {
+   "name": "a dead cmp calls it a NUL",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "cmp -s \"$tmp/no-nul\" \"$terms_file\"\ncase $? in\n    0) ;;\n    1) echo \"pre-push: $terms_file holds a NUL byte, so nothing was pushed.\" >&2; exit 1 ;;\n    *) unreadable ;;",
+   "new": "cmp -s \"$tmp/no-nul\" \"$terms_file\"\ncase $? in\n    0) ;;\n    *) echo \"pre-push: $terms_file holds a NUL byte, so nothing was pushed.\" >&2; exit 1 ;;",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tool_that_dies_on_the_terms_file_says_only_it_couldnt_read_it"
+   ]
+  },
+  {
+   "name": "a dead cmp passes the NUL check",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    1) echo \"pre-push: $terms_file holds a NUL byte, so nothing was pushed.\" >&2; exit 1 ;;\n    *) unreadable ;;",
+   "new": "    1) echo \"pre-push: $terms_file holds a NUL byte, so nothing was pushed.\" >&2; exit 1 ;;\n    *) ;;",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tool_that_dies_on_the_terms_file_says_only_it_couldnt_read_it"
+   ]
+  },
+  {
+   "name": "no byte-order mark check",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    0) echo \"pre-push: $terms_file starts with a byte-order mark, so nothing was pushed.\" >&2; exit 1 ;;\n",
+   "new": "    0) ;;\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_byte_order_mark_refuses"
+   ]
+  },
+  {
+   "name": "a dead mark check passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "starts with a byte-order mark, so nothing was pushed.\" >&2; exit 1 ;;\n    1) ;;\n    *) unreadable ;;",
+   "new": "starts with a byte-order mark, so nothing was pushed.\" >&2; exit 1 ;;\n    *) ;;",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tool_that_dies_on_the_terms_file_says_only_it_couldnt_read_it"
+   ]
+  },
+  {
+   "name": "a dead head on the mark check passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "head -c 3 \"$terms_file\" > \"$tmp/start\" || unreadable",
+   "new": "head -c 3 \"$terms_file\" > \"$tmp/start\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tool_that_dies_on_the_terms_file_says_only_it_couldnt_read_it"
+   ]
+  },
+  {
+   "name": "a dead find says missing",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "2>/dev/null) || unreadable\n",
+   "new": "2>/dev/null) || missing_or_loose\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dead_find_doesnt_say_the_file_is_missing"
+   ]
+  },
+  {
+   "name": "a dead find passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "loose=$(find \"$terms_file\" -prune ! -perm 0600 ! -perm 0400 2>/dev/null) || unreadable\n",
+   "new": "loose=$(find \"$terms_file\" -prune ! -perm 0600 ! -perm 0400 2>/dev/null)\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_find_that_fails_refuses_the_push"
+   ]
+  },
+  {
+   "name": "a loose file passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ -z \"$loose\" ] || missing_or_loose\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_only_an_owner_only_terms_file_is_accepted"
+   ]
+  },
+  {
+   "name": "a dead shape check passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ $? -gt 1 ] && unreadable\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_shape_check_that_dies_refuses"
+   ]
+  },
+  {
+   "name": "a dead squeeze of the terms passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "' \"$tmp/terms\" > \"$tmp/terms.squeezed\" || unreadable",
+   "new": "' \"$tmp/terms\" > \"$tmp/terms.squeezed\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tool_that_dies_on_the_terms_file_says_only_it_couldnt_read_it"
+   ]
+  },
+  {
+   "name": "terms not squeezed",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "sed 's/[[:space:]][[:space:]]*/ /g' \"$tmp/terms\" > \"$tmp/terms.squeezed\"",
+   "new": "cp \"$tmp/terms\" \"$tmp/terms.squeezed\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_with_two_spaces_still_crosses_a_line_break"
+   ]
+  },
+  {
+   "name": "no plain reading",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "        read_objects \"$1\" \"$reading\" \"$tmp/terms\" cat\n        answer=$?\n        [ \"$answer\" -eq 1 ] || return \"$answer\"\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_spaced_term_beside_it_kills_no_term"
+   ]
+  },
+  {
+   "name": "no squeezed reading",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "        read_objects \"$1\" \"$reading\" \"$tmp/terms.squeezed\" squeezed\n        answer=$?\n        [ \"$answer\" -eq 1 ] || return \"$answer\"\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_with_a_space_survives_a_line_break"
+   ]
+  },
+  {
+   "name": "squeezed reading uses the raw terms",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "read_objects \"$1\" \"$reading\" \"$tmp/terms.squeezed\" squeezed",
+   "new": "read_objects \"$1\" \"$reading\" \"$tmp/terms\" squeezed",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_with_two_spaces_still_crosses_a_line_break"
+   ]
+  },
+  {
+   "name": "no bytes reading",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    for reading in C \"$characters\"; do\n        read_objects",
+   "new": "    for reading in \"$characters\"; do\n        read_objects",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_beside_a_bad_byte_is_refused_in_a_file"
+   ]
+  },
+  {
+   "name": "no characters reading",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    for reading in C \"$characters\"; do\n        read_objects",
+   "new": "    for reading in C; do\n        read_objects",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dot_in_a_term_matches_a_letter_outside_ascii"
+   ]
+  },
+  {
+   "name": "a dead reading reads as none",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    [ \"$answer\" -eq 2 ] && { cant_run; continue; }\n    held=\n",
+   "new": "    held=\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_stage_that_reads_everything_then_dies_refuses"
+   ]
+  },
+  {
+   "name": "no -i",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "LC_ALL=$2 grep -a -q -i -E -f \"$3\"",
+   "new": "LC_ALL=$2 grep -a -q -E -f \"$3\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "no reading in the locale",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "LC_ALL=$2 grep -a -q -i -E -f \"$3\"",
+   "new": "grep -a -q -i -E -f \"$3\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dot_in_a_term_matches_a_letter_outside_ascii"
+   ]
+  },
+  {
+   "name": "no fold outside ascii, by reading",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "LC_ALL=$2 grep -a -q -i -E -f \"$3\"",
+   "new": "LC_ALL=$2 grep -a -q -E -f \"$3\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_case_folds_outside_ascii"
+   ]
+  },
+  {
+   "name": "NUL not stripped",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "| { tr -d '\\000'; echo $? > \"$tmp/stripped\"; } \\",
+   "new": "| { cat; echo $? > \"$tmp/stripped\"; } \\",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "the filter ignored",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "| { $4; echo $? > \"$tmp/filtered\"; } \\",
+   "new": "| { cat; echo $? > \"$tmp/filtered\"; } \\",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_with_a_space_survives_a_line_break"
+   ]
+  },
+  {
+   "name": "squeeze does nothing",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    tr -s '[:space:]' ' '\n",
+   "new": "    cat\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_with_a_space_survives_a_line_break"
+   ]
+  },
+  {
+   "name": "object list status lost",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "> \"$tmp/objects\" || { cant_run; continue; }",
+   "new": "> \"$tmp/objects\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_any_scan_that_dies_refuses_the_push"
+   ]
+  },
+  {
+   "name": "object scan trusts tracking refs",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "git rev-list --objects --no-object-names \"$local_sha\" --not \"$SCRUBBED_BASE\"",
+   "new": "git rev-list --objects --no-object-names \"$local_sha\" --not --remotes=origin",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tracking_ref_vouches_for_nothing"
+   ]
+  },
+  {
+   "name": "object scan from the start",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "git rev-list --objects --no-object-names \"$local_sha\" --not \"$SCRUBBED_BASE\"",
+   "new": "git rev-list --objects --no-object-names \"$local_sha\"",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_what_came_before_the_base_is_not_scanned_again"
+   ]
+  },
+  {
+   "name": "names without refs",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "{ printf '%s\\n%s\\n' \"$local_ref\" \"$remote_ref\" \\\n        && git",
+   "new": "{ git",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "names without the remote ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "printf '%s\\n%s\\n' \"$local_ref\" \"$remote_ref\" \\",
+   "new": "printf '%s\\n' \"$local_ref\" \\",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "names without the local ref",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "printf '%s\\n%s\\n' \"$local_ref\" \"$remote_ref\" \\",
+   "new": "printf '%s\\n' \"$remote_ref\" \\",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "names without paths",
+   "file": "scripts/git-hooks/pre-push",
+   "old": " \\\n        && git -c core.quotePath=false log -m --no-renames --name-only --format= \"$local_sha\" --not \"$SCRUBBED_BASE\"; }",
+   "new": "; }",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_second_name_for_a_blob_is_read"
+   ]
+  },
+  {
+   "name": "paths quoted",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "git -c core.quotePath=false log -m",
+   "new": "git log -m",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_dot_in_a_term_matches_a_letter_outside_ascii"
+   ]
+  },
+  {
+   "name": "paths miss a merge",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "log -m --no-renames --name-only",
+   "new": "log --no-renames --name-only",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_name_only_a_merge_adds_is_read_on_its_own_line"
+   ]
+  },
+  {
+   "name": "paths trust tracking refs",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "--name-only --format= \"$local_sha\" --not \"$SCRUBBED_BASE\"",
+   "new": "--name-only --format= \"$local_sha\" --not --remotes=origin",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_tracking_ref_vouches_for_no_path"
+   ]
+  },
+  {
+   "name": "a dead names scan in characters passes",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    LC_ALL=$characters grep -a -q -i -E -f \"$tmp/terms\" \"$tmp/names\"\n    answer=$?\n    [ \"$answer\" -gt 1 ] && { cant_run; continue; }\n",
+   "new": "    LC_ALL=$characters grep -a -q -i -E -f \"$tmp/terms\" \"$tmp/names\"\n    answer=$?\n",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_names_scan_in_characters_that_dies_refuses"
+   ]
+  },
+  {
+   "name": "no names scan in characters",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "    LC_ALL=$characters grep -a -q -i -E -f \"$tmp/terms\" \"$tmp/names\"\n    answer=$?\n    [ \"$answer\" -gt 1 ] && { cant_run; continue; }\n    [ \"$answer\" -eq 0 ] && named=yes\n",
+   "new": "",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_second_name_for_a_blob_is_read"
+   ]
+  },
+  {
+   "name": "touched not decisive",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if [ -s \"$tmp/touched\" ] || [ -n \"$held$named\" ]; then",
+   "new": "if [ -n \"$held$named\" ]; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_scrubbed_term_or_path_is_refused"
+   ]
+  },
+  {
+   "name": "held not decisive",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if [ -s \"$tmp/touched\" ] || [ -n \"$held$named\" ]; then",
+   "new": "if [ -s \"$tmp/touched\" ] || [ -n \"$named\" ]; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_anywhere_in_a_commit_is_refused"
+   ]
+  },
+  {
+   "name": "named not decisive",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "if [ -s \"$tmp/touched\" ] || [ -n \"$held$named\" ]; then",
+   "new": "if [ -s \"$tmp/touched\" ] || [ -n \"$held\" ]; then",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_term_in_a_ref_name_is_refused_and_not_repeated"
+   ]
+  },
+  {
+   "name": "object kind not named",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "$(git cat-file -t \"$object\") $(printf",
+   "new": "object $(printf",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_hit_in_a_file_names_the_blob"
+   ]
+  },
+  {
+   "name": "objects never named",
+   "file": "scripts/git-hooks/pre-push",
+   "old": "[ -n \"$held\" ] && objects=$(name_objects)",
+   "new": ":",
+   "project": "agent",
+   "tests": [
+    "tests/test_prepush_hook.py::test_a_hit_names_its_object_by_hash"
+   ]
+  }
+ ]
+}

@@ -123,6 +123,8 @@ jobs:
           cache-dependency-glob: team/uv.lock
       - run: make setup-team
       - run: make check-team
+      # The pre-push hook's bytes reading exists for macOS's grep, and this is the only job that runs there.
+      - run: uv run --locked --project agent --extra dev pytest agent/tests/test_prepush_hook.py -q
       - run: uv build --project team --out-dir /tmp/superyak-team-dist
 
   agent:
