@@ -51,7 +51,7 @@ jobs:
   engram:
     name: Engram and portable research tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # check-engram took 17m36s of 20 on 7d46e2b6
+    timeout-minutes: 45  # check-engram took 23.3 min of 30 on 4158fc61, and a run was cancelled at 30 on dc555ba7 with the same Engram code
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
