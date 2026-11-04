@@ -324,9 +324,10 @@ class Tools:
         return top + render_newest(room, messages, limit, max_chars(args), len(top))
 
     def _read_thread(self, room_id, args):
-        """A message and every reply under it, oldest first, from this room only. Replies come after what they answer, so
-        this reads from the root on, a page at a time, and stops at the size cap: a recent root costs a page, where it
-        once cost the whole room. A room that doesn't page (an older station, a paired peer's) sends itself whole."""
+        """A message and every reply under it, oldest first, from this room only. It reads from the root on, a page at a
+        time, and stops at the size cap: a recent root costs a page, where it once cost the whole room. A room that doesn't
+        page (an older station, a paired peer's) sends itself whole. A reply sorted before its root, which takes a clock
+        that stepped back between the two posts, isn't shown by a paged read: finding it would take the whole room."""
         root = args['thread']
         missing = ValueError(f'No message {label(str(root), 100)!r} in this room')
         if not isinstance(root, str) or not root:
@@ -335,7 +336,8 @@ class Tools:
         try:
             room = self.client.room(room_id, start=root, limit=THREAD_PAGE)
         except StationError as exc:  # the station's refusals, in the words this tool has always used
-            if exc.status == 404 or (exc.status == 400 and exc.message.endswith('is the id of a message')):
+            if (exc.status == 404 and exc.message == 'No message in this room'
+                    or exc.status == 400 and exc.message.endswith('is the id of a message')):
                 raise missing from None
             raise
         if room.get('paged') is True:
@@ -350,9 +352,12 @@ class Tools:
         """(position in the room, message), from a paged read's first page on; a later page is read only when it's reached."""
         while True:
             yield from enumerate(room['messages'], room['first_position'])
-            if not room['messages'] or room['first_position'] + len(room['messages']) >= room['total']:
+            end = room['first_position'] + len(room['messages'])
+            if not room['messages'] or end >= room['total']:
                 return
             room = self.client.room(room_id, after=room['messages'][-1]['id'], limit=THREAD_PAGE)
+            if room.get('first_position', 0) < end:  # pages that don't move on would read forever
+                raise ValueError('The station\'s pages of this room did not move forward')
 
     @staticmethod
     def _thread(room, positioned, root, args):

@@ -1,7 +1,7 @@
 import json
 import re
 from superyak_agent.mcp import TOOLS, Tools, handle
-from superyak_agent.station import StationClient
+from superyak_agent.station import StationClient, StationError
 from superyak_agent.watch import build_prompt
 
 
@@ -887,6 +887,73 @@ def test_a_thread_root_that_isnt_there_keeps_todays_words_paged_or_not(station):
             answer = call(tools, 'station_read', room=room, thread=root)
             assert answer.get('isError') is True, (root, pages)
             assert answer['content'][0]['text'].endswith(words), (root, pages, answer)
+
+
+def test_a_long_thread_root_reads_the_same_paged_or_not(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'a note')
+    tools, answers = tools_for(fake), []
+    for pages in (True, False):
+        fake.pages = pages
+        answers.append(call(tools, 'station_read', room=room, thread='x' * 101))
+    assert answers[0] == answers[1] and answers[0]['isError'] is True and 'No message' in answers[0]['content'][0]['text']
+
+
+def test_a_thread_read_keeps_the_stations_other_refusals(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    root = fake.say(room, jenn, 'a note')
+    tools = tools_for(fake)
+    for status, words in ((403, 'Forbidden'), (500, 'Server error'), (404, 'Not found')):
+        def refuse(*_args, status=status, words=words, **_page):
+            raise StationError(status, words)
+        tools.client.room = refuse
+        for asked in (root['id'], 5):  # a root that can't be a message still hears the room's own refusal first
+            text = call(tools, 'station_read', room=room, thread=asked)['content'][0]['text']
+            assert f'{status}: {words}' in text and 'No message' not in text, (status, asked)
+
+
+def test_a_reply_sorted_before_its_root_isnt_shown_by_a_paged_read(station):
+    """The cost of not reading the whole room, chosen in review: it takes a clock that stepped back between the two posts."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    early = fake.say(room, jenn, 'the earlier answer')
+    root = fake.say(room, andy, 'the question')
+    fake.replies[early['id']] = root['id']
+    text = call_text(tools_for(fake), {'room': room, 'thread': root['id']})
+    assert 'the question' in text and 'the earlier answer' not in text
+
+
+def test_a_thread_read_ends_when_a_stations_pages_dont_move_on(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    root = fake.say(room, andy, 'the question')
+    other = fake.say(room, jenn, 'chatter')
+    tools = tools_for(fake)
+    real, asked = tools.client.room, []
+
+    def stuck(room_id, **page):
+        asked.append(page)
+        answer = real(room_id, limit=2)
+        answer.update(first_position=0, total=1000)
+        return answer
+    tools.client.room = stuck
+    answer = call(tools, 'station_read', room=room, thread=root['id'])
+    assert answer['isError'] is True and 'did not move forward' in answer['content'][0]['text']
+    assert len(asked) == 2 and asked[1]['after'] == other['id']
+
+
+def test_a_later_pages_position_counts_from_the_rooms_start(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    root = fake.say(room, andy, 'the question')
+    for n in range(249):
+        fake.say(room, jenn, f'chatter {n}')
+    odd = reply(fake, room, serenity, 'a long answer ' + 'long ' * 900, root)
+    fake.replies['x y`z'] = fake.replies.pop(odd['id'])
+    odd['id'] = 'x y`z'
+    assert 'at=250' in call_text(tools_for(fake), {'room': room, 'thread': root['id'], 'max_chars': 200})
 
 
 def test_paged_and_full_reads_print_the_same(station):
