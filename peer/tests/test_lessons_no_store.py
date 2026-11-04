@@ -54,3 +54,33 @@ def test_a_directory_named_like_the_store_isnt_one(tmp_path, capsys):
     with pytest.raises(SystemExit) as stopped:
         main(['where', '--data-dir', str(tmp_path / 'peer')])
     assert stopped.value.code == 1 and 'no peer' in capsys.readouterr().err
+
+
+NO_ROOM = 'No lessons room on this peer, so no lesson can be shown here; this zero measures nothing.\n'
+
+
+@pytest.mark.parametrize('verb', ['receipts', 'outcomes', 'repeats'])
+def test_a_real_store_with_no_room_says_its_zero_measures_nothing(tmp_path, capsys, verb):
+    """Tardis's peer, 2026-11-04: a real store, no room recorded, and "No receipts yet" read as if lessons could have come."""
+    Store(tmp_path / 'peer', signing=False)
+    main([verb, '--data-dir', str(tmp_path / 'peer')])
+    assert capsys.readouterr().out == NO_ROOM
+
+
+@pytest.mark.parametrize('verb, words', [('receipts', 'No receipts yet.\n'), ('outcomes', None), ('repeats', 'No repeats recorded yet.\n')])
+def test_with_a_room_recorded_a_zero_is_a_real_zero(lessons_station, capsys, verb, words):
+    store, *_ = lessons_station
+    main([verb, '--data-dir', str(store.data_dir)])
+    out = capsys.readouterr().out
+    assert out != NO_ROOM and out == (words or out) and out.strip()
+    assert 'measures nothing' not in out
+
+
+def test_rows_are_always_listed_and_only_nothing_with_no_room_says_so():
+    from superyak_peer.lessons import NO_ROOM as WORDS, _no_room
+
+    def peer(room):
+        return type('Store', (), {'lessons_room_full_id': lambda self: room})()
+    assert _no_room(peer(None), []) == WORDS
+    assert _no_room(peer(None), ['a row']) is None, 'a row is a row, whatever the room'
+    assert _no_room(peer('p:r'), []) is None

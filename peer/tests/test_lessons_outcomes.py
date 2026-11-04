@@ -207,7 +207,7 @@ def test_outcomes_list_newest_first_with_ids_ship_lesson_and_outcome_and_section
     hashes, globs = full_id(store, HASHES), full_id(store, GLOBS)
     from superyak_peer.db import Store
     Store(store.data_dir.parent / 'other', signing=False)  # an empty peer, which the verb no longer makes for itself
-    assert run_lessons('outcomes', '--data-dir', store.data_dir.parent / 'other').stdout == 'No outcomes on this peer yet.\n'
+    assert run_lessons('outcomes', '--data-dir', store.data_dir.parent / 'other').stdout == 'No lessons room on this peer, so no lesson can be shown here; this zero measures nothing.\n'
     shown_to(store, clock, 'rio-grande', 'git show 1a2b')
     shown_to(store, clock, 'rio-grande', 'grep --include=*')
     first, second = receipts(store)[0], receipts(store)[1]
