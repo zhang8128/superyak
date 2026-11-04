@@ -375,3 +375,126 @@ def test_a_wrong_destination_replay_is_403_not_409(world):
     refused(world, first, 403, 'Receiving ship is not a current contact')
     again = request(world, nonce=first['nonce'], destination='c' * 64)
     refused(world, again, 403, 'Not addressed to this peer')
+
+
+# Task 4: processing. The frame is rewritten, the daemon answers within the deadline, P7's caps hold, and a
+# `crossings` row is written before the signed answer goes back. No row means no answer.
+
+from superyak_peer.identity import CROSSING_ANSWER_KEYS, crossing_digest, verify_crossing_answer
+
+
+def crossing_rows(w):
+    with w.a[0].transaction() as db:
+        return [dict(r) for r in db.execute('SELECT * FROM crossings ORDER BY at, disclosure_id')]
+
+
+def verified(w, value, answer):
+    card = w.m[2].connections(w.m[1])[0]['card']  # the card `m` paired for `a`, as `ask` dials it
+    return verify_crossing_answer(card, answer, me=w.m[2].identity.peer_id, digest=crossing_digest(value),
+                                  nonce=value['nonce'], kind=value['frame']['kind'])
+
+
+def test_the_daemon_gets_the_frame_with_the_ref_and_the_mapped_publisher(world):
+    frame = frame_of(receiver='tardis', publisher='somebody-else')
+    serve(world, request(world, frame))
+    [got] = world.daemon.frames
+    ref = f'urn:superyak:{world.m[2].identity.peer_id}:store:{INSTANCE}'
+    assert got == {**frame, 'receiver': ref, 'publisher': 'rio-grande'}
+
+
+def test_the_answer_is_signed_binds_the_request_and_is_recorded(world):
+    value = request(world)
+    answer = serve(world, value)
+    assert set(answer) == CROSSING_ANSWER_KEYS
+    assert verified(world, value, answer) == answer
+    assert answer['frame'] == recall_result(world.daemon.frames[0]) | {'turnId': answer['frame']['turnId']}
+    assert (answer['origin'], answer['destination']) == (world.a[2].identity.peer_id, world.m[2].identity.peer_id)
+    assert crossing_rows(world) == [{
+        'disclosure_id': 'd' * 32, 'origin_peer': world.m[2].identity.peer_id,
+        'receiver_ref': f'urn:superyak:{world.m[2].identity.peer_id}:store:{INSTANCE}',
+        'request_digest': crossing_digest(value), 'nonce': value['nonce'], 'at': value['at']}]
+
+
+def test_a_read_is_answered_with_its_read_result(world):
+    value = request(world, frame_of('read'))
+    answer = serve(world, value)
+    assert verified(world, value, answer)['frame']['kind'] == 'read_result'
+    assert [r['disclosure_id'] for r in crossing_rows(world)] == ['e' * 32]
+
+
+def test_a_failed_insert_is_503_with_no_answer(world):
+    with world.a[0].transaction() as db:
+        db.execute("CREATE TRIGGER refuse_crossings BEFORE INSERT ON crossings BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+    refused(world, request(world), 503, 'Crossing could not be recorded')
+    assert len(world.daemon.frames) == 1  # the daemon recorded its disclosure: `crossings` reports it as unsent
+
+
+def test_a_disclosure_already_recorded_is_503(world):
+    serve(world, request(world))
+    refused(world, request(world), 503, 'Crossing could not be recorded')  # the daemon answered the same disclosureId
+    assert len(crossing_rows(world)) == 1
+
+
+def test_a_daemon_error_frame_is_502_with_its_code_and_no_row(world):
+    world.daemon.answer = lambda frame: {'protocolVersion': '0.1', 'kind': 'error', 'code': 'TURN_UNBOUND', 'detail': ''}
+    refused(world, request(world), 502, 'TURN_UNBOUND')
+    assert crossing_rows(world) == []
+
+
+def test_a_daemon_past_the_deadline_is_504_and_no_row(world):
+    import time
+    world.daemon.hold = threading.Event()
+    started = time.monotonic()
+    refused(world, request(world, deadline_ms=200), 504, 'Deadline passed')
+    assert time.monotonic() - started < 2
+    assert crossing_rows(world) == []
+
+
+def test_an_answer_over_128_kib_is_502_and_no_row(world):
+    world.daemon.answer = lambda frame: recall_result(frame, candidates=[{'memoryId': 'x', 'pad': 'y' * 128 * 1024}])
+    refused(world, request(world), 502, 'Answer too large')
+    assert crossing_rows(world) == []
+
+
+def test_a_read_delivering_more_than_32_kib_of_text_is_502_and_no_row(world):
+    world.daemon.answer = lambda frame: read_result(frame, content='é' * (8 * 1024) + 'z')  # two items: 32 KiB + 2 bytes
+    refused(world, request(world, frame_of('read')), 502, 'Answer too large')
+    assert crossing_rows(world) == []
+    world.daemon.answer = lambda frame: read_result(frame, content='é' * (8 * 1024))  # exactly 32 KiB in all
+    assert serve(world, request(world, frame_of('read')))['frame']['disclosureId'] == 'e' * 32
+
+
+@pytest.mark.parametrize('reply', [b'not json\n', b'{"kind": "recall_result"}\n', b'[1]\n',
+                                   'no disclosure', 'read_result', 'null disclosure'])
+def test_a_bad_daemon_answer_is_502_and_no_row(world, reply):
+    def answer(frame):
+        if reply == 'no disclosure':
+            return {k: v for k, v in recall_result(frame).items() if k != 'disclosureId'}
+        if reply == 'read_result':
+            return read_result({**frame, 'memoryIds': ['m1']})
+        if reply == 'null disclosure':
+            return recall_result(frame, disclosure=None)
+        return reply
+    world.daemon.answer = answer
+    with pytest.raises(Problem) as answer_:
+        serve(world, request(world))
+    assert answer_.value.status == 502
+    assert crossing_rows(world) == []
+
+
+def test_an_unreachable_daemon_is_502(world):
+    world.daemon.close()
+    refused(world, request(world), 502, 'Publisher unavailable')
+
+
+def test_the_same_instance_signed_by_another_paired_peer_gets_that_peers_ref(world, tmp_path):
+    """Spec section 4, "Audience", the peer half: the ref binds the verified origin, so a second paired peer naming
+    the same instance_id reaches the daemon as its own store, never as Tardis's."""
+    n = station(tmp_path / 'n', 'nina', world.clock, mode='pull')
+    ship = lesson_ship(n[0], n[1], 'nights')
+    paired(world.a[2], world.a[1], n[2].card(ship['id']))
+    world.daemon.answer = lambda frame: recall_result(frame, disclosure=uuid.uuid4().hex)
+    serve(world, request(world, signer=n[2].identity, receiver_ship=ship['id']))
+    serve(world, request(world))
+    assert [f['receiver'] for f in world.daemon.frames] == [
+        f'urn:superyak:{n[2].identity.peer_id}:store:{INSTANCE}', f'urn:superyak:{world.m[2].identity.peer_id}:store:{INSTANCE}']

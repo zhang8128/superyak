@@ -13,16 +13,24 @@ import logging
 import os
 from pathlib import Path
 import re
+import socket
+import sqlite3
 import stat
 import threading
+import time
 import tomllib
 
 from .common import Problem
-from .identity import UUID_FORM, crossing_shape_ok, parse, verify_crossing
+from .identity import ANSWERS, UUID_FORM, canonical, crossing_digest, crossing_shape_ok, parse, verify_crossing
 
 log = logging.getLogger(__name__)
 CROSSING_REQUEST_MAX = 16 * 1024  # spec 2.3; the listener's cap for the route too
+ANSWER_MAX = 128 * 1024           # a signed answer (spec 2.3, P7)
+CONTENT_MAX = 32 * 1024           # the text a read delivers, as UTF-8 (spec 2.3, P7)
+DAEMON_REPLY_MAX = 1024 * 1024    # one daemon line, as lighthouse_client reads one
+DAEMON_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 NOT_CONTACT = 'Receiving ship is not a current contact'
+BAD_ANSWER, TOO_LARGE = 'Bad publisher answer', 'Answer too large'
 SETTINGS_FILE = 'crossings.toml'
 SETTINGS_MAX = 64 * 1024
 PUBLISHED_KEYS = frozenset({'ship', 'publisher', 'daemon_socket', 'sidecar'})
@@ -187,6 +195,81 @@ def serve(federation, raw):
     return _answer(federation, value, house)
 
 
+def _left(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Deadline passed')
+    return remaining
+
+
+def daemon_call(socket_path, frame, deadline):
+    """One canonical JSON line to the publisher's lighthouse daemon and one line back, at most DAEMON_REPLY_MAX, all
+    within `deadline` (time.monotonic). TimeoutError at the deadline; OSError when it can't be reached or closes
+    early; Problem when its line isn't one JSON object."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(_left(deadline))
+        connection.connect(str(socket_path))
+        connection.settimeout(_left(deadline))
+        connection.sendall(canonical(frame) + b'\n')
+        data = bytearray()
+        while b'\n' not in data:
+            connection.settimeout(_left(deadline))
+            part = connection.recv(65536)
+            if not part:
+                raise OSError('The daemon closed the connection before answering')
+            data += part
+            if len(data) > DAEMON_REPLY_MAX + 1:
+                raise OSError('The daemon answered more than 1 MiB')
+    _left(deadline)
+    line, _, rest = bytes(data).partition(b'\n')
+    if rest:
+        raise Problem(400, 'The daemon answered more than one line')
+    return parse(line, limit=DAEMON_REPLY_MAX)
+
+
+def _content_bytes(items):
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        raise Problem(502, BAD_ANSWER)
+    return sum(len(i['content'].encode('utf-8')) for i in items if isinstance(i.get('content'), str))
+
+
 def _answer(federation, value, house):
-    """The daemon call, the answer and its `crossings` row (plan P7): Task 4."""
-    raise Problem(503, 'Crossings are not answered yet')
+    """Plan P7, after the seven checks. The frame's `receiver` becomes the ref built from the verified origin and its
+    `publisher` the mapped daemon publisher; the daemon answers within `deadline_ms`. An error frame is 502 with the
+    daemon's code; a daemon past the deadline is 504; an answer over 128 KiB or delivering over 32 KiB of text is 502.
+    None of those writes a row. Then the `crossings` row, and only then the signed answer: a failed insert is 503 with
+    no answer, and the daemon's disclosure shows as unsent (P18)."""
+    origin = value['origin']
+    ref = f'urn:superyak:{origin}:store:{value["receiver_instance"]}'
+    frame = {**value['frame'], 'receiver': ref, 'publisher': house['publisher']}
+    deadline = time.monotonic() + value['deadline_ms'] / 1000
+    try:
+        reply = daemon_call(house['daemon_socket'], frame, deadline)
+    except TimeoutError:
+        raise Problem(504, 'Deadline passed') from None
+    except (OSError, Problem) as error:
+        log.warning('the lighthouse daemon for %s could not answer a crossing: %s', house['publisher'], error)
+        raise Problem(502, 'Publisher unavailable') from None
+    if reply.get('kind') == 'error':
+        code = reply.get('code')
+        raise Problem(502, code if isinstance(code, str) and DAEMON_CODE.fullmatch(code) else 'Publisher error')
+    disclosure = reply.get('disclosureId')
+    if reply.get('protocolVersion') != '0.1' or reply.get('kind') != ANSWERS[frame['kind']] \
+            or not isinstance(disclosure, str) or not 1 <= len(disclosure) <= 256:
+        raise Problem(502, BAD_ANSWER)
+    if frame['kind'] == 'read' and _content_bytes(reply.get('items')) > CONTENT_MAX:
+        raise Problem(502, TOO_LARGE)
+    digest = crossing_digest(value)
+    answer = federation.identity.sign_crossing_answer({
+        'version': 1, 'kind': 'crossing-answer', 'origin': federation.identity.peer_id, 'destination': origin,
+        'request_digest': digest, 'nonce': value['nonce'], 'frame': reply})
+    if len(canonical(answer)) > ANSWER_MAX:
+        raise Problem(502, TOO_LARGE)
+    try:
+        with federation.store.transaction() as db:
+            db.execute('INSERT INTO crossings(disclosure_id, origin_peer, receiver_ref, request_digest, nonce, at) '
+                       'VALUES(?,?,?,?,?,?)', (disclosure, origin, ref, digest, value['nonce'], value['at']))
+    except sqlite3.Error as error:
+        log.error('a crossing answer was withheld: its crossings row could not be written: %s', error)
+        raise Problem(503, 'Crossing could not be recorded') from None
+    return answer
