@@ -986,6 +986,11 @@ closed: P10 refuses remote frames outside `enforce`, and `_requester_ok` refuses
    - every served house needs migration 029, or `enforce` serves it nothing (`lighthouse_daemon.py:375-381`,
      :859-863). Rio Grande checks each house read-only first.
 4. **The publisher's settings.** After Andy's yes in the room, Rio Grande writes on the Pi:
+   - **(section 2 review S5) Before this and any later `grant-remote`:** `shares` for that house, run by the
+     publishing ship, shows no item with `refused_now`. Placements made before migration 030 stay served until
+     unshared, and the daemon has no captured check, so a captured memory placed before then would cross. Any such
+     item is unshared first. (Stage 2's first grant is safe: the Pi's house holds 0 placements, and step 5 names
+     memories one by one.)
    - **(S6)** with `python -m policy_gen grant-remote` (P24), the house's rule for Tardis's exact store ref
      (`urn:superyak:<Tardis peer_id>:store:<Tardis instance_id>`), for `recall` and `read`, in one context, with the
      work lane's audience in `engram:audiences`;
