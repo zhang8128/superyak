@@ -1219,13 +1219,20 @@ class Storage:
         source_episode_ids: list[str],
         auto_generated: bool = False,
         lane: str = "personal",
+        cluster_episode_ids: list[str] | None = None,
     ) -> str:
+        """Add a semantic linked to ``source_episode_ids``. ``cluster_episode_ids`` are every episode it was distilled
+        from, linked or not (compression links only those similar to its summary). Its capture mark (migration 030)
+        is 1 when any id in either list is a captured prompt in this store, otherwise 0, written in the same
+        transaction as the row."""
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane,"
+            " touched_capture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
             (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane),
         )
+        self.mark_touched_capture(id, [*(source_episode_ids or []), *(cluster_episode_ids or [])])
         self.conn.execute(
             "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
             (id, _pack_embedding(embedding)),
@@ -1238,6 +1245,25 @@ class Storage:
         self._commit()
         logger.debug("Semantic added: %s (kind=%s)", id, kind)
         return id
+
+    def mark_touched_capture(self, semantic_id: str, episode_ids: list[str]) -> bool:
+        """Whether any of ``episode_ids`` is a captured prompt (an episode with source 'auto', which hooks/nudge.py
+        writes) in this store. When one is, the semantic's capture mark (migration 030) is set to 1. The mark never
+        goes down, so a NULL (unknown) stays NULL unless a capture comes in. Writes in the caller's transaction and
+        does not commit: every caller commits with its own write."""
+        ids = list(dict.fromkeys(eid for eid in episode_ids or () if eid))
+        captured = False
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            if self.conn.execute(
+                f"SELECT 1 FROM episodes WHERE source = 'auto' AND id IN ({', '.join('?' * len(chunk))}) LIMIT 1",
+                chunk,
+            ).fetchone() is not None:
+                captured = True
+                break
+        if captured:
+            self.conn.execute("UPDATE semantics SET touched_capture = 1 WHERE id = ?", (semantic_id,))
+        return captured
 
     def get_semantic(self, id: str) -> dict | None:
         row = self.conn.execute(
@@ -1263,6 +1289,7 @@ class Storage:
                 "INSERT OR IGNORE INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
                 [(id, eid) for eid in additional_episode_ids],
             )
+            self.mark_touched_capture(id, additional_episode_ids)
         self._commit()
 
     def get_semantic_neighbors(self, semantic_id: str) -> list[dict]:

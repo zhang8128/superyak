@@ -156,6 +156,19 @@ class TestApplySubdivision:
             "SELECT 1 FROM semantic_vectors WHERE id = 'sem-1'").fetchone()
         assert row is None
 
+    @pytest.mark.parametrize("hub_mark", [None, 0, 1])
+    def test_peers_copy_the_hubs_capture_mark(self, tmp_db, fake_embedding, hub_mark):
+        # Migration 030: a peer's text comes from the hub's sources, so it carries the hub's mark, NULL included.
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        tmp_db.conn.execute("UPDATE semantics SET touched_capture = ? WHERE id = 'sem-1'", (hub_mark,))
+        tmp_db.conn.commit()
+        result = sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                         hub_content="the shared residue",
+                                         embed_fn=lambda t: fake_embedding(), site="sleep")
+        for pid in result["peer_ids"]:
+            assert tmp_db.get_semantic(pid)["touched_capture"] == hub_mark
+        assert tmp_db.get_semantic("sem-1")["touched_capture"] == hub_mark
+
     def test_hub_vector_kept_when_content_untouched(self, tmp_db, fake_embedding):
         eps = _seed_semantic(tmp_db, fake_embedding)
         v = _verdict(eps)

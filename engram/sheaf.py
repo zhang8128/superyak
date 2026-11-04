@@ -196,12 +196,15 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
         for pid, content, vec, part, p_energy in zip(
                 peer_ids, peer_contents, peer_vecs, verdict.parts,
                 verdict.part_energies):
+            # A peer is distilled from the hub's sources, so it carries the
+            # hub's capture mark (migration 030); a NULL hub gives a NULL peer.
             conn.execute(
                 "INSERT INTO semantics (id, content, content_hash, kind,"
-                " confidence, created_at, lane, auto_generated)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                " confidence, created_at, lane, auto_generated, touched_capture)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
                 (pid, content, hashlib.sha256(content.encode()).hexdigest(),
-                 parent["kind"], parent["confidence"], now, parent["lane"]),
+                 parent["kind"], parent["confidence"], now, parent["lane"],
+                 parent.get("touched_capture")),
             )
             conn.execute(
                 "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",

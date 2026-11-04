@@ -573,6 +573,8 @@ class Compressor:
                     source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
                     lane=lane,
+                    # the summary may draw on any episode of the cluster, linked or not: the capture mark sees them all
+                    cluster_episode_ids=all_episode_ids,
                 )
                 semantics_created += 1
                 # Track sibling semantics from the same split_group
@@ -1349,6 +1351,7 @@ class Compressor:
                             "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
                             (sid, ep["id"], sim),
                         )
+                        self._storage.mark_touched_capture(sid, [ep["id"]])
                         links_created += 1
 
         if links_created:

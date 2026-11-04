@@ -2642,7 +2642,24 @@ def shares(audience: str | None = None) -> dict:
             )
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
-        return {"shares": [asdict(record) for record in records]}
+        return {"shares": [_listed_share(record) for record in records]}
+
+
+def _listed_share(record) -> dict:
+    """A placement as `shares` lists it. A placement made before share refused captured prompts stays served until it
+    is unshared, so one from this server's instance whose source row is still here and would now be refused carries
+    `refused_now`, the refusal's words, for the owner to unshare (fix:share-refuses-captured-memories)."""
+    from sharing import captured_reason
+    item = asdict(record)
+    if record.source_instance != (_instance_name or "default") or record.layer not in ("episode", "semantic"):
+        return item
+    getter = _storage.get_episode if record.layer == "episode" else _storage.get_semantic
+    row = getter(record.source_id)
+    if row is not None:
+        refused = captured_reason(_storage, record.layer, row)
+        if refused is not None:
+            item["refused_now"] = refused
+    return item
 
 
 def _get_reading_gap_domains() -> list[str]:

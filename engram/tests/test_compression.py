@@ -2131,6 +2131,64 @@ def test_knowledge_feeds_queued_does_not_count_capture_only_cluster(tmp_db, embe
     assert graph.feeds == []
 
 
+# The capture mark (migration 030, fix:share-refuses-captured-memories): compression links only the episodes similar to
+# the summary, so a semantic's links can't say whether a capture went into it. The mark is stamped when it is made.
+
+
+def _mark(storage, sid):
+    return storage.conn.execute("SELECT touched_capture FROM semantics WHERE id = ?", (sid,)).fetchone()[0]
+
+
+def test_a_cluster_holding_a_capture_marks_its_new_semantic_though_only_a_chosen_episode_links(
+        tmp_db, compressor, embedder, tmp_path, monkeypatch):
+    from sharing import CapturedRefused, share
+    captured = _add_sourced(tmp_db, embedder, "mark: a used capture", "auto", _unit(6))
+    chosen = _add_sourced(tmp_db, embedder, "mark: a remembered note", "remember", _unit(6))
+    _log_recall(tmp_db, [captured], "used")
+    result = compressor.cluster_episodes()
+    assert [sorted(ep["id"] for ep in c["episodes"]) for c in result["clusters"]] == [sorted([captured, chosen])]
+    # Finding 2: the summary is similar only to the chosen episode, so only it is linked.
+    monkeypatch.setattr(compressor, "_filter_relevant_sources", lambda episodes, content: [chosen])
+
+    compressor.commit(result["compress_id"], [{"content": "a summary of the cluster", "kind": "fact", "action": "new"}])
+
+    (sem,) = tmp_db.get_active_semantics()
+    assert tmp_db.get_semantic(sem["id"])["source_episode_ids"] == [chosen]
+    assert tmp_db.get_semantic(sem["id"])["auto_generated"] == 0 and _mark(tmp_db, sem["id"]) == 1
+    house = Storage(str(tmp_path / "house.db"))
+    try:
+        with pytest.raises(CapturedRefused, match="was built from or reinforced by a captured prompt"):
+            share(source_storage=tmp_db, published_storage=house, source_id=sem["id"], layer="semantic",
+                  audience="commons", reason="r", source_instance="default")
+    finally:
+        house.close()
+
+
+def test_a_cluster_of_chosen_episodes_marks_its_new_semantic_clean(tmp_db, compressor, embedder):
+    for i in range(2):
+        _add_sourced(tmp_db, embedder, f"clean: remembered {i}", "remember", _unit(8))
+    result = compressor.cluster_episodes()
+    compressor.commit(result["compress_id"], [{"content": "a clean summary", "kind": "fact", "action": "new"}])
+    (sem,) = tmp_db.get_active_semantics()
+    assert _mark(tmp_db, sem["id"]) == 0
+
+
+def test_the_cross_link_pass_marks_a_semantic_it_links_to_a_capture(tmp_db, embedder):
+    emb = [0.5] * 768
+    embedder.override_map["cross-link topic"] = emb
+    chosen = _add_sourced(tmp_db, embedder, "cross-link: a remembered note", "remember", emb)
+    tmp_db.add_semantic("sem-x", "cross-link topic", "fact", 0.7, emb, [chosen])
+    captured = _add_sourced(tmp_db, embedder, "cross-link: a captured prompt", "auto", emb)
+    other = _add_sourced(tmp_db, embedder, "cross-link: another remembered note", "remember", emb)
+    compressor = Compressor(tmp_db, embedder)
+
+    assert compressor._multi_link_episodes([tmp_db.get_episode(other)], exclude_semantic_ids=[]) == 1
+    assert _mark(tmp_db, "sem-x") == 0
+    assert compressor._multi_link_episodes([tmp_db.get_episode(captured)], exclude_semantic_ids=[]) == 1
+    assert captured in tmp_db.get_semantic("sem-x")["source_episode_ids"]
+    assert _mark(tmp_db, "sem-x") == 1
+
+
 def test_a_bad_auto_with_scope_full_raises_before_any_reset(tmp_db, compressor, embedder):
     """The check comes before `_reset_all()`, which deletes every semantic: a bad value must leave the store whole."""
     sem_id = str(uuid.uuid4())

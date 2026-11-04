@@ -62,51 +62,77 @@ def _holds_capture(conn, digest: str) -> bool:
                         (CAPTURED_SOURCE, digest)).fetchone() is not None
 
 
+def _verbatim_capture(source_storage, text: str) -> bool | None:
+    """Whether `text` is a capture's text word for word, in the store or in its cold storage (read-only). None when
+    the store holds none and its cold storage exists but cannot be read, so that cannot be told."""
+    digest = content_digest(text)["value"]
+    if _holds_capture(source_storage.conn, digest):
+        return True
+    return _cold_holds_capture(source_storage, digest)
+
+
 def captured_reason(source_storage, layer: str, row: dict) -> str | None:
     """Why `row` must not be shared because it is, or may be built from, a captured prompt; None when it may be.
 
-    An episode is refused when its source is 'auto'. A semantic is shared only when its provenance is known and holds
-    no capture, so it is refused when:
-    - automatic compression wrote it (`auto_generated`), since its text is its episodes' own text;
-    - it has no source links: moving an episode to cold storage deletes its links (ON DELETE CASCADE), so nobody can
-      tell what it was built from;
+    An episode is refused when its source is 'auto', and when its text is a capture's text word for word, in the
+    store or in its cold storage (`remember` strips a prompt as the nudge does, so a copy has the capture's digest).
+
+    A semantic's links can't say what it was built from: compression links only the cluster's episodes similar to the
+    summary, and moving an episode to cold storage deletes its links (ON DELETE CASCADE). So each writer stamps
+    `touched_capture` (migration 030) when the semantic is made, reinforced or linked, in a column no cascade touches:
+    1 when a capture was in its cluster or among its sources, 0 when none was, and it never goes down. A semantic is
+    refused when:
+    - `auto_generated` is not 0, NULL included: automatic compression wrote it from its episodes' own text;
     - a link names an episode that is gone (the nudge hard-deletes weak captures without foreign keys, so the link
       stays);
     - a linked episode is a capture;
+    - `touched_capture` is NULL: it was made before migration 030, or by a path that doesn't record the mark;
+    - `touched_capture` is 1: a capture was in its cluster or among its sources, or reinforced or linked it;
     - its text is a capture's text word for word, in the store or in its cold storage.
-    A known limit: a model-written semantic that kept links to chosen episodes after a capture among its sources moved
-    to cold storage passes, since the cascade left no trace of that link."""
+    A semantic stamped 0 whose source episodes have since moved to cold storage is known clean, and shares.
+    When cold storage exists but cannot be read, an episode or semantic that passes every other rule is refused."""
     remedy = "remember what you mean to share, in your own words, and share that"
     if layer == "episode":
+        eid = row.get("id")
         if (row.get("source") or "") == CAPTURED_SOURCE:
-            return (f"episode {row['id']} is a captured prompt (source 'auto'): what a person typed, never shared; "
+            return (f"episode {eid} is a captured prompt (source 'auto'): what a person typed, never shared; "
                     f"{remedy}")
+        verbatim = _verbatim_capture(source_storage, row.get("content", ""))
+        if verbatim is None:
+            return (f"episode {eid}: its store's cold storage cannot be read, so whether its text is a captured "
+                    f"prompt's cannot be told; {remedy}")
+        if verbatim:
+            return f"episode {eid} holds a captured prompt's text word for word; {remedy}"
         return None
     if layer != "semantic":
         return None
     sid = row.get("id")
-    if row.get("auto_generated"):
+    if row.get("auto_generated") != 0:
         return (f"semantic {sid} was written by automatic compression from its episodes' own text, which may be "
                 f"captured prompts; share the episodes you chose, or {remedy}")
     ids = list(row.get("source_episode_ids") or [])
-    if not ids:
-        return (f"semantic {sid} has no source episodes left, so whether it was built from a captured prompt cannot "
-                f"be told; {remedy}")
-    placeholders = ", ".join("?" * len(ids))
-    found = {r[0]: r[1] for r in source_storage.conn.execute(
-        f"SELECT id, source FROM episodes WHERE id IN ({placeholders})", ids)}
+    found = {}
+    if ids:
+        placeholders = ", ".join("?" * len(ids))
+        found = {r[0]: r[1] for r in source_storage.conn.execute(
+            f"SELECT id, source FROM episodes WHERE id IN ({placeholders})", ids)}
     for eid in ids:
         if eid not in found:
             return (f"semantic {sid}: its source episode {eid} is gone, so whether it was a captured prompt cannot "
                     f"be told; {remedy}")
         if (found[eid] or "") == CAPTURED_SOURCE:
             return f"semantic {sid} is built from captured prompt {eid} (source 'auto'); {remedy}"
-    digest = content_digest(row.get("content", ""))["value"]
-    in_cold = _cold_holds_capture(source_storage, digest)
-    if in_cold is None:
+    mark = row.get("touched_capture")
+    if mark is None:
+        return (f"semantic {sid} was made before Engram recorded whether a captured prompt went into it, or by a path "
+                f"that doesn't record it, so that cannot be told; {remedy}")
+    if mark != 0:
+        return f"semantic {sid} was built from or reinforced by a captured prompt; {remedy}"
+    verbatim = _verbatim_capture(source_storage, row.get("content", ""))
+    if verbatim is None:
         return (f"semantic {sid}: its store's cold storage cannot be read, so whether its text is a captured "
                 f"prompt's cannot be told; {remedy}")
-    if in_cold or _holds_capture(source_storage.conn, digest):
+    if verbatim:
         return f"semantic {sid} is a captured prompt's text word for word; {remedy}"
     return None
 
