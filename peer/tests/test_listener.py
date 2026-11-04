@@ -1,4 +1,5 @@
-"""Federation pull, plan Task 8: federation-listen's app, two routes and nothing else (P9, nits 11, 18 and 20)."""
+"""Federation pull, plan Task 8: federation-listen's app, three routes and nothing else (P9, nits 11, 18 and 20); the
+third, /federation/crossing, is the ship home and crossing plan's Task 5."""
 import json
 import subprocess
 import sys
@@ -54,13 +55,15 @@ def test_a_refusal_answers_with_its_status_and_words(listening):
 
 @pytest.mark.parametrize('method, path', [('GET', '/federation/events'), ('GET', '/federation/pull'), ('GET', '/'),
                                           ('POST', '/'), ('POST', '/federation/events/x'), ('PUT', '/federation/pull'),
-                                          ('POST', '/api/sync')])
-def test_only_its_two_routes_are_served(listening, method, path):
+                                          ('POST', '/api/sync'), ('GET', '/federation/crossing'),
+                                          ('POST', '/federation/crossing/x')])
+def test_only_its_three_routes_are_served(listening, method, path):
     client = listening[0]
     assert client.request(method, path, content=b'{}').status_code == 404
 
 
-@pytest.mark.parametrize('path, cap', [('/federation/events', MAX_ENVELOPE), ('/federation/pull', 16 * 1024)])
+@pytest.mark.parametrize('path, cap', [('/federation/events', MAX_ENVELOPE), ('/federation/pull', 16 * 1024),
+                                       ('/federation/crossing', 16 * 1024)])
 def test_a_body_over_its_cap_is_refused(listening, path, cap):
     client = listening[0]
     assert client.post(path, content=b'x' * (cap + 1)).status_code == 413
@@ -153,3 +156,133 @@ def test_every_server_waits_only_a_moment_on_open_requests_when_stopped(tmp_path
     assert [options.get('timeout_graceful_shutdown') for options in ran] == [cli.SHUTDOWN_GRACE] * 3
     assert 0 < cli.SHUTDOWN_GRACE <= 5
 
+
+
+# Crossing plan, Task 5: the crossing route on the listener, and the load (P6): two crossings in flight per origin,
+# four in all, and sixty a minute per origin, so events and pulls are never starved.
+
+import threading as _threading
+import time as _time
+import uuid as _uuid
+
+from test_crossing_route import (INSTANCE, crossing_rows, frame_of, recall_result, request as crossing_request,
+                                 world)  # noqa: F401 - `world` is the crossing route's fixture
+from conftest import lesson_ship as _lesson_ship, paired as _paired
+
+
+@pytest.fixture
+def crossing_client(world):
+    from superyak_peer.listener import create_listener
+    return TestClient(create_listener(None, federation=world.a[2]), base_url='https://listener.example')
+
+
+def test_a_crossing_is_served_over_https(world, crossing_client):
+    answer = crossing_client.post('/federation/crossing', content=canonical(crossing_request(world)))
+    assert answer.status_code == 200 and answer.json()['kind'] == 'crossing-answer'
+    assert int(answer.headers['content-length']) == len(answer.content)  # the asking side refuses a 2xx without one
+    from superyak_peer.listener import create_listener
+    plain = TestClient(create_listener(None, federation=world.a[2]), base_url='http://listener.example')
+    assert plain.post('/federation/crossing', content=b'{}').json() == {'error': 'Federation requires HTTPS'}
+
+
+def test_a_crossing_refusal_answers_with_its_status_and_words(world, crossing_client):
+    answer = crossing_client.post('/federation/crossing', content=b'{"not": "a crossing"}')
+    assert (answer.status_code, answer.json()) == (400, {'error': 'Invalid crossing request'})
+
+
+def another_origin(world, tmp_path, name):
+    """A pull peer paired with `a`, with a ship that is a code-confirmed contact there: (identity, ship id)."""
+    peer = station(tmp_path / name, name, world.clock, mode='pull')
+    ship = _lesson_ship(peer[0], peer[1], name + '-ship')
+    _paired(world.a[2], world.a[1], peer[2].card(ship['id']))
+    return peer[2].identity, ship['id']
+
+
+def in_flight(client, bodies):
+    """Post each body on its own thread; returns the threads and a list their (status, json) answers land in."""
+    answers, threads = [], []
+    for body in bodies:
+        thread = _threading.Thread(target=lambda b=body: answers.append(
+            (lambda r: (r.status_code, r.json()))(client.post('/federation/crossing', content=canonical(b)))))
+        thread.start()
+        threads.append(thread)
+    return threads, answers
+
+
+def wait_for(condition, seconds=20):
+    end = _time.monotonic() + seconds
+    while not condition():
+        assert _time.monotonic() < end, 'timed out'
+        _time.sleep(0.01)
+
+
+def unique_disclosures(world):
+    world.daemon.answer = lambda frame: recall_result(frame, disclosure=_uuid.uuid4().hex)
+
+
+def test_a_third_crossing_from_one_origin_gets_429_while_events_and_pulls_flow(world, crossing_client, tmp_path):
+    from test_federation_pull import request as pull_request
+    unique_disclosures(world)
+    world.daemon.hold = _threading.Event()
+    pat = station(tmp_path / 'pat', 'pat', world.clock)
+    contact_there = _paired(pat[2], pat[1], world.a[2].card(world.a[1]))['id']
+    _paired(world.a[2], world.a[1], pat[2].card(pat[1]))
+    share(pat, contact_there, 'from pat')
+    pat[2].collect()
+    with pat[0].transaction() as db:
+        key = db.execute('SELECT id FROM outbox').fetchone()[0]
+    threads, answers = in_flight(crossing_client, [crossing_request(world), crossing_request(world)])
+    try:
+        wait_for(lambda: world.daemon.connections == 2)
+        third = crossing_client.post('/federation/crossing', content=canonical(crossing_request(world)))
+        assert (third.status_code, third.json()) == (429, {'error': 'Too many crossings'})
+        # the load is checked after the signature: a bad one is still 403 while the origin is full
+        forged = {**crossing_request(world), 'deadline_ms': 3000}
+        assert crossing_client.post('/federation/crossing', content=canonical(forged)).status_code == 403
+        push = crossing_client.post('/federation/events', content=pat[2]._prepared(key))
+        assert (push.status_code, push.json()) == (200, {'ok': True, 'duplicate': False})
+        mo = (world.m[0], world.m[1], world.m[2])
+        pulled = crossing_client.post('/federation/pull', content=canonical(pull_request(mo, world.a, world.clock)))
+        assert pulled.status_code == 200
+    finally:
+        world.daemon.hold.set()
+        for thread in threads:
+            thread.join(20)
+    assert [status for status, _ in answers] == [200, 200]
+    world.daemon.hold = None
+    assert crossing_client.post('/federation/crossing', content=canonical(crossing_request(world))).status_code == 200
+
+
+def test_a_fifth_crossing_in_flight_from_any_origin_gets_429(world, crossing_client, tmp_path):
+    unique_disclosures(world)
+    world.daemon.hold = _threading.Event()
+    (n, n_ship), (o, o_ship) = another_origin(world, tmp_path, 'nina'), another_origin(world, tmp_path, 'olga')
+    bodies = [crossing_request(world), crossing_request(world), crossing_request(world, signer=n, receiver_ship=n_ship),
+              crossing_request(world, signer=n, receiver_ship=n_ship)]
+    threads, answers = in_flight(crossing_client, bodies)
+    try:
+        wait_for(lambda: world.daemon.connections == 4)
+        fifth = crossing_client.post('/federation/crossing',
+                                     content=canonical(crossing_request(world, signer=o, receiver_ship=o_ship)))
+        assert (fifth.status_code, fifth.json()) == (429, {'error': 'Too many crossings'})
+    finally:
+        world.daemon.hold.set()
+        for thread in threads:
+            thread.join(20)
+    assert sorted(status for status, _ in answers) == [200] * 4
+
+
+def test_the_61st_crossing_in_60_seconds_from_one_origin_gets_429(world):
+    from superyak_peer.common import Problem
+    from superyak_peer.crossing import Limiter
+    now = [5000.0]
+    world.a[2].crossing_limiter = Limiter(clock=lambda: now[0])
+    unique_disclosures(world)
+    for _ in range(60):
+        world.a[2].serve_crossing(canonical(crossing_request(world)))
+        now[0] += 0.5
+    with pytest.raises(Problem) as refused:
+        world.a[2].serve_crossing(canonical(crossing_request(world)))
+    assert (refused.value.status, refused.value.message) == (429, 'Too many crossings')
+    now[0] = 5000.0 + 60.0  # the first of the sixty is a minute old
+    assert world.a[2].serve_crossing(canonical(crossing_request(world)))['kind'] == 'crossing-answer'

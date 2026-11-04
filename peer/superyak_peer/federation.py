@@ -164,6 +164,8 @@ class Federation:
         self._between_rows = lambda key: None  # a test hook between the walk's rows (plan Task 6, 8a and 8b)
         self._pull_owed = {}  # the puller's acks and refusals per listener, until a pull carries them (spec §6)
         self._started = store.clock()  # the replay floor's fallback for a damaged restore mark (_replay_floor)
+        from .crossing import Limiter
+        self.crossing_limiter = Limiter()  # crossings' load on the publisher's side (crossing plan P6)
 
     def card(self, actor):
         """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""

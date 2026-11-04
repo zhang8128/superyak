@@ -8,6 +8,8 @@ it checks the hosted store and the destination, signs, dials the publisher pinne
 Settings live in crossings.toml in the peer data directory (P2), read per request by mtime: `[[published]]` maps a ship
 of this peer to the daemon publisher serving its house, and `[[hosted]]` names the stores this home hosts (P19's
 interim, until the store host lands)."""
+import collections
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -30,7 +32,7 @@ CONTENT_MAX = 32 * 1024           # the text a read delivers, as UTF-8 (spec 2.3
 DAEMON_REPLY_MAX = 1024 * 1024    # one daemon line, as lighthouse_client reads one
 DAEMON_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 NOT_CONTACT = 'Receiving ship is not a current contact'
-BAD_ANSWER, TOO_LARGE = 'Bad publisher answer', 'Answer too large'
+BAD_ANSWER, TOO_LARGE, TOO_MANY = 'Bad publisher answer', 'Answer too large', 'Too many crossings'
 SETTINGS_FILE = 'crossings.toml'
 SETTINGS_MAX = 64 * 1024
 PUBLISHED_KEYS = frozenset({'ship', 'publisher', 'daemon_socket', 'sidecar'})
@@ -192,7 +194,44 @@ def serve(federation, raw):
     house = published_house(store, settings, value['publisher_ship'])
     if house is None:
         raise Problem(404, 'No published house for that ship')
-    return _answer(federation, value, house)
+    with federation.crossing_limiter.admit(origin):
+        return _answer(federation, value, house)
+
+
+class Limiter:
+    """Plan P6, the publisher's side, counted in memory after check 6, so only verified, mapped requests count: at most
+    `per_origin` crossings in flight from one origin and `total` in all, each taken without waiting, and at most
+    `per_minute` admitted from one origin in any 60 s on `clock`. Any refusal is 429. Four in flight at most leave the
+    listener's thread pool to events and pulls (listener.py runs handlers with asyncio.to_thread)."""
+
+    def __init__(self, *, per_origin=2, total=4, per_minute=60, clock=time.monotonic):
+        self.per_origin, self.per_minute, self.clock = per_origin, per_minute, clock
+        self._total = threading.BoundedSemaphore(total)
+        self._origins, self._times, self._lock = {}, {}, threading.Lock()
+
+    @contextmanager
+    def admit(self, origin):
+        with self._lock:
+            mine = self._origins.setdefault(origin, threading.BoundedSemaphore(self.per_origin))
+        if not mine.acquire(blocking=False):
+            raise Problem(429, TOO_MANY)
+        try:
+            if not self._total.acquire(blocking=False):
+                raise Problem(429, TOO_MANY)
+            try:
+                now = self.clock()
+                with self._lock:
+                    times = self._times.setdefault(origin, collections.deque())
+                    while times and times[0] <= now - 60:
+                        times.popleft()
+                    if len(times) >= self.per_minute:
+                        raise Problem(429, TOO_MANY)
+                    times.append(now)
+                yield
+            finally:
+                self._total.release()
+        finally:
+            mine.release()
 
 
 def _left(deadline):
