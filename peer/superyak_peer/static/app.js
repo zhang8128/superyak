@@ -673,10 +673,15 @@ function roomBrief(room) {
 }
 
 // Work board 5.2: the room's board, read from its own route and never from messages. A received room has none.
+async function readBoard(room) {
+  if (!room || room.origin) return null;
+  try { return { roomId: room.id, items: await api(`/api/chats/${pathPart(room.id)}/board`) }; }
+  catch (_) { return { roomId: room.id, items: null }; }
+}
+
 async function loadBoard(room) {
-  if (!room || room.origin) { state.board = null; return; }
-  try { state.board = { roomId: room.id, items: await api(`/api/chats/${pathPart(room.id)}/board`) }; }
-  catch (_) { state.board = { roomId: room.id, items: null }; }
+  const board = await readBoard(room);
+  if (state.room?.id === room?.id) state.board = board;  // or a late answer for a room the person has left
 }
 
 function boardStatus(item) {
@@ -699,8 +704,8 @@ function isReplaced(room) {
 // Board clicks are ignored for a moment after the panel renders: a double click's second press must not land on
 // whatever the first press's re-render moved under the pointer.
 const BOARD_CLICK_GUARD_MS = 400;
-// The panel on screen belongs to one room (data-room). While the next room loads, state.room is already that room but
-// the old panel is still shown: a write from it must not go to the room the person cannot see.
+// The panel on screen belongs to one room (data-room). state.room is the room on screen, and moves only when the next room is
+// ready to draw (openChat, loadRoute), so a write can't go to a room the person can't see; this is the second line.
 function boardOnScreen(room) { return document.querySelector(".room-board")?.dataset.room === room.id; }
 function boardClickBlocked() { return Date.now() - (state.boardRenderedAt || 0) < BOARD_CLICK_GUARD_MS; }
 
@@ -1750,16 +1755,15 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      const wanted = state.selectedChatId;
+      const wanted = state.selectedChatId, who = identityKey(state.me);
+      const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
       try {
         const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
         const room = paged ? await refreshRoom(state.room) : await loadRoom(wanted);
-        if (state.selectedChatId === wanted) {  // or a late answer for a room the person has left
-          state.room = room;
-          await loadBoard(state.room);
-        }
+        const board = await readBoard(room);
+        if (still()) showRoom(room, board);
       }
-      catch (_) { if (state.selectedChatId === wanted) state.room = null; }
+      catch (_) { if (still()) state.room = null; }
     } else {
       state.room = null;
     }
@@ -2074,13 +2078,23 @@ async function confirmWithdraw() {
   }
 }
 
+// state.room is the room on screen. It moves here and only with the room's board, when the room is ready to draw, so every
+// action reading it means the room the person is looking at: a message, a mark, a removal, an add. A dialog opened for the
+// room they've left closes, and doesn't go on for the next one.
+function showRoom(room, board) {
+  if (state.room?.id !== room.id) { state.chatDialog = null; state.chatPicked = null; state.chatError = null; }
+  state.room = room;
+  state.board = board;
+}
+
 async function openChat(id) {
   state.selectedChatId = id;
+  const who = identityKey(state.me), from = location.hash;
+  const still = () => state.selectedChatId === id && identityKey(state.me) === who && location.hash === from;
   const room = await loadRoom(id);
-  if (state.selectedChatId !== id) return;  // a late answer for a room the person has left
-  state.room = room;
-  await loadBoard(state.room);
-  if (state.selectedChatId !== id) return;
+  const board = await readBoard(room);
+  if (!still()) return;  // a late answer for a room or a page the person has left, or for another account
+  showRoom(room, board);
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
   state.transitionNote = null;
@@ -2103,8 +2117,8 @@ async function createChat(form) {
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
     state.selectedChatId = room.id;
-    state.room = await loadRoom(room.id);
-    await loadBoard(state.room);
+    const opened = await loadRoom(room.id);
+    showRoom(opened, await readBoard(opened));
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
@@ -2252,6 +2266,12 @@ async function sendMessage(form) {
   try {
     accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
+    if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
+      const title = (state.home?.chats || []).find((item) => item.id === room.id)?.title || "the room you left";
+      setFlash(`Your message wasn't sent. It's still in the box in ${title}.`);
+      render();
+      return;
+    }
     status.className = "inline-message error";
     status.textContent = error.status === 0 ? "Connection lost. Your message is still here." : `${error.message} Your message is still here.`;
     announce(status.textContent);
@@ -2263,15 +2283,14 @@ async function sendMessage(form) {
     sessionStorage.removeItem(draftKey(room.id));
     if (status.isConnected) status.textContent = "Message saved. Refreshing room…";
   }
-  if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're opening renders itself
+  if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're in stays as it is
     if (status.isConnected) status.textContent = "Message saved";
     announce("Message saved");
+    try { state.sync = await api("/api/sync"); } catch (_) { /* the next load reads it */ }  // or the message reads "Saved here" while a delivery is owed
     return;
   }
-  if (state.room?.id === room.id) {
-    const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
-    if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
-  }
+  const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
+  if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
   try {
     const [latestRoom, latestSync] = await Promise.all([
       refreshRoom(room),
@@ -2307,6 +2326,7 @@ async function logout() {
     state.sources = [];
     Research.reset(); Dashboard.reset();
     state.editorIdentity = null;
+    state.selectedChatId = null; state.room = null; state.board = null;  // so no late answer finds a room to land in
     state.me = null;
     location.hash = "";
     showLogin();
