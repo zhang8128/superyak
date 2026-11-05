@@ -651,3 +651,29 @@ def test_a_cut_message_with_the_longest_author_name_stays_under_the_cap(connecte
     huge = remote_says(connected, connected.rooms[0], chr(1) * 20000)
     for result in (call(connected, 'read_room', room=connected.rooms[0]), call(connected, 'fetch', id=huge)):
         assert len(result['content'][0]['text']) <= TEXT_CAP and ok(result)
+
+
+def test_another_members_mark_stops_this_persons_app(connected):
+    """"No member's connected app can read it": Andy's mark stops the app Sam connected, which Andy may not know of."""
+    from connector_support import allowed, exchange
+    client, code = allowed(connected, rooms='*', state='st-all')
+    connected.tokens = exchange(connected, client, code).json()
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    room = connected.store.create_room(connected.person['id'], 'Shared', [andy['id']])['id']
+    assert ok(call(connected, 'read_room', room=room))
+    connected.store.mark_room(andy['id'], room)
+    assert refused(call(connected, 'read_room', room=room)) == MARKED
+
+
+def test_an_earlier_part_a_mark_doesnt_cover_stays_open_to_an_all_rooms_app(connected):
+    """What the consent row says under a marked room. Jo joined only the continuing room, so her mark covers only that."""
+    from connector_support import allowed, exchange
+    client, code = allowed(connected, rooms='*', state='st-all')
+    connected.tokens = exchange(connected, client, code).json()
+    jo = person(connected, 'jo@example.org', 'Jo Example')
+    earlier = connected.store.create_room(connected.person['id'], 'Night notes', [])['id']
+    say(connected, earlier, 'before Jo')
+    later = connected.store.add_participants(connected.person['id'], earlier, [jo['id']])['id']
+    connected.store.mark_room(jo['id'], later)
+    assert refused(call(connected, 'read_room', room=later)) == MARKED
+    assert 'before Jo' in [m['text'] for m in ok(call(connected, 'read_room', room=earlier))['messages']]

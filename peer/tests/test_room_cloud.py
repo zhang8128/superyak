@@ -1,6 +1,8 @@
 """Never to a cloud model, in the store (remote connector plan, Task 1; spec "Never to a cloud model", D6, D8, D10).
 A ship's own add (POST /api/ships/me/rooms/{key}/members) needs the ship in the room, which a marked room never has,
 so the paths below are every way a ship can reach a marked room."""
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from superyak_peer.common import Problem
@@ -266,7 +268,15 @@ def test_what_the_server_says_about_a_mark_doesnt_promise_more_than_it_does():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     for path in (*(root / "superyak_peer").glob("*.py"), root / "API.md"):
-        assert "from cloud models" not in path.read_text(), path.name
+        joined = re.sub(r"""['"]?\s+['"]?""", " ", path.read_text())  # one sentence, however it's wrapped
+        assert "from cloud models" not in joined, path.name
+
+
+def test_the_refusals_say_what_a_mark_is():
+    assert SHIP_REFUSED == "A member has marked this room, and a ship can't join a marked room."
+    assert REMOTE_REFUSED == ("A member has marked this room, and nobody new from another home can join it: this home can't "
+                              "always tell whether they're a ship, nor tell their home about the mark yet.")
+    assert OWNER_TOLD == "A member asked to mark this room, to keep it from ships and connected apps. Remove the ships to let them."
 
 
 def test_a_mark_is_cleared_only_by_its_setter_and_only_while_they_are_in_the_room(city):

@@ -1203,19 +1203,19 @@ function earlierRoomsWithMe(room) {
 
 function cloudControl(room, replaced) {
   if (room.origin) return "";  // a received room's mark is its home's to keep
-  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  // This home can't always tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
   const away = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
     ? "<li>stop what's said here still going to a member already on another home, who may be a person or a ship, under that home's rules. Their home isn't told about the mark.</li>" : "";
-  const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
+  const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading or changing it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
   if (room.cloud?.mine) {
-    const yoursEarlier = earlierRoomsWithMe(room).length ? " Your marks on its earlier rooms stay." : "";
-    return `<div class="cloud-control"><p class="meta">You've marked this room, so this home's AI agents (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+    const yoursEarlier = earlierRoomsWithMe(room).some((item) => item.cloud?.mine) ? " Your marks on its earlier rooms stay." : "";
+    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
   }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so this home's AI agents (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
-  return `<div class="cloud-control"><p class="meta">Mark this room to keep this home's AI agents (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
+  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1230,14 +1230,15 @@ async function markRoom(room, earlier) {
 }
 
 async function clearMark(room) {
+  let answer;
   try {
-    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
+    answer = await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
     setFlash(error.message, true);
     render();
     return;
   }
-  await refresh("Your mark is cleared. Other members' marks still stand.");
+  await refresh(answer?.cloud?.count ? "Your mark is cleared. Other members' marks still stand." : "Your mark is cleared. This room has no marks now.");
 }
 
 function shipBanner(room) {

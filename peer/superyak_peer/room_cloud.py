@@ -19,8 +19,8 @@ EARLIER_IN = "An earlier room you're in has ships in it, and ships run on cloud 
 EARLIER_FIRST = EARLIER_IN + ' remove them first.'
 EARLIER_ASK = EARLIER_IN + ' ask {owner} to remove them first.'
 REPLACED_MARK = 'This room continues in a newer room. Mark that one.'
-REMOTE_REFUSED = ("A member has marked this room, and nobody new from another home can join it: this home can't tell "
-                  "whether they're a ship, nor tell their home about the mark yet.")
+REMOTE_REFUSED = ("A member has marked this room, and nobody new from another home can join it: this home can't always "
+                  "tell whether they're a ship, nor tell their home about the mark yet.")
 QUIET = 86400  # the owner is told once a day at most, so a member who tries again doesn't flood the room (the plan's)
 
 
@@ -44,8 +44,8 @@ class RoomCloud:
                           "WHERE room_members.room_id=? AND users.kind='ship'", (room_id,)).fetchone() is not None
 
     def _refuse_ship_in_marked(self, db, room_id, member_ids):
-        """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't tell a
-        remote contact's kind (`card --as` exports any account's card), and their home doesn't know the mark until
+        """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't always
+        tell a remote contact's kind (`card --as` exports any account's card), and their home doesn't know the mark until
         federation carries it, so a new one is refused, failing closed. A room that had one before it was marked keeps
         them, as the spec says for "Rooms with members on other homes"."""
         if not member_ids or not self._marked(db, room_id):
