@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import tempfile
 import shutil
 import socket
 import sqlite3
@@ -1022,6 +1023,72 @@ def test_the_runtimes_receiver_keys_are_the_receivers_own():
     receiver_ship; Serenity's default-crossing spec needs the same test, and the branch that merges second keeps it.)"""
     from lighthouse_receiver_config import SETTINGS_KEYS
     assert runpy.run_path(str(RUNTIME), run_name="runtime_keys")["RECEIVER_KEYS"] == SETTINGS_KEYS
+
+
+REMOTE = '[[remote_publishers]]\npeer_id = "' + "c" * 64 + '"\nship = "' + "d" * 32 + '"\ncontext = "memory/technical"\n'
+CROSSING = 'crossing_socket = "crossing.sock"\nreceiver_ship = "' + "e" * 32 + '"\n'
+ONLY_REMOTE = 'enabled = true\npublishers = []\npolicy_path = "lighthouse-receiver-policy.json"\n' + CROSSING + REMOTE
+
+
+def _receiver_files(memory_home):
+    instance = memory_home / ".engram" / "instances" / "engram"
+    return instance / "lighthouse-receiver.toml", instance
+
+
+@pytest.mark.parametrize("toml, works", [
+    (ONLY_REMOTE, True),
+    (ONLY_REMOTE.replace(CROSSING, 'receiver_ship = "' + "e" * 32 + '"\n'), False),  # no crossing socket
+    (ONLY_REMOTE.replace(CROSSING, 'crossing_socket = "crossing.sock"\n'), False),  # no receiving ship
+    (ONLY_REMOTE.replace("e" * 32, "not a participant id"), False),
+    (ONLY_REMOTE + REMOTE, False),  # the same ship of the same peer twice
+    (ONLY_REMOTE.replace('"' + "c" * 64 + '"', '"short"'), False),
+    (ONLY_REMOTE.replace('"memory/technical"', '"../not a context"'), False),
+    (ONLY_REMOTE.replace('context = "memory/technical"\n', ""), False),
+    (ONLY_REMOTE.replace(REMOTE, ""), False),  # nothing to ask at all
+    (ONLY_REMOTE.replace("publishers = []", 'publishers = ["engram"]'), False),  # a local publisher and no socket_path
+    (ONLY_REMOTE + "".join(REMOTE.replace("d" * 32, str(n) * 32) for n in range(8)), False),  # nine in all
+], ids=["remote-only", "no-socket", "no-ship", "bad-ship", "repeat", "bad-peer", "bad-context", "no-context", "empty",
+        "local-no-socket", "too-many"])
+def test_status_and_the_receiver_agree_on_what_a_receiver_may_be(tmp_path, toml, works):
+    """runtime.py is stdlib-only, so it keeps its own reading of these settings. Where the two differ, `status` calls a
+    working receiver invalid (as it did a remote-only one, the merged default crossing's review, note 3) or a broken one
+    working."""
+    from lighthouse_receiver_config import load_settings
+    _, launcher, memory_home, config, _ = _healthy_status_tree(tmp_path)
+    settings, _ = _receiver_files(memory_home)
+    settings.write_text(toml)
+    try:
+        load_settings(settings)
+        loads = True
+    except ValueError:
+        loads = False
+    assert loads is works
+    status = json.loads(_run_launcher(launcher, config, "status").stdout)
+    assert (status["receiver"]["state"] == "enabled") is works, status["receiver"]
+
+
+def test_status_says_when_a_remote_receivers_crossing_socket_is_down(tmp_path):
+    """Every crossing fails closed while federate has no crossing socket, so `ok` can't say all is well."""
+    import socket as sockets
+    _, launcher, memory_home, config, _ = _healthy_status_tree(tmp_path)
+    settings, _ = _receiver_files(memory_home)
+    short = tempfile.mkdtemp(prefix="c", dir="/tmp")  # a Unix socket's path has a short limit, and tmp_path can pass it
+    settings.write_text(ONLY_REMOTE.replace('"crossing.sock"', f'"{short}/c.sock"'))
+    status = json.loads(_run_launcher(launcher, config, "status").stdout)
+    assert status["receiver"]["crossing"]["connected"] is False
+    assert "crossing socket is unavailable" in status["errors"]
+    assert status["ok"] is False
+    assert status["receiver"]["remote_publishers"] == [{"peer": "c" * 12, "ship": "d" * 32, "context": "memory/technical"}]
+    server = sockets.socket(sockets.AF_UNIX, sockets.SOCK_STREAM)
+    try:
+        server.bind(f"{short}/c.sock")
+        server.listen(1)
+        status = json.loads(_run_launcher(launcher, config, "status").stdout)
+    finally:
+        server.close()
+        shutil.rmtree(short)
+    assert status["receiver"]["crossing"]["connected"] is True
+    assert "crossing socket is unavailable" not in status["errors"]
 
 
 def test_status_reads_a_receiver_with_remote_publishers_as_enabled(tmp_path):
