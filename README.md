@@ -67,8 +67,8 @@ Open http://127.0.0.1:7435. The demo opens as Alex, a fictional patient, without
 machine. The terminal shows two local lines you can pass over: where the demo keeps its fictional accounts' passwords
 (you don't need them), and a version check that reads only this clone's own git history. Then try the story:
 
-1. Open **My private notes**, which holds a fictional lab result. Add a line and click **Save private draft**. Only Alex
-   can see it.
+1. Open **My private notes**, which holds a fictional lab result. Add a line and click **Save private draft**. No other
+   account can open it.
 2. Under **Care circles and spaces**, tick **Alex's care circle**, and click **Save private draft** again. Click
    **Preview audience**, read **Who would see it**, then click **Turn on version** (its number is the saved draft's).
 3. Click Alex's name at the top right, the account menu, and choose **Try doctor**. Under **Shared with you**, open

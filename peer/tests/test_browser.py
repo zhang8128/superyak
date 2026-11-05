@@ -198,6 +198,30 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     assert "Opening your home" not in shell and "Opening this home" in shell
 
 
+def test_an_invitation_link_on_a_phone_goes_to_what_is_left_to_fill_in(browser_peer):
+    """The form sits far below the Sign in fields on a phone, so the link used to land a person on the wrong form."""
+    with sync_playwright() as playwright, signed_out_browser(playwright, viewport={"width": 390, "height": 844}) as page:
+        page.goto(browser_peer["base_url"] + "/#activate?token=made-up&username=someone&name=Someone")
+        password = page.locator('#redeem-form input[name="password"]')
+        expect(password).to_be_focused()
+        expect(password).to_be_in_viewport()
+
+
+def test_no_screen_promises_more_than_the_code_does(browser_peer):
+    """Its reader on the sign-in page, F1: stored words are in clear on disk, so whoever runs the machine, and any AI agent
+    they run on it, can read them, and a room may have a ship or another home in it. So what no other account can open is
+    said as that, and a room isn't called private. "private draft" stays: it means not yet shared, and the sign-in page
+    says who can read what's stored. So does "private chats" where an admin's roles are said not to open them: that
+    is about what an account can do."""
+    static = Path(__file__).resolve().parents[1] / "superyak_peer" / "static"
+    words = "\n".join((static / name).read_text() for name in ("app.js", "research.js", "index.html"))
+    for promise in ("Nobody can see", r"Only you\b", "Private room", "Received private room", "Private conversation",
+                    "private message", r"private chat\b", "private conversation"):
+        assert not re.search(promise, words), promise
+    for fact in ("No other account can open this draft.", "No other account — no audience is selected."):
+        assert fact in words
+
+
 def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(browser_peer):
     """Rio Grande, on T4's branch: whoever runs a home reads what's stored on it, and a person should know that before
     typing a password into someone else's home. Until now it was said only in the README."""
@@ -678,7 +702,7 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, context):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Care planning")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Dr. Morgan").check()
@@ -1090,7 +1114,7 @@ def test_accepted_message_refresh_failure_keeps_new_composer_without_duplicate(b
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Reliable send")
             page.get_by_role("button", name="Create chat").click()
             expect(page.get_by_role("heading", name="Reliable send")).to_be_visible()
@@ -1151,7 +1175,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("First audience")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Dr. Morgan").check()
@@ -1159,7 +1183,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
             expect(page.get_by_role("heading", name="First audience")).to_be_visible()
             room_id = decode_fragment_id(page.url)
 
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             expect(page.get_by_role("checkbox", name="Sam Family")).not_to_be_checked()
             expect(page.get_by_role("checkbox", name="Sam Family")).to_be_enabled()
             page.get_by_label("Chat title").fill("Second direct room")
@@ -1185,7 +1209,7 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Kept close")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("button", name="Create chat").click()
@@ -1362,7 +1386,7 @@ def test_repeated_send_during_post_acceptance_refresh_reuses_settled_composer(br
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("One accepted send")
             page.get_by_role("button", name="Create chat").click()
             expect(page.get_by_role("heading", name="One accepted send")).to_be_visible()
@@ -1403,7 +1427,7 @@ def test_accepted_participant_removal_survives_failed_followup_read(browser_peer
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Removal boundary")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("button", name="Create chat").click()
@@ -1652,7 +1676,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             page.get_by_role('link', name='Shared spaces', exact=True).click()
             expect(page.get_by_text('New incoming update', exact=True)).to_be_visible()
             page.get_by_role('link', name='Chats', exact=True).click()
-            page.get_by_role('button', name='New private chat').click()
+            page.get_by_role('button', name='New chat').click()
             page.get_by_label('Chat title').fill('Delivery room')
             page.get_by_role('dialog').get_by_role('checkbox', name='Casey Delivery').check()
             page.get_by_role('button', name='Create chat', exact=True).click()
