@@ -164,20 +164,22 @@ class Layers:
             if data.get('public'):
                 snapshot['public'] = False
             draft = json.loads(row['draft'])
-            narrowed = {**draft, 'audience_users': [u for u in draft['audience_users'] if u not in users],
-                        'audience_spaces': [s for s in draft['audience_spaces'] if s not in spaces],
-                        'public': draft['public'] and not data.get('public')}
-            draft_version = active['draft_version']
-            if narrowed != draft:
-                db.execute('UPDATE layers SET draft=?,version=version+1 WHERE id=?', (encode(narrowed), key))
+            before = {'audience_users': draft.get('audience_users', []), 'audience_spaces': draft.get('audience_spaces', []), 'public': draft.get('public', False)}
+            after = {'audience_users': [u for u in before['audience_users'] if u not in users],
+                     'audience_spaces': [s for s in before['audience_spaces'] if s not in spaces],
+                     'public': before['public'] and not data.get('public')}
+            draft_version, layer_version = active['draft_version'], row['version']
+            if after != before:
+                layer_version = row['version'] + 1
+                db.execute('UPDATE layers SET draft=?,version=? WHERE id=?', (encode({**draft, **after}), layer_version, key))
                 if draft_version == row['version']:  # the release still matches the draft: it isn't an unpublished change
-                    draft_version = row['version'] + 1
+                    draft_version = layer_version
             revision = row['resource_version'] + 1
             db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, draft_version, encode(snapshot), self.clock()))
             self._sign_revision(db, key, revision)  # G2: the narrowing's new revision, with its narrower audience
             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
             self.emit(db, 'layer.restricted', key, revision, {'owner_id': actor, 'previous_revision': row['active_revision']})
-            return self._active_layer(db, key, actor)
+            return {**self._active_layer(db, key, actor), 'layer_version': layer_version}  # so an open editor's next save isn't a false conflict
 
     def _access_routes(self, db, row, snapshot, actor):
         routes = []

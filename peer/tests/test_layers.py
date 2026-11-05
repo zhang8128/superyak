@@ -102,6 +102,23 @@ def test_a_revoke_leaves_edits_made_since_the_release_as_unpublished(env):
     assert revoked['draft_version'] != draft['version']  # the edit is still unpublished
 
 
+def test_a_revoke_says_where_the_draft_is_now_and_copes_with_an_old_row(env):
+    app, clients, users, _ = env
+    patient = clients[0]
+    store = app.state.store
+    made = patient.post('/api/layers', json={'title': 'Note', 'body': 'one', 'public': True}).json()
+    key = made['id']
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': made['version']}).status_code == 200
+    answer = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True}).json()
+    assert answer['layer_version'] == patient.get(f'/api/layers/{key}').json()['version']
+    old = patient.post('/api/layers', json={'title': 'Old', 'body': 'older', 'audience_users': [users[1]['id']]}).json()
+    assert patient.post(f"/api/layers/{old['id']}/activate", json={'version': old['version']}).status_code == 200
+    with store.transaction() as db:
+        db.execute('UPDATE layers SET draft=? WHERE id=?', ('{"title": "Old", "body": "older"}', old['id']))
+    answer = patient.post(f"/api/layers/{old['id']}/revoke", json={'revision': 1, 'user_ids': [users[1]['id']]})
+    assert answer.status_code == 200 and answer.json()['layer_version'] == old['version']  # nothing to narrow, so no new version
+
+
 def test_a_revoke_with_nothing_in_the_draft_leaves_its_version_alone(env):
     app, clients, users, _ = env
     patient = clients[0]

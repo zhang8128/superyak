@@ -2944,82 +2944,125 @@ def test_new_layer_has_the_same_window_closed(browser_peer):
     assert puts == [], puts
 
 
+def until(page, ready, what):
+    """Polls here, in Python. A page.wait_for_function whose body returns a fetch's promise doesn't wait: a promise is truthy."""
+    for _ in range(100):
+        if ready():
+            return
+        page.wait_for_timeout(50)
+    raise AssertionError(what)
+
+
+def a_layer_open_with_unsaved_words(page, base, store, patient, **fields):
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **fields})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    page.goto(f"{base}/#layers/{layer['id']}")
+    page.reload()
+    body = page.locator("#layer-body")
+    expect(body).to_have_value("Released words")
+    body.fill("Released words, and more not saved yet")
+    return layer, body
+
+
 def test_turning_off_a_public_link_with_unsaved_words_keeps_the_words_and_the_link_off(browser_peer):
     """The draft narrows with a revoke, so its version moves under an open editor. Their words must survive, and saving them
     must not put the public link back."""
-    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
-    patient = users["patient"]["id"]
-    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", "public": True})
-    store.activate_layer(patient, layer["id"], layer["version"])
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.goto(f"{base}/#layers/{layer['id']}")
-            page.reload()
-            body = page.locator("#layer-body")
-            expect(body).to_have_value("Released words")
-            body.fill("Released words, and more not saved yet")
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, public=True)
             page.get_by_role("button", name="Turn off public link").click()
             expect(page.get_by_role("button", name="Turn off public link")).to_have_count(0)
             expect(body).to_have_value("Released words, and more not saved yet")
             page.get_by_role("button", name=re.compile("^Save")).first.click()
-            page.wait_for_function("(id) => fetch(`/api/layers/${id}`).then(r => r.json()).then(l => l.body.includes('more not saved'))", arg=layer["id"])
-    saved = store.get_layer(patient, layer["id"])
-    assert saved["body"] == "Released words, and more not saved yet"
-    assert saved["public"] is False  # saving what was on screen didn't turn it back on
-
-
-def test_removing_someone_with_unsaved_words_keeps_the_words_and_them_out(browser_peer):
-    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
-    patient, family = users["patient"]["id"], users["family"]["id"]
-    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", "audience_users": [family]})
-    store.activate_layer(patient, layer["id"], layer["version"])
-    with sync_playwright() as playwright:
-        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.goto(f"{base}/#layers/{layer['id']}")
-            page.reload()
-            body = page.locator("#layer-body")
-            expect(body).to_have_value("Released words")
-            body.fill("Released words, and more not saved yet")
-            page.get_by_role("button", name=re.compile("^(Remove|Stop|Revoke).*Sam")).first.click()
-            page.wait_for_function("(id) => fetch(`/api/layers/${id}`).then(r => r.json()).then(l => l.audience_users.length === 0)", arg=layer["id"])
-            expect(body).to_have_value("Released words, and more not saved yet")
-            page.get_by_role("button", name=re.compile("^Save")).first.click()
-            page.wait_for_function("(id) => fetch(`/api/layers/${id}`).then(r => r.json()).then(l => l.body.includes('more not saved'))", arg=layer["id"])
-    saved = store.get_layer(patient, layer["id"])
-    assert saved["audience_users"] == []
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the words were never saved")
+            assert store.get_layer(patient, layer["id"])["public"] is False  # saving what was on screen didn't turn it back on
 
 
 @pytest.mark.parametrize("route", ["person", "space", "public"])
 def test_saving_before_the_page_redraws_doesnt_bring_back_who_was_just_removed(browser_peer, route):
+    """The page hasn't redrawn, so a Save reads the boxes on screen, and the version the revoke's answer gave. It saves, with no
+    false conflict, and without who was just removed."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     patient, family = users["patient"]["id"], users["family"]["id"]
     space = store.create_space(patient, "Care", "care-circle", [family])
     audience = {"person": {"audience_users": [family]}, "space": {"audience_spaces": [space["id"]]}, "public": {"public": True}}[route]
-    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **audience})
-    store.activate_layer(patient, layer["id"], layer["version"])
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.goto(f"{base}/#layers/{layer['id']}")
-            page.reload()
-            body = page.locator("#layer-body")
-            expect(body).to_have_value("Released words")
-            body.fill("Released words, and more not saved yet")
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
             redraw = []
             page.route("**/api/home", lambda held: redraw.append(held))  # the refresh after the revoke: the page stays as it is
             page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care|Turn off public link)")).first.click()
-            for _ in range(100):
-                if redraw:
-                    break
-                page.wait_for_timeout(50)
-            assert redraw, "the refresh never started"
+            until(page, lambda: redraw, "the refresh never started")
             page.get_by_role("button", name=re.compile("^Save")).first.click()
-            page.wait_for_timeout(300)
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the Save was refused")
             for held in redraw:
                 held.continue_()
             page.unroute("**/api/home")
-            page.wait_for_function("(id) => fetch(`/api/layers/${id}`).then(r => r.json()).then(l => l.body.includes('more not saved'))", arg=layer["id"])
     saved = store.get_layer(patient, layer["id"])
     assert saved["audience_users"] == [] and saved["audience_spaces"] == [] and saved["public"] is False
+
+
+@pytest.mark.parametrize("off", ["person", "public"])
+def test_a_second_tab_saving_its_text_doesnt_undo_a_revoke_made_in_the_first(browser_peer, off):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    audience = {"audience_users": [family]} if off == "person" else {"public": True}
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
+            revoke = {"user_ids": [family]} if off == "person" else {"public": True}
+            store.revoke_layer_routes(patient, layer["id"], {"revision": 1, **revoke})  # the first tab
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text was never saved")
+            expect(page.locator(".notice").first).to_contain_text("Who can see it stays as the latest draft has it")
+    saved = store.get_layer(patient, layer["id"])
+    assert saved["audience_users"] == [] and saved["public"] is False
+
+
+def test_a_revoke_answered_after_opening_another_layer_leaves_its_boxes_alone(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            other = store.create_layer(patient, {"title": "Beta", "body": "B", "audience_users": [family]})
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            held = []
+            page.route(f"**/api/layers/{layer['id']}/revoke", lambda route: held.append(route))
+            page.get_by_role("button", name=re.compile("^Stop sharing directly with Sam")).click()
+            until(page, lambda: held, "the revoke never started")
+            page.get_by_role("button", name="Beta").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta")
+            redraw = []
+            page.route("**/api/home", lambda route: redraw.append(route))
+            held[0].continue_()
+            until(page, lambda: redraw, "the revoke never answered")
+            box = page.locator(f'#layer-form [name="audience-user"][value="{family}"]')
+            expect(box).to_be_checked()  # it's Beta's, and Beta's sharing hasn't changed
+            for route in redraw:
+                route.continue_()
+            page.unroute("**/api/home")
+    assert family in store.get_layer(patient, other["id"])["audience_users"]
+
+
+@pytest.mark.parametrize("route", ["person", "space"])
+def test_removing_someone_with_unsaved_words_keeps_the_words_and_them_out(browser_peer, route):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    space = store.create_space(patient, "Care", "care-circle", [family])
+    audience = {"audience_users": [family]} if route == "person" else {"audience_spaces": [space["id"]]}
+    gone = lambda layer: not (store.get_layer(patient, layer["id"])["audience_users"] or store.get_layer(patient, layer["id"])["audience_spaces"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
+            page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care)")).click()
+            until(page, lambda: gone(layer), "the revoke never landed")
+            page.wait_for_function("() => !document.querySelector('[data-action=\"revoke-route\"]')")
+            expect(body).to_have_value("Released words, and more not saved yet")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the words were never saved")
+    assert gone(layer)
 
 
 def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_layer_public(browser_peer):
