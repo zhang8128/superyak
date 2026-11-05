@@ -13,6 +13,11 @@ REPLACED_ADD = 'This room was replaced by a newer linked room; add members there
 REPLACED_REMOVE = 'This room was replaced by a newer linked room; remove members there'
 REPLACED_SEND = 'This room was replaced by a newer linked room; post in the room that continues it'
 
+class ClosureToSave(Exception):
+    """A read inside reading() found a breakout whose seven days have passed. The first check that sees that saves the closure (S4),
+    so the caller reads again in a transaction. It's rare, and every other read of a room list stays off the write path."""
+
+
 class Problem(Exception):
     def __init__(self, status, message, *, keep=False):
         # keep: the transaction keeps what it saved before this refusal (a breakout's closure, saved on first sight)

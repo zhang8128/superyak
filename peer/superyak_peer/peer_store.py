@@ -120,7 +120,7 @@ class PeerStore:
             return {**row, 'content': base64.b64decode(row['content_base64'])}
 
     def remote_rooms(self, actor):
-        with self.transaction() as db:
+        with self.reading() as db:
             rows = db.execute("SELECT inbox.* FROM inbox JOIN peers ON peers.peer_id=inbox.origin WHERE kind='room' AND recipient=? AND payload IS NOT NULL AND paired=1", (actor,)).fetchall()
             return [self._remote_room(db, actor, r['origin']+':'+r['resource_id'], messages=False) for r in rows]
 
