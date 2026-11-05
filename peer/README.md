@@ -1,6 +1,6 @@
 # Superyak Peer
 
-A self-hosted personal home for private chats and sharing layers across care
+A self-hosted personal home for chats and sharing layers across care
 circles, projects, and organizations. Accounts, drafts, active releases, files,
 and delivery history live on each independently operated peer. There is no
 mandatory global account service, central database, CDN, or paid model API.

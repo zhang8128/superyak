@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import uuid
 import tempfile
 from pathlib import Path
 import socket
@@ -224,19 +225,63 @@ def test_an_invitation_link_on_a_phone_goes_to_what_is_left_to_fill_in(browser_p
         expect(password).to_be_in_viewport()
 
 
-def test_no_screen_promises_more_than_the_code_does(browser_peer):
-    """Its reader on the sign-in page, F1: stored words are in clear on disk, so whoever runs the machine, and any AI agent
-    they run on it, can read them, and a room may have a ship or another home in it. So what no other account can open is
-    said as that, and a room isn't called private. "private draft" stays: it means not yet shared, and the sign-in page
-    says who can read what's stored. So does "private chats" where an admin's roles are said not to open them: that
-    is about what an account can do."""
+def test_the_old_promises_are_gone_from_every_screen():
+    """A short list of words that promised more than the code does, so they don't come back. Stored words are in clear on
+    disk, so whoever runs the machine, and any AI agent they run on it, can read them, and a room may have a ship or
+    another home in it. What this can't catch is a new way of saying it: that takes a reader of the code."""
     static = Path(__file__).resolve().parents[1] / "superyak_peer" / "static"
-    words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html"))
-    for promise in ("Nobody can see", r"Only you\b", "Private room", "Received private room", "Private conversation",
-                    "private message", r"private chat\b", "private conversation"):
+    words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html", static / "consent.html"))
+    for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
+                    r"(?i)\b(nobody|no one) can (see|read|open)\b"):
         assert not re.search(promise, words), promise
-    for fact in ("No other account can open this draft.", "No other account — no audience is selected."):
-        assert fact in words
+
+
+def test_a_signed_in_person_is_told_who_can_read_where_they_work(browser_peer):
+    """The inside labels lean on this. The sidebar is hidden on a phone, so Home says it too."""
+    who = "Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            expect(page.get_by_test_id("who-can-read")).to_have_text(who)
+            expect(page.locator(".sidebar-foot")).to_have_text(who)
+            assert "Private chat" not in page.locator("main").inner_text()
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            expect(page.get_by_test_id("who-can-read")).to_be_visible()
+
+
+def test_a_saved_draft_says_what_no_other_account_can_do(browser_peer):
+    """The sentence meant for drafts sat in a branch nothing reached, so it's asserted on a rendered draft."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.get_by_role("link", name="My sharing layers").click()
+        page.get_by_role("button", name="New layer").click()
+        page.get_by_label("What do you want to share?").fill("Fictional words.")
+        page.get_by_role("button", name="Save private draft").click()
+        expect(page.get_by_text("No other account can open your saved draft.")).to_be_visible()
+
+
+@pytest.mark.parametrize("kind, label, says", [
+    ("selected-records", "Papers and records · No other account can open it", True),
+    ("file", "Files and datasets", False),
+])
+def test_a_source_only_says_no_other_account_where_that_holds(browser_peer, kind, label, says):
+    """A file in a file source can be attached to a release, so an anonymous visitor could fetch what its page called
+    no other account's. Only records keep the claim."""
+    name = "Source " + uuid.uuid4().hex[:6]
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.get_by_role("link", name="Research & data", exact=True).click()
+        page.get_by_role("button", name="New source", exact=True).click()
+        page.get_by_label("Source name", exact=True).fill(name)
+        page.get_by_label("Source type", exact=True).select_option(kind)
+        page.get_by_role("button", name="Create source", exact=True).click()
+        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
+        eyebrow = page.locator("main .eyebrow").filter(has_text=label.split(" · ")[0]).first
+        expect(eyebrow).to_have_text(label, ignore_case=True)
+        assert ("no other account" in eyebrow.inner_text().lower()) is says  # the eyebrow's text is upper-cased by CSS
+
+
+def test_an_invitation_link_with_only_a_token_goes_to_the_username(browser_peer):
+    with sync_playwright() as playwright, signed_out_browser(playwright, viewport={"width": 390, "height": 844}) as page:
+        page.goto(browser_peer["base_url"] + "/#activate?token=made-up")
+        expect(page.locator('#redeem-form input[name="username"]')).to_be_focused()
 
 
 def test_the_sign_in_pages_tile_shows_and_its_help_clears_the_button(browser_peer):
@@ -274,7 +319,7 @@ def test_on_a_phone_the_sign_in_form_is_on_the_first_screen_with_who_can_read(br
 
 def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_prototype(browser_peer):
     """The re-check of the phone order: someone with an invitation link could make an account with the page's main facts
-    a screen and more below the button, so the form says them itself, above its button, at every width."""
+    a screen and more below the button, so the form says them itself, at every width."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 390, "height": 844})
@@ -285,8 +330,8 @@ def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_p
             facts = page.get_by_test_id("before-an-account")
             expect(facts).to_have_text("Whoever runs this home, and any AI agent they run on its computer, can read what's "
                                        "stored here. It's a prototype: please don't put real patient information in it yet.")
-            button = page.get_by_role("button", name="Create my account")
-            assert facts.bounding_box()["y"] < button.bounding_box()["y"]
+            # Above the new password, so a phone's keyboard or a screen reader starting at that field doesn't pass them by.
+            assert facts.bounding_box()["y"] < page.locator("#new-password").bounding_box()["y"]
         finally:
             context.close()
             browser.close()
@@ -837,7 +882,7 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             page.screenshot(path=str(ARTIFACTS / "home-mobile.png"))
             page.get_by_role("link", name="Connections", exact=True).click()
             expect(page.get_by_role("heading", name="Account support")).to_be_visible()
-            expect(page.get_by_text("Account support does not open private chats or drafts.")).to_be_visible()
+            expect(page.get_by_text("Account support does not open anyone's chats or drafts.")).to_be_visible()
             page.get_by_role("button", name="Create invitation").click()
             # Exact: the access-requests panel also reads "Approving creates a one-use invitation …" once it loads.
             expect(page.get_by_text("One-use invitation", exact=True)).to_be_visible()
@@ -2081,7 +2126,7 @@ def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_
             page.reload()
             panel = page.locator(".room-brief")
             expect(panel.get_by_role("heading", name="Room brief")).to_be_visible()
-            expect(panel.get_by_text("Visible to members on this station only.")).to_be_visible()
+            expect(panel.get_by_text("Members on other homes don't get this. A ship aboard, or an app a member connected, sends it to its AI company.")).to_be_visible()
             panel.get_by_role("button", name="Edit brief").click()
             panel.get_by_label("Edit brief").fill(brief)
             panel.get_by_role("button", name="Save brief").click()
@@ -2666,7 +2711,7 @@ def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
             page.goto(f"{base}/#chats/{room['id']}")
             page.reload()
             expect(page.locator(".room-brief .room-brief-body")).to_have_text("Rio Grande builds the brief.")
-            expect(page.locator(".room-brief")).to_contain_text("Visible to members on this station only.")
+            expect(page.locator(".room-brief")).to_contain_text("Members on other homes don't get this. A ship aboard, or an app a member connected, sends it to its AI company.")
             expect(page.get_by_role("button", name="Edit brief")).to_have_count(0)
             expect(page.get_by_label("Edit brief")).to_have_count(0)
             expect(page.get_by_role("button", name="Save brief")).to_have_count(0)
