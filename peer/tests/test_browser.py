@@ -1889,6 +1889,53 @@ def test_a_conflict_in_the_window_is_said_in_the_dialog(browser_peer):
             expect(dialog.get_by_role("alert")).to_contain_text("This room was replaced")
 
 
+def test_a_read_landing_before_the_sends_own_refresh_keeps_the_message(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner)
+            older, refresh = [], []
+
+            def hold(route):
+                if not older:
+                    older.append((route, route.fetch()))
+                elif not refresh:
+                    refresh.append(route)
+                else:
+                    route.continue_()
+            page.route(re.compile(rf"/api/chats/{x['id']}(\?|$)"), hold)
+            page.get_by_role("button", name="Room X").click()
+            wait_for_hold(page, older)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Quick words")
+            page.get_by_role("button", name="Send message").click()
+            wait_for_hold(page, refresh)
+            route, response = older[0]
+            route.fulfill(response=response)
+            reads_settled(page, held=1)
+            expect(page.locator(".messages")).to_contain_text("Quick words")
+            release(refresh)
+            reads_settled(page)
+
+
+def test_a_conflict_answered_after_moving_on_stays_out_of_the_next_room(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            posts = held_routes(page, f"**/api/chats/{x['id']}/participants")
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            wait_for_hold(page, posts)
+            page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            posts[0].fulfill(status=409, json={"error": "This room was replaced"})
+            expect(page.locator(".notice.error")).to_have_text("Room X: This room was replaced")
+            expect(page.locator("dialog")).to_have_count(0)  # no dialog over Y for a conflict in X
+
+
 def test_a_room_title_kept_for_that_line_goes_at_sign_out(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
