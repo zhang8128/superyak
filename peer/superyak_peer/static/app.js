@@ -2274,7 +2274,6 @@ async function saveBrief(form) {
     // The revision is the one this editor opened, never a newer one: a stale tab gets 409 and overwrites nothing.
     await api(`/api/chats/${pathPart(room.id)}/brief`, { method: "PUT", json: { body, revision: edit.revision } });
   } catch (error) {
-    if (identityKey(state.me) !== who) return;
     // The station's own message: the editor has no maxlength, so "A brief is at most 4,000 characters" arrives here.
     let message = error.status === 0 ? "Connection lost. Your brief is still here." : `${error.message.replace(/\.?$/, ".")} Your brief is still here.`;
     if (error.status === 409) {
@@ -2290,7 +2289,7 @@ async function saveBrief(form) {
     Object.assign(edit, { status: message, error: true, saving: false });
     if (identityKey(state.me) !== who) return;
     if (state.room?.id !== room.id) {  // they've moved on, so the editor and its message aren't on screen
-      setFlash(`${room.title}: the brief wasn't saved. Your text is still in its editor.`, true);
+      setFlash(`${room.title}: the brief wasn't saved.${state.briefEdit === edit ? " Your text is still in its editor." : ""}`, true);
       render();
       return;
     }
@@ -2299,8 +2298,8 @@ async function saveBrief(form) {
     document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
-  if (identityKey(state.me) !== who) return;
-  if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
+  if (state.briefEdit === edit) state.briefEdit = null;
+  if (identityKey(state.me) !== who) return;  // only this editor closes: one opened since then stays
   try {
     const latest = await refreshRoom(room);
     if (state.room?.id === room.id) state.room = latest;

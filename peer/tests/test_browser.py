@@ -1988,6 +1988,46 @@ def test_a_brief_refused_after_moving_on_says_so_and_keeps_the_words(browser_pee
             assert page.evaluate("state.briefEdit.body") == "The plan for X"
 
 
+def test_a_brief_refused_after_another_editor_took_its_place_doesnt_promise_the_words(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+            page.evaluate("render()")
+            page.locator("#brief-body").fill("The plan for X")
+            saves = held_routes(page, f"**/api/chats/{x['id']}/brief")
+            page.get_by_role("button", name="Save brief").click()
+            wait_for_hold(page, saves)
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", y["id"])
+            saves[0].fulfill(status=400, json={"error": "A brief is at most 4,000 characters"})
+            expect(page.locator(".notice.error")).to_have_text("Room X: the brief wasn't saved.")
+
+
+def test_a_brief_answered_after_the_session_ended_leaves_no_editor_stuck(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner)
+            for answer in ({"status": 400, "json": {"error": "A brief is at most 4,000 characters"}}, None):
+                page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+                page.evaluate("render()")
+                page.locator("#brief-body").fill("The plan for X")
+                saves = held_routes(page, f"**/api/chats/{x['id']}/brief")
+                page.get_by_role("button", name="Save brief").click()
+                wait_for_hold(page, saves)
+                me = page.evaluate("state.me")
+                page.evaluate("state.me = { ...state.me, id: 'the-next-account' }")
+                saves[0].fulfill(**answer) if answer else saves[0].continue_()
+                reads_settled(page)
+                page.unroute(f"**/api/chats/{x['id']}/brief")
+                assert page.evaluate("state.briefEdit ? state.briefEdit.saving : false") is False
+                page.evaluate("(me) => { state.me = me; state.briefEdit = null; }", me)
+
+
 def test_a_read_refused_at_an_address_for_a_session_that_ended_goes_to_sign_in(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
