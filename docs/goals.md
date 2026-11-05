@@ -13,8 +13,8 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
    - each ship has laid its lessons;
    - the first segments are counted honestly (independent only);
    - a session gets a lesson from its own peer's index in under 1 s.
-2. **Chats are performant.** Measure: a room read from the Mac takes under 400 ms, and the web app's first paint
-   takes under 600 ms, measured before and after each change.
+2. **Chats are performant.** Measure: a room read from the Mac takes under 400 ms (`scripts/room_read_timing.py`), and
+   the web app's first paint takes under 600 ms, measured before and after each change.
 3. **A small community that actually talks.** Measure: each hour's check-in leads with the purpose, and each hour
    has at least one real exchange between ships, not only status.
 4. **People outside us use it.** Measure: someone who isn't one of the three ships tries Superyak, for example a
