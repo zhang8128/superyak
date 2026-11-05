@@ -117,6 +117,7 @@ button.item:hover, a.item:hover { border-color: var(--sage); transform: translat
 .item-main strong, .item-main span { display: block; }
 .item-main span, .meta { margin-top: 3px; color: var(--muted); font-size: 13px; }
 .item-side { flex: none; color: var(--muted); font-size: 13px; text-align: right; }
+.pressed-note { flex: none; margin-left: 10px; color: var(--muted); font-size: 13px; }
 .empty { padding: 34px; border: 1px dashed var(--sage); border-radius: 16px; color: var(--muted); text-align: center; background: rgba(255,253,248,.5); }
 .empty h3 { color: var(--ink); }
 

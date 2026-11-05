@@ -97,6 +97,30 @@ function announce(message) {
   });
 }
 
+// What was pressed says it's working, on a slow link only. It's on the thing pressed and not on main: aria-busy on main would
+// make a screen reader lose the page that's still there. It's held in state because render() replaces the element.
+const PRESSED_AFTER_MS = 300;
+function clearPressed() {
+  state.pressed = null;
+  document.querySelectorAll(".pressed-note").forEach((note) => { note.parentElement.removeAttribute("aria-busy"); note.remove(); });
+}
+function drawPressed() {
+  const element = state.pressed && document.querySelector(state.pressed.selector);
+  if (!element || element.querySelector(".pressed-note")) return;
+  element.setAttribute("aria-busy", "true");
+  element.insertAdjacentHTML("beforeend", `<span class="pressed-note">${escapeHtml(state.pressed.words)}</span>`);
+}
+async function whilePressed(selector, words, work) {
+  clearPressed();
+  const mine = { selector, words };
+  const timer = setTimeout(() => { state.pressed = mine; drawPressed(); announce(words); }, PRESSED_AFTER_MS);
+  try { return await work(); }
+  finally {
+    clearTimeout(timer);
+    if (state.pressed === mine) clearPressed();
+  }
+}
+
 function setFlash(message, error = false) {
   state.flash = { message, error };
   announce(message);
@@ -948,7 +972,7 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
   return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${state.wordsKeptIn ? `<p class="meta words-kept">Your words are kept in ${escapeHtml(state.wordsKeptIn)}.</p>` : ""}<label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -1825,6 +1849,7 @@ function render() {
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
+  drawPressed();
 }
 
 async function refresh(message = null) {
@@ -2082,7 +2107,13 @@ async function confirmWithdraw() {
 // action reading it means the room the person is looking at: a message, a mark, a removal, an add. A dialog opened for the
 // room they've left closes, and doesn't go on for the next one.
 function showRoom(room, board) {
-  if (state.room?.id !== room.id) { state.chatDialog = null; state.chatPicked = null; state.chatError = null; }
+  if (state.room?.id !== room.id) {
+    state.chatDialog = null; state.chatPicked = null; state.chatError = null;
+    // Someone mid-sentence as the next room arrives: their box is gone from under them, so say the words are safe, and where.
+    const box = document.querySelector("#message-body"), typing = box && document.activeElement === box && box.value.trim();
+    state.wordsKeptIn = typing && state.room ? state.room.title : null;
+    if (state.wordsKeptIn) announce(`Your words are kept in ${state.wordsKeptIn}.`);
+  }
   state.room = room;
   state.board = board;
 }
@@ -2091,14 +2122,28 @@ async function openChat(id) {
   state.selectedChatId = id;
   const who = identityKey(state.me), from = location.hash;
   const still = () => state.selectedChatId === id && identityKey(state.me) === who && location.hash === from;
-  const room = await loadRoom(id);
-  const board = await readBoard(room);
-  if (!still()) return;  // a late answer for a room or a page the person has left, or for another account
-  showRoom(room, board);
-  location.hash = `chats/${pathPart(id)}`;
-  state.flash = null;
-  state.transitionNote = null;
-  state.briefHistory = null;
+  await whilePressed(`[data-action="open-chat"][data-id="${CSS.escape(id)}"]`, "Opening…", async () => {
+    let room;
+    try { room = await loadRoom(id); }
+    catch (error) {
+      if (still()) openFailed(id, error);
+      return;
+    }
+    const board = await readBoard(room);
+    if (!still()) return;  // a late answer for a room or a page the person has left, or for another account
+    showRoom(room, board);
+    location.hash = `chats/${pathPart(id)}`;
+    state.flash = null;
+    state.transitionNote = null;
+    state.briefHistory = null;
+    render();
+  });
+}
+
+function openFailed(id, error) {
+  const title = (state.home?.chats || []).find((item) => item.id === id)?.title || "That room";
+  state.selectedChatId = state.room?.id ?? null;  // the selection follows what's on screen, so another try is a new open
+  setFlash(`${title} didn't open. ${error.status === 0 ? "The connection was lost." : error.message} Try it again.`, true);
   render();
 }
 
@@ -2326,7 +2371,7 @@ async function logout() {
     state.sources = [];
     Research.reset(); Dashboard.reset();
     state.editorIdentity = null;
-    state.selectedChatId = null; state.room = null; state.board = null;  // so no late answer finds a room to land in
+    state.selectedChatId = null; state.room = null; state.board = null; state.wordsKeptIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;
     location.hash = "";
     showLogin();

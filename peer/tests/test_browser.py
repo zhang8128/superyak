@@ -1038,6 +1038,146 @@ def test_a_late_room_doesnt_land_after_sign_out(browser_peer):
             assert page.evaluate("state.room") is None and page.evaluate("state.selectedChatId") is None
 
 
+def test_a_room_slow_to_open_says_so_on_the_row_pressed_and_not_on_the_page(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = y_opening(page, y)
+            row = page.get_by_role("button", name=re.compile("^Room Y"))
+            expect(row).to_contain_text("Opening…")
+            expect(row).to_have_attribute("aria-busy", "true")
+            assert page.evaluate("document.querySelector('main').hasAttribute('aria-busy')") is False  # X is still there to read
+            page.evaluate("render()")  # a draw replaces the row, and the mark stays
+            expect(row).to_contain_text("Opening…")
+            release(held)
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            expect(page.locator(".pressed-note")).to_have_count(0)
+            expect(row).not_to_have_attribute("aria-busy", "true")
+
+
+def test_a_room_that_answers_in_time_shows_no_mark(browser_peer):
+    """Timers fire in order, so this holds however slow the machine is."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            two_rooms_with_x_open(page, store, owner)
+            page.evaluate("""async () => {
+              window.marks = 0;
+              new MutationObserver(() => { window.marks += document.querySelectorAll('.pressed-note').length; }).observe(document.body, { childList: true, subtree: true });
+              await whilePressed('.composer', 'Opening…', () => new Promise((resolve) => setTimeout(resolve, 100)));
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            }""")
+            assert page.evaluate("window.marks") == 0
+
+
+def test_a_room_that_wont_open_ends_the_mark_and_says_so(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            pattern = re.compile(rf"/api/chats/{y['id']}(\\?|$)")
+            held = held_routes(page, pattern)
+            page.get_by_role("button", name="Room Y").click()
+            wait_for_hold(page, held)
+            row = page.get_by_role("button", name=re.compile("^Room Y"))
+            expect(row).to_contain_text("Opening…")  # a row that said this for good is the state a walker hits on a bad link
+            for route in held:
+                route.abort()
+            expect(page.locator(".notice.error")).to_have_text("Room Y didn't open. The connection was lost. Try it again.")
+            expect(page.locator(".pressed-note")).to_have_count(0)
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            assert page.evaluate("state.selectedChatId") == x["id"] and page.evaluate("state.room.title") == "Room X"
+            page.unroute(pattern)
+            page.get_by_role("button", name="Room Y").click()  # another try is a new open
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+
+
+def test_pressing_another_room_moves_the_mark(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            z = store.create_room(owner, "Room Z", [])
+            page.goto(page.url.split("#")[0] + f"#chats/{x['id']}")
+            page.reload()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            reads_settled(page)
+            held_y = y_opening(page, y)
+            expect(page.get_by_role("button", name=re.compile("^Room Y"))).to_contain_text("Opening…")
+            held_z = held_routes(page, f"**/api/chats/{z['id']}/board")
+            page.get_by_role("button", name=re.compile("^Room Z")).click()
+            wait_for_hold(page, held_z)
+            expect(page.get_by_role("button", name=re.compile("^Room Z"))).to_contain_text("Opening…")
+            expect(page.locator(".pressed-note")).to_have_count(1)
+            release(held_y)  # Y's late answer doesn't take Z's mark away
+            reads_settled(page, held=1)
+            expect(page.get_by_role("button", name=re.compile("^Room Z"))).to_contain_text("Opening…")
+            release(held_z)
+            expect(page.get_by_role("heading", name="Room Z")).to_be_visible()
+            expect(page.locator(".pressed-note")).to_have_count(0)
+
+
+def test_someone_typing_as_the_next_room_arrives_is_told_where_their_words_are(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = y_opening(page, y)
+            box = page.get_by_role("textbox", name="Message", exact=True)
+            box.click()
+            box.press_sequentially("Meant for X")
+            release(held)
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_text("Your words are kept in Room X.")
+            assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"  # the sentence is true
+            page.get_by_role("button", name="Room X").click()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_count(0)
+            expect(box).to_have_value("Meant for X")
+
+
+def test_a_room_title_kept_for_that_line_goes_at_sign_out(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = y_opening(page, y)
+            box = page.get_by_role("textbox", name="Message", exact=True)
+            box.click()
+            box.press_sequentially("Meant for X")
+            release(held)
+            expect(page.locator(".words-kept")).to_have_text("Your words are kept in Room X.")
+            page.evaluate("logout()")
+            page.wait_for_function("() => state.me === null")
+            assert page.evaluate("state.wordsKeptIn") is None
+
+
+def test_no_word_about_kept_words_when_nobody_was_typing(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            box = page.get_by_role("textbox", name="Message", exact=True)
+            box.fill("Left here on purpose")
+            page.get_by_role("button", name="Room Y").click()  # focus left the box to press this
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_count(0)
+            page.get_by_role("button", name="Room X").click()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            reads_settled(page)
+            box.fill("   ")
+            held = y_opening(page, y)
+            box.click()  # in the box, with only spaces in it
+            release(held)
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_count(0)
+
+
 def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_peer):
     """Break caught: a network error drops text or exposes old messages to a new member."""
     with sync_playwright() as playwright:
