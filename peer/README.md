@@ -442,7 +442,7 @@ must be live first.
 - choose how long it lasts, from 1 to 30 days;
 - press Allow.
 
-A room any member keeps away from cloud models ("Never to a cloud model") can't be chosen. If someone marks it later,
+A room any member has marked, to keep it away from ships and connected apps, can't be chosen. If someone marks it later,
 Claude can no longer read it from then on. A mark doesn't recall what Claude has already read, and it doesn't see text
 someone copies into another room by hand. A member on a paired home can't mark a room here yet, though their words in it
 reach Claude like anyone's.

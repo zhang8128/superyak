@@ -1178,8 +1178,8 @@ function dockingDialog() {
 }
 
 function cloudBadge(room) {
-  // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
-  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+  // A room's mark: only a marked room carries `cloud`, its count and whether one of the marks is this person's
+  return room.cloud ? `<span class="badge cloud-badge">No ships or connected apps · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
 }
 
 function earlierRoomsWithMe(room) {
@@ -1202,11 +1202,11 @@ function cloudControl(room, replaced) {
   // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
   const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
     ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
-  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from ships and connected apps on this home. It can't stop whoever runs this home, or an AI agent they run on its computer, and a member already on another home keeps their copy under that home's rules. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Keep this room away from ships and connected apps on this home. A ship can't join while it's marked, and nor can anyone new from another home. It can't stop whoever runs this home, or an AI agent they run on its computer, and a member already on another home keeps their copy under that home's rules. Each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from ships and apps</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1217,7 +1217,7 @@ async function markRoom(room, earlier) {
     render();
     return;
   }
-  await refresh("This room is kept away from cloud models.");
+  await refresh("This room is kept away from ships and connected apps on this home.");
 }
 
 async function clearMark(room) {
@@ -1453,7 +1453,7 @@ const APP_ENDED = new Map([
   ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["unknown", "Why it ended wasn't recorded."]]);  // a NULL reason, from before 9a recorded one (9a's N1)
-const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
+const APP_REFUSED = new Map([["marked", "a member keeps it from ships and apps"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
 const RECEIPT_PAGE = 20;
 
 function appName(host) {
@@ -1570,7 +1570,7 @@ function appRoomsForm(app) {
   const id = escapeHtml(app.id), chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room)), name = escapeHtml(appName(app.app));
   const choices = appRoomChoices(app).map((room) => `<label class="choice"><input type="checkbox" name="app-room" value="${escapeHtml(room.id)}"${chosen.has(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
     || `<p class="meta">You have no room it can read.</p>`;
-  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
+  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from ships and apps.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
 }
 
 async function saveAppRooms(form) {
@@ -1586,13 +1586,13 @@ function appRoomsList(app, live) {
   const name = escapeHtml(appName(app.app));
   if (app.damaged) return `<div class="app-rooms"><p class="meta">Its room list is damaged, so it can't read any room. Revoke it, then connect again.</p></div>`;
   const verb = live ? "It reads" : "It could read";  // an ended connection reads nothing
-  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from cloud models.</p></div>`;
+  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from ships and apps.</p></div>`;
   if (!app.rooms.length) return "";  // a connection a restore removed: only its receipts are left
   const ids = new Set(app.rooms.map((room) => room.room));
   const rows = app.rooms.map((room) => {
     const next = room.continues_in, offer = live && next && !ids.has(next.room)
       ? `<p class="app-offer">${escapeHtml(room.title)} continues in a new room. Let ${name} read it? <button class="button secondary" type="button" data-action="app-room-add" data-id="${escapeHtml(app.id)}" data-room="${escapeHtml(next.room)}" aria-label="Let ${name} read the new ${escapeHtml(next.title)}">Yes, add it</button></p>` : "";
-    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">Never to a cloud model</span>' : ""}${offer}</li>`;
+    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">No ships or connected apps</span>' : ""}${offer}</li>`;
   }).join("");
   return `<div class="app-rooms"><p class="meta">${verb} these rooms:</p><ul>${rows}</ul></div>`;
 }

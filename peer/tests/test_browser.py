@@ -234,7 +234,7 @@ def test_the_old_promises_are_gone_from_every_screen():
     for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
                     r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
                     r"(?i)\bstays? private to\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
-                    r"(?i)\bonly your account\b"):
+                    r"(?i)\bonly your account\b", r"(?i)\bnever to a cloud model\b", r"(?i)\baway from claude\b"):
         assert not re.search(promise, words), promise
 
 
@@ -1338,6 +1338,27 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
                 expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
 
 
+def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
+    """A person relies on the mark at the moment they set it, so it says there what it keeps out, and what it can't: the
+    machine's owner, their agents, and a copy already on another home. The sign-in page's line isn't on screen then."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    limit = ("It can't stop whoever runs this home, or an AI agent they run on its computer, and a member already on "
+             "another home keeps their copy under that home's rules.")
+    room = store.create_room(users["patient"]["id"], "To be marked", [users["family"]["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        control = page.locator(".cloud-control")
+        expect(control).to_contain_text("Keep this room away from ships and connected apps on this home.")
+        expect(control).to_contain_text("A ship can't join while it's marked, and nor can anyone new from another home.")
+        expect(control).to_contain_text(limit)
+        page.get_by_role("button", name="Keep this room away from ships and apps").click()
+        expect(page.locator(".notice", has_text="This room is kept away from ships and connected apps on this home.")).to_be_visible()
+        expect(control).to_contain_text("You keep this room away from ships and connected apps on this home.")
+        expect(control).to_contain_text(limit)
+        expect(page.locator(".split-detail").get_by_text("No ships or connected apps · 1 (yours)")).to_be_visible()
+
+
 def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
     """Never to a cloud model (connector plan, Task 2): a member marks a continuing room and, by default, the earlier
     room they're in; every member sees the badge with its count, and only the marker sees "(yours)"."""
@@ -1362,14 +1383,14 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
                 family.goto(browser_peer["base_url"] + f"/#chats/{second}")
                 expect(family.get_by_role("heading", name="Kept close")).to_be_visible()
                 expect(family.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")).to_be_checked()
-                family.get_by_role("button", name="Keep this room away from cloud models").click()
-                expect(family.locator(".split-detail").get_by_text("Never to a cloud model · 1 (yours)")).to_be_visible()
-                expect(family.locator(".split-list").get_by_text("Never to a cloud model · 1 (yours)")).to_have_count(2)
+                family.get_by_role("button", name="Keep this room away from ships and apps").click()
+                expect(family.locator(".split-detail").get_by_text("No ships or connected apps · 1 (yours)")).to_be_visible()
+                expect(family.locator(".split-list").get_by_text("No ships or connected apps · 1 (yours)")).to_have_count(2)
                 expect(family.get_by_role("button", name="Clear my mark")).to_be_visible()
                 expect(family.get_by_text("Clearing takes your mark off this room only; your marks on earlier rooms stay.")).to_be_visible()
 
             page.reload()
-            expect(page.locator(".split-detail").get_by_text("Never to a cloud model · 1", exact=True)).to_be_visible()
+            expect(page.locator(".split-detail").get_by_text("No ships or connected apps · 1", exact=True)).to_be_visible()
         with store.transaction() as db:
             marked = {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
         assert marked == {first, second}
@@ -1396,7 +1417,7 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
         with signed_in_browser(playwright, browser_peer, "family") as (page, _):
             page.goto(base + f"/#chats/{second}")
             page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too").uncheck()
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Keep this room away from ships and apps").click()
             expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
             assert marked() == {second}  # unticked: this room alone
 
@@ -1412,7 +1433,7 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
                 assert "<b>" not in owner.evaluate("cloudBadge({cloud: {count: '<b>1</b>', mine: false}})")
 
             page.get_by_role("button", name="Clear my mark").click()
-            expect(page.get_by_role("button", name="Keep this room away from cloud models")).to_be_visible()
+            expect(page.get_by_role("button", name="Keep this room away from ships and apps")).to_be_visible()
             assert marked() == set()
 
 
@@ -4159,7 +4180,7 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
             plain, marked = page.get_by_label('Care plan'), page.get_by_label('Night notes')
             expect(plain).not_to_be_checked()
             expect(marked).to_be_disabled()
-            expect(page.get_by_text('Kept away from cloud models')).to_be_visible()
+            expect(page.get_by_text('Kept from connected apps')).to_be_visible()
             expect(page.get_by_text('Growing: earlier part of Growing')).to_be_visible()
             expect(page.get_by_text('<img src=x id=planted> notes')).to_be_visible()
             assert page.locator('#planted').count() == 0  # shown as text, never made into an element
@@ -4373,7 +4394,7 @@ def test_receipts_show_what_was_read_a_page_at_a_time_and_start_again_when_the_l
         item.get_by_role("button", name="Show what it read").click()
         receipts = item.locator(".receipt")
         expect(receipts).to_have_count(20)
-        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from cloud models\)$"))
+        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from ships and apps\)$"))
         expect(receipts.nth(1)).to_have_text(re.compile(r"^[^·]+ · Read a room · Read: <i>Care</i> plan$"))
         assert page.locator("#main-content i").count() == 0
         item.get_by_role("button", name="Show earlier").dblclick()  # one read at a time: the next page once
