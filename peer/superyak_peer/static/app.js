@@ -913,7 +913,8 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     saved();
     state.boardDone = null; state.boardAsk = null;
     // A close that released someone else's claim says whose (the station's name, escaped where shown).
-    setFlash(answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message);
+    const said = answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message;
+    setFlash(state.room?.id === room.id ? said : `${room.title}: ${said}`);  // the next room may have opened meanwhile
     ok = true;
   } catch (error) {
     if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
@@ -926,7 +927,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     }
     render();
     if (!ok && state.boardDone?.roomId === room.id) document.querySelector("#board-outcome")?.focus();
-    else if (focusKey !== undefined) focusBoardItem(focusKey);
+    else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
 
@@ -972,7 +973,7 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
   return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${state.wordsKeptIn ? `<p class="meta words-kept">Your words are kept in ${escapeHtml(state.wordsKeptIn)}.</p>` : ""}<label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${state.composerNote ? `<p class="meta words-kept">${escapeHtml(state.composerNote)}</p>` : ""}<label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -983,7 +984,7 @@ function chatDialog() {
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const picked = new Set(state.chatPicked || []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form" data-kind="${escapeHtml(state.chatDialog)}" data-room="${escapeHtml(room?.id || "")}">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
@@ -1247,7 +1248,7 @@ async function markRoom(room, earlier) {
     render();
     return;
   }
-  await refresh("This room is kept away from cloud models.");
+  await refresh(`${room.title} is kept away from cloud models.`);  // by name: another room may have opened while this was sent
 }
 
 async function clearMark(room) {
@@ -1258,7 +1259,7 @@ async function clearMark(room) {
     render();
     return;
   }
-  await refresh("Your mark is cleared. Other members' marks still stand.");
+  await refresh(`Your mark on ${room.title} is cleared. Other members' marks still stand.`);
 }
 
 function shipBanner(room) {
@@ -1783,11 +1784,14 @@ async function loadRoute() {
       const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
       try {
         const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
-        const room = paged ? await refreshRoom(state.room) : await loadRoom(wanted);
-        const board = await readBoard(room);
-        if (still()) showRoom(room, board);
+        await landRoom(() => (paged ? refreshRoom(state.room) : loadRoom(wanted)), still);
       }
-      catch (_) { if (still()) state.room = null; }
+      catch (error) {
+        if (still()) {
+          if (state.room?.id !== wanted) state.room = null;  // the room on screen stays: it's the newer read that failed
+          setFlash(openFailedWords(wanted, error), true);
+        }
+      }
     } else {
       state.room = null;
     }
@@ -2103,19 +2107,36 @@ async function confirmWithdraw() {
   }
 }
 
-// state.room is the room on screen. It moves here and only with the room's board, when the room is ready to draw, so every
-// action reading it means the room the person is looking at: a message, a mark, a removal, an add. A dialog opened for the
-// room they've left closes, and doesn't go on for the next one.
+// state.room is the room on screen. It moves to another room here and only with that room's board, when the room is ready to
+// draw, so an action reading it means the room the person is looking at: a message, a mark, a removal, an add. A dialog opened
+// for the room they've left closes, and doesn't go on for the next one. Other writes refresh the same room, each checking it
+// after its read, or empty it.
 function showRoom(room, board) {
   if (state.room?.id !== room.id) {
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
-    // Someone mid-sentence as the next room arrives: their box is gone from under them, so say the words are safe, and where.
+    // Their box is gone from under them, so say where the words are: a send that failed, or someone mid-sentence as this arrives.
     const box = document.querySelector("#message-body"), typing = box && document.activeElement === box && box.value.trim();
-    state.wordsKeptIn = typing && state.room ? state.room.title : null;
-    if (state.wordsKeptIn) announce(`Your words are kept in ${state.wordsKeptIn}.`);
+    const left = state.room;
+    state.composerNote = !left ? null
+      : state.unsentIn === left.id ? `Your message wasn't sent. It's still in the box in ${left.title}.`
+        : typing ? `Your words are kept in ${left.title}.` : null;
+    state.unsentIn = null;
+    if (state.composerNote) announce(state.composerNote);
   }
   state.room = room;
   state.board = board;
+}
+
+// A read of a room and its board, landing them. The room on screen takes its new read at once, since nothing moves, so what
+// changes during the board read stays: a message sent then isn't replaced by the older answer. Another room waits for both.
+async function landRoom(read, still) {
+  const room = await read();
+  if (still() && state.room?.id === room.id) state.room = room;
+  const board = await readBoard(room);
+  if (!still()) return false;  // a late answer for a room or a page the person has left, or for another account
+  if (state.room?.id === room.id) state.board = board;
+  else showRoom(room, board);
+  return true;
 }
 
 async function openChat(id) {
@@ -2123,15 +2144,15 @@ async function openChat(id) {
   const who = identityKey(state.me), from = location.hash;
   const still = () => state.selectedChatId === id && identityKey(state.me) === who && location.hash === from;
   await whilePressed(`[data-action="open-chat"][data-id="${CSS.escape(id)}"]`, "Opening…", async () => {
-    let room;
-    try { room = await loadRoom(id); }
+    try { if (!await landRoom(() => loadRoom(id), still)) return; }
     catch (error) {
-      if (still()) openFailed(id, error);
+      if (still()) {
+        state.selectedChatId = state.room?.id ?? null;  // it follows what's on screen, so nothing opens this later by itself
+        setFlash(openFailedWords(id, error), true);
+        render();
+      }
       return;
     }
-    const board = await readBoard(room);
-    if (!still()) return;  // a late answer for a room or a page the person has left, or for another account
-    showRoom(room, board);
     location.hash = `chats/${pathPart(id)}`;
     state.flash = null;
     state.transitionNote = null;
@@ -2140,23 +2161,21 @@ async function openChat(id) {
   });
 }
 
-function openFailed(id, error) {
+function openFailedWords(id, error) {
   const title = (state.home?.chats || []).find((item) => item.id === id)?.title || "That room";
-  state.selectedChatId = state.room?.id ?? null;  // the selection follows what's on screen, so another try is a new open
-  setFlash(`${title} didn't open. ${error.status === 0 ? "The connection was lost." : error.message} Try it again.`, true);
-  render();
+  return `${title} didn't open. ${error.status === 0 ? "The connection was lost." : error.message} Try it again.`;
 }
 
 async function createChat(form) {
   const members = [...form.querySelectorAll('[name="chat-member"]:checked:not(:disabled)')].map((input) => input.value);
   try {
     let room;
-    if (state.chatDialog === "new") {
+    if (form.dataset.kind === "new") {
       room = await api("/api/chats", { method: "POST", json: { title: form.elements.title.value, member_ids: members } });
       state.transitionNote = null;
     } else {
       const carry = form.querySelector('[name="carry-brief"]:checked');
-      room = await api(`/api/chats/${pathPart(state.room.id)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
+      room = await api(`/api/chats/${pathPart(form.dataset.room)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
       state.transitionNote = "New room · earlier messages stay in the original chat";
     }
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
@@ -2167,18 +2186,20 @@ async function createChat(form) {
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
-    if (error.status === 409 && state.chatDialog === "linked" && state.room && !error.message.startsWith("The room brief changed")) {
+    const stillThisRoom = form.dataset.kind === "linked" && state.room?.id === form.dataset.room;
+    if (error.status === 409 && stillThisRoom && !error.message.startsWith("The room brief changed")) {
       state.chatPicked = members;  // a room replaced since this page loaded: the station's own words, in the dialog
       state.chatError = error.message;
       announce(state.chatError);
       render();
       return;
     }
-    if (error.status === 409 && state.chatDialog === "linked" && state.room) {
+    if (error.status === 409 && stillThisRoom) {
       state.chatPicked = members;
       state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
       try {
-        state.room = await refreshRoom(state.room);
+        const latest = await refreshRoom(state.room);
+        if (state.room?.id === form.dataset.room) state.room = latest;
       } catch (_) {
         state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
       }
@@ -2278,10 +2299,13 @@ async function removeParticipant(id) {
     state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
     state.transitionNote = `${name} no longer has access on this home; remote removal requires acknowledgement`;
     render();
-  }
+  } else setFlash(`${name} no longer has access to ${room.title} on this home; remote removal requires acknowledgement`);
   try {
     await loadData();
-    if (state.room?.id === room.id) state.room = await refreshRoom(room);
+    if (state.room?.id === room.id) {
+      const latest = await refreshRoom(room);
+      if (state.room?.id === room.id) state.room = latest;  // after the read: they may have moved on during it
+    }
     render();
   } catch (error) {
     if (error.status === 401) {
@@ -2296,7 +2320,7 @@ async function removeParticipant(id) {
 async function sendMessage(form) {
   // The room on screen, not state.room: while the next room loads, state.room is already that room and this composer is still
   // the old one. A person's words go where they were looking.
-  const room = state.room?.id === form.dataset.room ? state.room : { id: form.dataset.room };
+  const room = state.room?.id === form.dataset.room ? state.room : { id: form.dataset.room }, who = identityKey(state.me);
   const textarea = form.elements.body;
   const body = textarea.value;
   if (!body.trim()) return;
@@ -2311,17 +2335,21 @@ async function sendMessage(form) {
   try {
     accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;  // their words went with their sign-out, and this isn't the next person's news
+    const why = error.status === 0 ? "Connection lost." : error.message;
     if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
       const title = (state.home?.chats || []).find((item) => item.id === room.id)?.title || "the room you left";
-      setFlash(`Your message wasn't sent. It's still in the box in ${title}.`);
+      setFlash(`Your message wasn't sent. ${why} It's still in the box in ${title}.`, true);
       render();
       return;
     }
+    state.unsentIn = room.id;  // said here, and again if the next room replaces this before they've seen it
     status.className = "inline-message error";
-    status.textContent = error.status === 0 ? "Connection lost. Your message is still here." : `${error.message} Your message is still here.`;
+    status.textContent = `${why} Your message is still here.`;
     announce(status.textContent);
     return;
   }
+  if (state.unsentIn === room.id) state.unsentIn = null;
   const currentDraft = readChatDraft(room.id);
   if (currentDraft.clientId === draft.clientId && currentDraft.body === body) {
     if (textarea.isConnected && textarea.value === body) textarea.value = "";
@@ -2371,7 +2399,7 @@ async function logout() {
     state.sources = [];
     Research.reset(); Dashboard.reset();
     state.editorIdentity = null;
-    state.selectedChatId = null; state.room = null; state.board = null; state.wordsKeptIn = null; clearPressed();  // so no late answer finds a room to land in
+    state.selectedChatId = null; state.room = null; state.board = null; state.composerNote = null; state.unsentIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;
     location.hash = "";
     showLogin();
