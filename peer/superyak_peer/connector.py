@@ -522,7 +522,7 @@ class Connector:
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
-        grouped under it as `earlier_of` (spec D9), and `cloud` where a member keeps it away from cloud models."""
+        grouped under it as `earlier_of` (spec D9), and `cloud` where a member has marked it."""
         rows = db.execute('SELECT rooms.id, rooms.title FROM room_members JOIN rooms ON rooms.id=room_members.room_id '
                           'WHERE room_members.user_id=? ORDER BY rooms.title, rooms.id', (person_id,)).fetchall()
         current, earlier = [], {}

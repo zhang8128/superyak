@@ -14,7 +14,7 @@ RECEIPTS_LIMIT, RECEIPTS_MAX = 100, 500  # a page of receipts: one connection at
 NO_SUCH = 'No such connection'
 ENDED = 'This connection has ended'
 ROOMS_SHAPE = 'rooms is "*" or a list of the rooms you are in, each listed once'
-MARKED = 'A member of that room keeps it away from cloud models, so no connection can read it'
+MARKED = 'A member has marked that room, so no connection can read it'
 PAGE = f'limit is a whole number from 1 to {RECEIPTS_MAX}, and before is a cursor from an earlier page'
 
 

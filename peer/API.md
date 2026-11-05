@@ -409,7 +409,7 @@ Origin; the consent page's posts keep it.
   again on one request switches the person; a decided one answers 400 `already_decided`.
 - `POST /authorize/decision` `{pending, csrf, allow, rooms, days}`: 403 for a wrong CSRF token, 400
   `request_expired` 10 minutes after `/authorize`, 400 `already_decided` after a first decision. Allow takes `rooms`
-  as `"*"` or a list of the person's current rooms no member keeps away from cloud models, each once, and `days` 1 to
+  as `"*"` or a list of the person's current rooms no member has marked, each once, and `days` 1 to
   30 (30 by default), and answers `{redirect}` with a `code` (single use, 60 s), the `state` and `iss`. Deny answers
   `{redirect}` with `error=access_denied`, the `state` and `iss`.
 - `POST /token` (RFC 6749 4.1.3, 6): `application/x-www-form-urlencoded` only (anything else is 400 `invalid_request`
@@ -440,7 +440,7 @@ Origin; the consent page's posts keep it.
   `structuredContent` and the same JSON as text; a refusal is a result with `isError: true` and one sentence. The four
   tools (`rooms`, `read_room`, `search`, `fetch`) are read-only and read only rooms on this home that the connection's
   person chose, is still in, and nobody has marked, asked again at every call. A refusal is one sentence: the room is
-  kept away from cloud models, isn't shared, is on another home, or "No such room.". Every call writes a receipt
+  marked, isn't shared, is on another home, or "No such room.". Every call writes a receipt
   (room ids, never an argument), and the limit is counted from them, so it holds across a restart. A result is cut at a
   message or room boundary at 100,000 characters with `truncated` and the cursor to continue; one message alone past
   that is kept with its text cut and `text_cut`, the number of characters left out.

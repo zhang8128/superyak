@@ -5,7 +5,7 @@ from connector_support import connected, home, mcp, person, rpc  # noqa: F401
 
 NO_SUCH = 'No such room.'
 NOT_SHARED = "This room isn't shared with Claude. You can add it in Connected apps on your home."
-MARKED = 'A member of this room keeps it away from cloud models.'
+MARKED = 'A member has marked this room, so no connection can read it.'
 REMOTE = 'This room is on another home. This connector reads rooms on this home only.'
 EPOCH = '1970-01-12T13:46:40Z'  # the test clock's 1,000,000.0 in UTC
 

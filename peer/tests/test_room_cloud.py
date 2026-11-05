@@ -257,3 +257,13 @@ def test_the_route_marks_the_earlier_rooms_by_default(city):
     second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
     marked = login(c.app, 'jenn').post(f'/api/chats/{second}/cloud', json={})
     assert marked.status_code == 200 and set(marked.json()['marked']) == {first, second}
+
+
+
+def test_what_the_server_says_about_a_mark_doesnt_promise_more_than_it_does():
+    """A refusal reaches a person, or Claude, who may repeat it. "Ships run on cloud models" is a reason and stays; a mark
+    keeps a room from ships and connected apps on this home, not from every cloud model."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for path in (*(root / "superyak_peer").glob("*.py"), root / "API.md"):
+        assert "from cloud models" not in path.read_text(), path.name

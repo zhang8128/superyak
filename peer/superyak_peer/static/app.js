@@ -1179,7 +1179,10 @@ function dockingDialog() {
 
 function cloudBadge(room) {
   // A room's mark: only a marked room carries `cloud`, its count and whether one of the marks is this person's
-  return room.cloud ? `<span class="badge cloud-badge">No ships or connected apps · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+  if (!room.cloud) return "";
+  const count = Number(room.cloud.count) || 0;  // a number only, whoever sent it
+  const yours = !room.cloud.mine ? "" : count === 1 ? " (yours)" : " (one yours)";
+  return `<span class="badge cloud-badge">No ships or apps on this home · ${count} mark${count === 1 ? "" : "s"}${yours}</span>`;
 }
 
 function earlierRoomsWithMe(room) {
@@ -1200,13 +1203,15 @@ function earlierRoomsWithMe(room) {
 function cloudControl(room, replaced) {
   if (room.origin) return "";  // a received room's mark is its home's to keep
   // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
-  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
-    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
-  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from ships and connected apps on this home. It can't stop whoever runs this home, or an AI agent they run on its computer, and a member already on another home keeps their copy under that home's rules. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  const away = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? " A member already on another home stays in the room. What's said here after it's marked still goes to their home, under that home's rules, and their home isn't told about the mark." : "";
+  const limits = `<p class="meta">It can't stop whoever runs this home, or an AI agent they run on its computer. It can't take back what a ship or app has already read, and it can't stop a member copying the words or giving them to an AI themselves.${away}</p>`;
+  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You've marked this room, so it's kept from ships and connected apps on this home. It holds for everyone in the room, every member's connected apps included, until you clear it, and it stays after you leave. Clearing takes your mark off this room only; your marks on earlier rooms stay, and another member's mark would still hold.</p>${limits}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  return `<div class="cloud-control"><p class="meta">Keep this room away from ships and connected apps on this home. A ship can't join while it's marked, and nor can anyone new from another home. It can't stop whoever runs this home, or an AI agent they run on its computer, and a member already on another home keeps their copy under that home's rules. Each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from ships and apps</button></div>`;
+  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so this already holds: it's kept from ships and connected apps on this home, every member's connected apps included. Only the member who set a mark can clear it, and it stays after they leave. You can add your own mark too.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Keep this room away from ships and connected apps on this home. A ship can't be in a marked room, so any ship here has to be removed first, and none can join while it's marked. Nor can anyone new from another home. One member's mark is enough. It holds for everyone in the room, every member's connected apps included. Only the member who set it can clear it, and it stays after they leave.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from ships and apps</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1243,8 +1248,8 @@ function shipBanner(room) {
   const homes = room.origin
     ? `<strong>This room's home is another home.</strong><p>What you write here is copied there and to each member's home, under their rules. This home can't see whether ships there send it to Claude.</p>`
     : away.length === 1
-      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or a ship that sends text to Claude.</p>`
-      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
+      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't always tell whether the member is a person or a ship that sends text to Claude.</p>`
+      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't always tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
   return claude || bridge || homes ? `<div class="notice ship-banner">${claude}${bridge}${homes}</div>` : "";
 }
 
@@ -1592,7 +1597,7 @@ function appRoomsList(app, live) {
   const rows = app.rooms.map((room) => {
     const next = room.continues_in, offer = live && next && !ids.has(next.room)
       ? `<p class="app-offer">${escapeHtml(room.title)} continues in a new room. Let ${name} read it? <button class="button secondary" type="button" data-action="app-room-add" data-id="${escapeHtml(app.id)}" data-room="${escapeHtml(next.room)}" aria-label="Let ${name} read the new ${escapeHtml(next.title)}">Yes, add it</button></p>` : "";
-    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">No ships or connected apps</span>' : ""}${offer}</li>`;
+    return `<li>${escapeHtml(room.title)}${room.cloud ? ": it can't read this one, because a member has marked it." : ""}${offer}</li>`;
   }).join("");
   return `<div class="app-rooms"><p class="meta">${verb} these rooms:</p><ul>${rows}</ul></div>`;
 }
