@@ -1076,7 +1076,7 @@ def test_a_room_that_wont_open_ends_the_mark_and_says_so(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, y = two_rooms_with_x_open(page, store, owner)
-            pattern = re.compile(rf"/api/chats/{y['id']}(\\?|$)")
+            pattern = re.compile(rf"/api/chats/{y['id']}(\?|$)")
             held = held_routes(page, pattern)
             page.get_by_role("button", name="Room Y").click()
             wait_for_hold(page, held)
@@ -1160,6 +1160,31 @@ def test_a_message_sent_during_a_same_room_read_stays(browser_peer):
                 expect(page.get_by_text("No messages yet")).to_have_count(0)
 
 
+def test_a_same_room_read_brings_what_arrived(browser_peer):
+    users = browser_peer["users"]
+    store, owner, family = browser_peer["app"].state.store, users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner, family)
+            store.send_message(family, x["id"], "from-sam", "From Sam")
+            page.evaluate("loadRoute().then(() => render())")
+            expect(page.locator(".messages")).to_contain_text("From Sam")
+
+
+def test_a_same_room_read_for_the_last_account_stays_out(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner)
+            held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))
+            page.evaluate("void loadRoute()")
+            wait_for_hold(page, held)
+            page.evaluate("state.room.heldByThisAccount = true; state.me = { ...state.me, id: 'the-next-account' }")
+            release(held)
+            reads_settled(page)
+            assert page.evaluate("state.room.heldByThisAccount") is True  # the answer read for the last account didn't replace it
+
+
 def test_a_mark_answered_after_the_next_room_opens_names_its_room(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
@@ -1203,7 +1228,10 @@ def test_after_a_room_fails_to_open_nothing_opens_it_by_itself(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, y = two_rooms_with_x_open(page, store, owner)
-            pattern = re.compile(rf"/api/chats/{y['id']}(\\?|$)")
+            page.evaluate("() => { location.hash = 'chats'; }")  # the address no longer names a room, so the selection decides what a refresh opens
+            reads_settled(page)
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            pattern = re.compile(rf"/api/chats/{y['id']}(\?|$)")
             page.route(pattern, lambda route: route.abort())
             page.get_by_role("button", name="Room Y").click()
             expect(page.locator(".notice.error")).to_contain_text("Room Y didn't open.")
@@ -1220,7 +1248,7 @@ def test_a_removal_refreshed_after_the_next_room_opens_stays_out_and_says_so(bro
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, y = two_rooms_with_x_open(page, store, owner, family)
-            refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\\?|$)"))
+            refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))
             page.get_by_role("button", name=re.compile("^Remove .* from this room")).first.click()
             wait_for_hold(page, refresh_held)
             page.get_by_role("button", name="Room Y").click()
@@ -1281,7 +1309,7 @@ def test_a_new_chat_form_stays_a_new_chat_when_the_address_moves_under_it(browse
             dialog = page.locator("dialog")
             dialog.locator("#chat-title").fill("Just me and the doctor")
             dialog.get_by_role("checkbox", name="Dr. Morgan").check()
-            held = held_routes(page, re.compile(rf"/api/chats/{y['id']}(\\?|$)"))
+            held = held_routes(page, re.compile(rf"/api/chats/{y['id']}(\?|$)"))
             page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
             wait_for_hold(page, held)
             assert page.evaluate("state.chatDialog") is None and dialog.is_visible()  # the window: state cleared, form still up
@@ -1338,7 +1366,7 @@ def test_a_failed_read_of_the_room_on_screen_leaves_it_there_and_says_so(browser
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, _y = two_rooms_with_x_open(page, store, owner)
-            pattern = re.compile(rf"/api/chats/{x['id']}(\\?|$)")
+            pattern = re.compile(rf"/api/chats/{x['id']}(\?|$)")
             page.route(pattern, lambda route: route.abort())
             page.evaluate("loadRoute().then(() => render())")
             expect(page.locator(".notice.error")).to_contain_text("Room X didn't open.")
@@ -1440,7 +1468,7 @@ def test_a_brief_conflict_refreshed_after_the_next_room_opens_stays_out(browser_
             store.save_brief(owner, x["id"], "Plan for everyone, revised.", 1)  # another tab
             dialog.get_by_role("checkbox", name="Dr. Morgan").check()
             dialog.get_by_role("checkbox", name="Carry the room brief").check()
-            refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\\?|$)"))
+            refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))
             dialog.get_by_role("button", name="Start a new linked chat").click()
             wait_for_hold(page, refresh_held)
             page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
