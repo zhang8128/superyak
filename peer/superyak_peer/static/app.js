@@ -2019,11 +2019,30 @@ async function activateLayer() {
   }
 }
 
+// A revoke narrows the draft on the station too. Unsaved words in the editor stay, and what was just turned off stays off in
+// them, or the next save would turn it back on.
+function narrowEdit(layerId, { off = false, users = [], spaces = [] }) {
+  // The form on screen first: a Save before the page's next draw reads these boxes.
+  const form = document.querySelector("#layer-form");
+  if (form?.dataset.layerId === layerId) {
+    if (off && form.elements.public) form.elements.public.checked = false;
+    for (const [name, ids] of [["audience-user", users], ["audience-ship", users], ["audience-space", spaces]]) {
+      for (const id of ids) { const box = form.querySelector(`[name="${name}"][value="${CSS.escape(id)}"]`); if (box) box.checked = false; }
+    }
+  }
+  const values = state.layerEdits[layerId]?.values;
+  if (!values) return;
+  if (off) values.public = false;
+  values.audience_users = (values.audience_users || []).filter((id) => !users.includes(id));
+  values.audience_spaces = (values.audience_spaces || []).filter((id) => !spaces.includes(id));
+}
+
 async function publicOff() {
   const layer = selectedLayer();
   const active = state.activeLayers[layer.id];
   try {
     const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
+    narrowEdit(layer.id, { off: true });
     const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
     await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
@@ -2044,6 +2063,7 @@ async function revokeRoute(kind, id) {
         space_ids: kind === "space" ? [id] : [],
       },
     });
+    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] });
     const remainingNames = [
       ...(narrowed.audience_users || []).map(contactName),
       ...(narrowed.audience_spaces || []).map(spaceName),
