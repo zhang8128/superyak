@@ -1,0 +1,107 @@
+{
+ "sync": {
+  "peer": []
+ },
+ "mutants": [
+  {
+   "name": "no return after a render",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  else if (place) returnToField(app.querySelector(focusSelector), place);\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_typing_on_after_a_late_render_reaches_the_field"
+   ]
+  },
+  {
+   "name": "a field that has gone",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (!field) return;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_render_that_takes_the_field_away_doesnt_break"
+   ]
+  },
+  {
+   "name": "the page is pulled back",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "field.focus({ preventScroll: true });",
+   "new": "field.focus();",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_render_doesnt_pull_the_page_back_to_the_field"
+   ]
+  },
+  {
+   "name": "the selection is lost",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (typeof start === \"number\") field.setSelectionRange(start, end);  // a dropdown or a checkbox has no caret\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_render_keeps_the_selection"
+   ]
+  },
+  {
+   "name": "the selection collapses",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "field.setSelectionRange(start, end);",
+   "new": "field.setSelectionRange(start, start);",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_render_keeps_the_selection"
+   ]
+  },
+  {
+   "name": "a dropdown is given a caret",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "if (typeof start === \"number\") field",
+   "new": "if (start !== null) field",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_render_keeps_focus_on_a_dropdown_and_doesnt_break"
+   ]
+  },
+  {
+   "name": "the scroll is lost",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  field.scrollTop = top;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_render_keeps_a_long_text_where_it_was_scrolled"
+   ]
+  },
+  {
+   "name": "send leaves focus nowhere",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (state.room?.id === room.id && document.activeElement === document.body) document.querySelector(\"#message-body\")?.focus();\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_after_send_the_next_words_go_in_the_box"
+   ]
+  },
+  {
+   "name": "send takes someone from another field",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": " && document.activeElement === document.body) document.querySelector(\"#message-body\")",
+   "new": ") document.querySelector(\"#message-body\")",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_after_send_a_person_who_moved_to_another_field_stays_there"
+   ]
+  },
+  {
+   "name": "send reaches into another room",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "if (state.room?.id === room.id && document.activeElement === document.body)",
+   "new": "if (document.activeElement === document.body)",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_after_send_a_person_now_in_another_room_isnt_put_in_its_box"
+   ]
+  }
+ ]
+}

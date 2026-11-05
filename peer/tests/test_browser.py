@@ -1964,6 +1964,194 @@ def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_pe
             expect(editor.get_by_text("Unsaved changes", exact=True)).to_be_visible()  # the absence above is not vacuous
 
 
+def a_note(browser_peer, title="Late note", body="Hello."):
+    return browser_peer["app"].state.store.create_layer(browser_peer["users"]["patient"]["id"], {"title": title, "body": body})
+
+
+def open_the_note(page, layer):
+    page.get_by_role("link", name="My sharing layers").click()
+    page.get_by_role("button", name=layer["title"]).click()
+    expect(page.locator("section.editor").get_by_label("Layer title")).to_have_value(layer["title"])
+    page.wait_for_timeout(200)  # whatever the opening itself renders has landed
+
+
+def a_render_lands(page):
+    """What any answer does when it arrives: a save, an upload, a slow read. Each ends in render()."""
+    page.evaluate("render()")
+    page.wait_for_timeout(100)
+
+
+@pytest.mark.parametrize("field, before", [("Layer title", "Late note"), ("What do you want to share?", "Hello.")], ids=["title", "body"])
+def test_typing_on_after_a_late_render_reaches_the_field(browser_peer, field, before):
+    """Break caught: an answer landing while someone typed rebuilt the form and dropped focus, so the next words went
+    nowhere, with no error. It also made test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed lose its one
+    keystroke, 3 runs in 10, when opening a layer rendered twice."""
+    layer = a_note(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            open_the_note(page, layer)
+            box = page.locator("section.editor").get_by_label(field)
+            box.click()
+            page.keyboard.press("End")
+            page.keyboard.type(" my own")
+            a_render_lands(page)
+            page.keyboard.type(" words")
+            expect(box).to_have_value(f"{before} my own words")
+
+
+def test_a_late_render_keeps_the_selection(browser_peer):
+    """Both ends: typing over a selection replaces just what was selected, wherever the caret was."""
+    layer = a_note(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            open_the_note(page, layer)
+            box = page.locator("section.editor").get_by_label("What do you want to share?")
+            box.click()
+            box.evaluate("(field) => field.setSelectionRange(2, 4)")
+            a_render_lands(page)
+            page.keyboard.type("L")
+            expect(box).to_have_value("HeLo.")
+
+
+def test_a_late_render_keeps_a_long_text_where_it_was_scrolled(browser_peer):
+    layer = a_note(browser_peer, "Long note", "\n".join(f"line {n}" for n in range(300)))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            open_the_note(page, layer)
+            box = page.locator("section.editor").get_by_label("What do you want to share?")
+            box.click()
+            box.evaluate("(field) => { field.scrollTop = 900; }")
+            assert box.evaluate("(field) => field.scrollTop") == 900
+            a_render_lands(page)
+            assert page.locator("section.editor").get_by_label("What do you want to share?").evaluate("(field) => field.scrollTop") == 900
+
+
+def test_a_late_render_doesnt_pull_the_page_back_to_the_field(browser_peer):
+    """Someone who has scrolled away to read stays where they are, with the field still theirs."""
+    layer = a_note(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            open_the_note(page, layer)
+            page.locator("section.editor").get_by_label("Layer title").click()
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(100)
+            scrolled = page.evaluate("window.scrollY")
+            assert scrolled > 100
+            a_render_lands(page)
+            assert page.evaluate("document.activeElement.id") == "layer-title"
+            assert page.evaluate("window.scrollY") == scrolled
+
+
+def test_a_late_render_keeps_focus_on_a_dropdown_and_doesnt_break(browser_peer):
+    """A dropdown has no caret to put back, and the render must not throw trying."""
+    layer = a_note(browser_peer)
+    thrown = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: thrown.append(str(error)))
+            open_the_note(page, layer)
+            kind = page.locator("section.editor").get_by_label("Kind")
+            kind.focus()
+            focused = page.evaluate("document.activeElement.id")
+            assert focused
+            a_render_lands(page)
+            assert page.evaluate("document.activeElement.id") == focused
+            expect(page.locator("section.editor").get_by_label("Layer title")).to_have_value("Late note")
+            assert thrown == []
+
+
+def test_a_render_that_takes_the_field_away_doesnt_break(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Together", [users["family"]["id"]])
+    thrown = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: thrown.append(str(error)))
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.locator("#message-body").click()
+            page.evaluate("location.hash = 'layers'")
+            expect(page.get_by_role("heading", name="My sharing layers")).to_be_visible()
+            assert page.locator("#message-body").count() == 0
+            assert thrown == []
+            expect(page.locator(".notice.error")).to_have_count(0)  # the route load's catch would show a throw here
+
+
+def in_a_room_with_a_held_refresh(page, base, room):
+    """A room open, with the refresh after a send held: the moment a person may already have moved on."""
+    page.goto(f"{base}/#chats/{room['id']}")
+    page.reload()
+    expect(page.locator("#message-body")).to_be_visible()
+    held = []
+    page.route("**/api/sync", lambda route: held.append(route))
+    return held
+
+
+def test_after_send_the_next_words_go_in_the_box(browser_peer):
+    """Break caught: Send left focus nowhere, so a person typing on lost their next words."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Together", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator("#message-body")).to_be_visible()
+            page.locator("#message-body").fill("one")
+            page.get_by_role("button", name="Send").click()
+            expect(page.locator(".messages .message p", has_text="one")).to_be_visible()
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            page.keyboard.type("two")
+            expect(page.locator("#message-body")).to_have_value("two")
+
+
+def test_after_send_a_person_who_moved_to_another_field_stays_there(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Together", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            held = in_a_room_with_a_held_refresh(page, base, room)
+            page.locator("#message-body").fill("one")
+            page.get_by_role("button", name="Send").click()
+            for _ in range(100):
+                if held:
+                    break
+                page.wait_for_timeout(50)
+            assert held
+            elsewhere = page.locator("#home-search")
+            elsewhere.click()
+            page.keyboard.type("find")
+            for route in held:
+                route.continue_()
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            page.keyboard.type(" this")
+            expect(page.locator("#home-search")).to_have_value("find this")
+            expect(page.locator("#message-body")).to_have_value("")
+
+
+def test_after_send_a_person_now_in_another_room_isnt_put_in_its_box(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Together", [users["family"]["id"]])
+    other = store.create_room(users["patient"]["id"], "Elsewhere", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            held = in_a_room_with_a_held_refresh(page, base, room)
+            page.locator("#message-body").fill("one")
+            page.get_by_role("button", name="Send").click()
+            for _ in range(100):
+                if held:
+                    break
+                page.wait_for_timeout(50)
+            assert held
+            page.evaluate(f"location.hash = 'chats/{other['id']}'")
+            expect(page.locator(".messages, .composer").first).to_be_visible()
+            page.wait_for_function(f"location.hash.includes('{other['id']}')")
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            page.wait_for_timeout(400)
+            assert page.evaluate("document.activeElement.id") != "message-body"
+
+
 def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_peer):
     """Break caught: the owner cannot write a brief, it is carried without being chosen, or old messages come with it."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

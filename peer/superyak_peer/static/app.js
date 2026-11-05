@@ -1795,6 +1795,7 @@ function render() {
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
+  const place = focused?.id ? { start: focused.selectionStart, end: focused.selectionEnd, top: focused.scrollTop } : null;
   app.innerHTML = layout(view);
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
   // nav's own scroll moves, never the page's, so a render far down a page stays where it is.
@@ -1816,7 +1817,17 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  else if (place) returnToField(app.querySelector(focusSelector), place);
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
+}
+
+// A render rebuilds the page, and an answer can land while someone is typing. They keep their place: without this the
+// next words go nowhere, with no error. Never scrolls the page: they may have gone to read further down.
+function returnToField(field, { start, end, top }) {
+  if (!field) return;
+  field.focus({ preventScroll: true });
+  if (typeof start === "number") field.setSelectionRange(start, end);  // a dropdown or a checkbox has no caret
+  field.scrollTop = top;
 }
 
 async function refresh(message = null) {
@@ -2272,6 +2283,8 @@ async function sendMessage(form) {
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }
+  // The next words belong in the box, unless they've gone to another room or field while this was on its way.
+  if (state.room?.id === room.id && document.activeElement === document.body) document.querySelector("#message-body")?.focus();
 }
 
 function clearChatDrafts() {
