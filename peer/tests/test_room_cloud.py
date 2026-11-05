@@ -267,3 +267,19 @@ def test_what_the_server_says_about_a_mark_doesnt_promise_more_than_it_does():
     root = Path(__file__).resolve().parents[1]
     for path in (*(root / "superyak_peer").glob("*.py"), root / "API.md"):
         assert "from cloud models" not in path.read_text(), path.name
+
+
+def test_a_mark_is_cleared_only_by_its_setter_and_only_while_they_are_in_the_room(city):
+    """What the control says: nobody else lifts it, it stays when its setter leaves, and they can clear it again if they're
+    added back, since the mark moves to the room that continues this one."""
+    c = city
+    room = people_room(c, 'jenn')
+    c.store.mark_room(c.jenn['id'], room)
+    c.store.unmark_room(c.andy['id'], room)
+    assert marks(c.store, room) == {c.jenn['id']}
+    c.store.remove_participant(c.andy['id'], room, c.jenn['id'])
+    assert marks(c.store, room) == {c.jenn['id']}
+    assert refused(c.store.unmark_room, c.jenn['id'], room)[0] == 404
+    back = c.store.add_participants(c.andy['id'], room, [c.jenn['id']])['id']
+    assert marks(c.store, back) == {c.jenn['id']}
+    assert c.store.unmark_room(c.jenn['id'], back)['cloud'] == {'count': 0, 'mine': False}
