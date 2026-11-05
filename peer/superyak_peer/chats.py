@@ -1,5 +1,5 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
-from .common import REPLACED_ROOMS, REPLACED_SEND, Problem, text, ids, uid, require
+from .common import REPLACED_ROOMS, REPLACED_SEND, ClosureToSave, Problem, text, ids, uid, require
 from .tickets import DEFER_BOUND_SECONDS
 
 # The `since` read's query: it walks the existing events_kind_room_id index (kind, resource_id, id) in id order.
@@ -43,13 +43,23 @@ class Chats:
         with self.transaction() as db:
             return self._create_room(db, actor, title, ids(member_ids or []))
 
+    def _listed_rooms(self, db, actor):
+        rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+        moderating = self._moderating(db, actor)
+        for room in rooms:
+            if room['id'] in moderating:
+                room['moderating'] = moderating[room['id']]
+        return rooms
+
     def list_rooms(self, actor):
-        with self.transaction() as db:
-            rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
-            moderating = self._moderating(db, actor)
-            for room in rooms:
-                if room['id'] in moderating:
-                    room['moderating'] = moderating[room['id']]
+        """A read, so in WAL mode it holds neither the dispatch gate nor the write lock, and reads and writes don't queue behind it:
+        a timed run on a scratch store found this list the gate's largest holder."""
+        try:
+            with self.reading() as db:
+                rooms = self._listed_rooms(db, actor)
+        except ClosureToSave:
+            with self.transaction() as db:
+                rooms = self._listed_rooms(db, actor)
         rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
