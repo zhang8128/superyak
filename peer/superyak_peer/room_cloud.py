@@ -40,8 +40,14 @@ class RoomCloud:
         return {'cloud': cloud} if cloud['count'] else {}
 
     def _has_ship(self, db, room_id):
+        """A ship on this home, or a member on another home that this home itself lists as a ship (an owner trust made the
+        contact, as contacts() reads it). Any other remote contact may be a ship too, and this home can't tell, so the
+        mark's words say "on this home"; this is only what it can tell."""
         return db.execute("SELECT 1 FROM room_members JOIN users ON users.id=room_members.user_id "
-                          "WHERE room_members.room_id=? AND users.kind='ship'", (room_id,)).fetchone() is not None
+                          "WHERE room_members.room_id=? AND users.kind='ship' UNION ALL "
+                          "SELECT 1 FROM remote_room_members r WHERE r.room_id=? AND "
+                          "EXISTS(SELECT 1 FROM trust_confirmations t WHERE t.contact_id=r.contact_id) LIMIT 1",
+                          (room_id, room_id)).fetchone() is not None
 
     def _refuse_ship_in_marked(self, db, room_id, member_ids):
         """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't tell a
