@@ -178,7 +178,7 @@ function layout(content) {
         ${state.connector ? navLink("apps", "Connected apps", "⇄") : ""}
         ${state.imprints ? navLink("accounts", "Accounts", "☺") : ""}
       </nav>
-      <div class="sidebar-foot">Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer.</div>
+      <div class="sidebar-foot">Whoever runs this home, who may not be you, can read everything stored on it, and so can any AI agent they run on its computer.</div>
     </aside>
     <div class="main-column">
       <header class="topbar">
@@ -235,7 +235,7 @@ function showLogin(message = "") {
         </form>
         ${state.demoAccounts.length ? '</details>' : ''}
         <p class="meta login-help">This home is run by its owner, who can read what's stored here.</p>
-        <details class="invitation-redeem"><summary>Use an invitation</summary><p>The person who runs this home gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><p class="meta" data-testid="before-an-account">Whoever runs this home, and any AI agent they run on its computer, can read what's stored here. It's a prototype: please don't put real patient information in it yet.</p><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
+        <details class="invitation-redeem"><summary>Use an invitation</summary><p>The person who runs this home gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><p class="meta" id="before-an-account" data-testid="before-an-account">Whoever runs this home, and any AI agent they run on its computer, can read what's stored here. It's a prototype: please don't put real patient information in it yet.</p><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" aria-describedby="before-an-account" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
         <p class="meta login-help">No account? The person who runs this home invites people: ask them for an invitation.</p>
       </section>
     </div>
@@ -668,7 +668,7 @@ function roomBrief(room) {
   const editor = edit
     ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
     : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
-  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this. A ship aboard, or an app a member connected, sends it to its AI company.</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
+  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
 // Work board 5.2: the room's board, read from its own route and never from messages. A received room has none.

@@ -232,26 +232,32 @@ def test_the_old_promises_are_gone_from_every_screen():
     static = Path(__file__).resolve().parents[1] / "superyak_peer" / "static"
     words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html", static / "consent.html"))
     for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
-                    r"(?i)\b(nobody|no one) can (see|read|open)\b"):
+                    r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
+                    r"(?i)\bstays? private to\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
+                    r"(?i)\bonly your account\b"):
         assert not re.search(promise, words), promise
 
 
 def test_a_signed_in_person_is_told_who_can_read_where_they_work(browser_peer):
     """The inside labels lean on this. The sidebar is hidden on a phone, so Home says it too."""
-    who = "Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer."
+    who = "Whoever runs this home, who may not be you, can read everything stored on it, and so can any AI agent they run on its computer."
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             expect(page.get_by_test_id("who-can-read")).to_have_text(who)
             expect(page.locator(".sidebar-foot")).to_have_text(who)
             assert "Private chat" not in page.locator("main").inner_text()
-        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
-            expect(page.get_by_test_id("who-can-read")).to_be_visible()
+        for width, height in ((390, 844), (375, 667), (320, 568)):  # the fixed bar covers the foot of a small screen
+            with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": width, "height": height}) as (page, _):
+                line = page.get_by_test_id("who-can-read").bounding_box()
+                assert line["y"] + line["height"] <= page.locator(".sidebar").bounding_box()["y"]
 
 
 def test_a_saved_draft_says_what_no_other_account_can_do(browser_peer):
-    """The sentence meant for drafts sat in a branch nothing reached, so it's asserted on a rendered draft."""
+    """The sentence meant for drafts sat in a branch nothing reached, so it's asserted on a rendered draft, beside the
+    source panel's own sentence on the same page."""
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
         page.get_by_role("link", name="My sharing layers").click()
+        expect(page.get_by_text("No other account can open imported records.")).to_be_visible()
         page.get_by_role("button", name="New layer").click()
         page.get_by_label("What do you want to share?").fill("Fictional words.")
         page.get_by_role("button", name="Save private draft").click()
@@ -263,7 +269,7 @@ def test_a_saved_draft_says_what_no_other_account_can_do(browser_peer):
     ("file", "Files and datasets", False),
 ])
 def test_a_source_only_says_no_other_account_where_that_holds(browser_peer, kind, label, says):
-    """A file in a file source can be attached to a release, so an anonymous visitor could fetch what its page called
+    """A file in a file source can be attached to a release, so from a public release an anonymous visitor could fetch what its page called
     no other account's. Only records keep the claim."""
     name = "Source " + uuid.uuid4().hex[:6]
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
@@ -330,8 +336,10 @@ def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_p
             facts = page.get_by_test_id("before-an-account")
             expect(facts).to_have_text("Whoever runs this home, and any AI agent they run on its computer, can read what's "
                                        "stored here. It's a prototype: please don't put real patient information in it yet.")
-            # Above the new password, so a phone's keyboard or a screen reader starting at that field doesn't pass them by.
+            # Above the new password, so a phone's keyboard doesn't cover them, and tied to it, since a screen reader starts
+            # at that field and would otherwise read on past them.
             assert facts.bounding_box()["y"] < page.locator("#new-password").bounding_box()["y"]
+            assert page.locator("#new-password").get_attribute("aria-describedby") == "before-an-account"
         finally:
             context.close()
             browser.close()
@@ -417,6 +425,8 @@ def test_source_library_import_pause_and_private_review(browser_peer):
         assert browser_peer['app'].state.data_sources.list(actor)['sources'][0]['item_count'] == 0
         page.get_by_role('button', name='Import privately', exact=True).click()
         expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
+        expect(page.locator('.evidence-card .eyebrow', has_text='Source record')).to_have_text(
+            'Source record · No other account can open it', ignore_case=True)
         page.get_by_role('button', name='Pause imports', exact=True).click()
         expect(page.get_by_role('button', name='Resume imports', exact=True)).to_be_visible()
         expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
@@ -2082,6 +2092,7 @@ def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(brow
             open_new_layer(page)
             page.get_by_label("Kind").select_option("instructions")
             expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)
+            expect(page.get_by_text("Only your own ships get these, and only once you turn on a version. A ship sends them to its AI company.")).to_be_visible()
             page.get_by_label("Layer title").fill("House rules")
             page.get_by_label("What do you want to share?").fill("Run the tests first.")
             page.get_by_role("checkbox", name="Serenity").check()
@@ -2699,6 +2710,20 @@ def test_opening_a_room_from_the_chat_list_loads_its_board_and_a_new_room_opens_
             page.get_by_role("link", name="Made after load").click()
             expect(page.get_by_role("heading", name="Made after load", level=2)).to_be_visible()
             expect(page.locator(".room-board .board-item", has_text="spec:fresh")).to_be_visible()
+
+
+def test_a_marked_rooms_brief_doesnt_say_a_ship_sends_it_on(browser_peer):
+    """No ship can be aboard a marked room and a connected app is refused, so that half of the brief's line would
+    contradict the mark beside it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Kept away", [users["family"]["id"]])
+    store.mark_room(users["patient"]["id"], room["id"])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        brief = page.locator(".room-brief")
+        expect(brief).to_contain_text("Members on other homes don't get this.")
+        expect(brief).not_to_contain_text("sends it to its AI company")
 
 
 def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
