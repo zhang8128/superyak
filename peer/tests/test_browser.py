@@ -2028,6 +2028,51 @@ def test_a_brief_answered_after_the_session_ended_leaves_no_editor_stuck(browser
                 page.evaluate("(me) => { state.me = me; state.briefEdit = null; }", me)
 
 
+def signed_out_as_a_read_answers(page, peer, held, *, next_signs_in):
+    """A read was out as the person signed out, and it answers on the sign-in page or once the next person is in."""
+    page.get_by_role("button", name="Account and sign out").click()
+    page.get_by_role("button", name="Sign out", exact=True).click()
+    expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+    if next_signs_in:
+        page.get_by_label("Username", exact=True).fill("organizer")
+        page.get_by_label("Password", exact=True).fill(peer["password"])
+        page.get_by_role("button", name="Sign in").click()
+        expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+    held[0].continue_()
+    reads_settled(page)
+    page.wait_for_timeout(200)  # an announcement lands on the next frame
+    assert page.evaluate("state.flash") is None
+    assert page.evaluate("document.querySelector('#announcer').textContent") == ""
+    expect(page.get_by_text("Room X")).to_have_count(0)
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_a_brief_saved_as_the_person_signs_out_names_no_room_to_the_next(browser_peer, next_signs_in):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+            page.evaluate("render()")
+            page.locator("#brief-body").fill("The plan for X")
+            held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))  # the read after the save
+            page.get_by_role("button", name="Save brief").click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_a_mark_made_as_the_person_signs_out_names_no_room_to_the_next(browser_peer, next_signs_in):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner)
+            held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))  # refresh's read, after the mark
+            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+
+
 def test_a_read_refused_at_an_address_for_a_session_that_ended_goes_to_sign_in(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:

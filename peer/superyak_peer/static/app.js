@@ -1894,12 +1894,13 @@ function render() {
 }
 
 async function refresh(message = null) {
+  const who = identityKey(state.me);
   try {
     if (!await loadData()) return;
     await loadRoute();
     await loadDocking();
     await loadImprintPreview();
-    if (message) setFlash(message);
+    if (message && identityKey(state.me) === who) setFlash(message);  // not the next person's news
     render();
   } catch (error) {
     if (error.status === 401) showLogin("Your session ended. Sign in again; text in an open form has not been sent.");
@@ -2305,6 +2306,7 @@ async function saveBrief(form) {
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
+  if (identityKey(state.me) !== who) return;
   setFlash(aboutRoom(room, body.trim() ? "Room brief saved." : "Room brief removed."));
   render();
 }
