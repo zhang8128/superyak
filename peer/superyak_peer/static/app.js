@@ -1980,7 +1980,7 @@ async function uploadFile(input) {
 let revisionsRead = 0, revisionsTaken = 0;
 async function loadRevisions(id) {
   const read = ++revisionsRead;
-  const current = () => routeParts().route === "layers" && state.selectedLayerId === id;
+  const current = () => state.me && routeParts().route === "layers" && state.selectedLayerId === id;
   try {
     const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
     if (!current() || read < revisionsTaken) return false;
