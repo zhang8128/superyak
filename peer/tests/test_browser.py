@@ -214,7 +214,7 @@ def test_no_screen_promises_more_than_the_code_does(browser_peer):
     says who can read what's stored. So does "private chats" where an admin's roles are said not to open them: that
     is about what an account can do."""
     static = Path(__file__).resolve().parents[1] / "superyak_peer" / "static"
-    words = "\n".join((static / name).read_text() for name in ("app.js", "research.js", "index.html"))
+    words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html"))
     for promise in ("Nobody can see", r"Only you\b", "Private room", "Received private room", "Private conversation",
                     "private message", r"private chat\b", "private conversation"):
         assert not re.search(promise, words), promise
