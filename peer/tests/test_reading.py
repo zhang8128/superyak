@@ -375,3 +375,40 @@ def test_identity_is_not_created_without_the_gate(tmp_path):
     store._identity = None
     with closing(sqlite3.connect(store.db_path)) as raw:
         assert store._station_identity(raw).peer_id == made.peer_id
+
+
+def a_room(store):
+    with store.reading() as db:
+        actor = db.execute("SELECT id FROM users WHERE username='andy'").fetchone()[0]
+    return actor, store.create_room(actor, 'A room')
+
+
+def test_a_room_list_takes_no_gate_in_wal(tmp_path):
+    """The bound's measure: this list was the gate's largest holder. In WAL it waits for nothing and holds nothing."""
+    store = store_in(tmp_path, 'wal')
+    actor, room = a_room(store)
+    before = store.list_rooms(actor)
+    with gate_and_write_held(store):
+        listed, took = timed(lambda: store.list_rooms(actor))
+    assert listed == before and [r['id'] for r in listed] == [room['id']] and took < 1.0
+
+
+def test_a_room_list_says_the_same_in_rollback_mode_and_waits_its_turn(tmp_path):
+    store = store_in(tmp_path, 'rollback')
+    actor, room = a_room(store)
+    before = store.list_rooms(actor)
+    assert [r['id'] for r in before] == [room['id']]
+    started = threading.Event()
+
+    def listed():
+        started.set()
+        return store.list_rooms(actor)
+    results = []
+    with gate_and_write_held(store):
+        worker = threading.Thread(target=lambda: results.append(listed()))
+        worker.start()
+        assert started.wait(5)
+        time.sleep(0.2)
+        assert not results  # rollback mode: reading() still takes the gate
+    worker.join(10)
+    assert results == [before]

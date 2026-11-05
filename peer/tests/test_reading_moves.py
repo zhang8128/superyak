@@ -46,6 +46,8 @@ MOVED_READS = (
     'federate.Federate._pushed',
     'room_board.RoomBoard.board_counts',
     'room_board.RoomBoard.board_view',
+    'chats.Chats.list_rooms',
+    'peer_store.PeerStore.remote_rooms',
     'layers.Layers.get_layer',
     'layers.Layers.list_layers',
     'layers.Layers.layer_revisions',
@@ -76,6 +78,8 @@ CALLS = {
     'layers.Layers.get_layer': lambda s: s.store.get_layer(s.ids['andy'], s.layer),
     'layers.Layers.list_layers': lambda s: s.store.list_layers(s.ids['andy']),
     'layers.Layers.layer_revisions': lambda s: s.store.layer_revisions(s.ids['andy'], s.layer),
+    'chats.Chats.list_rooms': lambda s: s.store.list_rooms(s.ids['andy']),  # not serenity: its quiet breakout's closure is due, which goes back under the gate
+    'peer_store.PeerStore.remote_rooms': lambda s: s.store.remote_rooms(s.ids['andy']),
 }
 
 
@@ -115,6 +119,9 @@ def busy_wal_store(tmp_path):
         paired(other, user, fed.card(andy))
     layer = store.create_layer(andy, {'body': 'hello', 'audience_users': list(contacts.values())})['id']
     store.activate_layer(andy, layer, 1)
+    pat_store, pat_user, pat_fed = peers['push']
+    pat_store.create_room(pat_user, 'Across', [pat_store.contacts(pat_user)[-1]['id']])
+    pat_fed.sync_once(send=lambda card, prepare: fed.receive(prepare()))  # a room received from another home
     fed.collect()  # an outbox row for each peer
     clock.at = NOW
     store.start_docking('voyager', 'legion-go')  # waiting for its owner: a pending docking
@@ -122,6 +129,10 @@ def busy_wal_store(tmp_path):
     store.post_item(andy, hands, 'wal-build', 'Build the WAL mode', 'build')
     store.claim(ids['serenity'], hands, 'wal-build', 'on it')
     store.make_moderate_grant(andy, ids['tardis'], hands)
+    store.make_moderate_grant(andy, ids['defiant'], hands)
+    fresh = store.open_breakout(ids['defiant'], 'Fresh talk', ['tardis'])['id']  # open, and not due
+    finished = store.open_breakout(ids['defiant'], 'Finished talk', ['tardis'])['id']
+    store.close_breakout(ids['defiant'], finished)  # closed by its owner, so a read has nothing to save
     fed.make_due()  # every peer due now, and one sync request counted
     staged = b'{"kind": "imprint-request"}'
     (store.data_dir / 'imprints' / ('b' * 32)).mkdir(parents=True)
@@ -137,18 +148,34 @@ def busy_wal_store(tmp_path):
                    "VALUES('grant', ?, 'claude', 'claude.ai', ?, 'rooms.read', ?, ?)", (andy, json.dumps([hands]), NOW, NOW + DAY))
         grant = db.execute("SELECT * FROM connector_grants WHERE id='grant'").fetchone()
         access = store._mint(db, grant, 'rooms.read', RESOURCE, NOW)['access_token']
-    seeded = SimpleNamespace(store=store, fed=fed, federate=Federate(fed), ids=ids, token=signed_in['token'],
+    defiant_list = store.list_rooms(ids['defiant'])
+    seeded = SimpleNamespace(store=store, fed=fed, federate=Federate(fed), ids=ids, token=signed_in['token'], defiant_list=defiant_list, fresh=fresh, finished=finished,
                              device=signed_in['device'], ship_key=ships['serenity'][1], access=access, layer=layer,
                              pull_peer=peers['mac'][2].identity.peer_id)
     with gate_and_write_held(store):
         yield seeded
 
 
+def test_a_list_with_every_kind_of_room_takes_no_gate_when_no_closure_is_due(busy_wal_store):
+    """An open breakout, an owner-closed one, a replaced room's successor and a moderator grant, under the held gate. Only a
+    closure that's due may go back under the gate: a guard that fires for any unsaved breakout would wait out the hold here."""
+    seeded, done = busy_wal_store, {}
+    worker = threading.Thread(target=lambda: done.update(zip(('value', 'took'), timed(lambda: seeded.store.list_rooms(seeded.ids['defiant'])))), daemon=True)
+    worker.start()
+    worker.join(2)
+    assert not worker.is_alive(), 'the list waited for the gate'
+    assert done['value'] == seeded.defiant_list and done['took'] < 1.0
+    listed = {room['id']: room for room in done['value']}
+    assert listed[seeded.fresh]['breakout']['closed'] is None and listed[seeded.finished]['breakout']['closed'] is not None
+    assert any('moderating' in room for room in done['value'])
+
+
 @pytest.mark.parametrize('name', MOVED_READS)
 def test_each_moved_read_runs_while_the_gate_and_a_write_are_held(busy_wal_store, name):
     """D3 rule 2: with the gate and an open write held on another thread, the read answers within 200 ms, leaves every
     table as it was and changes no file but the -wal and -shm. A function still on transaction() waits at the join; one
-    that writes (a lazy closure, a last_used), creates a file or opens its own transaction fails here too."""
+    that writes (a lazy closure, a last_used), creates a file or opens its own transaction fails here too. A room list is
+    the one exception by design: a breakout closure that's due sends it back under the gate once, to save it (spec D3)."""
     seeded = busy_wal_store
     before, done = (tables(seeded.store), files(seeded.store)), {}
 

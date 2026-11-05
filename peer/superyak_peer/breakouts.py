@@ -1,7 +1,7 @@
 """Breakout rooms (docs/superpowers/specs/2026-10-11-breakout-rooms-design.md): a ship opens a room of its own with
 its sibling ships, ones a person already put together in a room. Ships only (D12): no person, and never the system
 author, is a member. The opening ship owns the room; owning it is never a person owner's authority (S7)."""
-from .common import REPLACED_ROOMS, Problem
+from .common import REPLACED_ROOMS, ClosureToSave, Problem
 from .ships import safe_line
 
 BREAKOUT_SCHEMA = '''
@@ -46,6 +46,8 @@ class Breakouts:
         activity = max(row['created'], latest or 0.0)
         if self.clock() - activity < QUIET_SECONDS:
             return None
+        if self.in_reading():  # a snapshot can't save it: the caller looks again under the gate
+            raise ClosureToSave()
         return self._close_breakout(db, room_id, activity + QUIET_SECONDS)
 
     def _close_breakout(self, db, room_id, when):

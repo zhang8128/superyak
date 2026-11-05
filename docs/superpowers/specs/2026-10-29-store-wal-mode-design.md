@@ -163,6 +163,15 @@ Functions move to `reading()` only from this list:
 `board_counts` already calls `_inbox_budget` outside the gate today (room_board.py:195), so the budget's shared memory
 gets its own `threading.Lock` in phase 1, which closes that race for both callers.
 
+**Added 2026-11-04: the room list.** `list_rooms` and `remote_rooms` move too, ahead of phase 2. A timed run on a
+scratch store found the room list the gate's largest holder. `list_rooms` can
+still save a breakout's closure, so the rule below for reads that write lazily holds this way: inside `reading()` a closure
+that's due raises `ClosureToSave`, and the list reads again in a transaction, which saves it, with the same writes the
+gated list made. `get_room`, `room_board`, `unread` and `mentions` stay gated until phase 2. `remote_rooms` reaches
+`_station_identity`: in WAL, with the identity file gone, a list raises where rollback mode would mint one if no signed
+record stands. No route reaches that, since `create_app` makes the file first. Only a person's `GET /api/chats` is gate-free
+as a whole route: a ship's still waits at `ship_for_key`, and `/api/home` still gates `list_spaces` and `shared_layers`.
+
 These stay gated: health (S1, below); `station_pending`, whose staged-file reads must stay gated and gain nothing from
 a split; `directory` (`presence.py`), until `_inbox_budget`'s lock lands and its gate-held test passes, when it may
 move by name in that commit; every lessons function, because `lessons_list` reaches
