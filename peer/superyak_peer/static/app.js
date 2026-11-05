@@ -943,7 +943,7 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
   return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -1750,12 +1750,16 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
+      const wanted = state.selectedChatId;
       try {
-        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
-        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
-        await loadBoard(state.room);
+        const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
+        const room = paged ? await refreshRoom(state.room) : await loadRoom(wanted);
+        if (state.selectedChatId === wanted) {  // or a late answer for a room the person has left
+          state.room = room;
+          await loadBoard(state.room);
+        }
       }
-      catch (_) { state.room = null; }
+      catch (_) { if (state.selectedChatId === wanted) state.room = null; }
     } else {
       state.room = null;
     }
@@ -2072,8 +2076,11 @@ async function confirmWithdraw() {
 
 async function openChat(id) {
   state.selectedChatId = id;
-  state.room = await loadRoom(id);
+  const room = await loadRoom(id);
+  if (state.selectedChatId !== id) return;  // a late answer for a room the person has left
+  state.room = room;
   await loadBoard(state.room);
+  if (state.selectedChatId !== id) return;
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
   state.transitionNote = null;
@@ -2228,7 +2235,9 @@ async function removeParticipant(id) {
 }
 
 async function sendMessage(form) {
-  const room = state.room;
+  // The room on screen, not state.room: while the next room loads, state.room is already that room and this composer is still
+  // the old one. A person's words go where they were looking.
+  const room = state.room?.id === form.dataset.room ? state.room : { id: form.dataset.room };
   const textarea = form.elements.body;
   const body = textarea.value;
   if (!body.trim()) return;
@@ -2253,6 +2262,11 @@ async function sendMessage(form) {
     if (textarea.isConnected && textarea.value === body) textarea.value = "";
     sessionStorage.removeItem(draftKey(room.id));
     if (status.isConnected) status.textContent = "Message saved. Refreshing room…";
+  }
+  if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're opening renders itself
+    if (status.isConnected) status.textContent = "Message saved";
+    announce("Message saved");
+    return;
   }
   if (state.room?.id === room.id) {
     const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
@@ -2936,10 +2950,11 @@ document.addEventListener("input", (event) => {
     entry.text = event.target.value;
   }
   if (event.target.closest("#layer-form")) rememberLayerForm();
-  if (event.target.id === "message-body" && state.room) {
-    const previous = readChatDraft(state.room.id);
+  if (event.target.id === "message-body") {
+    const roomId = event.target.form.dataset.room;  // the room on screen: see sendMessage
+    const previous = readChatDraft(roomId);
     const next = { body: event.target.value, clientId: previous.body === event.target.value ? previous.clientId : null };
-    sessionStorage.setItem(draftKey(state.room.id), JSON.stringify(next));
+    sessionStorage.setItem(draftKey(roomId), JSON.stringify(next));
   }
 });
 

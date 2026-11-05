@@ -673,6 +673,74 @@ def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
             patient.screenshot(path=str(ARTIFACTS / "sharing-layer-desktop.png"))
 
 
+def two_rooms_with_x_open(page, store, owner):
+    x, y = store.create_room(owner, "Room X"), store.create_room(owner, "Room Y")
+    page.goto(page.url.split("#")[0])
+    page.get_by_role("link", name="Chats").first.click()
+    page.get_by_role("button", name="Room X").click()
+    expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+    return x, y
+
+
+def bodies(page, room):
+    return page.evaluate("id => fetch(`/api/chats/${id}?limit=50`).then(r => r.json())", room["id"])["messages"]
+
+
+def test_a_message_goes_to_the_room_on_screen_while_another_opens(browser_peer):
+    """While the next room's board loads, the old room and its composer are still on screen. Send has to mean the room the person
+    is looking at, or their words reach people they didn't mean to tell. So does what they type: it's kept as that room's draft."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            box = page.get_by_role("textbox", name="Message", exact=True)
+            box.fill("Meant for X")
+            held = []
+            page.route(f"**/api/chats/{y['id']}/board", lambda route: held.append(route))
+            page.get_by_role("button", name="Room Y").click()
+            page.wait_for_function("() => state.room && state.room.title === 'Room Y'")
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()  # still on screen: the board is held
+            box.press_sequentially(", still")  # typed mid-switch: it's X's words
+            assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X, still"
+            assert page.evaluate("(id) => readChatDraft(id).body", y["id"]) == ""
+            page.get_by_role("button", name="Send message").click()
+            page.wait_for_function("(id) => fetch(`/api/chats/${id}?limit=50`).then(r => r.json()).then(room => room.messages.length === 1)", arg=x["id"])
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # and Room Y isn't drawn before its board has come
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            for route in held:
+                route.continue_()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            assert [m["body"] for m in bodies(page, x)] == ["Meant for X, still"]
+            assert bodies(page, y) == []
+            assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == ""  # sent, so nothing to keep
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value("")
+
+
+def test_a_late_answer_for_a_room_the_person_left_doesnt_take_them_back(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = []
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            pattern = re.compile(rf"/api/chats/{x['id']}(\?|$)")
+            page.route(pattern, lambda route: held.append(route))
+            page.get_by_role("button", name="Room X").click()
+            deadline = time.monotonic() + 5
+            while not held and time.monotonic() < deadline:
+                page.wait_for_timeout(20)
+            assert held, "the read for Room X never left"
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            for route in held:
+                route.continue_()
+            page.wait_for_timeout(300)  # a stale answer has had its chance
+            assert page.evaluate("state.room.title") == "Room Y"
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            assert y["id"] in page.evaluate("location.hash")
+
+
 def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_peer):
     """Break caught: a network error drops text or exposes old messages to a new member."""
     with sync_playwright() as playwright:
