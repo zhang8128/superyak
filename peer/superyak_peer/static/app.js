@@ -1867,6 +1867,9 @@ function rememberLayerForm(form = document.querySelector("#layer-form")) {
     dirty: true,
     conflict: previous?.conflict || false,
     generation: (previous?.generation || 0) + 1,
+    // The version these words were begun from. A refresh gives the page the newest draft, and if the save went by that, it would
+    // overwrite another tab's words with no conflict.
+    baseVersion: previous?.baseVersion ?? layer.version,
   };
   state.layerEdits[layer.id] = edit;
   return edit;
@@ -1886,12 +1889,12 @@ async function saveLayer(form) {
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
-    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: layer.version, ...values } });
+    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: submitted.baseVersion, ...values } });
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     const newerEdits = current && current.generation !== submitted.generation;
     if (!newerEdits) delete state.layerEdits[layer.id];
-    else current.conflict = false;
+    else { current.conflict = false; current.baseVersion = saved.version; }
     setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
@@ -1962,6 +1965,7 @@ async function uploadFile(input) {
       dirty: true,
       conflict: current?.conflict || false,
       generation: (current?.generation || 0) + 1,
+      baseVersion: current?.baseVersion ?? savedLayer.version,
     };
     if (state.selectedLayerId === layerId) {
       render();
@@ -2000,6 +2004,7 @@ async function resolveConflict() {
     if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
     else if (current) {
       current.conflict = false;
+      current.baseVersion = saved.version;
       Object.assign(current.values, { audience_users: saved.audience_users, audience_spaces: saved.audience_spaces, public: saved.public });
     }
     const same = (a = [], b = []) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
@@ -2032,6 +2037,8 @@ function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
   // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
   const layer = state.home?.layers?.find((item) => item.id === layerId);
   if (layer && layer.version === answer.layer_version_before) layer.version = answer.layer_version;
+  const edit = state.layerEdits[layerId];
+  if (edit?.baseVersion === answer.layer_version_before) edit.baseVersion = answer.layer_version;
   // The form on screen first: a Save before the page's next draw reads these boxes.
   const form = document.querySelector("#layer-form");
   if (form?.dataset.layerId === layerId) {

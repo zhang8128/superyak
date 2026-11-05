@@ -3021,6 +3021,58 @@ def test_a_second_tab_saving_its_text_doesnt_undo_a_revoke_made_in_the_first(bro
     assert saved["audience_users"] == [] and saved["public"] is False
 
 
+def test_a_refresh_doesnt_hide_a_real_conflict_with_another_tab(browser_peer):
+    """Any refresh gives the page the newest draft. The words on screen were begun from an older one, so their Save still meets
+    the other tab's, and doesn't overwrite it."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": store.get_layer(patient, layer["id"])["version"], "body": "The other tab's words"})
+            page.evaluate("refresh()")
+            page.wait_for_load_state("domcontentloaded")
+            until(page, lambda: page.evaluate("state.home.layers.find((item) => item.id === state.selectedLayerId).body") == "The other tab's words", "the refresh never landed")
+            expect(body).to_have_value("Released words, and more not saved yet")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+            page.get_by_role("button", name=re.compile("Save my text")).click()  # their choice, and then it's theirs
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text never saved")
+
+
+def test_two_saves_in_a_row_arent_a_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the first save")
+            expect(page.locator(".notice").first).to_have_text("Private draft saved")
+            body.fill("And a second go")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: store.get_layer(patient, layer["id"])["body"] == "And a second go", "the second save")
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_have_count(0)
+
+
+def test_words_typed_while_a_save_is_out_save_after_it_with_no_false_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            puts = []
+            page.route(f"**/api/layers/{layer['id']}", lambda route: puts.append(route) if route.request.method == "PUT" and not puts else route.continue_())
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: puts, "the save never left")
+            body.press("End")
+            body.press_sequentially(", still typing")
+            puts[0].continue_()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the first save")
+            page.wait_for_timeout(200)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "still typing" in store.get_layer(patient, layer["id"])["body"], "the later words never saved")
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_have_count(0)
+
+
 @pytest.mark.parametrize("narrows", [True, False])
 def test_a_revoke_doesnt_hide_a_real_conflict_with_another_tab(browser_peer, narrows):
     """Another tab saved first. Whether or not the revoke changes the draft, this tab's Save has to meet that, not overwrite it."""
