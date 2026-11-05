@@ -23,6 +23,7 @@ const state = {
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
+  revisionsOf: null,
   room: null,
   selectedLayerId: null,
   selectedSharedId: null,
@@ -337,6 +338,7 @@ function editorState(layer, active) {
 }
 
 function revisionHistory() {
+  if (state.revisionsOf !== state.selectedLayerId) return `<p class="meta">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
   return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
@@ -1738,10 +1740,9 @@ async function loadRoute() {
   if (route === "layers") {
     state.selectedLayerId = id || state.selectedLayerId || state.home.layers[0]?.id || null;
     if (state.selectedLayerId && state.home.layers.some((item) => item.id === state.selectedLayerId)) {
-      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);
+      await loadRevisions(state.selectedLayerId);
     } else {
       state.selectedLayerId = null;
-      state.revisions = [];
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
@@ -1973,11 +1974,29 @@ async function uploadFile(input) {
   }
 }
 
+// One layer's release history, kept only while that layer is still the open one: an answer for a layer the person has
+// left, good or bad, changes nothing here. revisionHistory shows only what's held for the layer on screen.
+async function loadRevisions(id) {
+  try {
+    const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
+    if (state.selectedLayerId !== id) return;
+    state.revisions = revisions;
+    state.revisionsOf = id;
+  } catch (error) {
+    if (state.selectedLayerId === id) throw error;
+  }
+}
+
 async function openLayer(id) {
   state.selectedLayerId = id;
   location.hash = `layers/${pathPart(id)}`;
-  state.revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
-  state.flash = null;
+  try {
+    await loadRevisions(id);
+    if (state.selectedLayerId !== id) return;  // the layer now open renders itself
+    state.flash = null;
+  } catch (error) {
+    setFlash(error.message, true);
+  }
   render();
 }
 

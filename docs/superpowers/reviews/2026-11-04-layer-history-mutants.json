@@ -1,0 +1,104 @@
+{
+ "mutants": [
+  {
+   "name": "the panel shows whatever is held",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (state.revisionsOf !== state.selectedLayerId) return `<p class=\"meta\">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "a late answer lands",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (state.selectedLayerId !== id) return;\n    state.revisions = revisions;\n",
+   "new": "    state.revisions = revisions;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_history_answer_doesnt_land_on_the_layer_now_open"
+   ]
+  },
+  {
+   "name": "whose history is never recorded",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    state.revisionsOf = id;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_history_answer_doesnt_land_on_the_layer_now_open"
+   ]
+  },
+  {
+   "name": "a late failure speaks",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (state.selectedLayerId === id) throw error;\n",
+   "new": "    throw error;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_failure_for_a_layer_the_person_left_says_nothing"
+   ]
+  },
+  {
+   "name": "a failure for the open layer is swallowed",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (state.selectedLayerId === id) throw error;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "the route load reads raw",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "      await loadRevisions(state.selectedLayerId);\n",
+   "new": "      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "a failed open is thrown away",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "    throw error;\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "a failed open says nothing",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_opening_the_layer_already_open_says_when_its_history_cant_be_read"
+   ]
+  },
+  {
+   "name": "a late answer clears and renders",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (state.selectedLayerId !== id) return;  // the layer now open renders itself\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_answer_doesnt_clear_what_the_open_layer_said"
+   ]
+  },
+  {
+   "name": "a good open keeps the old error",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    state.flash = null;\n  } catch (error) {\n    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "  } catch (error) {\n    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  }
+ ]
+}
