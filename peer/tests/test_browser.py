@@ -1393,6 +1393,83 @@ def test_typing_on_as_the_next_room_draws_never_reaches_its_box(browser_peer):
             assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "first half"
 
 
+def test_a_board_write_answered_after_the_next_room_opens_names_its_room_and_leaves_that_rooms_item_alone(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x = store.create_room(owner, "Room X", [])
+            y = store.create_room(owner, "Room Y", [])
+            for room in (x, y):
+                store.post_item(owner, room["id"], "spec:same", "Same key", "spec")
+            page.goto(page.url.split("#")[0] + f"#chats/{x['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            settle(page, ready=panel)
+            watch_reads(page)  # after the reload: what it cancels never reports back
+            reads_settled(page)
+            panel.get_by_role("button", name="Drop spec:same").click()
+            confirm = panel.get_by_role("button", name="Yes, drop spec:same")
+            expect(confirm).to_be_visible()
+            settle(page)
+            drop = held_routes(page, f"**/api/chats/{x['id']}/board/drop")
+            confirm.click()
+            wait_for_hold(page, drop)
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            release(drop)
+            expect(page.locator(".notice")).to_have_text("Room X: Item dropped.")
+            reads_settled(page)
+            assert page.evaluate("document.activeElement?.closest?.('.board-item') ?? null") is None  # Y's item with the same key
+    open_keys = lambda room: [i["key"] for i in store.room_board(owner, room["id"]) if i["state"] == "open"]
+    assert open_keys(x) == [] and open_keys(y) == ["spec:same"]
+
+
+def test_a_brief_conflict_refreshed_after_the_next_room_opens_stays_out(browser_peer):
+    users = browser_peer["users"]
+    store, owner = browser_peer["app"].state.store, users["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner, users["family"]["id"])
+            store.save_brief(owner, x["id"], "Plan for everyone.", 0)
+            page.reload()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            reads_settled(page)
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            store.save_brief(owner, x["id"], "Plan for everyone, revised.", 1)  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\\?|$)"))
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            wait_for_hold(page, refresh_held)
+            page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            release(refresh_held)
+            reads_settled(page)
+            assert page.evaluate("state.room.title") == "Room Y"
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+
+
+def test_a_send_that_failed_then_went_through_isnt_called_unsent(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Meant for X")
+            page.route(f"**/api/chats/{x['id']}/messages", lambda route: route.abort())
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_contain_text("Your message is still here")
+            page.unroute(f"**/api/chats/{x['id']}/messages")
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_count(0)
+
+
 def test_a_room_title_kept_for_that_line_goes_at_sign_out(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
