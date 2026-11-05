@@ -117,7 +117,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -1974,25 +1974,41 @@ async function uploadFile(input) {
   }
 }
 
-// One layer's release history, kept only while that layer is still the open one: an answer for a layer the person has
-// left, good or bad, changes nothing here. revisionHistory shows only what's held for the layer on screen.
+// One layer's release history. A read counts only while the person is still on that layer's page, and only if no newer
+// read has already been taken: an answer that comes late, good or bad, changes nothing here. revisionHistory shows only
+// what's held for the layer on screen.
+let revisionsRead = 0, revisionsTaken = 0;
 async function loadRevisions(id) {
+  const read = ++revisionsRead;
+  const current = () => routeParts().route === "layers" && state.selectedLayerId === id;
   try {
     const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
-    if (state.selectedLayerId !== id) return;
+    if (!current() || read < revisionsTaken) return false;
+    revisionsTaken = read;
     state.revisions = revisions;
     state.revisionsOf = id;
+    return true;
   } catch (error) {
-    if (state.selectedLayerId === id) throw error;
+    if (current() && read === revisionsRead) throw error;
+    return false;
   }
+}
+
+function forgetRevisions() {
+  state.revisions = [];
+  state.revisionsOf = null;
+  state.selectedLayerId = null;
 }
 
 async function openLayer(id) {
   state.selectedLayerId = id;
-  location.hash = `layers/${pathPart(id)}`;
+  const address = `layers/${pathPart(id)}`;
+  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read
+    location.hash = address;
+    return;
+  }
   try {
-    await loadRevisions(id);
-    if (state.selectedLayerId !== id) return;  // the layer now open renders itself
+    if (!await loadRevisions(id)) return;  // a newer read renders itself
     state.flash = null;
   } catch (error) {
     setFlash(error.message, true);
@@ -2311,6 +2327,7 @@ async function logout() {
     state.assistance = {};
     state.sources = [];
     Research.reset(); Dashboard.reset();
+    forgetRevisions();
     state.editorIdentity = null;
     state.me = null;
     location.hash = "";
