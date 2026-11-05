@@ -3040,6 +3040,21 @@ def test_a_refresh_doesnt_hide_a_real_conflict_with_another_tab(browser_peer):
             until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text never saved")
 
 
+def test_a_file_uploaded_after_a_refresh_doesnt_hide_a_real_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": store.get_layer(patient, layer["id"])["version"], "body": "The other tab's words"})
+            page.evaluate("refresh()")
+            until(page, lambda: page.evaluate("state.home.layers.find((item) => item.id === state.selectedLayerId).body") == "The other tab's words", "the refresh never landed")
+            page.locator("#file-upload").set_input_files({"name": "care-note.txt", "mimeType": "text/plain", "buffer": b"A note."})
+            expect(page.get_by_text("care-note.txt uploaded")).to_be_visible()
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
 def test_two_saves_in_a_row_arent_a_conflict(browser_peer):
     base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
