@@ -3021,6 +3021,54 @@ def test_a_second_tab_saving_its_text_doesnt_undo_a_revoke_made_in_the_first(bro
     assert saved["audience_users"] == [] and saved["public"] is False
 
 
+@pytest.mark.parametrize("narrows", [True, False])
+def test_a_revoke_doesnt_hide_a_real_conflict_with_another_tab(browser_peer, narrows):
+    """Another tab saved first. Whether or not the revoke changes the draft, this tab's Save has to meet that, not overwrite it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            fresh = store.get_layer(patient, layer["id"])
+            other_tab = {"version": fresh["version"], "body": "The other tab's words"}
+            if not narrows:
+                other_tab["audience_users"] = []  # the release still names them, and this draft no longer does
+            store.save_layer(patient, layer["id"], other_tab)
+            redraw = []
+            page.route("**/api/home", lambda held: redraw.append(held))  # before the redraw: after it, any refresh picks up the newest version (boarded)
+            page.get_by_role("button", name=re.compile("^Stop sharing directly with Sam")).click()
+            until(page, lambda: redraw, "the refresh never started")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"  # not overwritten
+            for held in redraw:
+                held.continue_()
+            page.unroute("**/api/home")
+
+
+def test_words_typed_while_a_second_tabs_text_saves_dont_bring_back_who_was_turned_off(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            store.revoke_layer_routes(patient, layer["id"], {"revision": 1, "user_ids": [family]})  # the first tab
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            puts = []
+            page.route(f"**/api/layers/{layer['id']}", lambda route: puts.append(route) if route.request.method == "PUT" and not puts else route.continue_())
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            until(page, lambda: puts, "the save never left")
+            body.press("End")
+            body.press_sequentially(", still typing")
+            puts[0].continue_()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text never saved")
+            page.unroute(f"**/api/layers/{layer['id']}")
+            page.wait_for_timeout(200)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "still typing" in store.get_layer(patient, layer["id"])["body"], "the later words never saved")
+    assert store.get_layer(patient, layer["id"])["audience_users"] == []
+
+
 def test_a_revoke_answered_after_opening_another_layer_leaves_its_boxes_alone(browser_peer):
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     patient, family = users["patient"]["id"], users["family"]["id"]

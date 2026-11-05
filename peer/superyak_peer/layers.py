@@ -179,7 +179,8 @@ class Layers:
             self._sign_revision(db, key, revision)  # G2: the narrowing's new revision, with its narrower audience
             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
             self.emit(db, 'layer.restricted', key, revision, {'owner_id': actor, 'previous_revision': row['active_revision']})
-            return {**self._active_layer(db, key, actor), 'layer_version': layer_version}  # so an open editor's next save isn't a false conflict
+            # So an editor that was current stays current, with no false conflict. One that wasn't still hits its real conflict.
+            return {**self._active_layer(db, key, actor), 'layer_version': layer_version, 'layer_version_before': row['version']}
 
     def _access_routes(self, db, row, snapshot, actor):
         routes = []

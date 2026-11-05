@@ -2028,9 +2028,10 @@ async function activateLayer() {
 
 // A revoke narrows the draft on the station too. Unsaved words in the editor stay, and what was just turned off stays off in
 // them, or the next save would turn it back on.
-function narrowEdit(layerId, { off = false, users = [], spaces = [] }, version) {
+function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
+  // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
   const layer = state.home?.layers?.find((item) => item.id === layerId);
-  if (layer && version) layer.version = version;  // the draft moved with the revoke, and a save now isn't a conflict with another tab
+  if (layer && layer.version === answer.layer_version_before) layer.version = answer.layer_version;
   // The form on screen first: a Save before the page's next draw reads these boxes.
   const form = document.querySelector("#layer-form");
   if (form?.dataset.layerId === layerId) {
@@ -2051,7 +2052,7 @@ async function publicOff() {
   const active = state.activeLayers[layer.id];
   try {
     const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
-    narrowEdit(layer.id, { off: true }, narrowed.layer_version);
+    narrowEdit(layer.id, { off: true }, narrowed);
     const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
     await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
@@ -2072,7 +2073,7 @@ async function revokeRoute(kind, id) {
         space_ids: kind === "space" ? [id] : [],
       },
     });
-    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] }, narrowed.layer_version);
+    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] }, narrowed);
     const remainingNames = [
       ...(narrowed.audience_users || []).map(contactName),
       ...(narrowed.audience_spaces || []).map(spaceName),

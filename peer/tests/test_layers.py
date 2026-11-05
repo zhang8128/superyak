@@ -110,7 +110,7 @@ def test_a_revoke_says_where_the_draft_is_now_and_copes_with_an_old_row(env):
     key = made['id']
     assert patient.post(f'/api/layers/{key}/activate', json={'version': made['version']}).status_code == 200
     answer = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True}).json()
-    assert answer['layer_version'] == patient.get(f'/api/layers/{key}').json()['version']
+    assert answer['layer_version'] == patient.get(f'/api/layers/{key}').json()['version'] and answer['layer_version_before'] == answer['layer_version'] - 1
     old = patient.post('/api/layers', json={'title': 'Old', 'body': 'older', 'audience_users': [users[1]['id']]}).json()
     assert patient.post(f"/api/layers/{old['id']}/activate", json={'version': old['version']}).status_code == 200
     with store.transaction() as db:
