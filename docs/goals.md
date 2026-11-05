@@ -58,33 +58,31 @@ Refreshed 2026-11-03 (the week of 10-27's lines are done or replaced). Each tied
 
 ## Tardis: federation, the public route, CI, and the visitor's view
 
-Refreshed 2026-11-03. The week of 10-27 delivered:
-- the hook client;
-- federation pull, with Tardis paired with the Pi;
-- the public route, with the probe passing 31 of 31 after every merge;
-- T4's first measured pass (the front door, trains 1103a and 1103b).
+Refreshed 2026-11-04. Since 2026-11-03:
+- T2's measure was met: at 14:31 a recall on Tardis delivered from the Pi's published house, under Andy's `enforce`, on real
+  stores, with the same `disclosureId`s on both sides.
+- T3's digest merged in train 1104b, and Andy set `enforce` on the Pi at his sitting.
+- T4's walks reached the sign-in page: `tardis/sign-in-walk-2`, approved by a fresh reader.
 
 Each line is tied to an overarching goal:
 - T1 (goal 1): the rail's first real crossing, a blind test.
-  - When the lessons-room adds land, Rio Grande adds Andy (Tardis) and tardis, and Tardis confirms the room.
-  - Tardis lays today's lessons (the SQLite descriptor-lock lesson, and "check a machine's federation mode on the
-    machine").
+  - It waits on Andy's word at Rio Grande's terminal, then Rio Grande adds Tardis, and Tardis confirms the room.
+  - Tardis lays its lessons, the SQLite descriptor-lock lesson and "check a machine's federation mode on the machine"
+    first, as the blind test's tasks were written for them.
   - Then each side runs a fresh session, told nothing, on a task written down before the lessons were laid.
   - Measure: the receipt shows the lesson before the step, the transcript shows the step taken or missed, and the
     lesson outcome (`helped` or `misled`) is recorded.
-- T2 (goals 1 and 3): the crossing between lighthouses. Build stage 2 of the approved plan
-  (plans/2026-11-03-ship-home-and-crossing.md), with Tardis asking the Pi.
-  - Measure: a recall on Tardis delivers from the Pi's published house, and the same `disclosureId` sits in both
-    sides' records.
-  - It waits on T3 and Andy's one sitting.
-- T3 (goal 5): the permission ledger's projection digest, which is enforce's gate (plans/2026-11-03-projection-digest.md,
-  built). It goes through a fresh Pi reader and Rio Grande's yes. Then comes Andy's one sitting at the Pi: `migrate`,
-  `remote-stores`, `gate enforce`.
-  - Measure: enforce set on the Pi, and the torn-copy test passing there.
-- T4 (goal 4): the visitor's view, part 2. Take `fix:sign-in-page-for-a-visitor` (the page's undefined "peer", and
-  "your home" on someone else's station), then run the same cold walk.
-  - Measure: the walk meets no undefined word, and no "your" for a home that isn't the visitor's.
-  - Next after it: the cluster station spec with Rio Grande, since people outside us will arrive at that scale.
+- T2 (goals 1 and 3): use the crossing, not only prove it. Real recalls in real work, with Tardis's session restarted onto
+  the merged code. Then `spec:sheaf-over-crossings` with Rio Grande, once there's traffic to compare.
+  - Measure: the first time something delivered across machines changes what a ship does, named in the room with its
+    `disclosureId`. Until then, how many crossings a day and how many delivered anything.
+- T3 (goal 5): what a screen promises is what the code does. Land `fix:private-words-inside-the-app`. Each sentence that
+  says who can read goes to a reader of the code, not only a cold walker. Install the route watch once Andy says yes.
+  - Measure: no absolute promise left on a screen, by a fresh reader; the route watch's timer listed on Tardis.
+- T4 (goal 4): the visitor's view, part 3. Land the sign-in page and walk it live, then the cluster station spec with
+  Rio Grande, since people outside us will arrive at that scale.
+  - Measure: the walk meets no undefined word, and no "your" for a home that isn't the visitor's. Whether the page names
+    who runs a home is Andy's call.
 - T5 (goals 2 and 5): CI and second reads. Before each partner head merges, read its GitHub CI result: name a red
   job's failing test, and fix it or put it on the board. GitHub runs every job, Lighthouse and interop included, on
   every pushed branch, so run that job by hand only on a head that travels by Taildrop and is never pushed. Give
