@@ -98,27 +98,54 @@ function announce(message) {
 }
 
 // What was pressed says it's working, on a slow link only. It's on the thing pressed and not on main: aria-busy on main would
-// make a screen reader lose the page that's still there. It's held in state because render() replaces the element.
+// make a screen reader lose the page that's still there. It's held in state because render() replaces the element. There's
+// one at a time: a new press, or a sign-out, ends the last one's timer as well as its mark.
 const PRESSED_AFTER_MS = 300;
+let pressedTimer = null, pressedNow = null;
 function clearPressed() {
+  clearTimeout(pressedTimer);
+  pressedNow = null;
   state.pressed = null;
-  document.querySelectorAll(".pressed-note").forEach((note) => { note.parentElement.removeAttribute("aria-busy"); note.remove(); });
+  document.querySelectorAll(".pressed-note").forEach((note) => { note.closest("[aria-busy]")?.removeAttribute("aria-busy"); note.remove(); });
+  drawComposerTo();
 }
 function drawPressed() {
   const element = state.pressed && document.querySelector(state.pressed.selector);
   if (!element || element.querySelector(".pressed-note")) return;
   element.setAttribute("aria-busy", "true");
-  element.insertAdjacentHTML("beforeend", `<span class="pressed-note">${escapeHtml(state.pressed.words)}</span>`);
+  (element.querySelector(".item-side") || element).insertAdjacentHTML("beforeend", `<span class="pressed-note">${escapeHtml(state.pressed.words)}</span>`);
 }
 async function whilePressed(selector, words, work) {
   clearPressed();
-  const mine = { selector, words };
-  const timer = setTimeout(() => { state.pressed = mine; drawPressed(); announce(words); }, PRESSED_AFTER_MS);
+  const mine = pressedNow = { selector, words };
+  pressedTimer = setTimeout(() => { state.pressed = mine; drawPressed(); drawComposerTo(); announce(words); }, PRESSED_AFTER_MS);
   try { return await work(); }
-  finally {
-    clearTimeout(timer);
-    if (state.pressed === mine) clearPressed();
-  }
+  finally { if (pressedNow === mine) clearPressed(); }
+}
+
+// Whose words these are at the box, always, because the heading and the room list can be screens away from it. While the next
+// room opens, the box still goes to this one, and the line says so.
+function chatTitle(id) { return (state.home?.chats || []).find((item) => item.id === id)?.title; }
+function composerTo(room) {
+  const next = state.pressed && state.selectedChatId && state.selectedChatId !== room.id ? chatTitle(state.selectedChatId) : null;
+  return next ? `${next} is opening. This still goes to ${room.title}.` : `To ${room.title}`;
+}
+function drawComposerTo() {
+  const line = document.querySelector("#composer-to");
+  if (line && state.room) line.textContent = composerTo(state.room);
+}
+// Where a failed send's words or someone's half a sentence went, said at the box they're now looking at, while that room is still theirs.
+function composerNote() {
+  const note = state.composerNote;
+  return note && chatTitle(note.roomId) ? `<p class="meta words-kept">${escapeHtml(note.words)}</p>` : "";
+}
+function unsentWords(id) {
+  return readChatDraft(id).body.trim() ? `Your message wasn't sent. It's still in the box in ${chatTitle(id) || "the room you left"}.` : null;
+}
+function aboutRoom(room, words) { return state.room?.id === room.id ? words : `${room.title}: ${words}`; }  // the next room may have opened meanwhile
+function reasonOf(error) {
+  const reason = error.status === 0 ? "Connection lost." : error.message;
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
 }
 
 function setFlash(message, error = false) {
@@ -140,7 +167,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -913,12 +940,11 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     saved();
     state.boardDone = null; state.boardAsk = null;
     // A close that released someone else's claim says whose (the station's name, escaped where shown).
-    const said = answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message;
-    setFlash(state.room?.id === room.id ? said : `${room.title}: ${said}`);  // the next room may have opened meanwhile
+    setFlash(aboutRoom(room, answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message));
     ok = true;
   } catch (error) {
     if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
-    setFlash(error.message, true);
+    setFlash(aboutRoom(room, error.message), true);
   } finally {
     state.boardSaving = false;
     if (state.me && state.room?.id === room.id) {
@@ -936,7 +962,7 @@ async function postBoardItem(form) {
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -973,7 +999,7 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
   return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${state.composerNote ? `<p class="meta words-kept">${escapeHtml(state.composerNote)}</p>` : ""}<label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+    ${replaced ? `<div class="composer composer-replaced">${composerNote()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -1244,7 +1270,7 @@ async function markRoom(room, earlier) {
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "POST", json: { earlier } });
   } catch (error) {
-    setFlash(error.message, true);
+    setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
@@ -1255,7 +1281,7 @@ async function clearMark(room) {
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
-    setFlash(error.message, true);
+    setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
@@ -1788,8 +1814,10 @@ async function loadRoute() {
       }
       catch (error) {
         if (still()) {
-          if (state.room?.id !== wanted) state.room = null;  // the room on screen stays: it's the newer read that failed
-          setFlash(openFailedWords(wanted, error), true);
+          if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
+          const here = state.room?.id === wanted;  // the room on screen stays: it's the newer read that failed
+          if (!here) state.room = null;
+          setFlash(here ? `${chatTitle(wanted) || "This room"} couldn't be refreshed. ${reasonOf(error)}` : openFailedWords(wanted, error), true);
         }
       }
     } else {
@@ -2117,21 +2145,22 @@ function showRoom(room, board) {
     // Their box is gone from under them, so say where the words are: a send that failed, or someone mid-sentence as this arrives.
     const box = document.querySelector("#message-body"), typing = box && document.activeElement === box && box.value.trim();
     const left = state.room;
-    state.composerNote = !left ? null
-      : state.unsentIn === left.id ? `Your message wasn't sent. It's still in the box in ${left.title}.`
-        : typing ? `Your words are kept in ${left.title}.` : null;
+    const words = !left ? null : (state.unsentIn === left.id && unsentWords(left.id)) || (typing ? `Your words are kept in ${left.title}.` : null);
+    state.composerNote = words ? { roomId: left.id, words } : null;
     state.unsentIn = null;
-    if (state.composerNote) announce(state.composerNote);
+    if (words) announce(words);
   }
   state.room = room;
   state.board = board;
 }
 
 // A read of a room and its board, landing them. The room on screen takes its new read at once, since nothing moves, so what
-// changes during the board read stays: a message sent then isn't replaced by the older answer. Another room waits for both.
+// changes during the board read stays, and a read that began before the room last changed is dropped: a message sent or a person
+// removed meanwhile isn't undone by the older answer. Another room waits for both.
 async function landRoom(read, still) {
+  const began = state.room;
   const room = await read();
-  if (still() && state.room?.id === room.id) state.room = room;
+  if (still() && began?.id === room.id && state.room === began) state.room = room;  // changed since it began: what's there is newer
   const board = await readBoard(room);
   if (!still()) return false;  // a late answer for a room or a page the person has left, or for another account
   if (state.room?.id === room.id) state.board = board;
@@ -2143,10 +2172,11 @@ async function openChat(id) {
   state.selectedChatId = id;
   const who = identityKey(state.me), from = location.hash;
   const still = () => state.selectedChatId === id && identityKey(state.me) === who && location.hash === from;
-  await whilePressed(`[data-action="open-chat"][data-id="${CSS.escape(id)}"]`, "Opening…", async () => {
+  const open = async () => {
     try { if (!await landRoom(() => loadRoom(id), still)) return; }
     catch (error) {
       if (still()) {
+        if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
         state.selectedChatId = state.room?.id ?? null;  // it follows what's on screen, so nothing opens this later by itself
         setFlash(openFailedWords(id, error), true);
         render();
@@ -2158,15 +2188,17 @@ async function openChat(id) {
     state.transitionNote = null;
     state.briefHistory = null;
     render();
-  });
+  };
+  if (state.room?.id === id) { clearPressed(); await open(); }  // already on screen: there's nothing to wait for
+  else await whilePressed(`[data-action="open-chat"][data-id="${CSS.escape(id)}"]`, "Opening…", open);
 }
 
 function openFailedWords(id, error) {
-  const title = (state.home?.chats || []).find((item) => item.id === id)?.title || "That room";
-  return `${title} didn't open. ${error.status === 0 ? "The connection was lost." : error.message} Try it again.`;
+  return `${chatTitle(id) || "That room"} didn't open. ${reasonOf(error)} Try it again.`;
 }
 
 async function createChat(form) {
+  const who = identityKey(state.me);
   const members = [...form.querySelectorAll('[name="chat-member"]:checked:not(:disabled)')].map((input) => input.value);
   try {
     let room;
@@ -2180,13 +2212,18 @@ async function createChat(form) {
     }
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
+    if (identityKey(state.me) !== who) return;  // not for whoever signed in since
     state.selectedChatId = room.id;
     const opened = await loadRoom(room.id);
-    showRoom(opened, await readBoard(opened));
+    const openedBoard = await readBoard(opened);
+    if (identityKey(state.me) !== who) return;
+    showRoom(opened, openedBoard);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     const stillThisRoom = form.dataset.kind === "linked" && state.room?.id === form.dataset.room;
+    if (error.status === 409 && stillThisRoom) state.chatDialog = "linked";  // the address may have cleared it with the form still up: say why in it
     if (error.status === 409 && stillThisRoom && !error.message.startsWith("The room brief changed")) {
       state.chatPicked = members;  // a room replaced since this page loaded: the station's own words, in the dialog
       state.chatError = error.message;
@@ -2208,7 +2245,8 @@ async function createChat(form) {
       document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
       return;
     }
-    setFlash(error.message, true);
+    const asked = form.dataset.kind === "linked" && state.room?.id !== form.dataset.room ? `${chatTitle(form.dataset.room) || "The room you left"}: ` : "";
+    setFlash(`${asked}${error.message}`, true);
     render();
   }
 }
@@ -2250,7 +2288,7 @@ async function saveBrief(form) {
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
-  setFlash(body.trim() ? "Room brief saved." : "Room brief removed.");
+  setFlash(aboutRoom(room, body.trim() ? "Room brief saved." : "Room brief removed."));
   render();
 }
 
@@ -2291,7 +2329,7 @@ async function removeParticipant(id) {
   try {
     updated = await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
   } catch (error) {
-    setFlash(`${error.message} Room access was not changed.`, true);
+    setFlash(aboutRoom(room, `${error.message} Room access was not changed.`), true);
     render();
     return;
   }
@@ -2318,8 +2356,8 @@ async function removeParticipant(id) {
 }
 
 async function sendMessage(form) {
-  // The room on screen, not state.room: while the next room loads, state.room is already that room and this composer is still
-  // the old one. A person's words go where they were looking.
+  // The room this composer was drawn for. By the time a send ends another room may be on screen, and a person's words go where
+  // they were looking.
   const room = state.room?.id === form.dataset.room ? state.room : { id: form.dataset.room }, who = identityKey(state.me);
   const textarea = form.elements.body;
   const body = textarea.value;
@@ -2336,14 +2374,13 @@ async function sendMessage(form) {
     accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
     if (identityKey(state.me) !== who) return;  // their words went with their sign-out, and this isn't the next person's news
-    const why = error.status === 0 ? "Connection lost." : error.message;
+    const why = reasonOf(error);
     if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
-      const title = (state.home?.chats || []).find((item) => item.id === room.id)?.title || "the room you left";
-      setFlash(`Your message wasn't sent. ${why} It's still in the box in ${title}.`, true);
+      setFlash(`Your message to ${chatTitle(room.id) || "the room you left"} wasn't sent. ${why} It's still in the box there.`, true);
       render();
       return;
     }
-    state.unsentIn = room.id;  // said here, and again if the next room replaces this before they've seen it
+    state.unsentIn = room.id;  // said here, and again if the next room or page replaces this before they've seen it
     status.className = "inline-message error";
     status.textContent = `${why} Your message is still here.`;
     announce(status.textContent);
@@ -2354,6 +2391,10 @@ async function sendMessage(form) {
   if (currentDraft.clientId === draft.clientId && currentDraft.body === body) {
     if (textarea.isConnected && textarea.value === body) textarea.value = "";
     sessionStorage.removeItem(draftKey(room.id));
+    if (state.composerNote?.roomId === room.id) {  // those words have gone now, so it's no longer true
+      state.composerNote = null;
+      document.querySelector(".words-kept")?.remove();
+    }
     if (status.isConnected) status.textContent = "Message saved. Refreshing room…";
   }
   if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're in stays as it is
@@ -2363,7 +2404,7 @@ async function sendMessage(form) {
     return;
   }
   const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
-  if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
+  if (!duplicate) state.room = { ...state.room, messages: [...(state.room.messages || []), accepted] };  // a new object, so landRoom sees the change
   try {
     const [latestRoom, latestSync] = await Promise.all([
       refreshRoom(room),
@@ -2665,7 +2706,7 @@ document.addEventListener("click", async (event) => {
     state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; state.chatBoard = undefined;
     render();  // the dialog opens at once, with the help text only if there is a brief
     const room = state.room, items = await openBoardItems(room);
-    if (state.chatDialog !== "linked" || state.room !== room) return;
+    if (state.chatDialog !== "linked" || state.room?.id !== room.id) return;
     state.chatBoard = items;  // fill in the slot only, so nothing the owner already ticked is redrawn
     const slot = document.querySelector("dialog .carry-help-slot");
     if (slot) slot.innerHTML = carryHelp(room);
@@ -3078,6 +3119,11 @@ window.addEventListener("hashchange", async () => {
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
+  if (state.unsentIn && routeParts().route !== "chats") {  // the failed send's status has just gone from the screen
+    const words = unsentWords(state.unsentIn);
+    state.unsentIn = null;
+    if (words) setFlash(words, true);
+  }
   if (!["apps", "connections"].includes(routeParts().route)) { state.appAsk = null; state.appRoomsEdit = null; }  // N3
   try {
     await loadRoute(); render();
