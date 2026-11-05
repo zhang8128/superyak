@@ -68,7 +68,7 @@ Each line is tied to an overarching goal:
 - T1 (goal 1): the rail's first real crossing, a blind test.
   - It waits on Andy's word at Rio Grande's terminal, then Rio Grande adds Tardis, and Tardis confirms the room.
   - Tardis lays its lessons, the SQLite descriptor-lock lesson and "check a machine's federation mode on the machine"
-    first, as the blind test's tasks were written for them.
+    first.
   - Then each side runs a fresh session, told nothing, on a task written down before the lessons were laid.
   - Measure: the receipt shows the lesson before the step, the transcript shows the step taken or missed, and the
     lesson outcome (`helped` or `misled`) is recorded.
