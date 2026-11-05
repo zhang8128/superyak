@@ -1936,6 +1936,68 @@ def test_a_conflict_answered_after_moving_on_stays_out_of_the_next_room(browser_
             expect(page.locator("dialog")).to_have_count(0)  # no dialog over Y for a conflict in X
 
 
+def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
+            page.evaluate("state.transitionNote = 'Sam no longer has access'; announcer.textContent = 'Your words are kept in Room X.'")
+            page.evaluate("bindEditorIdentity({ ...state.me, id: 'the-next-account' })")
+            for field in ("flash", "transitionNote"):
+                assert page.evaluate(f"state.{field}") is None, field
+            assert page.evaluate("announcer.textContent") == ""
+
+
+@pytest.mark.parametrize("press, route", [
+    ("Keep this room away from cloud models", "cloud"),
+    ("^Remove .* from this room", "participants/**"),
+])
+def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, route):
+    users = browser_peer["users"]
+    store, owner = browser_peer["app"].state.store, users["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, _y = two_rooms_with_x_open(page, store, owner, users["family"]["id"])
+            answers = held_routes(page, f"**/api/chats/{x['id']}/{route}")
+            page.get_by_role("button", name=re.compile(press)).first.click()
+            wait_for_hold(page, answers)
+            page.evaluate("state.me = { ...state.me, id: 'the-next-account' }")
+            release(answers)
+            reads_settled(page)
+            expect(page.locator(".notice")).to_have_count(0)
+
+
+def test_a_brief_refused_after_moving_on_says_so_and_keeps_the_words(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+            page.evaluate("render()")
+            page.locator("#brief-body").fill("The plan for X")
+            saves = held_routes(page, f"**/api/chats/{x['id']}/brief")
+            page.get_by_role("button", name="Save brief").click()
+            wait_for_hold(page, saves)
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            saves[0].fulfill(status=400, json={"error": "A brief is at most 4,000 characters"})
+            expect(page.locator(".notice.error")).to_have_text("Room X: the brief wasn't saved. Your text is still in its editor.")
+            assert page.evaluate("state.briefEdit.body") == "The plan for X"
+
+
+def test_a_read_refused_at_an_address_for_a_session_that_ended_goes_to_sign_in(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            _x, y = two_rooms_with_x_open(page, store, owner)
+            page.route(re.compile(rf"/api/chats/{y['id']}(\?|$)"), lambda route: route.fulfill(status=401, json={"error": "Sign in required"}))
+            page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
+            expect(page.get_by_text("Your session ended. Sign in again.")).to_be_visible()
+
+
 def test_a_room_title_kept_for_that_line_goes_at_sign_out(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:

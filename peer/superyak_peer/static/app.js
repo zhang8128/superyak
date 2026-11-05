@@ -167,7 +167,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -935,8 +935,10 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
   if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
+  const who = identityKey(state.me);
   try {
     const answer = await api(`/api/chats/${pathPart(room.id)}${path}`, { method: "POST", json });
+    if (identityKey(state.me) !== who) return;  // finally still runs, and frees the panel
     saved();
     state.boardDone = null; state.boardAsk = null;
     // A close that released someone else's claim says whose (the station's name, escaped where shown).
@@ -944,6 +946,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     ok = true;
   } catch (error) {
     if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, error.message), true);
   } finally {
     state.boardSaving = false;
@@ -1267,24 +1270,30 @@ function cloudControl(room, replaced) {
 }
 
 async function markRoom(room, earlier) {
+  const who = identityKey(state.me);
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "POST", json: { earlier } });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
+  if (identityKey(state.me) !== who) return;  // not the next person's news
   await refresh(`${room.title} is kept away from cloud models.`);  // by name: another room may have opened while this was sent
 }
 
 async function clearMark(room) {
+  const who = identityKey(state.me);
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
+  if (identityKey(state.me) !== who) return;
   await refresh(`Your mark on ${room.title} is cleared. Other members' marks still stand.`);
 }
 
@@ -2254,6 +2263,7 @@ async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
   // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
   if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
+  const who = identityKey(state.me);
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
   form.querySelector('button[type="submit"]').disabled = true;
@@ -2264,6 +2274,7 @@ async function saveBrief(form) {
     // The revision is the one this editor opened, never a newer one: a stale tab gets 409 and overwrites nothing.
     await api(`/api/chats/${pathPart(room.id)}/brief`, { method: "PUT", json: { body, revision: edit.revision } });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     // The station's own message: the editor has no maxlength, so "A brief is at most 4,000 characters" arrives here.
     let message = error.status === 0 ? "Connection lost. Your brief is still here." : `${error.message.replace(/\.?$/, ".")} Your brief is still here.`;
     if (error.status === 409) {
@@ -2277,11 +2288,18 @@ async function saveBrief(form) {
       }
     }
     Object.assign(edit, { status: message, error: true, saving: false });
+    if (identityKey(state.me) !== who) return;
+    if (state.room?.id !== room.id) {  // they've moved on, so the editor and its message aren't on screen
+      setFlash(`${room.title}: the brief wasn't saved. Your text is still in its editor.`, true);
+      render();
+      return;
+    }
     announce(message);
     render();
     document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
+  if (identityKey(state.me) !== who) return;
   if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
   try {
     const latest = await refreshRoom(room);
@@ -2323,16 +2341,18 @@ function useBriefRevision(room, revision, confirmed = false) {
 }
 
 async function removeParticipant(id) {
-  const room = state.room;
+  const room = state.room, who = identityKey(state.me);
   const name = participantName(id);
   let updated;
   try {
     updated = await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, `${error.message} Room access was not changed.`), true);
     render();
     return;
   }
+  if (identityKey(state.me) !== who) return;
   if (state.room?.id === room.id) {
     state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
     state.transitionNote = `${name} no longer has access on this home; remote removal requires acknowledgement`;
@@ -2400,7 +2420,7 @@ async function sendMessage(form) {
   if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're in stays as it is
     if (status.isConnected) status.textContent = "Message saved";
     announce("Message saved");
-    try { state.sync = await api("/api/sync"); } catch (_) { /* the next load reads it */ }  // or the message reads "Saved here" while a delivery is owed
+    try { const latest = await api("/api/sync"); if (identityKey(state.me) === who) state.sync = latest; } catch (_) { /* the next load reads it */ }  // or the message reads "Saved here" while a delivery is owed
     return;
   }
   const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
@@ -2410,6 +2430,7 @@ async function sendMessage(form) {
       refreshRoom(room),
       api("/api/sync"),
     ]);
+    if (identityKey(state.me) !== who) return;
     if (state.room?.id === room.id) state.room = latestRoom;
     state.sync = latestSync;
     render();
