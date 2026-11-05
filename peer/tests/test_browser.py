@@ -167,7 +167,7 @@ def test_the_sign_in_page_says_it_is_a_prototype_and_links_what_superyak_is(brow
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_text("Superyak's first use is medical research, and it's a prototype", exact=False)).to_be_visible()
-        expect(page.get_by_text("please don't put real patient information in it yet", exact=False)).to_be_visible()
+        expect(page.locator(".login-note").get_by_text("please don't put real patient information in it yet", exact=False)).to_be_visible()
         link = page.get_by_role("link", name="What is Superyak?")
         expect(link).to_be_visible()
         expect(link).to_have_attribute("href", "https://github.com/zhang8128/superyak#readme")
@@ -188,7 +188,7 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
         page.goto(browser_peer["base_url"] + "/")
         expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
-        expect(page.get_by_text("Free, open-source and self-hosted: this home runs where its owner put it, not on a Superyak service.", exact=False)).to_be_visible()
+        expect(page.get_by_text("Free, open-source and self-hosted.", exact=False)).to_be_visible()
         # The second cold walk: "Write privately" beside "its owner can read" read as private from the owner too, and
         # "home" was never said to be anything. "version" of what, it asked as well.
         expect(page.get_by_text("A home is a small server someone runs for the people they invite.", exact=False)).to_be_visible()
@@ -199,6 +199,9 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
         assert "make public only what you choose." in words
         assert "Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer." in words
         assert "Room messages go to every member: an AI agent's copy goes on to its AI company" in words
+        # Its re-check: a copy on another home doesn't "stay" there. That home's owner reads it, and its member may be a ship.
+        assert "a member on another home gets a copy kept there under that home's rules." in words
+        assert "The room says which, above its messages." in words
         assert "only you" not in words.lower()
         assert "write privately" not in page.locator("main").inner_text().lower()
         assert "the version you mean" not in page.locator("main").inner_text().lower()
@@ -219,13 +222,14 @@ def test_the_sign_in_pages_tile_shows_and_its_help_clears_the_button(browser_pee
         expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
         style = "e => getComputedStyle(e).%s"
         tile, panel = page.locator(".login-story .brand-mark"), page.locator(".login-story")
-        assert tile.evaluate(style % "backgroundColor") != panel.evaluate(style % "backgroundColor")
+        shade = tile.evaluate(style % "backgroundColor")
+        assert shade != panel.evaluate(style % "backgroundColor") and shade != "rgba(0, 0, 0, 0)"
         assert page.locator(".login-panel > .login-help").first.evaluate(style % "marginTop") == "16px"
 
 
 def test_on_a_phone_the_sign_in_form_is_on_the_first_screen_with_who_can_read(browser_peer):
-    """The page's words grew past a screen, and a returning person shouldn't scroll for the form. Who can read stays
-    in front of the password there, and nothing overflows."""
+    """The page's words grew past a screen, and a returning person shouldn't scroll for the form. The owner line stays on
+    that first screen, and neither the page nor the card overflows."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 390, "height": 844})
@@ -238,6 +242,27 @@ def test_on_a_phone_the_sign_in_form_is_on_the_first_screen_with_who_can_read(br
             help_line = page.get_by_text("This home is run by its owner, who can read what's stored here.", exact=True)
             assert help_line.bounding_box()["y"] < 844
             assert page.evaluate("document.documentElement.scrollWidth") == 390
+            assert page.locator(".login-wrap").evaluate("e => e.scrollWidth <= e.clientWidth")  # it hides its own overflow
+        finally:
+            context.close()
+            browser.close()
+
+
+def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_prototype(browser_peer):
+    """The re-check of the phone order: someone with an invitation link could make an account with the page's main facts
+    a screen and more below the button, so the form says them itself, above its button, at every width."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 390, "height": 844})
+        try:
+            page = context.new_page()
+            page.goto(browser_peer["base_url"] + "/")
+            page.get_by_text("Use an invitation", exact=True).click()
+            facts = page.get_by_test_id("before-an-account")
+            expect(facts).to_have_text("Whoever runs this home, and any AI agent they run on its computer, can read what's "
+                                       "stored here. It's a prototype: please don't put real patient information in it yet.")
+            button = page.get_by_role("button", name="Create my account")
+            assert facts.bounding_box()["y"] < button.bounding_box()["y"]
         finally:
             context.close()
             browser.close()
@@ -252,8 +277,8 @@ def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(bro
 
 
 ABOUT = ("A Superyak home: a free, open-source, self-hosted place for the parts of your life you choose to share. Its "
-         "owner invites the people in it and can read what's stored here. Its first use is medical research, and it's a "
-         "prototype: please don't put real patient information in it yet.")
+         "owner invites the people in it and can read what's stored here. Superyak's first use is medical research, and "
+         "it's a prototype: please don't put real patient information in it yet.")
 
 
 def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
@@ -281,7 +306,12 @@ def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
             # inner text, since Playwright's text locators and aria snapshot skip <noscript>, which this browser does show.
             assert "This page can't finish opening without JavaScript, and signing in needs it." in shell.locator("body").inner_text()
             assert "Ask the person who runs this home for an invitation." in shell.locator("body").inner_text()
-            assert shell.locator(".loading-page noscript p").evaluate("p => getComputedStyle(p).paddingLeft") == "16px"
+            line = shell.locator(".loading-page noscript p")
+            assert line.evaluate("p => getComputedStyle(p).textAlign") == "center"
+            assert line.evaluate("p => getComputedStyle(p).maxWidth") == "440px"
+            shell.set_viewport_size({"width": 390, "height": 844})
+            for text in (line, shell.locator(".loading-about")):  # a gutter at phone width, for both paragraphs
+                assert text.bounding_box()["x"] >= 16
             expect(shell.get_by_role("link", name="What is Superyak?")).to_have_attribute(
                 "href", "https://github.com/zhang8128/superyak#readme")
         finally:
