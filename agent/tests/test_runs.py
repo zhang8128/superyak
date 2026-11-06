@@ -357,6 +357,25 @@ def test_a_long_answer_that_exits_badly_is_not_read_as_an_error_message(repo, tm
     assert failed.value.reason == 'exit'
 
 
+@pytest.mark.parametrize('stdout', [
+    'The fix is in /login',                       # a short answer can name the sign-in command
+    'That limit reached its peak',                # or say something near a usage limit
+    'Not logged in\nand a second line of answer',  # Claude's error is a line by itself
+])
+def test_a_short_answer_with_a_bad_exit_is_not_read_as_an_error_message(repo, tmp_path, claude, stdout):
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, stdout)).run('read', 'Why?', 'm1')
+    assert failed.value.reason == 'exit'
+
+
+def test_the_log_line_masks_a_key_before_it_is_cut(repo, tmp_path, claude):
+    """Cut first, and what's left of a key can be too short for the mask to know it."""
+    key = 'sk-ant-' + 'x' * 60
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, '', 'y' * 487 + ' ' + key + ' ' + 'y' * 800)).run('read', 'Why?', 'm1')
+    assert 'sk-ant' not in str(failed.value) and 'xxx' not in str(failed.value)
+
+
 def test_a_missing_claude_command_is_named(repo, tmp_path, claude):
     with pytest.raises(RunFailed) as failed:
         runner(repo, tmp_path, str(tmp_path / 'no-such-claude')).run('read', 'Why?', 'm1')
