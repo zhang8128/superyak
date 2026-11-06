@@ -99,6 +99,29 @@ def test_existing_manual_memory_preserves_novelty_threshold(capture):
     assert rows(capture)[0]["source"] is None
 
 
+NOTICE = (
+    "<task-notification>\n<task-id>b90t8e6so</task-id>\n<status>completed</status>\n"
+    '<summary>Background command "Run arm 0 once the load settles" completed (exit code 0)</summary>\n'
+    "</task-notification>"
+)
+
+
+@pytest.mark.parametrize("prompt", [NOTICE, "\n  " + NOTICE])
+def test_a_notice_from_the_harness_is_not_a_persons_words(capture, prompt):
+    capture.context["prompt"] = prompt
+    capture.hook.nudge()
+    assert rows(capture) == []
+    assert capture.embedded == []
+
+
+def test_a_person_who_mentions_a_notice_is_still_heard(capture):
+    capture.context["prompt"] = (
+        "Why did the <task-notification> say the background measure completed when no result file was written?"
+    )
+    capture.hook.nudge()
+    assert len(rows(capture)) == 1
+
+
 @pytest.mark.parametrize("prompt", ["", "short", "A short research question."])
 def test_short_prompts_are_not_captured(capture, prompt):
     capture.context["prompt"] = prompt
