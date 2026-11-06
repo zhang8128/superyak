@@ -36,6 +36,45 @@ class RunTimeout(Exception):
     pass
 
 
+_NOTE_OPEN = "I couldn't answer this one: "
+FAILED_NOTES = {  # what a room may hear about a failed run: these words, and a number. A run's output never reaches a room.
+    'signed_out': _NOTE_OPEN + "Claude isn't signed in on this machine. My owner can sign it in again.",
+    'usage': _NOTE_OPEN + "Claude has reached a usage limit on this machine. Try again later.",
+    'missing': _NOTE_OPEN + "this machine can't start Claude, because the command isn't found. My owner can check the watcher's PATH.",
+    'exit': _NOTE_OPEN + "the run stopped with exit code {code}. My owner can check the watcher log on this machine.",
+    'empty': _NOTE_OPEN + "the run ended without an answer. My owner can check the watcher log on this machine.",
+}
+_ERROR_WORDS = (  # lowercase, read only from a short output: an error message, never an answer that mentions these
+    ('signed_out', ('not logged in', '/login', 'invalid api key', 'authentication_error', 'authentication failed')),
+    ('usage', ('usage limit', 'rate limit', 'credit balance', 'limit reached', "hit your limit")),
+)
+_ERROR_CHARS = 300
+
+
+class RunFailed(RuntimeError):
+    """A run that ended with no answer. `str()` is for this machine's log, and may quote the run's output; `note` is for
+    the room, and never does. It stays a RuntimeError for anything that catches one."""
+
+    def __init__(self, reason, code, detail):
+        super().__init__(detail)
+        self.reason, self.code = reason, code
+
+    @property
+    def note(self):
+        return FAILED_NOTES[self.reason].format(code=self.code)
+
+
+def _failure_reason(code, stdout, stderr):
+    """Why a run failed, from what it wrote. Claude writes a sign-in or usage error to stdout, with stderr empty."""
+    for text in (stdout, stderr):
+        if text and len(text) <= _ERROR_CHARS:
+            lowered = text.lower()
+            for reason, words in _ERROR_WORDS:
+                if any(word in lowered for word in words):
+                    return reason
+    return 'exit' if code else 'empty'
+
+
 @dataclass
 class RunResult:
     reply: str
@@ -147,9 +186,15 @@ class ClaudeRunner:
         # Its own session, so a timeout can end the shells and background jobs claude started, not just claude.
         # SUPERYAK_RUN tells the person's station hook (installed at user scope, which --setting-sources already
         # leaves out of these runs) to stay quiet, so a run never reads messages or moves the person's cursor.
-        proc = subprocess.Popen(self._command(settings_path, limit, instructions), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True,
-                                env=dict(os.environ, SUPERYAK_RUN='1'))
+        command = self._command(settings_path, limit, instructions)
+        try:
+            proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True,
+                                    env=dict(os.environ, SUPERYAK_RUN='1'))
+        except FileNotFoundError:
+            if not Path(cwd).is_dir():  # Popen says the same when its folder is gone, and that isn't a missing command
+                raise
+            raise RunFailed('missing', None, f'cannot start {command[0]}: not found') from None
         try:
             stdout, stderr = proc.communicate(input=prompt, timeout=limit)
         except subprocess.TimeoutExpired:
@@ -160,7 +205,9 @@ class ClaudeRunner:
             raise
         reply = stdout.strip()
         if proc.returncode or not reply:
-            raise RuntimeError(f'claude exited {proc.returncode}: {redact(stderr.strip()[:500])}')
+            said = ' '.join(part for part in (stderr.strip()[:500], stdout.strip()[:500]) if part)
+            raise RunFailed(_failure_reason(proc.returncode, stdout.strip(), stderr.strip()), proc.returncode,
+                            f'claude exited {proc.returncode}: {redact(said)}')
         return reply
 
     def run(self, mode, prompt, message_id, instructions=''):
