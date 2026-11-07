@@ -2213,7 +2213,7 @@ async function openChat(id) {
         state.selectedChatId = state.room?.id ?? null;  // it follows what's on screen, so nothing opens this later by itself
         const words = openFailedWords(id, error);
         setFlash(words, true);
-        if (state.room) state.composerNote = { roomId: state.room.id, words };  // at the box too: the reader may be far below the flash
+        if (state.room && !state.composerNote) state.composerNote = { roomId: state.room.id, words };  // at the box too: the reader may be far below the flash; never over a note about unsent words
         render();
       }
       return;
