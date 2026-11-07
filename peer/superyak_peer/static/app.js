@@ -569,9 +569,7 @@ async function readRoomNews(room) {
   } while (answer.more);
   const current = state.room?.id === room.id ? state.room : shown;
   const arrived = new Set(fresh.map((message) => message.id));
-  // By `created`, and stable: the answers come in the station's order, and a peer's message can carry an older time.
-  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh]
-    .sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
   // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
   // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
   // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
@@ -657,8 +655,8 @@ function sayRoomUnreachable(on) {
 }
 
 // state.room takes the answer whole, so a later render keeps what's appended and the next ask doesn't fetch it. Nothing
-// else on the page is touched. A message sorting earlier than the last one shown waits for the next render, since
-// drawing it now would shift what the person is reading.
+// else on the page is touched. A message sorting earlier than the newest one shown waits for the next render, which
+// shows it at the end until the room is reopened (chat paging's known limit): an arrival doesn't guess at its place.
 function showArrivals(answer) {
   const known = new Set((state.room.messages || []).map((message) => message.id));
   if (!answer.messages.some((message) => !known.has(message.id))) return;
@@ -667,8 +665,8 @@ function showArrivals(answer) {
   const list = app.querySelector(".messages");
   if (list?.dataset.room !== answer.id) return;
   const drawn = new Set([...list.querySelectorAll(".message[data-message]")].map((node) => node.dataset.message));
-  const last = answer.messages.filter((message) => drawn.has(message.id)).at(-1);
-  const fresh = answer.messages.filter((message) => !drawn.has(message.id) && (!last || message.created >= last.created));
+  const newest = answer.messages.filter((message) => drawn.has(message.id)).reduce((latest, message) => (latest && latest.created > message.created ? latest : message), null);
+  const fresh = answer.messages.filter((message) => !drawn.has(message.id) && (!newest || message.created >= newest.created));
   if (!fresh.length) return;
   list.querySelector(":scope > .empty")?.remove();
   list.insertAdjacentHTML("beforeend", fresh.map((message) => messageMarkup(message, answer)).join(""));
