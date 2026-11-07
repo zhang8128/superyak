@@ -119,6 +119,8 @@ people's private content or authority over another independently operated peer.
 
 ## Pair two peers
 
+In the parent repository, [docs/two-people.md](../docs/two-people.md) walks two people on two laptops through this.
+
 See [API.md](API.md) for provisioning, routes, state, and audience semantics;
 [PROTOCOL.md](PROTOCOL.md) specifies the signed envelope/card schema, independent
 origins, receipts, bounded retry and revocation behavior. An operator pairs a card
