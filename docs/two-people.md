@@ -7,7 +7,8 @@ pairing codes out.
 
 ## What it costs and what you need
 
-- **Money:** nothing we know of. Superyak is free; Tailscale has a $0 plan, with sharing on all plans (November 2026).
+- **Money:** nothing we know of. Superyak is free; Tailscale has a $0 plan for non-commercial use, with sharing on all
+  plans (November 2026).
 - **Each of you:** a Mac or Linux laptop you may install software on (no Windows; WSL is untried), a terminal, `git`,
   `make`, uv and a free Tailscale account. We haven't timed this. Be on a call for steps 4 to 6.
 - **In use:** Alex keeps three windows open, Sam one. Messages wait until both laptops are awake and running them.
@@ -32,8 +33,12 @@ Run everything from the top `superyak` folder, in an ordinary terminal window. Y
 `peer/README.md`'s commands run inside `peer/`, where that path would mean a different home.
 
 **1. Both: install.** Install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` and open a new terminal. On a
-Mac without `git` or `make`, run `xcode-select --install`. Run the `git clone` line from [Try a
-home](../README.md#try-a-home-in-two-minutes), then `cd superyak` and `make setup-peer`.
+Mac without `git` or `make`, run `xcode-select --install`. Then:
+```sh
+git clone https://github.com/zhang8128/superyak.git
+cd superyak
+make setup-peer
+```
 
 **2. Both: create your home.** Alex runs this; Sam uses `--username sam --name 'Sam'`.
 ```sh
@@ -45,7 +50,7 @@ you already ran `make home`, use a second home: `--data-dir .engram/sam` on `ini
 `HOME_DATA=.engram/sam` on `make home`, the same folder.
 
 **3. Both: connect with Tailscale.** Install [Tailscale](https://tailscale.com/download) and sign in with a personal
-account, not a university one: accepting a share takes being an admin of your own Tailscale network. On a Mac, if
+account, not a university one: sharing and accepting each take being an admin of your own Tailscale network. On a Mac, if
 `tailscale` isn't a command, use `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
 - **Alex:** in the Tailscale [admin console](https://login.tailscale.com/admin/machines), open **Machines**, your
   laptop's menu, **Share**, **Copy invite link**. Send Sam the link and the address from `tailscale ip -4`
@@ -59,13 +64,14 @@ uv run --locked --project peer python -m superyak_peer card --username alex --en
 uv run --locked --project peer python -m superyak_peer card --username sam --pull > sam-card.json
 ```
 Each shows `Pairing code:` on that screen only, and the same command shows it again. `--endpoint` is `https://`, the
-address, `:7437`, and nothing after. Check it: after pairing it can't change, short of a new home and pairing again.
+address, `:7437`, and nothing after. Check it: after pairing it can't change, short of a new home and pairing again. If
+Alex's laptop already uses port 7437, pick another now and use it here, as `federation-listen --port N`, and in `tailscale
+serve --tcp N tcp://127.0.0.1:N` in step 7.
 
 **5. Both: swap cards, then read your codes.** Send your card file as an attachment, any way you like: it's all public
-material. Save theirs in your `superyak` folder. Then read your code aloud on a call, or send it by a channel you both
-trust, apart from the card, and never to an AI agent or into a chat with one: the code proves the card you hold is the
-one on that person's screen only if a person reads it there and types it here, and if it travels as the card did,
-nothing is compared.
+material. Save theirs in your `superyak` folder. Then read your code aloud on a call, and never send it to an AI agent or
+into a chat with one: the code proves the card you hold is the one on that person's screen only if a person reads it
+there and types it here, and if it travels as the card did, nothing is compared.
 
 **6. Both: pair.** Alex runs the first line and types Sam's code; Sam runs the second and types Alex's.
 ```sh
@@ -76,8 +82,9 @@ It names the card's person and address (`at None` for Sam, who has none), then a
 If the code doesn't match, ask them to read it again, and type only what they read you. Run `card` and `pair` yourself:
 they need a real terminal, so from an AI assistant's tools `card` shows no code and `pair` refuses.
 
-**7. Both: start your homes.** Alex needs three windows, one line each, left running: the web page (`--sync` makes it
-deliver), the door Sam's home dials, and Tailscale publishing that door. Sam needs only the first line.
+**7. Both: start your homes, only after `Paired`.** Before it, the second line stops with `serves a push peer only`. Alex
+needs three windows, one line each, left running: the web page (`--sync` makes it deliver), the door Sam's home dials, and
+Tailscale publishing that door. Sam needs only the first line.
 ```sh
 make home HOME_ARGS=--sync
 uv run --locked --project peer python -m superyak_peer federation-listen
