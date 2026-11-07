@@ -53,5 +53,5 @@ def test_serve_passes_the_loaded_history_to_create_app(monkeypatch, tmp_path):
     # serve imports create_app and uvicorn inside its branch (__main__.py:330-331), so patch where they are looked up
     monkeypatch.setattr(app_module, 'create_app', lambda *a, **kw: seen.update(kw) or object())
     monkeypatch.setitem(sys.modules, 'uvicorn', types.SimpleNamespace(run=lambda *a, **kw: None))
-    cli.main(['serve', '--data-dir', str(tmp_path / 'd')])
+    cli.main(['serve', '--data-dir', str(tmp_path / 'd'), '--port', '0'])  # any free port: this machine may be using 7435
     assert seen['agent_history'] == AgentHistory(STATION, frozenset())

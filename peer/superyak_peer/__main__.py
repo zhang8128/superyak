@@ -1,6 +1,7 @@
 """Explicit provisioning and loopback-first server commands."""
 import argparse
 from datetime import datetime, timezone
+import errno
 import getpass
 import hmac
 import ipaddress
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import shlex
+import socket
 import sqlite3
 import sys
 from . import agent_version
@@ -25,6 +27,21 @@ TRUSTS_HEADER = 'Owner trusts here. Owner and ship names come from other machine
 SHUTDOWN_GRACE = 5  # seconds a stopping server waits on open requests: an unread long-poll waits up to 25 s
 
 SOCKET_VARIABLE = 'ENGRAM_EMBEDDER_SOCKET'
+
+
+def refuse_a_taken_port(host, port, another):
+    """Say a taken port plainly, before anything starts: uvicorn runs the app's startup first, then reports a bind error.
+    Only a taken port is refused here. Anything else goes on to the server, which says it as it always has."""
+    try:
+        for family, kind, protocol, _, address in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE):
+            with socket.socket(family, kind, protocol) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn binds: an old connection isn't a taken port
+                if family == socket.AF_INET6:
+                    probe.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)  # as asyncio binds: --host :: isn't IPv4's port too
+                probe.bind(address)
+    except OSError as error:
+        if error.errno == errno.EADDRINUSE:
+            raise ValueError(f'Port {port} is already in use on {host}, so nothing was started. Stop what is using it, or {another}.') from None
 
 
 def imprint_unit_env(home):
@@ -1082,7 +1099,7 @@ def main(argv=None):
             print(new_identity_for(args.data_dir, args.endpoint))
         elif args.command == 'demo':
             seed_demo(args.data_dir)
-            print(f'Demo ready. Private credentials: {args.data_dir / "demo-credentials.json"}')
+            print(f'Demo accounts set up. Their fictional passwords, which you do not need: {args.data_dir / "demo-credentials.json"}')
         elif args.command == 'init':
             store = Store(args.data_dir)
             with store.transaction() as db:
@@ -1129,6 +1146,7 @@ def main(argv=None):
                 loopback = False
             if not loopback:
                 raise ValueError('federation-listen binds to loopback; tailscale serve publishes it')
+            refuse_a_taken_port(args.host, args.port, 'choose another with --port, though a paired peer keeps dialing the port in your card')
             from .identity import PeerIdentity
             from .signatures import refuse_a_lost_identity_before_the_store
             refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b
@@ -1215,7 +1233,9 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load(), imprints_dir=args.imprints_dir,
+            other = 8081 if args.port == 8080 else 8080
+            refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,

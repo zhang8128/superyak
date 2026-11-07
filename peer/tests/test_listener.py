@@ -152,7 +152,7 @@ def test_every_server_waits_only_a_moment_on_open_requests_when_stopped(tmp_path
     push[0].claim_federation_mode('push')
     cli.main(['federation-listen', '--data-dir', str(push[0].data_dir), '--port', '0'])
     cli.main(['door', '--data-dir', str(tmp_path / 'door'), '--port', '7999'])
-    cli.main(['serve', '--data-dir', str(tmp_path / 'lighthouse')])
+    cli.main(['serve', '--data-dir', str(tmp_path / 'lighthouse'), '--port', '0'])
     assert [options.get('timeout_graceful_shutdown') for options in ran] == [cli.SHUTDOWN_GRACE] * 3
     assert 0 < cli.SHUTDOWN_GRACE <= 5
 
