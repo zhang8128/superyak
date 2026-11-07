@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import uuid
 import tempfile
 from pathlib import Path
 import socket
@@ -215,6 +216,80 @@ def test_the_sign_in_page_speaks_to_a_visitor_about_this_home_not_theirs(browser
     assert "Opening your home" not in shell and "Opening this home" in shell
 
 
+def test_an_invitation_link_on_a_phone_goes_to_what_is_left_to_fill_in(browser_peer):
+    """The form sits far below the Sign in fields on a phone, so the link used to land a person on the wrong form."""
+    with sync_playwright() as playwright, signed_out_browser(playwright, viewport={"width": 390, "height": 844}) as page:
+        page.goto(browser_peer["base_url"] + "/#activate?token=made-up&username=someone&name=Someone")
+        password = page.locator('#redeem-form input[name="password"]')
+        expect(password).to_be_focused()
+        expect(password).to_be_in_viewport()
+
+
+def test_the_old_promises_are_gone_from_every_screen():
+    """A short list of words that promised more than the code does, so they don't come back. Stored words are in clear on
+    disk, so whoever runs the machine, and any AI agent they run on it, can read them, and a room may have a ship or
+    another home in it. What this can't catch is a new way of saying it: that takes a reader of the code."""
+    static = Path(__file__).resolve().parents[1] / "superyak_peer" / "static"
+    words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html", static / "consent.html"))
+    for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
+                    r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
+                    r"(?i)\bstays? private to\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
+                    r"(?i)\bonly your account\b"):
+        assert not re.search(promise, words), promise
+
+
+def test_a_signed_in_person_is_told_who_can_read_where_they_work(browser_peer):
+    """The inside labels lean on this. The sidebar is hidden on a phone, so Home says it too."""
+    who = "Whoever runs this home, who may not be you, can read everything stored on it, and so can any AI agent they run on its computer."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            expect(page.get_by_test_id("who-can-read")).to_have_text(who)
+            expect(page.locator(".sidebar-foot")).to_have_text(who)
+            assert "Private chat" not in page.locator("main").inner_text()
+        for width, height in ((390, 844), (375, 667), (320, 568)):  # the fixed bar covers the foot of a small screen
+            with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": width, "height": height}) as (page, _):
+                line = page.get_by_test_id("who-can-read").bounding_box()
+                assert line["y"] + line["height"] <= page.locator(".sidebar").bounding_box()["y"]
+
+
+def test_a_saved_draft_says_what_no_other_account_can_do(browser_peer):
+    """The sentence meant for drafts sat in a branch nothing reached, so it's asserted on a rendered draft, beside the
+    source panel's own sentence on the same page."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.get_by_role("link", name="My sharing layers").click()
+        expect(page.get_by_text("No other account can open imported records.")).to_be_visible()
+        page.get_by_role("button", name="New layer").click()
+        page.get_by_label("What do you want to share?").fill("Fictional words.")
+        page.get_by_role("button", name="Save private draft").click()
+        expect(page.get_by_text("No other account can open your saved draft.")).to_be_visible()
+
+
+@pytest.mark.parametrize("kind, label, says", [
+    ("selected-records", "Papers and records · No other account can open it", True),
+    ("file", "Files and datasets", False),
+])
+def test_a_source_only_says_no_other_account_where_that_holds(browser_peer, kind, label, says):
+    """A file in a file source can be attached to a release, so from a public release an anonymous visitor could fetch what its page called
+    no other account's. Only records keep the claim."""
+    name = "Source " + uuid.uuid4().hex[:6]
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.get_by_role("link", name="Research & data", exact=True).click()
+        page.get_by_role("button", name="New source", exact=True).click()
+        page.get_by_label("Source name", exact=True).fill(name)
+        page.get_by_label("Source type", exact=True).select_option(kind)
+        page.get_by_role("button", name="Create source", exact=True).click()
+        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
+        eyebrow = page.locator("main .eyebrow").filter(has_text=label.split(" · ")[0]).first
+        expect(eyebrow).to_have_text(label, ignore_case=True)
+        assert ("no other account" in eyebrow.inner_text().lower()) is says  # the eyebrow's text is upper-cased by CSS
+
+
+def test_an_invitation_link_with_only_a_token_goes_to_the_username(browser_peer):
+    with sync_playwright() as playwright, signed_out_browser(playwright, viewport={"width": 390, "height": 844}) as page:
+        page.goto(browser_peer["base_url"] + "/#activate?token=made-up")
+        expect(page.locator('#redeem-form input[name="username"]')).to_be_focused()
+
+
 def test_the_sign_in_pages_tile_shows_and_its_help_clears_the_button(browser_peer):
     """The second cold walk: the S tile vanished on the dark panel, and `.login-panel > p` outranked `.login-help`."""
     with sync_playwright() as playwright, signed_out_browser(playwright) as page:
@@ -250,7 +325,7 @@ def test_on_a_phone_the_sign_in_form_is_on_the_first_screen_with_who_can_read(br
 
 def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_prototype(browser_peer):
     """The re-check of the phone order: someone with an invitation link could make an account with the page's main facts
-    a screen and more below the button, so the form says them itself, above its button, at every width."""
+    a screen and more below the button, so the form says them itself, at every width."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 390, "height": 844})
@@ -261,8 +336,10 @@ def test_before_making_an_account_a_person_is_told_who_can_read_and_that_its_a_p
             facts = page.get_by_test_id("before-an-account")
             expect(facts).to_have_text("Whoever runs this home, and any AI agent they run on its computer, can read what's "
                                        "stored here. It's a prototype: please don't put real patient information in it yet.")
-            button = page.get_by_role("button", name="Create my account")
-            assert facts.bounding_box()["y"] < button.bounding_box()["y"]
+            # Above the new password, so a phone's keyboard doesn't cover them, and tied to it, since a screen reader starts
+            # at that field and would otherwise read on past them.
+            assert facts.bounding_box()["y"] < page.locator("#new-password").bounding_box()["y"]
+            assert page.locator("#new-password").get_attribute("aria-describedby") == "before-an-account"
         finally:
             context.close()
             browser.close()
@@ -348,6 +425,8 @@ def test_source_library_import_pause_and_private_review(browser_peer):
         assert browser_peer['app'].state.data_sources.list(actor)['sources'][0]['item_count'] == 0
         page.get_by_role('button', name='Import privately', exact=True).click()
         expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
+        expect(page.locator('.evidence-card .eyebrow', has_text='Source record')).to_have_text(
+            'Source record · No other account can open it', ignore_case=True)
         page.get_by_role('button', name='Pause imports', exact=True).click()
         expect(page.get_by_role('button', name='Resume imports', exact=True)).to_be_visible()
         expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
@@ -759,7 +838,7 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, context):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Care planning")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Dr. Morgan").check()
@@ -813,7 +892,7 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             page.screenshot(path=str(ARTIFACTS / "home-mobile.png"))
             page.get_by_role("link", name="Connections", exact=True).click()
             expect(page.get_by_role("heading", name="Account support")).to_be_visible()
-            expect(page.get_by_text("Account support does not open private chats or drafts.")).to_be_visible()
+            expect(page.get_by_text("Account support does not open anyone's chats or drafts.")).to_be_visible()
             page.get_by_role("button", name="Create invitation").click()
             # Exact: the access-requests panel also reads "Approving creates a one-use invitation …" once it loads.
             expect(page.get_by_text("One-use invitation", exact=True)).to_be_visible()
@@ -1171,7 +1250,7 @@ def test_accepted_message_refresh_failure_keeps_new_composer_without_duplicate(b
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Reliable send")
             page.get_by_role("button", name="Create chat").click()
             expect(page.get_by_role("heading", name="Reliable send")).to_be_visible()
@@ -1232,7 +1311,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("First audience")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Dr. Morgan").check()
@@ -1240,7 +1319,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
             expect(page.get_by_role("heading", name="First audience")).to_be_visible()
             room_id = decode_fragment_id(page.url)
 
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             expect(page.get_by_role("checkbox", name="Sam Family")).not_to_be_checked()
             expect(page.get_by_role("checkbox", name="Sam Family")).to_be_enabled()
             page.get_by_label("Chat title").fill("Second direct room")
@@ -1266,7 +1345,7 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Kept close")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("button", name="Create chat").click()
@@ -1443,7 +1522,7 @@ def test_repeated_send_during_post_acceptance_refresh_reuses_settled_composer(br
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("One accepted send")
             page.get_by_role("button", name="Create chat").click()
             expect(page.get_by_role("heading", name="One accepted send")).to_be_visible()
@@ -1484,7 +1563,7 @@ def test_accepted_participant_removal_survives_failed_followup_read(browser_peer
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="Chats", exact=True).click()
-            page.get_by_role("button", name="New private chat").click()
+            page.get_by_role("button", name="New chat").click()
             page.get_by_label("Chat title").fill("Removal boundary")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("button", name="Create chat").click()
@@ -1733,7 +1812,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             page.get_by_role('link', name='Shared spaces', exact=True).click()
             expect(page.get_by_text('New incoming update', exact=True)).to_be_visible()
             page.get_by_role('link', name='Chats', exact=True).click()
-            page.get_by_role('button', name='New private chat').click()
+            page.get_by_role('button', name='New chat').click()
             page.get_by_label('Chat title').fill('Delivery room')
             page.get_by_role('dialog').get_by_role('checkbox', name='Casey Delivery').check()
             page.get_by_role('button', name='Create chat', exact=True).click()
@@ -2013,6 +2092,7 @@ def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(brow
             open_new_layer(page)
             page.get_by_label("Kind").select_option("instructions")
             expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)
+            expect(page.get_by_text("Only your own ships get these, and only once you turn on a version. A ship sends them to its AI company.")).to_be_visible()
             page.get_by_label("Layer title").fill("House rules")
             page.get_by_label("What do you want to share?").fill("Run the tests first.")
             page.get_by_role("checkbox", name="Serenity").check()
@@ -2057,7 +2137,7 @@ def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_
             page.reload()
             panel = page.locator(".room-brief")
             expect(panel.get_by_role("heading", name="Room brief")).to_be_visible()
-            expect(panel.get_by_text("Visible to members on this station only.")).to_be_visible()
+            expect(panel.get_by_text("Members on other homes don't get this. A ship aboard, or an app a member connected, sends it to its AI company.")).to_be_visible()
             panel.get_by_role("button", name="Edit brief").click()
             panel.get_by_label("Edit brief").fill(brief)
             panel.get_by_role("button", name="Save brief").click()
@@ -2634,6 +2714,20 @@ def test_opening_a_room_from_the_chat_list_loads_its_board_and_a_new_room_opens_
             expect(page.locator(".room-board .board-item", has_text="spec:fresh")).to_be_visible()
 
 
+def test_a_marked_rooms_brief_doesnt_say_a_ship_sends_it_on(browser_peer):
+    """No ship can be aboard a marked room and a connected app is refused, so that half of the brief's line would
+    contradict the mark beside it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Kept away", [users["family"]["id"]])
+    store.mark_room(users["patient"]["id"], room["id"])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        brief = page.locator(".room-brief")
+        expect(brief).to_contain_text("Members on other homes don't get this.")
+        expect(brief).not_to_contain_text("sends it to its AI company")
+
+
 def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
     """Break caught: a member who is not the owner can change the brief, or cannot see it."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
@@ -2644,7 +2738,7 @@ def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
             page.goto(f"{base}/#chats/{room['id']}")
             page.reload()
             expect(page.locator(".room-brief .room-brief-body")).to_have_text("Rio Grande builds the brief.")
-            expect(page.locator(".room-brief")).to_contain_text("Visible to members on this station only.")
+            expect(page.locator(".room-brief")).to_contain_text("Members on other homes don't get this. A ship aboard, or an app a member connected, sends it to its AI company.")
             expect(page.get_by_role("button", name="Edit brief")).to_have_count(0)
             expect(page.get_by_label("Edit brief")).to_have_count(0)
             expect(page.get_by_role("button", name="Save brief")).to_have_count(0)

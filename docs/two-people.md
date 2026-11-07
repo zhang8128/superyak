@@ -97,7 +97,7 @@ tailscale serve --tcp 7437 tcp://127.0.0.1:7437
   `Fetches from us · last pull`.
 
 **8. Alex, then Sam: a room and a message.**
-- **Alex:** **Chats**, **New private chat**, a title, tick Sam, **Create chat**. Write something and click **Send
+- **Alex:** **Chats**, **New chat**, a title, tick Sam, **Create chat**. Write something and click **Send
   message**. It says `Waiting for pull` until Sam's home fetches it, within about a minute.
 - **Sam:** pages don't update by themselves, so click **Check delivery now** on **Connections**, which also fetches at
   once. Open the room under **Chats** and reply. Alex clicks it too, to see the reply.
