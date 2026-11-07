@@ -3377,9 +3377,10 @@ def recall(
         except Exception:
             logger.warning("Knowledge graph search failed during recall", exc_info=True)
 
-    # ∞-category: surface relevant morphisms (cross-domain transfers)
+    # ∞-category: surface relevant morphisms (cross-domain transfers). Their text quotes earlier queries word for word
+    # and a cell doesn't know its lane, so a recall kept to one lane leaves them out.
     transfers = []
-    if _category_store:
+    if _category_store and lane is None:
         try:
             cat_results = _category_store.search(embedding, level=2, limit=3)
             for cr in cat_results:

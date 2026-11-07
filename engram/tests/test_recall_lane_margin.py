@@ -94,3 +94,19 @@ def test_biased_lane_recall_counterfactual_stays_in_requested_lane(
         "survives": True,
         "displaced": None,
     }
+
+
+def test_a_recall_kept_to_one_lane_returns_no_transfers(engram_server_env, monkeypatch):
+    """A transfer's text quotes earlier queries word for word, and a cell doesn't know its lane."""
+    _seed_two_lanes()
+
+    class Transfers:
+        def search(self, embedding, level=None, limit=10):
+            return [{"content": "cross-domain: 'a personal question' connects to 'a work question'", "level": 2, "context": {}}]
+
+    monkeypatch.setattr(server, "_category_store", Transfers())
+
+    assert server.recall(query="rivers", max_results=2, uninvited=0)["transfers"]  # the store is wired, and both lanes still see them
+    out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
+    assert "transfers" not in out
+    assert "a personal question" not in json.dumps(out)
