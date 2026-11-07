@@ -2211,7 +2211,9 @@ async function openChat(id) {
       if (still()) {
         if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
         state.selectedChatId = state.room?.id ?? null;  // it follows what's on screen, so nothing opens this later by itself
-        setFlash(openFailedWords(id, error), true);
+        const words = openFailedWords(id, error);
+        setFlash(words, true);
+        if (state.room) state.composerNote = { roomId: state.room.id, words };  // at the box too: the reader may be far below the flash
         render();
       }
       return;
@@ -2420,7 +2422,9 @@ async function sendMessage(form) {
     if (identityKey(state.me) !== who) return;  // their words went with their sign-out, and this isn't the next person's news
     const why = reasonOf(error);
     if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
-      setFlash(`Your message to ${chatTitle(room.id) || "the room you left"} wasn't sent. ${why} It's still in the box there.`, true);
+      const words = `Your message to ${chatTitle(room.id) || "the room you left"} wasn't sent. ${why} It's still in the box there.`;
+      setFlash(words, true);
+      state.composerNote = { roomId: room.id, words };  // at the box too: a room opens at its newest, far below the flash
       render();
       return;
     }

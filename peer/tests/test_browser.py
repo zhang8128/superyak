@@ -913,6 +913,7 @@ def test_a_send_that_fails_after_the_person_moved_on_says_where_the_words_are(br
             for route in posts:
                 route.abort()
             expect(page.locator(".notice.error")).to_have_text("Your message to Room X wasn't sent. Connection lost. It's still in the box there.")
+            expect(page.locator(".words-kept")).to_have_text("Your message to Room X wasn't sent. Connection lost. It's still in the box there.")  # a room opens at its newest, far below the flash
             assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"
             page.unroute(f"**/api/chats/{x['id']}/messages")
             page.get_by_role("button", name="Room X").click()
@@ -1323,6 +1324,7 @@ def test_after_a_room_fails_to_open_nothing_opens_it_by_itself(browser_peer):
             page.route(pattern, lambda route: route.abort())
             page.get_by_role("button", name="Room Y").click()
             expect(page.locator(".notice.error")).to_contain_text("Room Y didn't open.")
+            expect(page.locator(".words-kept")).to_contain_text("Room Y didn't open.")  # at the box too, for a reader far below the flash
             page.unroute(pattern)
             page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
             expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
