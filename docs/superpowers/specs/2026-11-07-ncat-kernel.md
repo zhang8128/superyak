@@ -83,8 +83,10 @@ The reviewer ran these against revision 1 and they failed. Each now has a test:
   - **What it counts:** each cell's words, offsets and allocator overhead, plus the context's own arrays at their current sizes: cells,
     the interning table, the memo and the traversal's scratch.
   - **Revision 2 counted words only,** and the reviewer found 64 MB of them came to 364 MB resident.
-  - **Measured now:** filling a 64 MB budget raised resident memory by 47 to 54 MB. A test bounds it at 1.25 times the budget, at
-    32 MB, because the allocator keeps a little more than it hands out. Python's own objects for the cells you hold aren't counted.
+  - **Measured now:** filling a 64 MB budget raised resident memory by 47 to 54 MB on Tardis, with 4 KB pages. On the Pi, with 16 KB
+    pages, a 32 MB budget of long paths raised it 1.31 times, as Rio Grande measured three times.
+  - **The test's bound:** 1.25 times with 4 KB pages, 1.4 with larger ones, because the allocator keeps a little more than it hands
+    out, and more with larger pages. Python's own objects for the cells you hold aren't counted.
 - **The build.**
   - **Compiler:** only `/usr/bin/cc`, `gcc` or `clang`, never one found on PATH.
   - **Flags:** stack protection and `_FORTIFY_SOURCE`, plus full RELRO and a non-executable stack on Linux.

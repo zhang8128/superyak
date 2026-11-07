@@ -532,7 +532,9 @@ def test_the_budget_bounds_resident_memory(kind):
                 for g in loops:
                     p = p.then(g)
     assert caught.value.code == -10
-    assert resident() - before <= budget * 1.25  # the allocator keeps a little more than it hands out
+    # The allocator keeps a little more than it hands out, and more with larger pages: 1.31 measured on the Pi's 16 KB pages.
+    factor = 1.25 if os.sysconf('SC_PAGE_SIZE') <= 4096 else 1.4
+    assert resident() - before <= budget * factor
 
 
 def test_a_refusal_never_leaves_the_category_over_its_budget():
