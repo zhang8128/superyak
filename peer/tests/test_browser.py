@@ -2252,7 +2252,9 @@ def test_a_120_character_emoji_title_posts_whole_from_the_panel(browser_peer):
 
 
 def double_click_apart(page, locator, gap=180):
-    """Two real mouse clicks `gap` ms apart on the same spot, as a hurried double click lands."""
+    """Two real mouse clicks `gap` ms apart on the same spot, as a hurried double click lands. A room opens at its newest,
+    so a person scrolls to the button first; the two clicks themselves don't scroll."""
+    locator.scroll_into_view_if_needed()
     box = locator.bounding_box()
     x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
     page.mouse.click(x, y)
@@ -3740,6 +3742,365 @@ def test_a_long_room_opens_on_the_newest_hundred_and_loads_earlier(browser_peer)
             expect(messages).to_have_count(150)
             assert messages.all_inner_texts() == [f"message {i}" for i in range(150)]
             expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+NEWEST_ON_SCREEN = """() => {
+    const bar = document.querySelector(".sidebar");  // a phone's bottom bar sits over the page
+    const floor = getComputedStyle(bar).position === "fixed" ? bar.getBoundingClientRect().top : innerHeight;
+    const uncovered = (node) => {
+        const box = node.getBoundingClientRect();
+        const covering = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return box.top >= 0 && box.bottom <= floor && node.contains(covering);
+    };
+    return uncovered([...document.querySelectorAll(".messages .message")].pop()) && uncovered(document.querySelector(".composer"));
+}"""
+
+
+@pytest.mark.parametrize("size", [{"width": 1280, "height": 960}, {"width": 390, "height": 844}], ids=["desktop", "phone"])
+@pytest.mark.parametrize("who", ["patient", "family"], ids=["owner", "member"])
+def test_a_busy_room_opens_with_its_newest_message_on_screen(browser_peer, size, who):
+    """Break caught: a busy room opens at the oldest message shown, about 12 screens above the newest, or with the newest
+    under a phone's bottom bar and the box to answer in off the screen (spec D1). An owner has more below the box."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, who) as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()  # by reload
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(NEWEST_ON_SCREEN)
+            page.goto(f"{base}/#home")  # and by the route entering it from another view
+            expect(page.locator(".messages")).to_have_count(0)
+            page.evaluate("scrollTo(0, 0)")
+            page.goto(f"{base}/#chats/{room['id']}")
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(NEWEST_ON_SCREEN)
+
+
+def test_at_the_end_of_a_room_the_box_covers_nothing(browser_peer):
+    """Break caught: the composer's sticky rule, under .split-view's overflow, lifted it 134 px on a phone, over the newest
+    message for good, for a member with nothing below the box to scroll to. It's part of the page now."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            page.evaluate("scrollTo(0, document.scrollingElement.scrollHeight)")
+            assert page.evaluate("""() => {
+                const newest = [...document.querySelectorAll(".messages .message")].pop().getBoundingClientRect();
+                return newest.bottom <= document.querySelector(".composer").getBoundingClientRect().top;
+            }""")
+
+
+def test_no_words_show_through_the_phones_bar(browser_peer):
+    """Break caught: a message under the phone's bottom bar shows through and reads as a muddle."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.send_message(users["patient"]["id"], room["id"], "m1", "message 1")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 1")
+            assert page.evaluate('getComputedStyle(document.querySelector(".sidebar")).backgroundColor').startswith("rgb(")
+
+
+NEWEST_READABLE = """() => {
+    const box = [...document.querySelectorAll(".messages .message")].pop().getBoundingClientRect();
+    const covering = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return box.top >= 0 && box.bottom <= innerHeight && !!covering?.closest(".message");
+}"""
+PHONE = {"width": 390, "height": 844}
+DESKTOP = {"width": 1280, "height": 960}
+
+
+def _busy_room(browser_peer, count=150, title="City of AI"):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], title, [users["family"]["id"]])
+    for i in range(count):
+        store.send_message(users["patient"]["id"], room["id"], f"{title}-{i}", f"message {i}")
+    return room
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_your_own_message_is_on_screen_after_you_send_it(browser_peer, size):
+    """Break caught: with the composer stuck, what you send lands behind it, and the page says "Message saved"."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            for words in ("first of mine", "second of mine"):
+                page.get_by_role("textbox", name="Message", exact=True).fill(words)
+                page.get_by_role("button", name="Send message").click()
+                expect(page.locator(".messages .message p").last).to_have_text(words)
+                expect(page.locator("#chat-status")).to_have_text("Message saved")
+                assert page.evaluate(NEWEST_ON_SCREEN)
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_clicking_a_room_opens_it_at_its_newest(browser_peer, size):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats")
+            page.locator(".split-list .item", has_text="City of AI").click()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(NEWEST_ON_SCREEN)
+
+
+def test_signing_in_again_opens_the_room_at_its_newest(browser_peer):
+    """Break caught: the page remembers the room drawn before the sign-out, so it opens at the top."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.get_by_label("Username", exact=True).fill("family")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(NEWEST_ON_SCREEN)
+
+
+def test_the_rooms_stay_reachable_from_the_end_of_a_long_room(browser_peer):
+    """Break caught: opening at the newest leaves the room list 10,000 px up. On a desktop it stays beside the room; on a
+    phone, where it stacks above, the Chats link goes back to it."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    for i in range(26):  # a phone's list is long: the Chats link must land at its start, not its end
+        store.create_room(users["patient"]["id"], f"Room {i}", [users["family"]["id"]])
+    FIRST_ROOM = """() => { const box = document.querySelector(".split-list .item").getBoundingClientRect();
+        const covering = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return box.top >= 0 && box.bottom <= innerHeight && !!covering?.closest(".item"); }"""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(DESKTOP)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(FIRST_ROOM)
+            page.set_viewport_size(PHONE)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert not page.evaluate(FIRST_ROOM)
+            page.get_by_role("link", name="Chats").click()
+            expect(page.locator(".messages")).to_have_count(0)
+            assert page.evaluate(FIRST_ROOM)
+            assert page.evaluate('(() => { const l = document.querySelector(".split-list .item-list"); return l.scrollHeight <= l.clientHeight; })()')
+
+
+@pytest.mark.parametrize("size", [{"width": 390, "height": 500}, {"width": 667, "height": 375}], ids=["short", "landscape"])
+def test_on_a_short_screen_the_newest_can_be_read(browser_peer, size):
+    """Where the box and the newest can't both fit, the newest wins: the words are what opened the room."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate(NEWEST_READABLE)
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_a_message_too_long_to_fit_opens_at_its_start(browser_peer, size):
+    """Break caught: a long newest message shows neither its start nor its end, or only its end."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, count=30)
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    store.send_message(users["patient"]["id"], room["id"], "long", "A long one. " + "word " * 1200)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_contain_text("A long one.")
+            top = page.evaluate('[...document.querySelectorAll(".messages .message")].pop().getBoundingClientRect().top')
+            assert 0 <= top <= 100
+
+
+def test_an_empty_room_on_a_phone_shows_its_box(browser_peer):
+    """Break caught: with many rooms above it, clicking an empty room changes nothing a person can see."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    for i in range(30):
+        store.create_room(users["patient"]["id"], f"Room {i}", [users["family"]["id"]])
+    store.create_room(users["patient"]["id"], "An empty one", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(PHONE)
+            page.goto(f"{base}/#chats")
+            page.locator(".split-list .item", has_text="An empty one").click()
+            expect(page.get_by_role("heading", name="An empty one")).to_be_attached()
+            expect(page.locator("#composer-to")).to_have_text("To An empty one")  # the page draws twice: measure in one step
+            page.wait_for_function("""() => {
+                const box = document.querySelector(".composer").getBoundingClientRect();
+                return box.top >= 0 && box.bottom <= document.querySelector(".sidebar").getBoundingClientRect().top;
+            }""")
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_the_box_and_the_list_say_which_room_this_is(browser_peer, size):
+    """Break caught: opening at the newest puts the title 10,000 px up, and nothing else names the room, so a person can
+    post in the wrong one."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, title="Plans <b>for</b> May")
+    other = browser_peer["app"].state.store.create_room(browser_peer["users"]["patient"]["id"], "Another", [browser_peer["users"]["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            expect(page.locator("#composer-to")).to_have_text("To Plans <b>for</b> May")
+            expect(page.locator("#composer-to")).to_be_in_viewport(ratio=1)
+            assert page.get_by_role("textbox", name="Message", exact=True).get_attribute("aria-describedby") == "composer-to"
+            current = page.locator('.split-list .item[aria-current="true"]')
+            expect(current).to_have_count(1)
+            expect(current).to_contain_text("Plans <b>for</b> May")
+            expect(current).to_have_class(re.compile(r"\bselected\b"))
+            page.goto(f"{base}/#chats/{other['id']}")
+            expect(page.locator("#composer-to")).to_have_text("To Another")
+            expect(page.locator('.split-list .item[aria-current="true"]')).to_contain_text("Another")
+
+
+def test_the_room_list_keeps_its_place_through_a_render(browser_peer):
+    """Break caught: the desktop list scrolls by itself, and each render reset it, so the room a person clicked jumped away."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    for i in range(40):
+        store.create_room(users["patient"]["id"], f"Room {i}", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(DESKTOP)
+            page.goto(f"{base}/#chats")
+            expect(page.locator(".split-list .item").first).to_be_visible()
+            assert page.evaluate('(() => { const l = document.querySelector(".split-list .item-list"); l.scrollTop = 600; return l.scrollTop; })()') == 600
+            page.evaluate("render()")
+            assert page.evaluate('document.querySelector(".split-list .item-list").scrollTop') == 600
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_a_link_out_of_a_room_starts_the_next_view_at_its_top(browser_peer, size):
+    """Break caught: a long room's scroll carried over, so Home opened at its bottom."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            assert page.evaluate("scrollY") > 1000
+            page.get_by_role("link", name="Home", exact=True).click()
+            expect(page.locator(".messages")).to_have_count(0)
+            assert page.evaluate("scrollY") == 0
+
+
+@pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])
+def test_back_and_forward_are_left_to_the_browser(browser_peer, size):
+    """Break caught: resetting the page on leaving a room lost a person's place on Back, and a scroll memory of our own
+    landed them at the end of the view on Forward then Back."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(size)
+            page.goto(f"{base}/#home")
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.evaluate("scrollTo(0, 400)")
+            page.goto(f"{base}/#chats/{room['id']}")
+            expect(page.locator("#composer-to")).to_have_text("To City of AI")
+            page.go_back()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.wait_for_timeout(100)
+            assert page.evaluate("scrollY") == 400
+            page.evaluate("scrollTo(0, 200)")
+            page.go_forward()
+            expect(page.locator("#composer-to")).to_have_text("To City of AI")
+            page.go_back()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.wait_for_timeout(100)
+            assert page.evaluate("scrollY") == 200
+
+
+def test_a_send_that_ends_after_you_moved_on_does_not_pull_you_back(browser_peer):
+    """Break caught: a slow Send ends while the person is reading another room, and that room jumps to its newest."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer)
+    other = _busy_room(browser_peer, title="Another room")
+    held = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.set_viewport_size(DESKTOP)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator("#composer-to")).to_have_text("To City of AI")
+            page.route("**/api/chats/*/messages", lambda route: held.append(route) if route.request.method == "POST" else route.continue_())
+            page.get_by_role("textbox", name="Message", exact=True).fill("sent on the way out")
+            page.get_by_role("button", name="Send message").click()
+            page.goto(f"{base}/#chats/{other['id']}")
+            expect(page.locator("#composer-to")).to_have_text("To Another room")
+            page.evaluate("scrollTo(0, 40)")
+            assert held
+            with page.expect_response("**/api/sync"):
+                held[0].continue_()
+            page.wait_for_timeout(300)
+            assert page.evaluate("scrollY") == 40
+
+
+def test_a_later_render_of_a_room_leaves_the_reader_where_they_are(browser_peer):
+    """Break caught: every render jumps a person reading older messages back to the newest (spec D1)."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            page.evaluate("scrollTo(0, 500)")
+            page.evaluate("render()")
+            assert page.evaluate("scrollY") == 500
+            page.evaluate("scrollTo(0, 0)")
+            more = page.get_by_role("button", name="Load earlier messages")
+            more.scroll_into_view_if_needed()
+            line = page.locator(".messages .message", has_text="message 50").first
+            before = line.bounding_box()["y"]
+            more.click()
+            expect(page.locator(".messages .message p")).to_have_count(150)
+            assert abs(line.bounding_box()["y"] - before) <= 2  # Load earlier keeps the reader's line
+
+
+def test_moving_to_another_room_opens_that_room_at_its_newest(browser_peer):
+    """Break caught: the page only notices leaving the view, so a longer room opens where a shorter one's end was."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    first = store.create_room(users["patient"]["id"], "First room", [users["family"]["id"]])
+    second = store.create_room(users["patient"]["id"], "Second room", [users["family"]["id"]])
+    for room, count in ((first, 20), (second, 120)):
+        for i in range(count):
+            store.send_message(users["patient"]["id"], room["id"], f"{room['id']}-{i}", f"{room['title']} {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{first['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p").last).to_have_text("First room 19")
+            page.locator(".split-list .item", has_text="Second room").click()  # a real click, from the end of the first
+            expect(page.locator(".messages .message p").last).to_have_text("Second room 119")
+            assert page.evaluate(NEWEST_ON_SCREEN)
 
 
 def test_a_refresh_appends_a_new_message_once(browser_peer):
