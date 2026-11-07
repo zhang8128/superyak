@@ -1,8 +1,9 @@
 # The n-category kernel: the loop-free fragment of the free strict n-category
 
-Tardis, 2026-11-07, revision 2. It was written for Andy's "even the basics aren't properly built like n category theory graph
-structure" and "write it in C if needed for performance", and is stage 2 of the plan on issue #2. Revision 1 was rejected by a fresh
-spec reviewer; each of its must-changes is answered below. The code is `engram/ncat_kernel.c`, `engram/ncat.py` and
+Tardis, 2026-11-07, revision 3. It was written for Andy's "even the basics aren't properly built like n category theory graph
+structure" and "write it in C if needed for performance", and is stage 2 of the plan on issue #2. A fresh spec reviewer rejected
+revision 1, then approved revision 2 with three changes, which revision 3 makes: no call freezes the process, the budget bounds real
+memory, and two lines below. The code is `engram/ncat_kernel.c`, `engram/ncat.py` and
 `engram/tests/test_ncat.py`. It has no storage, and nothing in Engram calls it yet.
 
 ## What it is, named for what it is
@@ -50,10 +51,12 @@ there, and every way of building U by composition names it. The labelling is a m
 ν(U) to the free category on the generators, and that functor sends the top cell to one cell. An accepted composite is, by induction
 on how it was built, the image of its own shape's top cell. So two composites with the same labelled shape are the same cell.
 
-**Different canonical words, so different cells (completeness).** The kernel's cells, with its composition, satisfy the strict laws
-up to the unique isomorphism of shapes. Rigidity makes it unique, and Hadzihasanovic proves pasting of molecules is associative with
-interchange up to isomorphism. So any two expressions the laws equate land on one shape, and the shape is an invariant of the cell:
-different shapes can't be the same cell. That rests on the laws holding for labelled pasting. They're tested here, at every
+**Different canonical words, so different cells (completeness).** Labelled pasting of molecules satisfies the strict laws up to the
+unique isomorphism of shapes, for all labelled molecules and not only the kernel's partial composition. Rigidity makes the isomorphism
+unique, and Hadzihasanovic proves pasting of molecules is associative with interchange up to isomorphism. Two held cells that the laws
+equate are joined by a chain of law steps, and that chain never leaves the loop-free fragment: each step keeps the whole shape, and
+every part of a loop-free shape is loop-free. So the laws equate them within the fragment, both land on one shape, and the shape is an
+invariant of the cell: different shapes can't be the same cell. That rests on the laws holding for labelled pasting. They're tested here, at every
 dimension up to 5, and cited. I haven't proved them for non-injective labellings myself.
 
 **Needs a mathematician:** both directions lean on texts I haven't re-read for this, and on my step from Steiner's injective shapes
@@ -63,15 +66,25 @@ to labelled ones. No agent's agreement is independent evidence, mine and the rev
 
 The reviewer ran these against revision 1 and they failed. Each now has a test:
 
-- **Threads.** Every call holds the GIL (`ctypes.PyDLL`) and the category's own lock. Four threads on one category used to crash with a
-  use-after-free. They now give the cells one thread gives, and the test is clean under ASan and UBSan.
+- **Threads.** Every call holds its category's lock and lets the GIL go (`ctypes.CDLL`).
+  - Four threads on one category used to crash with a use-after-free. They now give the cells one thread gives, and the test is clean
+    under ASan and UBSan.
+  - Revision 2 held the GIL instead, so one long composition froze every other thread in the process: 58.6 s in the reviewer's run.
+    A test now checks that another thread runs during a long call.
+- **Work.** Each call has a bound on its steps, 2³⁰ by default and set on creation, past which it refuses (-11) and changes nothing but
+  the memo of what it finished.
 - **Ownership.** Cells from two categories are refused (-7), never silently mixed.
 - **Ranges.** A dimension must be an int from 0 to 15, checked in Python and again in C, so 2**32 is refused, not wrapped. The C checks
   a negative or missing buffer too.
 - **Immutability.** A cell's fields can't be set.
 - **Sizes.** A cell holds at most 2²² elements and 2²⁶ words, checked before anything is allocated, so every count fits in 32 bits.
-- **Memory.** A category holds every cell it makes, so it has a budget, 2²⁷ words by default and set on creation. The budget counts
-  everything held, and the category keeps answering once it's full. Dropping the category frees all of it.
+- **Memory.** A category holds every cell it makes, so it has a budget in bytes, 1 GiB by default and set on creation. Dropping the
+  category frees all of it, and a full category keeps answering.
+  - **What it counts:** each cell's words, offsets and allocator overhead, plus the context's own arrays at their current sizes: cells,
+    the interning table, the memo and the traversal's scratch.
+  - **Revision 2 counted words only,** and the reviewer found 64 MB of them came to 364 MB resident.
+  - **Measured now:** filling a 64 MB budget raised resident memory by 47 to 54 MB. A test bounds it at 1.25 times the budget, at
+    32 MB, because the allocator keeps a little more than it hands out. Python's own objects for the cells you hold aren't counted.
 - **The build.**
   - **Compiler:** only `/usr/bin/cc`, `gcc` or `clang`, never one found on PATH.
   - **Flags:** stack protection and `_FORTIFY_SOURCE`, plus full RELRO and a non-executable stack on Linux.
@@ -101,11 +114,11 @@ The reviewer ran these against revision 1 and they failed. Each now has a test:
   - **n ≤ 4:** 230,398 pairs, 0 disagreements, at ab1c4978. 370 cells reached dimension 4, and 48 pairs there were equal.
   - **The reviewer, on worlds built around Rio Grande's example:** about 659,000 pairs at n = 3 and 289,000 at n = 4, 214,000 of
     those real exchanges. No false equality.
-- **Mutants:** `engram/experiments/ncat/mutants.py`, 21 of them, all committed.
-  - 18 are caught, including the reviewer's four survivors: the check only at i = top − 2, skipping dimension 3, top elements only,
-    and skipping generators.
-  - 3 are equivalent, each with its reason printed.
+- **Mutants:** `engram/experiments/ncat/mutants.py`, 24 of them, all committed. Every one that changes an answer is caught, 21 in all,
+  including the reviewer's four round-one survivors and the budget, work and scratch mutants added for revision 3. The other 3 are
+  equivalent, each with its reason printed.
 - **Sanitizers:** ASan and UBSan, clean, on the threads, budget, argument, refusal and known-answer tests.
+- **The suite:** the kernel's test file only, counted once the file is final, with no other files counted in.
 
 **Not done:**
 - The rewalt cross-check: installing it was refused on Tardis, so it needs Andy's yes or the Pi.
@@ -126,7 +139,8 @@ understates the gap.
 | Stack of 50 sheets, 100 marks | 303 | 1.2 ms | 54.6 ms | 45 |
 
 So yes for canonicalising. But each composite is canonicalised whole, so building a long cell step by step is quadratic: the reviewer
-measured 44.6 s and 4.3 GB for a 2-cell tree grown one step at a time to 1,000 steps. The budget stops that from taking the machine.
+measured 44.6 s and 4.3 GB for a 2-cell tree grown one step at a time to 1,000 steps. The budget and the work bound now refuse that
+before it takes the machine.
 Making it incremental is future work, and only worth it if real sessions are that long.
 
 ## Where speed comes from, beyond the language
@@ -146,7 +160,7 @@ The reviewer corrected four of these, so each now says its conditions.
 4. **Exact shortcut methods need equality.** Contraction hierarchies and hub labels answer exactly only when a shortcut costs exactly
    what the route it replaces costs, not merely no more. Memory graphs may also be small-world, where they degrade. Measure, don't assume.
 5. **A heuristic is a cochain, per target.** A* with heuristic h is Dijkstra on reduced costs w − δπ with π = −h and π(target) = 0.
-   Consistency is δπ ≤ w. The largest feasible π is the exact distance to that one target, so "largest" holds per target only.
+   Consistency is δπ ≤ w. The largest consistent h is the exact distance to that one target, so "largest" holds per target only.
    - **The H¹ class:** cost has one only on the bare graph. Once cost-reducing 2-cells are present, δw ≠ 0 on them.
    - **"How far":** "how far from path-independent" needs a chosen norm.
 6. **Sheaf cohomology, with conditions.** On a 1-complex over a field, dim H⁰ − dim H¹ = Σ dim F(v) − Σ dim F(e), so one rank gives

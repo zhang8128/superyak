@@ -3,8 +3,9 @@ dimension, and equality you can trust where it answers. The kernel is C (`ncat_k
 canonicalising a shape at every composition. That file's head says what a cell is and what's refused. No storage, and nothing
 steers recall: it's the structure alone.
 
-Safe to share between threads: every call into the kernel holds the GIL (PyDLL) and the category's own lock. Cells from two
-categories never mix. A category holds every cell it has made until it's dropped, within a budget of words."""
+Safe to share between threads: every call into the kernel holds its category's lock, and lets the GIL go, so a long composition
+stops nothing else in the process. Cells from two categories never mix. A category holds every cell it has made until it's dropped,
+within a budget of bytes, and each call has a bound on its work."""
 import ctypes
 import hashlib
 import os
@@ -25,7 +26,7 @@ ERRORS = {-1: 'not composable: the boundaries differ', -2: 'a generator with an 
           -3: "the source and target aren't parallel", -4: "a generator's boundary must be round",
           -5: "this shape isn't loop-free, so the kernel won't say which cell it is (it may still be determined)",
           -6: 'out of memory', -7: 'bad argument', -8: "the traversal couldn't finish this shape",
-          -9: 'too large for the kernel', -10: "over this category's budget"}
+          -9: 'too large for the kernel', -10: "over this category's budget", -11: 'more work than one call may do'}
 
 
 class NCatError(ValueError):
@@ -69,7 +70,7 @@ def _load():
     path = Path(chosen) if chosen else _built()
     if chosen:
         _private(path, 'library')
-    lib = ctypes.PyDLL(str(path))  # PyDLL holds the GIL through each call
+    lib = ctypes.CDLL(str(path))  # releases the GIL during each call; each category's lock keeps its calls one at a time
     lib.ncat_new.restype = ctypes.c_void_p
     lib.ncat_free.argtypes = [ctypes.c_void_p]
     for name, args in (('ncat_gen', 2), ('ncat_compose', 3), ('ncat_boundary', 3), ('ncat_identity', 1), ('ncat_formal', 1),
@@ -85,6 +86,8 @@ def _load():
     lib.ncat_held.restype = ctypes.c_int64
     lib.ncat_set_budget.argtypes = [ctypes.c_void_p, ctypes.c_int64]
     lib.ncat_set_budget.restype = ctypes.c_int32
+    lib.ncat_set_work.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+    lib.ncat_set_work.restype = ctypes.c_int32
     return lib
 
 
@@ -184,15 +187,18 @@ class Cell:
 class NCat:
     """A polygraph: generators with checked boundaries, and the cells they compose into. Dropping it frees every cell."""
 
-    def __init__(self, budget_words=1 << 27):
-        if type(budget_words) is not int or budget_words < 0:
-            raise NCatError(-7)
+    def __init__(self, budget_bytes=1 << 30, work=1 << 30):
+        """budget_bytes bounds the memory its cells hold, overheads counted; work bounds the steps one call may take."""
+        for value in (budget_bytes, work):
+            if type(value) is not int or value < 1:
+                raise NCatError(-7)
         self._lib = _kernel()
         self._lock = threading.RLock()
         self._ptr = self._lib.ncat_new()
         if not self._ptr:
             raise MemoryError
-        _checked(self._lib.ncat_set_budget(self._ptr, budget_words))
+        _checked(self._lib.ncat_set_budget(self._ptr, budget_bytes))
+        _checked(self._lib.ncat_set_work(self._ptr, work))
 
     def __del__(self):
         ptr, self._ptr = getattr(self, '_ptr', None), None
@@ -223,6 +229,6 @@ class NCat:
         return self._call('ncat_ncells')
 
     @property
-    def words_held(self):
+    def bytes_held(self):
         with self._lock:
             return self._lib.ncat_held(self._ptr)
