@@ -202,7 +202,7 @@ async function api(path, options = {}) {
     throw new ApiError(data?.error || "Request could not be completed", response.status);
   }
   // Every route read here answers JSON. Anything else is something in the way, like a sign-in page, or an answer cut
-  // short: the home hasn't said yes, so it's a lost connection, and a send's words stay in the box.
+  // short. No yes can be read, and the home may or may not have taken it, so it's a lost connection and a send's words stay.
   if (!isJson || data === undefined) throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   return data;
 }
