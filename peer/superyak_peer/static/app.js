@@ -196,11 +196,14 @@ async function api(path, options = {}) {
   } catch (_) {
     throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   }
-  const type = response.headers.get("content-type") || "";
-  const data = type.includes("application/json") ? await response.json() : await response.text();
+  const isJson = (response.headers.get("content-type") || "").includes("application/json");
+  const data = await (isJson ? response.json() : response.text()).catch(() => undefined);
   if (!response.ok) {
     throw new ApiError(data?.error || "Request could not be completed", response.status);
   }
+  // Every route read here answers JSON. Anything else is something in the way, like a sign-in page, or an answer cut
+  // short: the home hasn't said yes, so it's a lost connection, and a send's words stay in the box.
+  if (!isJson || data === undefined) throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   return data;
 }
 
