@@ -4465,6 +4465,45 @@ def test_an_arrival_while_sends_sync_waits_stays_on_screen(browser_peer):
             assert page.evaluate("state.room.messages.at(-1).body") == "while sync waits"
 
 
+def test_a_sync_that_fails_first_still_draws_what_sends_refresh_brought(browser_peer):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.evaluate("() => { clearTimeout(roomAskTimer); roomAskTimer = null; }")
+            held = _hold_first_ask(page, room)
+            page.route("**/api/sync", lambda route: route.abort())
+            _someone_says(browser_peer, room, "in send's refresh")
+            page.get_by_role("textbox", name="Message", exact=True).fill("mine")
+            page.get_by_role("button", name="Send message").click()
+            _until(page, "refreshesRunning === 1")
+            page.wait_for_timeout(200)  # the sync has failed by now
+            assert len(held) == 1
+            held[0].continue_()
+            expect(page.locator(".notice")).to_contain_text("Message saved. Latest room status is unavailable.")
+            assert "in send's refresh" in _shown_words(page) and "mine" in _shown_words(page)
+
+
+def test_a_long_wait_for_a_big_received_room_doesnt_carry_into_the_next_room(browser_peer):
+    """A reader ran it: 30.9 s for a message in the room switched to, and by the code up to 180 s after a 5,000-message room."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    other = _busy_room(browser_peer, 3, title="Room B")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.evaluate("""() => {
+                state.room = { ...state.room, paged: false };
+                clearTimeout(roomAskTimer); roomAskTimer = null;
+                roomAskFailures = 2;
+                keepAskingRoom();
+            }""")
+            page.locator(".split-list .item", has_text="Room B").click()
+            expect(page.get_by_role("heading", name="Room B")).to_be_visible()
+            assert page.evaluate("roomAskFailures") == 0
+            _someone_says(browser_peer, other, "soon after the switch")
+            expect(page.locator(".messages .message p").last).to_have_text("soon after the switch", timeout=NEW_MESSAGE_SHOWS_MS)
+
+
 def test_an_ask_that_hangs_gives_up_and_counts_as_a_failure(browser_peer):
     base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
     with sync_playwright() as playwright:

@@ -613,16 +613,28 @@ function roomToAsk() {
   return state.me && state.home && state.room && routeParts().route === "chats" && document.visibilityState === "visible" ? state.room : null;
 }
 
-// A room that isn't paged (a received room) is read whole at every ask, and its news only comes by the pull, about once
-// a minute. So it waits longer, and longer still as it grows, which keeps what a tab costs about level.
+// A room that isn't paged (a received room) is read whole at every ask, and a home that pulls hears news about once a
+// minute. So it waits longer, and longer still as it grows, which keeps what a tab costs about level.
 function roomAskWait(room) {
   const base = room.paged ? ROOM_ASK_MS : Math.max(ROOM_ASK_WHOLE_MS, (room.messages?.length || 0) * 30);
   return Math.min(base * 2 ** roomAskFailures, Math.max(base, ROOM_ASK_LONGEST_MS));
 }
 
+// Another room starts over: no failures, and a long wait armed for a big received room doesn't carry into it.
+function startOverIfAnotherRoom(room) {
+  if (roomAsked === room.id) return;
+  roomAsked = room.id;
+  roomAskFailures = 0;
+  sayRoomUnreachable(false);
+  clearTimeout(roomAskTimer);
+  roomAskTimer = null;
+}
+
 function keepAskingRoom() {
   const room = roomToAsk();
-  if (roomAskTimer !== null || roomAsking || !room) return;
+  if (!room) return;
+  startOverIfAnotherRoom(room);
+  if (roomAskTimer !== null || roomAsking) return;
   roomAskTimer = setTimeout(askRoom, roomAskWait(room) * (0.8 + Math.random() * 0.4));  // a home's tabs don't fall into step, or come back in step
 }
 
@@ -630,10 +642,10 @@ async function askRoom() {
   roomAskTimer = null;
   const room = roomToAsk();
   if (!room || roomAsking) return;
+  startOverIfAnotherRoom(room);
   // An older answer can move the room's place back and put what it fetched after newer messages, so an ask never
   // competes with another read: it steps aside, and its answer is dropped if one started after it did.
   if (refreshesRunning) { keepAskingRoom(); return; }
-  if (roomAsked !== room.id) { roomAsked = room.id; roomAskFailures = 0; sayRoomUnreachable(false); }
   const who = identityKey(state.me), started = refreshesStarted;
   let answer = null, failure = null;
   roomAsking = true;
@@ -2438,17 +2450,16 @@ async function sendMessage(form) {
     const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
     if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
   }
+  // Taken when it comes: an ask can run while sync waits, and this answer mustn't overwrite what it showed.
+  const refreshed = refreshRoom(room).then((latestRoom) => { if (state.room?.id === room.id) state.room = latestRoom; });
   try {
-    const [, latestSync] = await Promise.all([
-      // Taken when it comes: an ask can run while sync waits, and this answer mustn't overwrite what it showed.
-      refreshRoom(room).then((latestRoom) => { if (state.room?.id === room.id) state.room = latestRoom; }),
-      api("/api/sync"),
-    ]);
+    const [, latestSync] = await Promise.all([refreshed, api("/api/sync")]);
     state.sync = latestSync;
     render();
     const refreshedStatus = document.querySelector("#chat-status");
     if (refreshedStatus && state.room?.id === room.id) refreshedStatus.textContent = "Message saved";
   } catch (error) {
+    await refreshed.catch(() => {});  // sync can fail first, and the render below draws what the room's answer brought
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }

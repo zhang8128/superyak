@@ -34,9 +34,9 @@ never stacks. A hidden tab asks nothing. Coming back asks at once. Leaving the r
 person has left changes nothing. No other view polls.
 
 A room that isn't paged (a received room) has no `?since`: each ask reads it whole, which a reader measured at 1.9 MB and
-41 ms of the gate for 5,000 messages. Its news only comes by the pull, about once a minute, so it waits at least 30 s, or
-30 ms per message if that's longer. That keeps one visible tab near 350 MB in 8 hours at any size, for messages of about
-150 characters.
+41 ms of the gate for 5,000 messages. A home that pulls hears news about once a minute (a host that dials in delivers on
+its 5 s pass), so it waits at least 30 s, or 30 ms per message if that's longer. That keeps one visible tab at most about
+370 MB in 8 hours, for messages of about 150 characters. Another room starts over with its own wait and no failures.
 
 Send, the board, the brief and a removal also call `refreshRoom`, and they keep doing so. It builds its answer from
 the room on screen when the answer arrives, so overlapping callers can't lose a message from `state.room`. But an
@@ -163,7 +163,9 @@ same way.
 - An arrival during Send's wait for sync stays on screen.
 - An ask that hangs gives up and counts as a failure.
 - A removal says so, shows the unsent text, and takes the room off the list.
-- A leftover timer asks nothing for the next person signing in, and `state.room` doesn't outlive the person.
+- A leftover timer asks nothing for the next person signing in, and sign-out clears `state.room`.
+- A wait armed for a big received room doesn't carry into the next room.
+- If sync fails before Send's refresh returns, what the refresh brought is still drawn.
 - An ask held across opening the room leaves "Load earlier" working.
 - The "New messages" button is on screen and uncovered, measured in the window: `to_be_visible` says yes at 10,000 px
   below it.
@@ -176,7 +178,7 @@ same way.
 3. One timed arm at load: 20 pollers at 5 s on a 1,200-message room, with goal 2's read time as the bar. Rio Grande's,
    if it wants it; it holds the harness.
 4. After deploy, measure from the Mac, tailnet and Funnel, what this is for: **from a post to a person seeing it.**
-   Propose it for goal 2 as a line of its own: a new message shows within 6 s in a visible room.
+   Propose it for goal 2 as a line of its own: a new message shows within 6 s in a visible paged room.
 
 ## Not in this spec
 
