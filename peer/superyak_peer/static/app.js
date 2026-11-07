@@ -544,11 +544,20 @@ const withoutRepeats = (older, newer) => { const seen = new Set(older.map((messa
 
 function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
 
+let refreshesStarted = 0, refreshesRunning = 0;
+
 // The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
 // (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
 // place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
 // refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
 async function refreshRoom(room) {
+  refreshesStarted++;
+  refreshesRunning++;
+  try { return await readRoomNews(room); }
+  finally { refreshesRunning--; }
+}
+
+async function readRoomNews(room) {
   const shown = state.room?.id === room.id ? state.room : room;
   if (!shown.paged) return api(roomPath(room.id));
   let fresh = [], seq = shown.seq, answer;
@@ -560,7 +569,9 @@ async function refreshRoom(room) {
   } while (answer.more);
   const current = state.room?.id === room.id ? state.room : shown;
   const arrived = new Set(fresh.map((message) => message.id));
-  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
+  // By `created`, and stable: the answers come in the station's order, and a peer's message can carry an older time.
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh]
+    .sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
   // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
   // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
   // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
@@ -591,12 +602,110 @@ async function loadEarlier() {
   }
 }
 
+// A room shows its new messages (spec 2026-11-04). While a room is open and its tab visible, the page asks what's new,
+// one ask at a time, and an arrival goes on the end of the list: a render would drop a selection and close what's open.
+const ROOM_ASK_MS = 5000, ROOM_ASK_LONGEST_MS = 60000, ROOM_ASK_SAY_AFTER = 3, ROOM_NEAR_NEWEST_PX = 120;
+let roomAskTimer = null, roomAsking = false, roomAskFailures = 0, roomAsked = null;
+
+function roomToAsk() {
+  return state.me && state.room && routeParts().route === "chats" && document.visibilityState === "visible" ? state.room : null;
+}
+
+function keepAskingRoom() {
+  if (roomAskTimer !== null || roomAsking || !roomToAsk()) return;
+  const wait = Math.min(ROOM_ASK_MS * 2 ** roomAskFailures, ROOM_ASK_LONGEST_MS);
+  roomAskTimer = setTimeout(askRoom, wait * (0.8 + Math.random() * 0.4));  // a home's tabs don't fall into step, or come back in step
+}
+
+async function askRoom() {
+  roomAskTimer = null;
+  const room = roomToAsk();
+  if (!room || roomAsking) return;
+  // An older answer can move the room's place back and put what it fetched after newer messages, so an ask never
+  // competes with another read: it steps aside, and its answer is dropped if one started after it did.
+  if (refreshesRunning) { keepAskingRoom(); return; }
+  if (roomAsked !== room.id) { roomAsked = room.id; roomAskFailures = 0; sayRoomUnreachable(false); }
+  const who = identityKey(state.me), started = refreshesStarted;
+  let answer = null, failure = null;
+  roomAsking = true;
+  try { answer = await readRoomNews(room); }
+  catch (error) { failure = error; }
+  roomAsking = false;
+  if (identityKey(state.me) !== who || state.room?.id !== room.id) { keepAskingRoom(); return; }
+  if (failure?.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+  if (failure?.status === 403 || failure?.status === 404) {  // removed, or the room is gone: the route says so, as it would on arriving
+    try { await loadRoute(); render(); }
+    catch (error) { setFlash(error.message, true); render(); }
+    return;
+  }
+  if (failure || !Array.isArray(answer?.messages)) {  // a page in the way can answer 200, and it isn't the room
+    roomAskFailures++;
+    if (roomAskFailures >= ROOM_ASK_SAY_AFTER) sayRoomUnreachable(true);
+    keepAskingRoom();
+    return;
+  }
+  roomAskFailures = 0;
+  sayRoomUnreachable(false);
+  try { if (refreshesStarted === started) showArrivals(answer); }
+  finally { keepAskingRoom(); }
+}
+
+function sayRoomUnreachable(on) {
+  state.roomUnreachable = on;
+  const line = document.querySelector("#room-reach");
+  if (line) line.hidden = !on;
+}
+
+// state.room takes the answer whole, so a later render keeps what's appended and the next ask doesn't fetch it. Nothing
+// else on the page is touched. A message sorting earlier than the last one shown waits for the next render, since
+// drawing it now would shift what the person is reading.
+function showArrivals(answer) {
+  const known = new Set((state.room.messages || []).map((message) => message.id));
+  if (!answer.messages.some((message) => !known.has(message.id))) return;
+  const following = seesNewestMessage();
+  state.room = answer;
+  const list = app.querySelector(".messages");
+  if (list?.dataset.room !== answer.id) return;
+  const drawn = new Set([...list.querySelectorAll(".message[data-message]")].map((node) => node.dataset.message));
+  const last = answer.messages.filter((message) => drawn.has(message.id)).at(-1);
+  const fresh = answer.messages.filter((message) => !drawn.has(message.id) && (!last || message.created >= last.created));
+  if (!fresh.length) return;
+  list.querySelector(":scope > .empty")?.remove();
+  list.insertAdjacentHTML("beforeend", fresh.map((message) => messageMarkup(message, answer)).join(""));
+  announce(fresh.length === 1 ? "1 new message" : `${fresh.length} new messages`);
+  if (following) {
+    const { end, start } = newestMessagePlace();
+    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+  } else {
+    state.roomUnseen = answer.id;
+    const button = document.querySelector('[data-action="new-messages"]');
+    if (button) button.hidden = false;
+  }
+}
+
+function seenNewMessages() {
+  state.roomUnseen = null;
+  const button = document.querySelector('[data-action="new-messages"]');
+  if (button) button.hidden = true;
+}
+
+function newMessagesButton(room) {
+  return `<button class="button secondary new-messages" type="button" data-action="new-messages"${state.roomUnseen === room.id ? "" : " hidden"}>New messages</button>`;
+}
+
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(roomAskTimer);
+  roomAskTimer = null;
+  if (document.visibilityState === "visible") askRoom();
+});
+window.addEventListener("scroll", () => { if (state.roomUnseen && seesNewestMessage()) seenNewMessages(); }, { passive: true });
+
 function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
   const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
   const author = mine ? "You" : system && message.author_id === system.id ? "Station" : message.unverified ? UNVERIFIED_AUTHOR : participantName(message.author_id);
   const delivery = messageDelivery(message, room);
-  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
+  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}" data-message="${escapeHtml(message.id)}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
 }
 
 // Ship briefs S4: whose words a revision is, from its own author fields and never from a name. The room's owner when
@@ -942,8 +1051,8 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form"><p class="meta composer-to" id="composer-to">To ${escapeHtml(room.title)}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+  return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+    ${replaced ? `<div class="composer composer-replaced">${newMessagesButton(room)}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form">${newMessagesButton(room)}<p class="meta composer-to" id="composer-to">To ${escapeHtml(room.title)}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p><p id="room-reach" class="inline-message error" role="status"${state.roomUnreachable ? "" : " hidden"}>Can't reach this home. New messages will show when it's back.</p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -1826,19 +1935,34 @@ function render() {
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
+  keepAskingRoom();
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
 }
 
 // The newest message with the composer under it, clear of a phone's bottom bar. It measures from the end of the messages, which an
 // empty room has too, and not the page's end: a room's management sits below the composer. A message too long to fit shows its start.
 function showNewestMessage() {
+  seenNewMessages();
+  const place = newestMessagePlace();
+  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+}
+
+// How far down the page would have to move to show the end of the messages with the composer under them, and to show
+// the last message's start.
+function newestMessagePlace() {
   const messages = app.querySelector(".messages"), composer = app.querySelector(".composer"), bar = app.querySelector(".sidebar");
-  if (!messages) return;
+  if (!messages) return null;
   const covered = bar && getComputedStyle(bar).position === "fixed" ? bar.offsetHeight : 0;
   const under = (composer ? composer.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom : 0) + covered + 12;
   const end = messages.getBoundingClientRect().bottom + under - window.innerHeight;
-  const start = (messages.lastElementChild?.getBoundingClientRect().top ?? end + 1) - 12;
-  window.scrollTo(0, window.scrollY + Math.min(end, start));
+  return { end, start: (messages.lastElementChild?.getBoundingClientRect().top ?? end + 1) - 12 };
+}
+
+// Measured from the end of the messages and not the page's: a room's management sits below the composer, so an owner
+// never gets near the page's end. Below the messages altogether, reading that management, isn't at the newest either.
+function seesNewestMessage() {
+  const place = newestMessagePlace();
+  return !!place && place.end <= ROOM_NEAR_NEWEST_PX && app.querySelector(".messages").getBoundingClientRect().bottom > 0;
 }
 
 async function refresh(message = null) {
@@ -2670,6 +2794,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "load-earlier") await loadEarlier();
+  if (action === "new-messages") { showNewestMessage(); document.querySelector("#message-body")?.focus({ preventScroll: true }); }
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
