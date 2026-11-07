@@ -22,7 +22,8 @@
 
 #define NCAT_MAX_DIM 15
 enum { NCAT_ENOTCOMPOSABLE = -1, NCAT_EDEGENERATE = -2, NCAT_ENOTPARALLEL = -3, NCAT_ENOTROUND = -4,
-       NCAT_ENOTLOOPFREE = -5, NCAT_ENOMEM = -6, NCAT_EARG = -7, NCAT_EWALK = -8, NCAT_ETOOBIG = -9, NCAT_EBUDGET = -10 };
+       NCAT_ENOTLOOPFREE = -5, NCAT_ENOMEM = -6, NCAT_EARG = -7, NCAT_EWALK = -8, NCAT_ETOOBIG = -9, NCAT_EBUDGET = -10,
+       NCAT_EWORK = -11 };
 #define NCAT_EUNSUPPORTED NCAT_EWALK
 /* Well inside int32 for every count and offset the kernel computes, with room for both sides of a composite. */
 #define NCAT_MAX_ELEMENTS (1 << 22)
@@ -43,6 +44,9 @@ typedef struct {
 
 typedef struct { int32_t a, b, k, val; } MemoSlot;
 
+enum { U_MS, U_SEEN, U_FACE, U_OUT, U_DOWNST, U_INFRONT, U_DONE, U_COUNT };
+enum { I_S, I_SEQ, I_F, I_L, I_DOWN, I_STACKLESS, I_COUNT };
+
 typedef struct {
     Cell *cells;
     int32_t ncells, cap_cells;
@@ -51,7 +55,8 @@ typedef struct {
     MemoSlot *memo;  /* composites and boundaries asked before; a = -1 empty */
     uint32_t memo_mask, memo_used;
     int32_t ngens;
-    int64_t words_held, words_budget;  /* every cell's words together, and the most allowed */
+    int64_t bytes_held, bytes_budget;  /* every held cell's memory with its overheads, and the most allowed */
+    int64_t work, work_limit;          /* steps taken by the call in progress, and the most one call may take */
     /* traversal scratch, grown as needed */
     int32_t scr_n, scr_d;
     uint32_t stamp;
@@ -89,6 +94,25 @@ static int grow_table(Ctx *c)
     return 0;
 }
 
+/* What a held cell costs: its words and offsets, its struct, the allocator's overhead on its two blocks, its slot in the interning
+ * table at the table's worst load, and two memo slots for the composite or boundary that made it. Measured against resident memory
+ * by tests/test_ncat.py. */
+static int64_t cell_bytes(int32_t nwords, int32_t n)
+{
+    return (int64_t)nwords * 4 + (int64_t)(n ? n : 1) * 4 + 2 * 32;
+}
+
+/* The context's own arrays at their current sizes: cells, the interning table, the memo and the traversal's scratch. */
+static int64_t fixed_bytes(const Ctx *c)
+{
+    return (int64_t)c->cap_cells * (int64_t)sizeof(Cell) + ((int64_t)c->table_mask + 1) * 4 +
+           ((int64_t)c->memo_mask + 1) * (int64_t)sizeof(MemoSlot) +
+           (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
+}
+
+/* Would growing by more bytes take the context past its budget? */
+static int over_budget(const Ctx *c, int64_t more) { return c->bytes_held + fixed_bytes(c) + more > c->bytes_budget; }
+
 /* Takes ownership of words. Returns the cell's id, the same id for the same cell. */
 static int32_t intern(Ctx *c, int32_t formal, int32_t shape, int32_t n, int32_t *words, int32_t nwords)
 {
@@ -104,7 +128,11 @@ static int32_t intern(Ctx *c, int32_t formal, int32_t shape, int32_t n, int32_t 
         }
         at = (at + 1) & c->table_mask;
     }
-    if (c->words_held + nwords + n > c->words_budget) { free(words); return NCAT_EBUDGET; }
+    int64_t bytes = cell_bytes(nwords, n);
+    int64_t growth = 0;  /* the arrays that would double for this cell */
+    if (c->ncells == c->cap_cells) growth += (int64_t)c->cap_cells * (int64_t)sizeof(Cell);
+    if ((uint32_t)(c->ncells + 1) * 2 > c->table_mask) growth += ((int64_t)c->table_mask + 1) * 4 * 2;
+    if (over_budget(c, bytes + growth)) { free(words); return NCAT_EBUDGET; }
     if (c->ncells == c->cap_cells) {
         if (c->cap_cells > INT32_MAX / 2) { free(words); return NCAT_ETOOBIG; }
         int32_t cap = c->cap_cells * 2;
@@ -123,7 +151,7 @@ static int32_t intern(Ctx *c, int32_t formal, int32_t shape, int32_t n, int32_t 
     Cell *cell = &c->cells[id];
     cell->formal = formal; cell->shape = shape; cell->n = n; cell->nwords = nwords;
     cell->words = words; cell->off = off; cell->hash = h;
-    c->words_held += nwords + n;
+    c->bytes_held += bytes;
     c->table[at] = id;
     if ((uint32_t)c->ncells * 2 > c->table_mask) {
         int r = grow_table(c);
@@ -150,6 +178,7 @@ static int memo_put(Ctx *c, int32_t a, int32_t b, int32_t k, int32_t val)
 {
     if ((c->memo_used + 1) * 2 > c->memo_mask) {
         uint32_t cap = (c->memo_mask + 1) * 2;
+        if (over_budget(c, (int64_t)cap * (int64_t)sizeof(MemoSlot))) return 0;  /* a full memo only forgets; the answer stands */
         MemoSlot *m = malloc(sizeof(MemoSlot) * cap);
         if (!m) return NCAT_ENOMEM;
         for (uint32_t i = 0; i < cap; i++) m[i].a = -1;
@@ -218,8 +247,6 @@ static void host_load(Host *h, const Cell *c, int32_t *map)
 
 /* ------------------------------------------------------------------ the traversal */
 
-enum { U_MS, U_SEEN, U_FACE, U_OUT, U_DOWNST, U_INFRONT, U_DONE, U_COUNT };
-enum { I_S, I_SEQ, I_F, I_L, I_DOWN, I_STACKLESS, I_COUNT };
 
 typedef struct {
     Ctx *c; const Host *h;
@@ -235,6 +262,10 @@ static int walk_ready(Walk *w, const Host *h, int32_t D)
     w->h = h; w->N = h->n > 0 ? h->n : 1; w->D = D + 2;
     if (c->scr_n < w->N || c->scr_d < w->D) {
         int32_t n = c->scr_n > w->N ? c->scr_n : w->N, dd = c->scr_d > w->D ? c->scr_d : w->D;
+        /* the working space counts against the budget too, beside what's held */
+        int64_t scratch = (int64_t)n * dd * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
+        int64_t old = (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
+        if (over_budget(c, scratch - old)) return NCAT_EBUDGET;
         free(c->scr_u); free(c->scr_i);
         c->scr_u = calloc((size_t)n * (size_t)dd * U_COUNT, sizeof(uint32_t));
         c->scr_i = malloc(sizeof(int32_t) * (size_t)n * (size_t)dd * I_COUNT);
@@ -261,6 +292,7 @@ static int32_t closure(Walk *w, int d, const int32_t *F, int32_t nF, const int32
     int32_t n = 0;
     for (int32_t i = 0; i < nF; i++) if (ms[F[i]] != st) { ms[F[i]] = st; S[n++] = F[i]; }
     for (int32_t i = 0; i < nL; i++) if (ms[L[i]] != st) { ms[L[i]] = st; S[n++] = L[i]; }
+    w->c->work += n;
     for (int32_t i = 0; i < n; i++) {   /* S doubles as the worklist */
         int32_t e = S[i];
         for (int32_t j = 0; j < h->in_n[e]; j++) { int32_t f = h->pool[h->in_at[e] + j]; if (ms[f] != st) { ms[f] = st; S[n++] = f; } }
@@ -280,6 +312,8 @@ static int32_t walk(Walk *w, int d, int32_t nS)
     int32_t n = -1;
     for (int32_t i = 0; i < nS; i++) if (h->dim[S[i]] > n) n = h->dim[S[i]];
     if (n < 0) return 0;
+    w->c->work += nS;
+    if (w->c->work > w->c->work_limit) return NCAT_EWORK;
     if (n == 0) {
         if (nS != 1) return NCAT_EWALK;
         seq[0] = S[0];
@@ -340,6 +374,7 @@ static int32_t walk(Walk *w, int d, int32_t nS)
             if (infront[f] == st) return NCAT_EWALK;
             infront[f] = st; F[nF++] = f;
         }
+        if (w->c->work > w->c->work_limit) return NCAT_EWORK;
         cnt = walk(w, d + 1, closure(w, d + 1, F, nF, L, nL));
         if (cnt < 0) return cnt;
         for (int32_t i = 0; i < cnt; i++) if (seen[front[i]] != st) { seen[front[i]] = st; seq[ns++] = front[i]; }
@@ -452,7 +487,7 @@ static int32_t boundary_ordered(Ctx *c, int32_t a, int32_t k, int sign, int32_t 
  * i-element, has no cycle. Where it holds the shape's free omega-category is generated freely by its atoms, so any way of
  * building the whole shape gives the one cell, and a labelled shape determines its cell. Dimensions 2 and below always hold it,
  * and tests assert that dimension 3 has done so. Returns 1, 0, or a negative error. */
-static int loop_free(const Host *h)
+static int loop_free(Ctx *ctx, const Host *h)
 {
     int32_t top = 0;
     for (int32_t e = 0; e < h->n; e++) if (h->dim[e] > top) top = h->dim[e];
@@ -472,6 +507,8 @@ static int loop_free(const Host *h)
             int32_t ncl = 0;
             st++;
             in_cl[x] = st; cl[ncl++] = x;
+            ctx->work += ncl;
+            if (ctx->work > ctx->work_limit) { result = NCAT_EWORK; break; }
             for (int32_t c = 0; c < ncl; c++) {
                 int32_t e = cl[c];
                 for (int32_t j = 0; j < h->in_n[e]; j++) { int32_t f = h->pool[h->in_at[e] + j]; if (in_cl[f] != st) { in_cl[f] = st; cl[ncl++] = f; } }
@@ -536,7 +573,8 @@ Ctx *ncat_new(void)
     if (!c->cells || !c->table || !c->memo) { free(c->cells); free(c->table); free(c->memo); free(c); return NULL; }
     memset(c->table, 0xff, sizeof(int32_t) * 256);
     for (int i = 0; i < 256; i++) c->memo[i].a = -1;
-    c->words_budget = (int64_t)1 << 27;  /* about 512 MB of words; ncat_set_budget changes it */
+    c->bytes_budget = (int64_t)1 << 30;  /* 1 GiB; ncat_set_budget changes it */
+    c->work_limit = (int64_t)1 << 30;    /* steps per call; ncat_set_work changes it */
     return c;
 }
 
@@ -551,8 +589,9 @@ int32_t ncat_formal(Ctx *c, int32_t a) { return a >= 0 && a < c->ncells ? c->cel
 int32_t ncat_shape(Ctx *c, int32_t a) { return a >= 0 && a < c->ncells ? c->cells[a].shape : NCAT_EARG; }
 int32_t ncat_size(Ctx *c, int32_t a) { return a >= 0 && a < c->ncells ? c->cells[a].n : NCAT_EARG; }
 int32_t ncat_ncells(Ctx *c) { return c->ncells; }
-int64_t ncat_held(Ctx *c) { return c->words_held; }
-int32_t ncat_set_budget(Ctx *c, int64_t words) { if (words < 0) return NCAT_EARG; c->words_budget = words; return 0; }
+int64_t ncat_held(Ctx *c) { return c->bytes_held + fixed_bytes(c); }
+int32_t ncat_set_budget(Ctx *c, int64_t bytes) { if (bytes < 0) return NCAT_EARG; c->bytes_budget = bytes; return 0; }
+int32_t ncat_set_work(Ctx *c, int64_t steps) { if (steps < 1) return NCAT_EARG; c->work_limit = steps; return 0; }
 int32_t ncat_ngens(Ctx *c) { return c->ngens; }
 
 /* The canonical words, so the host can address a cell by what it is. Returns how many; copies at most cap. */
@@ -564,7 +603,7 @@ int32_t ncat_words(Ctx *c, int32_t a, int32_t *buf, int32_t cap)
     return cell->nwords;
 }
 
-int32_t ncat_boundary(Ctx *c, int32_t a, int32_t k, int32_t sign)
+static int32_t boundary_in(Ctx *c, int32_t a, int32_t k, int32_t sign)
 {
     if (a < 0 || a >= c->ncells || k < 0 || k > NCAT_MAX_DIM || (sign != -1 && sign != 1)) return NCAT_EARG;
     if (k >= c->cells[a].formal) return a;
@@ -594,15 +633,15 @@ static int32_t with_formal(Ctx *c, int32_t a, int32_t formal)
 }
 
 /* a then b, along their k-boundary. Defined exactly when a's output k-boundary is b's input k-boundary. */
-int32_t ncat_compose(Ctx *c, int32_t a, int32_t b, int32_t k)
+static int32_t compose_in(Ctx *c, int32_t a, int32_t b, int32_t k)
 {
     if (a < 0 || a >= c->ncells || b < 0 || b >= c->ncells || k < 0 || k > NCAT_MAX_DIM) return NCAT_EARG;
     int32_t got = memo_get(c, a, b, k);
     if (got != INT32_MIN) return got;
     Cell A = c->cells[a], B = c->cells[b];
     int32_t formal = A.formal > B.formal ? A.formal : B.formal;
-    int32_t ba = A.formal > k ? ncat_boundary(c, a, k, 1) : with_formal(c, a, k);
-    int32_t bb = B.formal > k ? ncat_boundary(c, b, k, -1) : with_formal(c, b, k);
+    int32_t ba = A.formal > k ? boundary_in(c, a, k, 1) : with_formal(c, a, k);
+    int32_t bb = B.formal > k ? boundary_in(c, b, k, -1) : with_formal(c, b, k);
     if (ba < 0) return ba;
     if (bb < 0) return bb;
     /* compare at formal dimension k: a cell shorter than k has been raised to it, a cell whose shape is shorter still matches by shape */
@@ -631,7 +670,7 @@ int32_t ncat_compose(Ctx *c, int32_t a, int32_t b, int32_t k)
                 for (int32_t i = 0; i < B.n; i++) mapb[i] = -1;
                 for (int32_t i = 0; i < nb; i++) mapb[ob[i]] = mapa[oa[i]];
                 host_load(&h, &B, mapb);
-                int lf = loop_free(&h);
+                int lf = loop_free(c, &h);
                 if (lf < 0) id = lf;
                 else if (!lf) id = NCAT_ENOTLOOPFREE;
                 else {
@@ -693,7 +732,7 @@ static int is_round(Ctx *c, int32_t s)
 
 /* A new 0-cell when s and t are both -1. Otherwise a new d-cell from s to t, which must be parallel (d-1)-cells, not
  * identities, and round. Returns the generator as a cell. */
-int32_t ncat_gen(Ctx *c, int32_t s, int32_t t)
+static int32_t gen_in(Ctx *c, int32_t s, int32_t t)
 {
     int32_t g = c->ngens;
     if (s == -1 && t == -1) {
@@ -711,7 +750,7 @@ int32_t ncat_gen(Ctx *c, int32_t s, int32_t t)
     if (S.shape != m || T.shape != m) return NCAT_EDEGENERATE;
     if (m >= 1) {
         for (int sign = -1; sign <= 1; sign += 2) {
-            int32_t bs = ncat_boundary(c, s, m - 1, sign), bt = ncat_boundary(c, t, m - 1, sign);
+            int32_t bs = boundary_in(c, s, m - 1, sign), bt = boundary_in(c, t, m - 1, sign);
             if (bs < 0) return bs;
             if (bt < 0) return bt;
             if (bs != bt) return NCAT_ENOTPARALLEL;
@@ -755,7 +794,7 @@ int32_t ncat_gen(Ctx *c, int32_t s, int32_t t)
             for (int32_t i = 0; i < S.n; i++) if (S.words[S.off[i]] == m) { h.pool[h.pool_len++] = ms[i]; h.in_n[x]++; }
             h.out_at[x] = h.pool_len; h.out_n[x] = 0;
             for (int32_t i = 0; i < T.n; i++) if (T.words[T.off[i]] == m) { h.pool[h.pool_len++] = mt[i]; h.out_n[x]++; }
-            int lf = loop_free(&h);
+            int lf = loop_free(c, &h);
             if (lf < 0) id = lf;
             else if (!lf) id = NCAT_ENOTLOOPFREE;
             else {
@@ -770,3 +809,9 @@ int32_t ncat_gen(Ctx *c, int32_t s, int32_t t)
     free(ms); free(mt); free(os); free(ot);
     return id;
 }
+
+/* The public calls: each starts its own count of work, so one call can't run unbounded, and one that stops early has changed
+ * nothing but the memo of what it finished. */
+int32_t ncat_boundary(Ctx *c, int32_t a, int32_t k, int32_t sign) { c->work = 0; return boundary_in(c, a, k, sign); }
+int32_t ncat_compose(Ctx *c, int32_t a, int32_t b, int32_t k) { c->work = 0; return compose_in(c, a, b, k); }
+int32_t ncat_gen(Ctx *c, int32_t s, int32_t t) { c->work = 0; return gen_in(c, s, t); }

@@ -32,7 +32,7 @@ MUTANTS = [
     ('loop check only at i = top - 2', 'for (int32_t i = 0; i < top && result == 1; i++) {', 'for (int32_t i = top - 2; i < top - 1 && result == 1; i++) {'),
     ('loop check skips dimension 3', 'if (top < 3) return 1;', 'if (top < 4) return 1;'),
     ('loop check only on top elements', 'if (h->dim[x] <= i) continue;\n            int32_t ncl = 0;', 'if (h->dim[x] != top) continue;\n            int32_t ncl = 0;'),
-    ('loop check skips generators', '''            int lf = loop_free(&h);
+    ('loop check skips generators', '''            int lf = loop_free(c, &h);
             if (lf < 0) id = lf;
             else if (!lf) id = NCAT_ENOTLOOPFREE;
             else {
@@ -43,11 +43,14 @@ MUTANTS = [
             else {
                 Walk w = { .c = c };
                 id = walk_ready(&w, &h, d);'''),
-    ("the budget isn't counted", 'c->words_held += nwords + n;', ''),
+    ("the budget isn't counted", 'c->bytes_held += bytes;', ''),
+    ("the work limit is ignored", 'c->work_limit = steps; return 0;', 'return 0;'),
+    ("scratch isn't budgeted", '        if (over_budget(c, scratch - old)) return NCAT_EBUDGET;\n', ''),
+    ("the context's own arrays aren't budgeted", 'return c->bytes_held + fixed_bytes(c) + more > c->bytes_budget;', 'return c->bytes_held + more > c->bytes_budget;'),
     ("words don't check a negative cap", 'cap < 0 || ', ''),
 ]
 TESTS = ('catalan or beads or sheets or refused or composing or loops or parallel or same_however or units or globular or torsion '
-         'or tangled or determined or exchanges or budget or checks_its_own or separate_blocks or dimension_2 or counts_everything')
+         'or tangled or determined or exchanges or budget or checks_its_own or separate_blocks or dimension_2 or counts_everything or work')
 
 
 def main():

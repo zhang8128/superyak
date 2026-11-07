@@ -1,6 +1,7 @@
 """The free strict n-category: known answers first, because a law can hold in a structure that's simply too small, then the
 laws on random polygraphs up to n = 5, then what it refuses. ncat_kernel.c says what a cell is."""
 import itertools
+import os
 import math
 import random
 
@@ -499,18 +500,97 @@ def test_the_kernel_checks_its_own_arguments():
 
 def test_the_budget_counts_everything_held_not_just_one_cell():
     """Many small cells, none near the budget alone, still run out of it together."""
-    C = NCat(budget_words=3000)
+    C = NCat(budget_bytes=60_000)
     made = 0
     with pytest.raises(NCatError) as caught:
         for _ in range(2000):
             C.object()
             made += 1
     assert caught.value.code == -10
-    assert 100 < made < 1000 and 0 < C.words_held <= 3000
+    assert 100 < made < 1000 and 0 < C.bytes_held <= 60_000
+
+
+@pytest.mark.skipif(not os.path.exists('/proc/self/statm'), reason='reads resident memory from /proc')
+@pytest.mark.parametrize('kind', ['small cells', 'long paths'])
+def test_the_budget_bounds_resident_memory(kind):
+    """A spec reviewer found 64 MB of counted words came to 364 MB resident. The budget counts bytes with every overhead now, so
+    filling it raises resident memory by no more than the budget."""
+    def resident():
+        return int(open('/proc/self/statm').read().split()[1]) * os.sysconf('SC_PAGE_SIZE')
+    budget = 32 << 20
+    C = NCat(budget_bytes=budget)
+    before = resident()
+    with pytest.raises(NCatError) as caught:
+        if kind == 'small cells':
+            while True:
+                C.object()
+        else:
+            x = C.object()
+            loops = [C.generator(x, x) for _ in range(64)]
+            p = loops[0]
+            while True:
+                for g in loops:
+                    p = p.then(g)
+    assert caught.value.code == -10
+    assert resident() - before <= budget * 1.25  # the allocator keeps a little more than it hands out
+
+
+def test_a_refusal_never_leaves_the_category_over_its_budget():
+    """The traversal's working space counts too, and is checked before it grows: doubling a path until refused leaves what's held,
+    scratch included, inside the budget."""
+    C = NCat(budget_bytes=160_000)  # tight enough that the scratch for the next doubling, not the cell, is what runs out
+    x = C.object()
+    p = C.generator(x, x)
+    with pytest.raises(NCatError) as caught:
+        for _ in range(30):
+            p = p.then(p)
+    assert caught.value.code == -10
+    assert C.bytes_held <= 160_000
+
+
+def test_a_long_composition_lets_other_threads_run():
+    """The reviewer froze a second thread for 58.6 s behind one composition. The GIL is let go during a call now."""
+    import threading
+    import time
+    C = NCat()
+    x = C.object()
+    f = C.generator(x, x)
+    a = C.generator(f, f)
+    row = a
+    for _ in range(900):
+        row = row.then(a, 0)
+    ticks, stop = [0], [False]
+
+    def spin():
+        while not stop[0]:
+            ticks[0] += 1
+    spinner = threading.Thread(target=spin)
+    spinner.start()
+    time.sleep(0.05)
+    before, started = ticks[0], time.perf_counter()
+    row.then(row, 1)
+    took, during = time.perf_counter() - started, ticks[0] - before
+    stop[0] = True
+    spinner.join()
+    assert took > 0.02, took  # long enough that a held GIL would have shown
+    assert during > 1000, during
+
+
+def test_one_call_has_a_bound_on_its_work():
+    C = NCat(work=10_000)
+    x = C.object()
+    f = C.generator(x, x)
+    a = C.generator(f, f)
+    row = a
+    with pytest.raises(NCatError) as caught:
+        for _ in range(400):
+            row = row.then(a, 0)
+    assert caught.value.code == -11
+    assert a.then(a, 0) == a.then(a, 0)  # small calls still answer
 
 
 def test_a_category_over_its_budget_refuses_and_keeps_working():
-    C = NCat(budget_words=400)
+    C = NCat(budget_bytes=40_000)  # the context's own arrays are a few kilobytes of that
     x = C.object()
     f = C.generator(x, x)
     cell = f
@@ -518,7 +598,7 @@ def test_a_category_over_its_budget_refuses_and_keeps_working():
         for _ in range(100):
             cell = cell.then(f)
     assert caught.value.code == -10
-    assert C.words_held <= 400
+    assert C.bytes_held <= 40_000
     assert f.then(f) == f.then(f)  # what it already holds still answers
 
 
