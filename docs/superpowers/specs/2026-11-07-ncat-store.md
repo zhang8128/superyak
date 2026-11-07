@@ -27,7 +27,8 @@ and the sheaf (stages 4 to 6) are computed from what it holds, without re-readin
 that recall returned as used. It's coarse, and it's what the log records, so the store says so rather than guess.
 
 **Order, exactly:**
-- A session's used rows are sorted by their timestamp parsed to UTC, then by `memory_log.id`. Raw strings aren't
+- A session's used rows are sorted by their timestamp parsed to UTC, then by `memory_log.id`. A timestamp with no
+  timezone is taken as UTC, which is how Engram writes them, and counted. Raw strings aren't
   compared, because mixed formats would change the order.
 - Within a row, `target_ids` are taken in order with repeats dropped, keeping the first, as E1′ does. So a repeat inside
   one row makes no a→a road; the same memory used in two rows in a row does.
@@ -38,7 +39,9 @@ that recall returned as used. It's coarse, and it's what the log records, so the
 
 `ncat.db`, by default in the Engram store's directory, separate from it: nothing in `graph.db` changes. It's mode 0600,
 like the store. It's derived and disposable: each run rebuilds it whole from the current log, into a temporary file in
-the same directory, then renames it over the old one. So within a file nothing changes after it's written, a session
+the same directory, then renames it over the old one. The temporary file is created 0600 from the start, written with a
+rollback journal (not WAL) so no `-wal` or `-shm` file follows it, closed, fsynced, renamed, and then its directory is
+fsynced. So within a file nothing changes after it's written, a session
 that spans two runs is simply whole in the second, and a recall whose outcome arrived later is read right next time.
 
 | Table | Holds |
@@ -62,8 +65,9 @@ rebuild.
 
 A generator or composite row is written only after the kernel accepted it. A refusal is counted in `ingest` and nothing
 else about that cell is written. The whole rebuild is one transaction on the temporary file, so a crash leaves the old
-`ncat.db` untouched and a stray temporary file, which the next run removes. One run at a time: an exclusive lock on
-`ncat.db.lock`, and a second run exits saying another holds it.
+`ncat.db` untouched and a stray temporary file, which the next run removes. One run at a time: an exclusive `flock` on
+`ncat.db.lock`, which the system releases if the process dies, so the lock file's existence alone means nothing. A second
+run exits saying another holds it.
 
 ## Reading Engram
 
@@ -73,7 +77,9 @@ tables. Memory ids and session ids are opaque strings; no content, query text or
 read-only may still need to write its `-shm` file. If it can't, the run stops and says so, rather than open the store
 some other way: it runs as the store's owner.
 
-**Erasure:** an erased memory's id leaves the next rebuild, because only ids still in the store become cells. Between an
+**Erasure:** an erased memory's id leaves the next rebuild, because only ids still in the store become cells: ids in
+`episodes`, `semantics` or `instincts`. A `target_ids` entry naming anything else is dropped and counted. When a person
+erases everything, or removes the store, `ncat.db` must be deleted with it. Between an
 erase and the next run the old file still holds it. So a rebuild runs after every erase, or hourly at most, whichever
 the wiring stage can arrange; until then that window is a stated limit. In this stage it's run on this
 ship's own store only, by hand or on a timer, never inside a served process: the kernel's reviewer asked for that until
