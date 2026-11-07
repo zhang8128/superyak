@@ -732,6 +732,7 @@ async function askRoom() {
 // Removed, or the room is gone. The list catches up, the person is told, and what they'd typed is where they can copy it.
 async function roomRefused(room) {
   const gone = { who: identityKey(state.me), words: readChatDraft(room.id).body };
+  state.room = null;  // a refusal isn't a failed read, which would leave the room on screen and ask again
   try { await loadData(); } catch (_) { /* the route below reads what it can */ }
   try { await loadRoute(); }
   catch (error) { setFlash(error.message, true); }
