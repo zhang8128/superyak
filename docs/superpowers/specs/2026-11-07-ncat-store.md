@@ -23,12 +23,23 @@ and the sheaf (stages 4 to 6) are computed from what it holds, without re-readin
 
 **Used** means what E1′ meant: in `memory_log`, `event_type = 'recall'`, `context.session_id` names the session,
 `target_ids` the memories returned, and `outcome LIKE 'used%'` marks them used (`scripts/rail_e1_prime.py`'s
-`RECALL_SQL`, on branch `rail-mathematics`). A session's used memories are taken in timestamp order, ties by recall id
-then the order in `target_ids`. Rows with no session id or invalid JSON are counted and skipped.
+`RECALL_SQL`, on branch `rail-mathematics`). That's per recall row, not per memory: one `log_outcome` marks every memory
+that recall returned as used. It's coarse, and it's what the log records, so the store says so rather than guess.
+
+**Order, exactly:**
+- A session's used rows are sorted by their timestamp parsed to UTC, then by `memory_log.id`. Raw strings aren't
+  compared, because mixed formats would change the order.
+- Within a row, `target_ids` are taken in order with repeats dropped, keeping the first, as E1′ does. So a repeat inside
+  one row makes no a→a road; the same memory used in two rows in a row does.
+- Skipped and counted: a row with invalid JSON, no session id, an unparsable timestamp, or a `target_ids` that isn't a
+  list of strings. A memory id that no longer names a memory (erased, see below) is dropped from its session, counted.
 
 ## The file
 
-`ncat.db`, beside the Engram store and separate from it: nothing in `graph.db` changes. It's append-only, in WAL mode.
+`ncat.db`, by default in the Engram store's directory, separate from it: nothing in `graph.db` changes. It's mode 0600,
+like the store. It's derived and disposable: each run rebuilds it whole from the current log, into a temporary file in
+the same directory, then renames it over the old one. So within a file nothing changes after it's written, a session
+that spans two runs is simply whole in the second, and a recall whose outcome arrived later is read right next time.
 
 | Table | Holds |
 |---|---|
@@ -36,30 +47,42 @@ then the order in `target_ids`. Rows with no session id or invalid JSON are coun
 | `composite(key, dim, recipe)` | Each held cell once, by the kernel's `key()`. The recipe is the expression that built it: a generator id, or (k, left key, right key). |
 | `session(session_id, key, recalls, used, read_at)` | Each session's cell and its counts. |
 | `road_use(road, session_id, step)` | Each walk of a road, so its weight is a count, not a guess. |
-| `ingest(read_at, rows_read, rows_skipped, last_timestamp, engram_store)` | Each run, so a rerun starts where the last ended. |
+| `ingest(read_at, rows_read, rows_skipped, skip_reasons, engram_store, kernel_commit)` | The run that wrote this file. |
 
-Opening the store makes a fresh `NCat` and replays `generator` in id order. A composite is rebuilt from its recipe when
-it's first asked for, and its key is checked against the stored one. A mismatch stops with an error, because it means the
-kernel or the file changed under it.
+**Generator ids are deterministic,** because the kernel's keys depend on creation order (the reviewer ran it): objects by
+memory id, sorted; then roads by (source id, target id), sorted. A recipe names composites by key, never by a kernel id.
+So the same log gives the same file, whatever the row order.
+
+Opening the store makes a fresh `NCat` with an explicit `budget_words` and replays `generator` in id order. A composite
+is rebuilt from its recipe when it's first asked for, and its key is checked against the stored one. A mismatch exits
+with code 2 and a message, and touches nothing, because it means the kernel or the file changed under it. The fix is a
+rebuild.
 
 ## Writes are checked
 
-A generator or composite row is written only after the kernel accepted it, in the same transaction as the counts. A
-refusal is recorded in `ingest` and nothing else is written. So the file holds only cells the kernel holds, and a crash
-mid-run leaves the last whole transaction.
+A generator or composite row is written only after the kernel accepted it. A refusal is counted in `ingest` and nothing
+else about that cell is written. The whole rebuild is one transaction on the temporary file, so a crash leaves the old
+`ncat.db` untouched and a stray temporary file, which the next run removes. One run at a time: an exclusive lock on
+`ncat.db.lock`, and a second run exits saying another holds it.
 
 ## Reading Engram
 
-`ncat-store ingest --engram <path to graph.db> --store <path to ncat.db>` opens Engram with a `mode=ro` URI and
-`query_only`, inside one read transaction, and reads only `memory_log`'s recall rows newer than the last run's timestamp.
-Memory ids and session ids are opaque strings; no content, query text or vector is read. In this stage it's run on this
+`ncat-store rebuild --engram <path to graph.db> [--store <path to ncat.db>]` opens Engram with a `mode=ro` URI and
+`query_only`, inside one read transaction, and reads `memory_log`'s recall rows and the ids in the episode and semantic
+tables. Memory ids and session ids are opaque strings; no content, query text or vector is read. A WAL store opened
+read-only may still need to write its `-shm` file. If it can't, the run stops and says so, rather than open the store
+some other way: it runs as the store's owner.
+
+**Erasure:** an erased memory's id leaves the next rebuild, because only ids still in the store become cells. Between an
+erase and the next run the old file still holds it. So a rebuild runs after every erase, or hourly at most, whichever
+the wiring stage can arrange; until then that window is a stated limit. In this stage it's run on this
 ship's own store only, by hand or on a timer, never inside a served process: the kernel's reviewer asked for that until
 its GIL and memory-budget fixes land.
 
 ## What it costs, as budgets for the tests
 
 On the Pi, measured before this stage is called done:
-- Ingest 10,000 recall rows in under 10 s.
+- Rebuild from 10,000 recall rows in under 10 s, including the SQLite reads.
 - Open a store of 100,000 generators in under 2 s.
 - Rebuild a session of 200 roads from its recipe in under 5 ms.
 - Keep the process under 256 MB, or say what drove it over: the kernel's resident memory runs about 5.7 times its counted
@@ -67,16 +90,24 @@ On the Pi, measured before this stage is called done:
 
 ## Tests
 
-- **Replay:** the same file opened twice gives the same keys, and a rerun of ingest adds nothing.
-- **Determinism:** the same `memory_log` rows, inserted in another order, give the same cells.
+- **Replay:** the same file opened twice gives the same keys, and a rebuild from the same log gives the same file content.
+- **Determinism:** the same `memory_log` rows, inserted in another order, give the same keys.
+- **Late outcomes:** a recall marked used after a first rebuild is in the second.
+- **Erasure:** a memory removed from the store is gone from the next file, with its roads and its sessions' cells.
+- **Skips:** each skip reason is counted, and a repeat inside one row makes no a→a road.
+- **One writer:** a second rebuild while one holds the lock exits without touching the file.
 - **Checked writes:** a generator the kernel refuses leaves no row, and its refusal is counted.
-- **Crash:** killing ingest between transactions leaves a file that opens and replays.
+- **Crash:** killing a rebuild leaves the old file opening and replaying, and the next run clears the temporary file.
 - **Integrity:** a tampered recipe or key is caught on open.
 - **Loops and order:** a→b→a and b→a→b differ, and a session walking a→a→a is one road used twice.
-- **Read-only:** ingest on a store opened read-only by another process changes nothing in `graph.db`.
+- **Read-only:** a rebuild changes nothing in `graph.db`, and `ncat.db` is mode 0600.
 - **The budgets above,** on the Pi, recorded.
 
 ## Rejected
+
+- **Incremental ingest by timestamp:** outcomes and `target_ids` are updated after a row is written, so a row read early
+  stays wrong, and sessions straddle runs. A whole rebuild costs seconds at this size, and an incremental design can come
+  when a measure asks for it.
 
 - **Storing cells in `graph.db`:** that mixes a derived structure into the person's store, and one bug could cost them
   memories.
