@@ -96,8 +96,9 @@ make home
 Your home listens only on this machine. For anyone else to reach it, give it a route you control, such as a private
 Tailscale network. Then you can invite people with one-use links, which work once their machine can reach your home.
 To connect with someone else's home, pair the two by exchanging cards, as in "Pair two peers" in
-[peer/README.md](peer/README.md). Pairing shares nothing by itself; a room or release still has to name the other
-person.
+[peer/README.md](peer/README.md). [docs/two-people.md](docs/two-people.md) walks two people on two laptops through it,
+to a first message and a shared document. Pairing shares nothing by itself; a room or release still has to name the
+other person.
 
 ## Bring your agent
 

@@ -212,6 +212,7 @@ function demoChoices() {
 
 function showLogin(message = "") {
   dataLoadSequence++;
+  roomDrawn = null;
   state.me = null;
   state.home = null;
   app.innerHTML = `<main class="login-page" id="main-content">
@@ -942,7 +943,7 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form"><p class="meta composer-to" id="composer-to">To ${escapeHtml(room.title)}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -958,7 +959,7 @@ function chatDialog() {
 
 function chatsView() {
   return `<header class="page-head"><div><p class="eyebrow">Conversations</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New chat</button></header>
-    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a new chat.")}</div></div>${chatDialog()}`;
+    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item${room.id === state.room?.id ? " selected" : ""}" ${room.id === state.room?.id ? 'aria-current="true"' : ""} data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a new chat.")}</div></div>${chatDialog()}`;
 }
 
 // __main__.contact_state's words: held, and why (owner trust Task 7: a retired peer, or a ship whose owner's trust
@@ -1747,7 +1748,8 @@ async function loadRoute() {
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
-    state.selectedChatId = id || state.selectedChatId || null;
+    // On a phone the rooms stack above the open room, thousands of pixels up, so the Chats link means the list and closes the room.
+    state.selectedChatId = id || (matchMedia("(max-width: 760px)").matches ? null : state.selectedChatId) || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
       try {
         const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
@@ -1779,6 +1781,8 @@ async function loadRoute() {
 }
 
 let dialogReturn = null;
+let roomDrawn = null;  // the room last drawn, so a room opens at its newest once and a later render leaves the reader alone
+let leftByLink = false;  // a link was clicked: leaving a room that way starts the next view at its top; Back and Forward stay the browser's
 function closeDialogs() {
   state.accountRolePreview = null;
   state.docking = null; state.dockCode = null; state.imprint = null; state.imprintCode = null; state.imprintAsk = null;
@@ -1794,7 +1798,9 @@ function render() {
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
+  const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   app.innerHTML = layout(view);
+  if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
   // nav's own scroll moves, never the page's, so a render far down a page stays where it is.
   const nav = app.querySelector(".nav"), current = nav?.querySelector('[aria-current="page"]');
@@ -1815,7 +1821,24 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  const drawing = route === "chats" && state.room ? state.room.id : null;
+  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
+  roomDrawn = drawing;
+  leftByLink = false;
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
+}
+
+// The newest message with the composer under it, clear of a phone's bottom bar. It measures from the end of the messages, which an
+// empty room has too, and not the page's end: a room's management sits below the composer. A message too long to fit shows its start.
+function showNewestMessage() {
+  const messages = app.querySelector(".messages"), composer = app.querySelector(".composer"), bar = app.querySelector(".sidebar");
+  if (!messages) return;
+  const covered = bar && getComputedStyle(bar).position === "fixed" ? bar.offsetHeight : 0;
+  const under = (composer ? composer.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom : 0) + covered + 12;
+  const end = messages.getBoundingClientRect().bottom + under - window.innerHeight;
+  const start = (messages.lastElementChild?.getBoundingClientRect().top ?? end + 1) - 12;
+  window.scrollTo(0, window.scrollY + Math.min(end, start));
 }
 
 async function refresh(message = null) {
@@ -2271,6 +2294,7 @@ async function sendMessage(form) {
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }
+  if (state.room?.id === room.id) showNewestMessage();  // what you just sent, with the box still on screen
 }
 
 function clearChatDrafts() {
@@ -2965,6 +2989,8 @@ document.addEventListener("change", async (event) => {
     form.querySelector(".grant-rooms").innerHTML = grantRoomChoices(state.grantForm);
   }
 });
+
+document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;

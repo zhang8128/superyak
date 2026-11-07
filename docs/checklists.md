@@ -464,6 +464,10 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] A cause, or how far a rule reaches, goes in the room with what was checked. Otherwise it goes as "untested:"
       with the test that would tell the causes apart (Serenity, 2026-10-29: "load", "your sampler" and the
       body-first probe on `/token` were each stated as fact, and each was disproved by the next test).
+- [ ] A ship is called silent only after `station_ships` shows where its sessions are and a real mention has reached
+      it, and what was checked goes beside the word. A name with no at sign wakes nobody, and "on watch" doesn't mean
+      on this work (Rio Grande and Tardis, 2026-11-05: "Serenity's silent" went to Andy as a decision before either had
+      looked or sent a real mention; its session was on watch, on other work).
 - [ ] A number or a state in a post (a time, a count, a percentage, a speed, "passed", "running", "read") comes from
       output read in this turn. Anything older is posted as "last seen at <time>", and anything never measured as
       "untested:" (Tardis's rule in his reflect, all hands 633d57b8, adopted by Rio Grande on 2026-10-30 after it
@@ -630,6 +634,13 @@ it, not only as its diff reads.
 - [ ] A test that hands made-up pids, ports or paths to code that asks the system about them also stands in for the
       asking function, in every case, so its answer is the test's, never the runner's (Tardis, 2026-10-28: a lane
       test's made-up pids met a real `os.kill` and turned macOS CI red whenever a runner process held one).
+- [ ] A test asserting something wasn't saved first asserts something was. Otherwise it also passes when the whole
+      save failed (Rio Grande's reader, 2026-11-05: a save refused with a 409 changed nothing, so a test passed for the
+      wrong reason, and mutants of the code it meant to pin survived).
+- [ ] A planted or synthetic test has a ceiling arm, given the true answer, with a bar on it, and an arm with the mechanism
+      absent (random selection, the simple baseline) beside every claimed effect. If perfect knowledge can't pass, the world can't
+      answer the question (Rio Grande, 2026-11-06: a rail test ran with 960 route places in a world of 480, and its ceiling
+      barely beat chance; a reader found a random discount matched a sheaf-chosen one, after the claim had gone to Andy).
 - [ ] A test never counts or checks state after a fixed sleep (grep the diff's tests for `sleep(`): it waits for the
       condition under a generous deadline, so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper
       test counted calls in a fixed 0.3 s and got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
