@@ -732,12 +732,17 @@ async function askRoom() {
 // Removed, or the room is gone. The list catches up, the person is told, and what they'd typed is where they can copy it.
 async function roomRefused(room) {
   const gone = { who: identityKey(state.me), words: readChatDraft(room.id).body };
-  state.room = null;  // a refusal isn't a failed read, which would leave the room on screen and ask again
-  try { await loadData(); } catch (_) { /* the route below reads what it can */ }
+  const ended = () => showLogin("Your session ended. Sign in again; text in an open form has not been sent.");
+  state.room = null;  // nothing of this room stays drawn while the rest is read
+  state.unsentIn = null;  // the note below says where those words are; "still in the box" no longer would be true
+  try { await loadData(); }
+  catch (error) { if (error.status === 401) { ended(); return; } }  // another account took this browser: its screen isn't this person's
   try { await loadRoute(); }
-  catch (error) { setFlash(error.message, true); }
+  catch (error) { if (error.status === 401) { ended(); return; } setFlash(error.message, true); }
+  if (!state.me) return;
   if (state.room?.id !== room.id) {
     state.roomGone = gone;
+    state.flash = null;
     announce("You can't open that room any more.");
   }
   render();
@@ -1991,7 +1996,8 @@ async function loadRoute() {
       catch (error) {
         if (still()) {
           if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
-          const here = state.room?.id === wanted;  // the room on screen stays: it's the newer read that failed
+          // The room on screen stays when the newer read failed. A refusal isn't a failure: this person can't read it now.
+          const here = state.room?.id === wanted && error.status !== 403 && error.status !== 404;
           if (!here) state.room = null;
           setFlash(here ? `${chatTitle(wanted) || "This room"} couldn't be refreshed. ${reasonOf(error)}` : openFailedWords(wanted, error), true);
         }
@@ -2647,6 +2653,7 @@ async function sendMessage(form) {
     if (refreshedStatus && state.room?.id === room.id) refreshedStatus.textContent = "Message saved";
   } catch (error) {
     await refreshed.catch(() => {});  // sync can fail first, and the render below draws what the room's answer brought
+    if (identityKey(state.me) !== who) return;
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }

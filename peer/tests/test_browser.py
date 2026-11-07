@@ -6093,6 +6093,56 @@ def test_being_removed_says_so_shows_your_words_and_takes_the_room_off_the_list(
             expect(page.locator(".split-detail .notice")).to_have_count(0)
 
 
+def test_a_refused_ask_after_the_account_changed_goes_to_sign_in_and_leaves_nothing_on_screen(browser_peer):
+    """Another tab signed in as someone else: the ask is refused, and the first person's room mustn't stay for them."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.get_by_role("textbox", name="Message", exact=True).fill("the first person's draft")
+            page.route(f"**/api/chats/{room['id']}?since=*", lambda route: route.fulfill(status=404, json={"error": "Not available"}))
+            page.evaluate("state.me = { ...state.me, id: 'the-first-person' }")  # the home now answers as someone else
+            _ask_soon(page)
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            assert page.evaluate("state.room") is None and page.evaluate("state.me") is None
+            expect(page.locator(".message")).to_have_count(0)
+            expect(page.get_by_text("the first person's draft")).to_have_count(0)
+
+
+def test_removed_with_a_failed_send_says_only_what_is_true(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.get_by_role("textbox", name="Message", exact=True).fill("never reached them")
+            store.remove_participant(users["patient"]["id"], room["id"], users["family"]["id"])
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_contain_text("Your message is still here")
+            _ask_soon(page)
+            notice = page.locator(".split-detail .notice")
+            expect(notice).to_contain_text("You can't open that room any more.")
+            expect(notice.locator("pre.draft-kept")).to_have_text("never reached them")
+            expect(page.locator(".notice.error")).to_have_count(0)  # not "still in the box", which they can't open
+            assert page.evaluate("state.unsentIn") is None
+
+
+def test_a_send_whose_sync_fails_says_nothing_to_the_next_account(browser_peer):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            held = []
+            page.route("**/api/sync", lambda route: held.append(route))
+            page.get_by_role("textbox", name="Message", exact=True).fill("mine")
+            page.get_by_role("button", name="Send message").click()
+            _until(page, "state.room.messages.some((message) => message.body === 'mine') && refreshesRunning === 0")
+            page.evaluate("state.me = { ...state.me, id: 'the-next-account' }")
+            held[0].abort()
+            page.wait_for_timeout(300)
+            assert page.evaluate("state.flash") is None
+
+
 def test_a_leftover_timer_asks_nothing_for_the_next_person_signing_in(browser_peer):
     base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
     with sync_playwright() as playwright:
