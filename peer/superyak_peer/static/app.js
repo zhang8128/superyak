@@ -263,17 +263,18 @@ function demoChoices() {
 
 function showLogin(message = "") {
   dataLoadSequence++;
+  roomDrawn = null;
   state.me = null;
   state.home = null;
   app.innerHTML = `<main class="login-page" id="main-content">
     <div class="login-wrap">
       <section class="login-story">
         ${brand()}
-        <div><h1>A home for the parts of your life you choose to share.</h1><p>Write privately, talk with people you trust, and turn on only the version you mean to share.</p></div>
-        <p class="login-note">Self-hosted: this home runs on a computer its owner keeps. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
+        <div><h1>A home for the parts of your life you choose to share.</h1><p>A home is a small server someone runs for the people they invite. Keep notes no other account can open until you share them, talk with people you trust, and make public only what you choose. Whoever runs this home can read everything stored on it, and so can any AI agent they run on its computer.</p></div>
+        <div><p class="login-note">Room messages go to every member: an AI agent's copy goes on to its AI company, and a member on another home gets a copy kept there under that home's rules. The room says which, above its messages.</p><p class="login-note">Free, open-source and self-hosted. Superyak's first use is medical research, and it's a prototype, so please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p></div>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
-        <p class="eyebrow">Personal home</p>
+        <p class="eyebrow">A Superyak home</p>
         <h2 id="login-title">Sign in to this home</h2>
         <p>An account here lives on this home, not with a company.</p>
         ${message ? `<div class="notice error" role="alert">${escapeHtml(message)}</div>` : ""}
@@ -286,7 +287,7 @@ function showLogin(message = "") {
         </form>
         ${state.demoAccounts.length ? '</details>' : ''}
         <p class="meta login-help">This home is run by its owner, who can read what's stored here.</p>
-        <details class="invitation-redeem"><summary>Use an invitation</summary><p>An admin gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
+        <details class="invitation-redeem"><summary>Use an invitation</summary><p>The person who runs this home gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><p class="meta" data-testid="before-an-account">Whoever runs this home, and any AI agent they run on its computer, can read what's stored here. It's a prototype: please don't put real patient information in it yet.</p><button class="button secondary" type="submit">Create my account</button></form></details>
         <p class="meta login-help">No account? The person who runs this home invites people: ask them for an invitation.</p>
       </section>
     </div>
@@ -1018,7 +1019,7 @@ function chatDialog() {
 
 function chatsView() {
   return `<header class="page-head"><div><p class="eyebrow">Private conversation</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New private chat</button></header>
-    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
+    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item${room.id === state.room?.id ? " selected" : ""}" ${room.id === state.room?.id ? 'aria-current="true"' : ""} data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
 // __main__.contact_state's words: held, and why (owner trust Task 7: a retired peer, or a ship whose owner's trust
@@ -1813,7 +1814,8 @@ async function loadRoute() {
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
-    state.selectedChatId = id || state.selectedChatId || null;
+    // On a phone the rooms stack above the open room, thousands of pixels up, so the Chats link means the list and closes the room.
+    state.selectedChatId = id || (matchMedia("(max-width: 760px)").matches ? null : state.selectedChatId) || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
       const wanted = state.selectedChatId, who = identityKey(state.me);
       const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
@@ -1853,6 +1855,8 @@ async function loadRoute() {
 }
 
 let dialogReturn = null;
+let roomDrawn = null;  // the room last drawn, so a room opens at its newest once and a later render leaves the reader alone
+let leftByLink = false;  // a link was clicked: leaving a room that way starts the next view at its top; Back and Forward stay the browser's
 function closeDialogs() {
   state.accountRolePreview = null;
   state.docking = null; state.dockCode = null; state.imprint = null; state.imprintCode = null; state.imprintAsk = null;
@@ -1868,7 +1872,9 @@ function render() {
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
+  const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   app.innerHTML = layout(view);
+  if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
   // nav's own scroll moves, never the page's, so a render far down a page stays where it is.
   const nav = app.querySelector(".nav"), current = nav?.querySelector('[aria-current="page"]');
@@ -1889,8 +1895,25 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  const drawing = route === "chats" && state.room ? state.room.id : null;
+  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
+  roomDrawn = drawing;
+  leftByLink = false;
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
   drawPressed();
+}
+
+// The newest message with the composer under it, clear of a phone's bottom bar. It measures from the end of the messages, which an
+// empty room has too, and not the page's end: a room's management sits below the composer. A message too long to fit shows its start.
+function showNewestMessage() {
+  const messages = app.querySelector(".messages"), composer = app.querySelector(".composer"), bar = app.querySelector(".sidebar");
+  if (!messages) return;
+  const covered = bar && getComputedStyle(bar).position === "fixed" ? bar.offsetHeight : 0;
+  const under = (composer ? composer.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom : 0) + covered + 12;
+  const end = messages.getBoundingClientRect().bottom + under - window.innerHeight;
+  const start = (messages.lastElementChild?.getBoundingClientRect().top ?? end + 1) - 12;
+  window.scrollTo(0, window.scrollY + Math.min(end, start));
 }
 
 async function refresh(message = null) {
@@ -2441,6 +2464,7 @@ async function sendMessage(form) {
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }
+  if (state.room?.id === room.id) showNewestMessage();  // what you just sent, with the box still on screen
 }
 
 function clearChatDrafts() {
@@ -3135,6 +3159,8 @@ document.addEventListener("change", async (event) => {
     form.querySelector(".grant-rooms").innerHTML = grantRoomChoices(state.grantForm);
   }
 });
+
+document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
