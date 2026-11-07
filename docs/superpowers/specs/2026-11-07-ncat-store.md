@@ -46,17 +46,20 @@ that spans two runs is simply whole in the second, and a recall whose outcome ar
 
 | Table | Holds |
 |---|---|
-| `generator(id, dim, source, target, kind, ref)` | Generators in creation order. `source` and `target` are composite keys (dimension 0: the object's key). `kind` is `object` or `road` for now, and `ref` is the memory id or the ordered pair. |
+| `generator(id, dim, source, target, kind, ref, key)` | Generators in creation order, each with its kernel key. `source` and `target` are the ends' keys (none for an object). `kind` is `object` or `road` for now, and `ref` is the memory id or the ordered pair. |
 | `composite(key, dim, recipe)` | Each held cell once, by the kernel's `key()`. The recipe is the expression that built it: a generator id, or (k, left key, right key). |
-| `session(session_id, key, recalls, used, read_at)` | Each session's cell and its counts. |
+| `session(session_id, key, used)` | Each session's cell, and how many used memories it walked. |
 | `road_use(road, session_id, step)` | Each walk of a road, so its weight is a count, not a guess. |
-| `ingest(read_at, rows_read, rows_skipped, skip_reasons, engram_store, kernel_commit)` | The run that wrote this file. |
+| `ingest(read_at, rows_read, rows_skipped, skip_reasons, engram_store, kernel)` | The run that wrote this file; `kernel` is a digest of the kernel's C source. |
 
 **Generator ids are deterministic,** because the kernel's keys depend on creation order (the reviewer ran it): objects by
 memory id, sorted; then roads by (source id, target id), sorted. A recipe names composites by key, never by a kernel id.
 So the same log gives the same file, whatever the row order.
 
-Opening the store makes a fresh `NCat` with an explicit `budget_words` and replays `generator` in id order. A composite
+Opening the store makes a fresh `NCat` with an explicit `budget_words` and replays `generator` in id order. Replay
+also checks that order (objects sorted by memory, then roads sorted by pair, each road's ends the objects its pair
+names), a composite's dimension, a session's count, and that a session's key is its own walk in `road_use`, so a
+swapped ref or a moved key is caught, not only a changed recipe. An unreadable or missing file is the same error. A composite
 is rebuilt from its recipe when it's first asked for, and its key is checked against the stored one. A mismatch exits
 with code 2 and a message, and touches nothing, because it means the kernel or the file changed under it. The fix is a
 rebuild.
@@ -81,7 +84,8 @@ some other way: it runs as the store's owner.
 `episodes`, `semantics` or `instincts`. A `target_ids` entry naming anything else is dropped and counted. When a person
 erases everything, or removes the store, `ncat.db` must be deleted with it. Between an
 erase and the next run the old file still holds it. So a rebuild runs after every erase, or hourly at most, whichever
-the wiring stage can arrange; until then that window is a stated limit. In this stage it's run on this
+the wiring stage can arrange; until then that window is a stated limit. An erased memory between two others joins
+them: a, b, c with b erased gives a road from a to c, by the rule above. In this stage it's run on this
 ship's own store only, by hand or on a timer, never inside a served process: the kernel's reviewer asked for that until
 its GIL and memory-budget fixes land.
 

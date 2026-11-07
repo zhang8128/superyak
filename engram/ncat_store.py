@@ -58,6 +58,8 @@ def _parse_time(text):
 
 def read_engram(engram):
     """Sessions as ordered lists of used memory ids, and what was skipped. Reads ids only, in one read transaction."""
+    if not Path(engram).is_file():
+        raise FileNotFoundError(f"no Engram store at {engram}")
     conn = sqlite3.connect(Path(engram).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         conn.execute("PRAGMA query_only = ON")
@@ -146,23 +148,30 @@ def _write(path, engram, sessions, report):
                 road_ids[a, b] = generator_id
                 db.execute("INSERT INTO generator VALUES (?, 1, ?, ?, 'road', ?, ?)",
                            (generator_id, objects[a].key(), objects[b].key(), json.dumps([a, b]), cell.key()))
+            refused = 0
             for sid in sorted(sessions):
                 walk = walks[sid]
-                if walk:
-                    cell = _compose([roads[road] for road in walk], 0)
-                    recipe = ["then", 0, [roads[road].key() for road in walk]]
-                else:
-                    cell, recipe = objects[sessions[sid][0]].identity(), ["id", objects[sessions[sid][0]].key()]
+                try:
+                    if walk:
+                        cell = _compose([roads[road] for road in walk], 0)
+                        recipe = ["then", 0, [roads[road].key() for road in walk]]
+                    else:
+                        cell, recipe = objects[sessions[sid][0]].identity(), ["id", objects[sessions[sid][0]].key()]
+                except NCatError:  # the kernel refused it, or ran out of budget: counted, and nothing of it written
+                    refused += 1
+                    continue
                 db.execute("INSERT OR IGNORE INTO composite VALUES (?, ?, ?)", (cell.key(), cell.dim, json.dumps(recipe)))
                 db.execute("INSERT INTO session VALUES (?, ?, ?)", (sid, cell.key(), len(sessions[sid])))
                 db.executemany("INSERT INTO road_use VALUES (?, ?, ?)",
                                [(road_ids[road], sid, step) for step, road in enumerate(walk)])
+            if refused:
+                report["skipped"]["refused_by_kernel"] = refused
             db.execute("INSERT INTO ingest VALUES (?, ?, ?, ?, ?, ?)",
                        (datetime.now(timezone.utc).isoformat(), report["rows_read"], sum(report["skipped"].values()),
                         json.dumps(report["skipped"]), str(Path(engram).resolve()), _kernel_digest()))
     finally:
         db.close()
-    return {"sessions": len(sessions), "memories": len(memories), "roads": len(uses)}
+    return {"sessions": len(sessions) - refused, "memories": len(memories), "roads": len(uses)}
 
 
 def _replace(temporary, store):
@@ -179,20 +188,25 @@ def _fsync(path, flags=os.O_RDONLY):
 
 def rebuild(engram, store=None):
     """Rebuild the store whole from Engram's log, then rename it into place. One run at a time, by flock."""
-    store = Path(store) if store else Path(engram).with_name("ncat.db")
+    store = (Path(store) if store else Path(engram).with_name("ncat.db")).resolve()  # one lock per file, whatever the alias
     lock = os.open(f"{store}.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise Busy(f"another rebuild of {store} is running") from None
-        for stray in store.parent.glob(f"{store.name}.tmp-*"):
-            stray.unlink()
+        for stray in store.parent.iterdir():  # not a glob: a name with [ in it would match the wrong files
+            if stray.name.startswith(f"{store.name}.tmp-"):
+                stray.unlink()
         sessions, report = read_engram(engram)
         temporary = store.with_name(f"{store.name}.tmp-{os.getpid()}")
         os.close(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))  # 0600 from the start
-        report.update(_write(temporary, engram, sessions, report))
-        _fsync(temporary)
+        try:
+            report.update(_write(temporary, engram, sessions, report))
+            _fsync(temporary)
+        except Exception:
+            temporary.unlink(missing_ok=True)  # it holds ids: it doesn't wait for the next run
+            raise
         _replace(temporary, store)
         _fsync(store.parent)
         return report
@@ -204,16 +218,39 @@ class Store:
     """An opened store: its generators replayed in id order through a fresh kernel, composites rebuilt when asked."""
 
     def __init__(self, path):
+        if not Path(path).is_file():
+            raise IntegrityError(f"no store at {path}; rebuild it")
         self._db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            self._replay()
+        except sqlite3.Error as error:
+            self._db.close()
+            raise IntegrityError(f"the store can't be read ({error}); rebuild it") from None
+
+    def _replay(self):
+        """Generators in id order, as the rebuild made them: objects sorted by memory, then roads sorted by their pair,
+        each road's ends the objects its pair names. A swapped or edited ref breaks that order, and is caught."""
         self.cat = NCat(budget_words=BUDGET_WORDS)
-        self._by_key, self._memories, self._cells = {}, {}, {}
-        for _, dim, source, target, kind, ref, key in self._db.execute("SELECT * FROM generator ORDER BY id"):
+        self._by_key, self._memories, self._cells, self._road_ids, self._road_cells = {}, {}, {}, {}, {}
+        last_memory, last_road, seen_road = None, None, False
+        for gid, dim, source, target, kind, ref, key in self._db.execute("SELECT * FROM generator ORDER BY id"):
             try:
-                cell = self.cat.object() if kind == "object" else self.cat.generator(self._by_key[source], self._by_key[target])
-            except (KeyError, NCatError) as error:
-                raise IntegrityError(f"generator {ref} can't be replayed ({error}); rebuild the store") from None
+                if kind == "object" and dim == 0 and not seen_road and (last_memory is None or ref > last_memory):
+                    cell, last_memory = self.cat.object(), ref
+                elif kind == "road" and dim == 1:
+                    seen_road, pair = True, tuple(json.loads(ref))
+                    a, b = pair
+                    if (last_road is not None and pair <= last_road) or source != self._memories[a].key() \
+                            or target != self._memories[b].key():
+                        raise ValueError("a road's pair doesn't match its place or its ends")
+                    cell, last_road = self.cat.generator(self._by_key[source], self._by_key[target]), pair
+                    self._road_ids[gid], self._road_cells[gid] = pair, cell
+                else:
+                    raise ValueError(f"generator {gid} is out of place")
+            except (KeyError, TypeError, ValueError, NCatError) as error:
+                raise IntegrityError(f"generator {gid} can't be replayed ({error}); rebuild the store") from None
             if cell.key() != key:
-                raise IntegrityError(f"generator {ref} replays to another key; rebuild the store")
+                raise IntegrityError(f"generator {gid} replays to another key; rebuild the store")
             self._by_key[key] = cell
             if kind == "object":
                 self._memories[ref] = cell
@@ -224,9 +261,13 @@ class Store:
     def cell(self, key):
         if key in self._cells:
             return self._cells[key]
-        row = self._db.execute("SELECT recipe FROM composite WHERE key = ?", (key,)).fetchone()
+        try:
+            row = self._db.execute("SELECT recipe, dim FROM composite WHERE key = ?", (key,)).fetchone()
+        except sqlite3.Error as error:
+            raise IntegrityError(f"the store can't be read ({error}); rebuild it") from None
         if row is None:
             raise IntegrityError(f"no composite with key {key}; rebuild the store")
+        dim = row[1]
         try:
             recipe = json.loads(row[0])
             if recipe[0] == "id":
@@ -235,16 +276,35 @@ class Store:
                 cell = _compose([self._by_key[part] for part in recipe[2]], recipe[1])
         except (KeyError, IndexError, TypeError, ValueError, NCatError) as error:
             raise IntegrityError(f"composite {key} can't be rebuilt ({error}); rebuild the store") from None
-        if cell.key() != key:
-            raise IntegrityError(f"composite {key} rebuilds to another key; rebuild the store")
+        if cell.key() != key or cell.dim != dim:
+            raise IntegrityError(f"composite {key} rebuilds to another key or dimension; rebuild the store")
         self._cells[key] = cell
         return cell
 
     def session(self, session_id):
-        row = self._db.execute("SELECT key FROM session WHERE session_id = ?", (session_id,)).fetchone()
-        if row is None:
-            raise KeyError(session_id)
-        return self.cell(row[0])
+        """A session's cell, checked against its own walk in `road_use`, so a moved key or a lost walk is caught."""
+        try:
+            row = self._db.execute("SELECT key, used FROM session WHERE session_id = ?", (session_id,)).fetchone()
+            if row is None:
+                raise KeyError(session_id)
+            steps = self._db.execute("SELECT road, step FROM road_use WHERE session_id = ? ORDER BY step",
+                                     (session_id,)).fetchall()
+        except sqlite3.Error as error:
+            raise IntegrityError(f"the store can't be read ({error}); rebuild it") from None
+        key, used = row
+        cell = self.cell(key)
+        if [step for _, step in steps] != list(range(len(steps))) or used != len(steps) + 1:
+            raise IntegrityError(f"session {session_id}'s walk doesn't match its count; rebuild the store")
+        try:
+            walk = [self._road_cells[road] for road, _ in steps]
+        except KeyError:
+            raise IntegrityError(f"session {session_id} walks a road that isn't there; rebuild the store") from None
+        if walk and _compose(walk, 0).key() != key:
+            raise IntegrityError(f"session {session_id}'s key isn't its walk; rebuild the store")
+        if not walk and cell.dim != 1:
+            raise IntegrityError(f"session {session_id} of one memory isn't an identity; rebuild the store")
+        return cell
+
 
     def session_ids(self):
         return [row[0] for row in self._db.execute("SELECT session_id FROM session ORDER BY session_id")]
@@ -263,10 +323,17 @@ class Store:
 
     def check(self):
         """Rebuild every composite and session, raising IntegrityError at the first that doesn't match."""
-        for (key,) in self._db.execute("SELECT key FROM composite ORDER BY key").fetchall():
+        try:
+            keys = [row[0] for row in self._db.execute("SELECT key FROM composite ORDER BY key")]
+            used_roads = {row[0] for row in self._db.execute("SELECT DISTINCT road FROM road_use")}
+        except sqlite3.Error as error:
+            raise IntegrityError(f"the store can't be read ({error}); rebuild it") from None
+        for key in keys:
             self.cell(key)
         for session_id in self.session_ids():
             self.session(session_id)
+        if used_roads != set(self._road_ids):  # every road was made because a session walked it
+            raise IntegrityError("roads and their uses don't match; rebuild the store")
         return len(self._cells)
 
 
@@ -300,6 +367,9 @@ def main(argv=None):
     except IntegrityError as error:
         print(f"ncat_store: {error}", file=sys.stderr)
         return 2
+    except FileNotFoundError as error:
+        print(f"ncat_store: {error}", file=sys.stderr)
+        return 1
     except Busy as error:
         print(f"ncat_store: {error}", file=sys.stderr)
         return 3

@@ -240,6 +240,78 @@ def test_a_crashed_rebuild_leaves_the_old_file_and_the_next_run_clears_its_temp(
         assert store.roads() == {("a", "b"): 1, ("b", "c"): 1}
 
 
+def _three_step(tmp_path):
+    engram = _engram(tmp_path / "graph.db")
+    for i, (session, memory) in enumerate([("s1", "a"), ("s1", "b"), ("s2", "b"), ("s2", "c"), ("s3", "d")]):
+        _recall(engram, str(i), f"2026-11-07T10:0{i}:00+00:00", session, [memory])
+    _rebuild(tmp_path, engram)
+    return tmp_path / "ncat.db"
+
+
+@pytest.mark.parametrize("tamper", [
+    "UPDATE session SET key = (SELECT key FROM session WHERE session_id = 's2') WHERE session_id = 's1'",
+    "UPDATE generator SET ref = CASE ref WHEN 'a' THEN 'b' WHEN 'b' THEN 'a' ELSE ref END WHERE kind = 'object'",
+    "UPDATE generator SET ref = '[\"a\", \"c\"]' WHERE kind = 'road' AND ref = '[\"a\", \"b\"]'",
+    "DELETE FROM road_use",
+    "UPDATE session SET used = 7 WHERE session_id = 's1'",
+    "UPDATE composite SET dim = 2",
+    "UPDATE road_use SET road = (SELECT max(road) FROM road_use) WHERE session_id = 's1'",
+], ids=["session key moved", "object refs swapped", "road ref edited", "walks deleted", "count edited", "dim edited",
+        "walk moved"])
+def test_a_tampered_file_is_caught_by_check(tmp_path, tamper):
+    store = _three_step(tmp_path)
+    db = sqlite3.connect(store)
+    db.execute(tamper)
+    db.commit(); db.close()
+    with pytest.raises(ncat_store.IntegrityError):
+        with ncat_store.open_store(store) as opened:
+            opened.check()
+
+
+def test_an_unreadable_or_missing_file_is_an_integrity_error(tmp_path):
+    (tmp_path / "garbage.db").write_bytes(b"not a database at all" * 100)
+    for path in (tmp_path / "garbage.db", tmp_path / "missing.db"):
+        with pytest.raises(ncat_store.IntegrityError):
+            with ncat_store.open_store(path) as opened:
+                opened.check()
+
+
+def test_a_failed_rebuild_leaves_no_temporary_file(tmp_path, monkeypatch):
+    engram = _engram(tmp_path / "graph.db")
+    _recall(engram, "1", "2026-11-07T10:00:00+00:00", "s", ["a"])
+    monkeypatch.setattr(ncat_store, "_write", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        _rebuild(tmp_path, engram)
+    assert not any(p.name.startswith("ncat.db.tmp-") for p in tmp_path.iterdir())
+
+
+def test_a_session_the_kernel_refuses_is_counted_and_the_rest_are_kept(tmp_path, monkeypatch):
+    engram = _engram(tmp_path / "graph.db", [f"m{i}" for i in range(400)])
+    for i in range(300):
+        _recall(engram, f"long{i:03d}", f"2026-11-07T10:{i // 60:02d}:{i % 60:02d}+00:00", "long", [f"m{i}"])
+    _recall(engram, "short1", "2026-11-07T11:00:00+00:00", "short", ["m1"])
+    _recall(engram, "short2", "2026-11-07T11:01:00+00:00", "short", ["m2"])
+    compose = ncat_store._compose
+
+    def over_budget(parts, k):  # the kernel's own refusal, as a budget overrun on the long one gives it
+        if len(parts) > 100:
+            raise ncat_store.NCatError(-9)
+        return compose(parts, k)
+    monkeypatch.setattr(ncat_store, "_compose", over_budget)
+    report = _rebuild(tmp_path, engram)
+    monkeypatch.undo()
+    assert report["skipped"].get("refused_by_kernel") == 1 and report["sessions"] == 1
+    with ncat_store.open_store(tmp_path / "ncat.db") as store:
+        assert store.session_ids() == ["short"]
+
+
+def test_a_missing_engram_store_says_so_and_exits_1(tmp_path):
+    env = {**os.environ, "PYTHONPATH": str(ENGRAM)}
+    done = subprocess.run([sys.executable, "-m", "ncat_store", "rebuild", "--engram", str(tmp_path / "nope.db")],
+                          capture_output=True, text=True, env=env, cwd=ENGRAM)
+    assert done.returncode == 1 and "no Engram store" in done.stderr and "Traceback" not in done.stderr
+
+
 def test_one_rebuild_at_a_time(tmp_path):
     engram = _engram(tmp_path / "graph.db")
     _recall(engram, "1", "2026-11-07T10:00:00+00:00", "s", ["a"])
