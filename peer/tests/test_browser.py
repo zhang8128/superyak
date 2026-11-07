@@ -992,8 +992,8 @@ def test_a_send_that_fails_after_the_person_moved_on_says_where_the_words_are(br
             reads_settled(page, held=1)
             for route in posts:
                 route.abort()
-            expect(page.locator(".notice.error")).to_have_text("Your message to Room X wasn't sent. Connection lost. It's still in the box there.")
-            expect(page.locator(".words-kept")).to_have_text("Your message to Room X wasn't sent. Connection lost. It's still in the box there.")  # a room opens at its newest, far below the flash
+            expect(page.locator(".notice.error")).to_have_text("Your message to Room X may not have been sent. Connection lost. It's still in the box there, so check that room before sending it again.")
+            expect(page.locator(".words-kept")).to_have_text("Your message to Room X may not have been sent. Connection lost. It's still in the box there, so check that room before sending it again.")  # a room opens at its newest, far below the flash
             assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"
             page.unroute(f"**/api/chats/{x['id']}/messages")
             page.get_by_role("button", name="Room X").click()
@@ -1508,7 +1508,7 @@ def test_a_send_that_failed_before_the_next_room_drew_is_said_again_there(browse
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
             reads_settled(page)
-            expect(page.locator(".words-kept")).to_have_text("Your message wasn't sent. It's still in the box in Room X.")
+            expect(page.locator(".words-kept")).to_have_text("Your message may not have been sent. It's still in the box in Room X, so check that room before sending it again.")
             assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"
 
 
@@ -2001,6 +2001,109 @@ def test_the_kept_line_goes_once_those_words_are_sent(browser_peer):
             reads_settled(page)
 
 
+def test_a_send_whose_answer_was_lost_doesnt_say_it_wasnt_sent(browser_peer):
+    """The home took it and only the answer was lost, so "wasn't sent" would be false, and a person who rewords it sends it twice."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Meant for X")
+            posts = held_routes(page, f"**/api/chats/{x['id']}/messages")
+            page.get_by_role("button", name="Send message").click()
+            wait_for_hold(page, posts)
+            assert posts[0].fetch().ok  # it reached the home
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            posts[0].abort()
+            words = "Your message to Room X may not have been sent. Connection lost. It's still in the box there, so check that room before sending it again."
+            expect(page.locator(".notice.error")).to_have_text(words)
+            expect(page.locator(".words-kept")).to_have_text(words)
+            assert bodies(page, x) == ["Meant for X"]
+            page.unroute(f"**/api/chats/{x['id']}/messages")
+            page.get_by_role("button", name="Room X").click()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            reads_settled(page)
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value("Meant for X")
+            page.get_by_role("button", name="Send message").click()  # the same words again: its client id makes it the same message
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value("")
+            reads_settled(page)
+            assert bodies(page, x) == ["Meant for X"]
+
+
+@pytest.mark.parametrize("status, json, reason, said_later", [
+    (403, {"error": "Only members can post"}, "Only members can post.", "Your message wasn't sent. It's still in the box in Room X."),
+    (502, {"error": "Bad gateway"}, "Bad gateway. It may have reached the room anyway.", "Your message may not have been sent. It's still in the box in Room X, so check that room before sending it again."),
+])
+def test_only_a_refusal_says_a_message_wasnt_sent(browser_peer, status, json, reason, said_later):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Meant for X")
+            page.route(f"**/api/chats/{x['id']}/messages", lambda route: route.fulfill(status=status, json=json))
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_have_text(f"{reason} Your message is still here.")
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            expect(page.locator(".words-kept")).to_have_text(said_later)
+
+
+def test_a_failed_send_is_said_again_when_the_chats_link_closes_the_room_on_a_phone(browser_peer):
+    """On a phone the Chats link is the way between rooms, and it takes the status at the box away with the room."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Meant for X")
+            page.route(f"**/api/chats/{x['id']}/messages", lambda route: route.abort())
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_contain_text("Your message is still here")
+            page.get_by_role("link", name="Chats").first.click()
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_count(0)
+            expect(page.locator(".notice.error")).to_have_text("Your message may not have been sent. It's still in the box in Room X, so check that room before sending it again.")
+            assert page.evaluate("state.unsentIn") is None
+            assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"
+
+
+@pytest.mark.parametrize("leave", ["logout()", "showLogin('Your session ended. Sign in again.')"])
+def test_a_rooms_title_doesnt_stay_for_the_sign_in_page(browser_peer, leave):
+    """The announcer is in the page, where a screen reader finds it, and the next person on this browser is at the sign-in page."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Meant for X")
+            page.route(f"**/api/chats/{x['id']}/messages", lambda route: route.abort())
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_contain_text("Your message is still here")
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            expect(page.locator("#announcer")).to_contain_text("Room X")
+            page.evaluate(leave)
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            expect(page.locator("#announcer")).to_have_text("")
+
+
+def test_a_brief_whose_answer_was_lost_doesnt_say_it_wasnt_saved(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+            page.evaluate("render()")
+            page.locator("#brief-body").fill("The plan for X")
+            saves = held_routes(page, f"**/api/chats/{x['id']}/brief")
+            page.get_by_role("button", name="Save brief").click()
+            wait_for_hold(page, saves)
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page, held=1)
+            saves[0].abort()
+            expect(page.locator(".notice.error")).to_have_text("Room X: the brief may not have been saved. Your text is still in its editor.")
+
+
 def test_a_failed_send_is_said_on_a_page_without_a_composer(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
@@ -2011,7 +2114,7 @@ def test_a_failed_send_is_said_on_a_page_without_a_composer(browser_peer):
             page.get_by_role("button", name="Send message").click()
             expect(page.locator("#chat-status")).to_contain_text("Your message is still here")
             page.get_by_role("link", name="My sharing layers").first.click()
-            expect(page.locator(".notice.error")).to_have_text("Your message wasn't sent. It's still in the box in Room X.")
+            expect(page.locator(".notice.error")).to_have_text("Your message may not have been sent. It's still in the box in Room X, so check that room before sending it again.")
 
 
 def test_the_kept_line_shows_on_a_replaced_room_too(browser_peer):
@@ -2304,7 +2407,7 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
             page.get_by_role("textbox", name="Message", exact=True).fill("Keep this through a connection problem.")
             context.set_offline(True)
             page.get_by_role("button", name="Send message").click()
-            expect(page.locator("#chat-status")).to_have_text("Connection lost. Your message is still here.")
+            expect(page.locator("#chat-status")).to_have_text("Connection lost. It may have reached the room anyway. Your message is still here.")
             expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value(
                 "Keep this through a connection problem."
             )

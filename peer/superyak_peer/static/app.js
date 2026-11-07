@@ -139,8 +139,18 @@ function composerNote() {
   const note = state.composerNote;
   return note && chatTitle(note.roomId) ? `<p class="meta words-kept">${escapeHtml(note.words)}</p>` : "";
 }
+// A refusal is an answer. With no answer, or a server's or gateway's failure, the home may have taken it and only the answer was lost.
+function mayHaveGone(error) { return !(error.status >= 400 && error.status < 500); }
 function unsentWords(id) {
-  return readChatDraft(id).body.trim() ? `Your message wasn't sent. It's still in the box in ${chatTitle(id) || "the room you left"}.` : null;
+  if (!readChatDraft(id).body.trim()) return null;
+  const where = chatTitle(id) || "the room you left";
+  return state.unsentMayHaveGone ? `Your message may not have been sent. It's still in the box in ${where}, so check that room before sending it again.` : `Your message wasn't sent. It's still in the box in ${where}.`;
+}
+// The failed send's status has just gone from the screen, so it's said once more.
+function sayUnsent() {
+  const words = state.unsentIn && unsentWords(state.unsentIn);
+  state.unsentIn = null;
+  if (words) setFlash(words, true);
 }
 function aboutRoom(room, words) { return state.room?.id === room.id ? words : `${room.title}: ${words}`; }  // the next room may have opened meanwhile
 function reasonOf(error) {
@@ -263,6 +273,7 @@ function demoChoices() {
 
 function showLogin(message = "") {
   dataLoadSequence++;
+  announcer.textContent = "";  // the next person on this browser is here, and a room's title isn't theirs
   roomDrawn = null;
   state.me = null;
   state.home = null;
@@ -1831,6 +1842,7 @@ async function loadRoute() {
         }
       }
     } else {
+      if (state.room) sayUnsent();  // the Chats link on a phone closes the room, and the status at its box goes with it
       state.room = null;
     }
   }
@@ -2314,7 +2326,7 @@ async function saveBrief(form) {
     Object.assign(edit, { status: message, error: true, saving: false });
     if (identityKey(state.me) !== who) return;
     if (state.room?.id !== room.id) {  // they've moved on, so the editor and its message aren't on screen
-      setFlash(`${room.title}: the brief wasn't saved.${state.briefEdit === edit ? " Your text is still in its editor." : ""}`, true);
+      setFlash(`${room.title}: the brief ${mayHaveGone(error) ? "may not have been" : "wasn't"} saved.${state.briefEdit === edit ? " Your text is still in its editor." : ""}`, true);
       render();
       return;
     }
@@ -2419,17 +2431,18 @@ async function sendMessage(form) {
     accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
     if (identityKey(state.me) !== who) return;  // their words went with their sign-out, and this isn't the next person's news
-    const why = reasonOf(error);
+    const why = reasonOf(error), gone = mayHaveGone(error);
     if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
-      const words = `Your message to ${chatTitle(room.id) || "the room you left"} wasn't sent. ${why} It's still in the box there.`;
+      const where = chatTitle(room.id) || "the room you left";
+      const words = gone ? `Your message to ${where} may not have been sent. ${why} It's still in the box there, so check that room before sending it again.` : `Your message to ${where} wasn't sent. ${why} It's still in the box there.`;
       setFlash(words, true);
       state.composerNote = { roomId: room.id, words };  // at the box too: a room opens at its newest, far below the flash
       render();
       return;
     }
-    state.unsentIn = room.id;  // said here, and again if the next room or page replaces this before they've seen it
+    state.unsentIn = room.id; state.unsentMayHaveGone = gone;  // said here, and again if the next room or page replaces this before they've seen it
     status.className = "inline-message error";
-    status.textContent = `${why} Your message is still here.`;
+    status.textContent = `${why} ${gone ? "It may have reached the room anyway. " : ""}Your message is still here.`;
     announce(status.textContent);
     return;
   }
@@ -3172,11 +3185,7 @@ window.addEventListener("hashchange", async () => {
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
-  if (state.unsentIn && routeParts().route !== "chats") {  // the failed send's status has just gone from the screen
-    const words = unsentWords(state.unsentIn);
-    state.unsentIn = null;
-    if (words) setFlash(words, true);
-  }
+  if (routeParts().route !== "chats") sayUnsent();
   if (!["apps", "connections"].includes(routeParts().route)) { state.appAsk = null; state.appRoomsEdit = null; }  // N3
   try {
     await loadRoute(); render();
