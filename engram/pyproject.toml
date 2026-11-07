@@ -99,6 +99,7 @@ py-modules = [
     "maintenance",
     "margins",
     "mirror",
+    "ncat",
     "neighbors",
     "notepad",
     "operation_audit",
@@ -128,7 +129,7 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/engram" = ["context_chat.html"]
+"share/engram" = ["context_chat.html", "ncat_kernel.c"]
 "share/engram/migrations" = ["migrations/*.sql"]
 "share/engram/prompts" = ["prompts/*.txt"]
 "share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]
