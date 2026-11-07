@@ -114,6 +114,37 @@ def test_three_cells_on_stacked_sheets_are_counted_the_same_way(sheets, marks):
     assert len(level) == math.comb(marks + sheets - 1, sheets - 1)
 
 
+@pytest.mark.parametrize('j', [0, 1, 2])
+@pytest.mark.parametrize('marks', [2, 3, 4])
+def test_four_cells_on_separate_blocks_commute_along_each_lower_dimension(j, marks):
+    """Real exchanges at n = 4, the case a torsion check could wrongly refuse: 4-cells on two 3-cells composed along j. Interchange
+    says they commute, so only how many on each can matter: marks + 1 cells, and nothing refused."""
+    C = NCat()
+    x = C.object()
+    f = C.generator(x, x)
+    a = C.generator(f, f)
+    b = C.generator(a, a)
+    mark = C.generator(b, b)
+    left, right = mark.then(b, j), b.then(mark, j)
+    assert left.then(right) == right.then(left) == mark.then(mark, j)
+    level = {b.then(b, j).identity()}
+    for _ in range(marks):
+        level = {cell.then(step) for cell in level for step in (left, right)}
+    assert len(level) == marks + 1
+
+
+def test_shapes_inside_a_loop_free_shape_need_no_check_of_their_own():
+    """Rio Grande's doubt: can a later identity or whisker change what a checked shape determines? An identity is the same shape,
+    and a whisker makes a new shape, which is checked. A boundary is a closed part of a shape, and an atom's own boundaries are the
+    same inside it, so its relation is part of the larger one: if that has no cycle, nor has this. Its boundaries never refuse."""
+    _, d1, _, a, b = torsion()
+    for cell in (a, b, d1):
+        for k in range(cell.dim):
+            assert cell.source(k).identity().source() == cell.source(k)
+            assert cell.target(k).then(cell.target(k), k) == cell.target(k)
+    assert a.identity().then(a.identity()) == a.identity()
+
+
 @pytest.mark.parametrize('sides, marks', [(2, 3), (3, 2)])
 def test_three_cells_on_side_by_side_sheets_are_counted_too(sides, marks):
     C = NCat()
