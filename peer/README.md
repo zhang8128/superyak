@@ -43,7 +43,7 @@ the existing supported file types, with original bytes preserved. Repeated impor
 requests return their existing successful receipts. No source is shared merely
 because it is registered or enabled. See the [data-source API examples](API.md#backend-data-sources).
 Open **Research & data** to create a source, preview selected files or record
-documents, import privately, inspect source text and provenance, correct details,
+documents, import, inspect source text and provenance, correct details,
 pause/resume imports, and read import receipts. A failed acknowledgement can be
 retried with the same request identity. **Start evidence review** creates a private
 layer with a source citation, an excerpt (up to 12,000 characters), and review

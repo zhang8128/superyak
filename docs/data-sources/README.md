@@ -3,7 +3,7 @@
 The dashboard now provides **Research & data**. Create a source of type
 **Papers and selected source records**, choose **Select source document**, and
 select the prepared `peer-import.json` described below. Review the three records,
-then choose **Import privately**. The source page provides pause/resume, provenance,
+then choose **Import**. The source page provides pause/resume, provenance,
 import receipts, and **Start evidence review**, which creates a private cited
 draft for manual review or the existing selected Gemma assistance. Importing does
 not run a model or grant training or publication rights.
@@ -75,7 +75,7 @@ account's session, same-origin header and CSRF token, as described in
 [the API](../../peer/API.md#backend-data-sources).
 Credentials belong in the local session, not in the catalog or import document.
 Repeating the same successful request ID and content returns its original receipt.
-Imported sources stay private to the account; public sharing uses the existing
+No other account can open imported sources; public sharing uses the existing
 separate sharing flow.
 
 The staged batch already passed an actual import into disposable local state,
