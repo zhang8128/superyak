@@ -228,6 +228,78 @@ def test_either_side_of_a_generator_being_not_round_is_refused():
         assert caught.value.code == -4
 
 
+def torsion():
+    """Rio Grande's example (2026-11-07). A 3-cell D with events m < a < c < n, d < b, d < n, m < b. The block {m, a, b} and the
+    block {d, c, n} each come together in one way of building D, and never both, because a feeds c and d feeds b. So 4-cells on
+    the two blocks have no interchange between their two orders, and they share no 3-dimensional face, so the shape can't record
+    which came first. The free category tells A;B from B;A, and a shape can't. Returns the pieces."""
+    C = NCat()
+    def seq(j, *cells):
+        whole = cells[0]
+        for cell in cells[1:]:
+            whole = whole.then(cell, j)
+        return whole
+    x, w, mid = C.object(), C.object(), C.object()
+    z_, y_ = C.generator(x, w), C.generator(x, w)
+    z1, e1, y1 = C.generator(x, mid), C.generator(x, mid), C.generator(x, mid)
+    z2, e2, y2 = C.generator(mid, w), C.generator(mid, w), C.generator(mid, w)
+    mu, nu = C.generator(z_, e1.then(e2, 0)), C.generator(e1.then(e2, 0), y_)
+    wt, wb = C.generator(z_, z1.then(z2, 0)), C.generator(y1.then(y2, 0), y_)
+    uL, uR, uR1, uR2 = C.generator(z1, e1), C.generator(z2, e2), C.generator(z2, e2), C.generator(z2, e2)
+    vL, vR, beta, rho = C.generator(e1, y1), C.generator(e2, y2), C.generator(z1, y1), C.generator(z2, y2)
+    m = C.generator(mu, seq(1, wt, uL.then(uR, 0)))
+    d3 = C.generator(nu, seq(1, vL.then(vR, 0), wb))
+    a3, c3 = C.generator(uR, uR1), C.generator(uR1, uR2)
+    b3, n3 = C.generator(uL.then(vL, 1), beta), C.generator(uR2.then(vR, 1), rho)
+    s1 = seq(2, seq(1, m, vL.then(e2, 0)), seq(1, wt, uL.then(a3, 0), vL.then(e2, 0)), seq(1, wt, b3.then(uR1, 0)))
+    s2 = seq(2, seq(1, e1.then(uR1, 0), d3), seq(1, e1.then(c3, 0), vL.then(vR, 0), wb), seq(1, vL.then(n3, 0), wb))
+    head = seq(1, mu, d3)
+    def whisker_a(block):
+        return seq(2, head, seq(1, block, y1.then(vR, 0), wb), seq(1, wt, beta.then(c3, 0), y1.then(vR, 0), wb),
+                   seq(1, wt, beta.then(n3, 0), wb))
+    def whisker_b(block):
+        return seq(2, seq(1, m, nu), seq(1, wt, uL.then(a3, 0), nu), seq(1, wt, uL.then(z2, 0), block),
+                   seq(1, wt, b3.then(rho, 0), wb))
+    return C, whisker_a(s1), whisker_b(s2), whisker_a(C.generator(s1, s1)), whisker_b(C.generator(s2, s2))
+
+
+def test_torsion_is_refused_and_not_answered():
+    """Both ways of building D are one 3-cell, which is fine, and each 4-cell alone is fine. Composing them is what the shape
+    can't decide, and the kernel used to say A;B == B;A. It refuses, both ways round."""
+    _, d1, d2, a, b = torsion()
+    assert d1 == d2
+    assert a.source(3) == d1 == a.target(3)
+    assert b.source(3) == d1 == b.target(3)
+    for first, second in ((a, b), (b, a)):
+        with pytest.raises(NCatError) as caught:
+            first.then(second, 3)
+        assert caught.value.code == -5
+
+
+def test_a_4_cell_composes_with_itself_when_nothing_is_tangled():
+    """The refusal is for torsion only: the same 4-cell twice is a stack, with an order the shape records."""
+    _, _, _, a, b = torsion()
+    assert a.then(a, 3).source(3) == a.source(3)
+    assert b.then(b, 3).target(3) == b.target(3)
+
+
+@pytest.mark.parametrize('seed', range(24))
+def test_nothing_up_to_dimension_3_is_refused_as_torsion(seed):
+    """Two blocks can't each feed the other in a planar 2-cell, since their wires would cross, so torsion can't start below 4."""
+    rng, _, pool = random_polygraph(seed, 3)
+    cells = everything(pool)
+    for _ in range(1500):
+        a, b = rng.choice(cells), rng.choice(cells)
+        k = rng.randrange(max(a.dim, b.dim) or 1)
+        try:
+            c = a.then(b, k)
+        except NCatError as e:
+            assert e.code == -1, e
+            continue
+        if c.size <= 200:
+            cells.append(c)
+
+
 # ---- A second traversal, in Python on shuffled numbering: the canonical form has to depend on the shape and nothing else
 
 def parse(words):
@@ -349,7 +421,7 @@ def grow(rng, pool, d, want):
         try:
             c = a.then(b, k) if rng.random() < 0.5 else b.then(a, k)
         except NCatError as e:
-            assert e.code == -1, e
+            assert e.code in (-1, -5), e  # -5 is torsion, from dimension 4
             continue
         if c.size <= 120:
             cells.append(c)
@@ -394,7 +466,7 @@ def composable(rng, pool, tries=600):
         try:
             yield a, b, k, a.then(b, k)
         except NCatError as e:
-            assert e.code == -1, e
+            assert e.code in (-1, -5), e
 
 
 @pytest.mark.parametrize('seed', SEEDS)

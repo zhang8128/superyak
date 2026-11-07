@@ -27,13 +27,26 @@ Kessler, O(n³ log n), with rewalt as their implementation).
 - A generator with an identity boundary: it would bring Eckmann-Hilton, where 2-cells on an identity commute.
 - A generator whose boundary isn't round. Two 2-cells side by side touch at a point, so a 3-cell can't have that as its source.
   This is a real limit against the full free 3-category, and a person could want such a cell.
-- A shape the traversal can't finish, possible from dimension 4 on: not every molecule has a layering there. It says
-  "beyond what the kernel can decide" and doesn't guess. None appeared in the random tests up to dimension 5.
+- A shape that isn't loop-free in Steiner's sense, which starts at dimension 4. Two top elements can each feed the other through a
+  lower dimension, so no way of building the cell keeps them apart, and interchange can't relate their two orders. They may also share
+  no face of the dimension below, so the shape can't record which came first. The free category tells them apart, and a shape can't.
 
-**What's proved and what's tested.** Dimension 2 rests on published results. That labelled-shape equality is exactly equality in
-the free strict n-category at n ≥ 3 is what I expect from the literature on loop-free shapes, not something I've proved. Forest
-shows the older formalisms (parity complexes, pasting schemes) fail freeness in general, so this needs a mathematician's read.
-Laws hold by test, and known answers check that nothing is over-identified at the counts below. Treat dimension ≥ 3 as tested.
+**A correction.** This spec first said the kernel "answers exactly or refuses". That was false at n = 4. Rio Grande's reference, written
+without seeing this code, found a composite of two 4-cells on round generators where the kernel said A;B == B;A and the reference
+said they differ. Rio Grande's hand argument holds: it's torsion in Forest's sense. Hence the third refusal above. It starts at 4 because
+in a planar 2-cell two blocks can't each feed the other without their wires crossing.
+
+**What's proved and what's tested.**
+- **n ≤ 2:** published results, as above.
+- **Loop-free shapes, any n:** Steiner's theorem says such a complex's free omega-category is generated freely by its atoms, so any way
+  of building the whole shape gives one cell, and a map to the generators sends it to one cell. That's my reading of his theorem and my own
+  step for labelled, non-injective shapes. It needs a mathematician's read.
+- **Laws:** by test, and known answers check that nothing's over-identified at the counts below.
+- **Differential:** Rio Grande's reference agreed at n ≤ 2 on 726,598 pairs and n ≤ 3 on 370,705 pairs, 0 disagreements. Rio Grande notes that
+  deep interchange at n = 3 may be thinly covered. Those runs predate the loop-free check.
+
+**If the quotient is wanted.** Where independent rewrites commute might suit memory better than the free category does: lawful, and what the
+kernel did before this check. That would be a decision to make and name, not a default.
 
 ## Evidence (all run on Tardis, all synthetic)
 
@@ -43,13 +56,15 @@ Laws hold by test, and known answers check that nothing is over-identified at th
   composition, interchange. Tests count that the top dimensions and interchange were really reached.
 - **A second traversal in Python, on randomly renumbered elements and faces,** recovers the same canonical words. Same author and
   same algorithm, so it checks numbering-independence and the C, not the mathematics.
+- **Torsion:** Rio Grande's example is refused both ways round, and the same 4-cell twice still composes. 24 random seeds up to n = 3 never
+  hit the refusal.
 - **Under ASan and UBSan:** clean on the known answers, refusals and units.
 - **14 mutants of the C:** 10 caught. Of the 4 survivors, 1 was a real gap, now tested (only one side of the round check). 3 are
   equivalent by argument: face lists keep their atom's order anyway, the hash already holds the formal dimension, and the unit
   shortcut gives what gluing gives.
 
-**Not done:** the rewalt cross-check (installing it was refused on Tardis, so it needs Andy's yes or the Pi), and any independent
-mathematician's read. No agent's agreement counts as independent evidence.
+**Not done:** the rewalt cross-check (installing it was refused on Tardis, so it needs Andy's yes or the Pi), a rerun of the differential
+at n ≤ 4 with the check in, and any independent mathematician's read. No agent's agreement counts as independent evidence.
 
 ## Is C needed? Measured
 
@@ -92,12 +107,13 @@ These matter more than the language, and they're the order I'd build in.
    stores really differ, the maps are identities and cohomology carries no information about the data. Real maps need only a sparse,
    matrix-free Laplacian.
 
-## Next, for a split with Rio Grande
+## Next, as split with Rio Grande
 
-Rio Grande holds `build:n-category`. I'd offer: this kernel as stage 2, reviewed and cross-checked, with Rio Grande's store and session
-wiring above it (stages 3 and 4). A second kernel in Python from Rio Grande's spike would be the independent implementation this
-lacks, and I'd run the two against each other. Then the thin quotient and the sheaf (stages 4 and 5). Rails stay behind E1′, as the
-plan says: the mathematics can be right and rails can still not help anyone explore further.
+Agreed on 2026-11-07. Tardis keeps this kernel, its sanitizer builds and its law tests. It parses nothing from the network and takes only
+validated input. Rio Grande has the spec's reviewer, the store, traversal in C, packaging, and the slow reference from the spec alone, which
+is the independent implementation this lacked and has already found one real error here. Each attacks the other's work. Then come the thin
+quotient and the sheaf (stages 4 and 5). Rails stay behind E1′, as the plan says: the mathematics can be right and rails can still not help
+anyone explore further.
 
 ## References
 

@@ -14,7 +14,7 @@ if not SOURCE.exists():  # an installed wheel keeps it with the other shared fil
     SOURCE = Path(sys.prefix) / 'share' / 'engram' / 'ncat_kernel.c'
 ERRORS = {-1: 'not composable: the boundaries differ', -2: 'a generator with an identity boundary is refused',
           -3: "the source and target aren't parallel", -4: "a generator's boundary must be round",
-          -5: 'this shape is beyond what the kernel can decide', -6: 'out of memory', -7: 'bad argument'}
+          -5: "this shape isn't loop-free, so it doesn't determine its cell", -6: 'out of memory', -7: 'bad argument'}
 
 
 class NCatError(ValueError):

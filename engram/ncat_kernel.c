@@ -11,8 +11,10 @@
  * laws hold with nothing to do. Associativity, globularity and interchange are tested, not assumed (tests/test_ncat.py).
  *
  * Refused, and said: a generator with an identity boundary (it would bring Eckmann-Hilton), a generator whose boundary is
- * not round, and any shape the traversal can't finish (NCAT_EUNSUPPORTED), which is possible from dimension 4 on. It never
- * guesses: it answers exactly or it refuses. */
+ * not round, and a shape that isn't loop-free in Steiner's sense (NCAT_EUNSUPPORTED), which starts at dimension 4. There two
+ * top elements can each feed the other through a lower dimension, so no way of building the cell keeps them apart, and interchange
+ * can't relate their two orders: the free category tells them apart and the shape can't. Rio Grande's reference found this
+ * (2026-11-07). The kernel answers only where a shape determines its cell. */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -436,6 +438,79 @@ static int32_t boundary_ordered(Ctx *c, int32_t a, int32_t k, int sign, int32_t 
     return id;
 }
 
+/* Steiner's loop-free condition, for every i: the relation a <_i b, when a's output i-boundary and b's input i-boundary share an
+ * i-element, has no cycle. Where it holds the shape's free omega-category is generated freely by its atoms, so any way of
+ * building the whole shape gives the one cell, and a labelled shape determines its cell. Dimensions 2 and below always hold it,
+ * and tests assert that dimension 3 has done so. Returns 1, 0, or a negative error. */
+static int loop_free(const Host *h)
+{
+    int32_t top = 0;
+    for (int32_t e = 0; e < h->n; e++) if (h->dim[e] > top) top = h->dim[e];
+    if (top < 3) return 1;
+    size_t cap_edges = 1024;
+    int32_t *from = malloc(sizeof(int32_t) * cap_edges), *to = malloc(sizeof(int32_t) * cap_edges);
+    int32_t *cl = malloc(sizeof(int32_t) * (size_t)h->n), *indeg = malloc(sizeof(int32_t) * (size_t)h->n);
+    int32_t *head = malloc(sizeof(int32_t) * (size_t)h->n), *queue = malloc(sizeof(int32_t) * (size_t)h->n);
+    int32_t *nextedge = NULL;
+    uint32_t *in_cl = calloc((size_t)h->n, sizeof(uint32_t)), *not_in = calloc((size_t)h->n, sizeof(uint32_t)), *not_out = calloc((size_t)h->n, sizeof(uint32_t));
+    int result = (from && to && cl && indeg && head && queue && in_cl && not_in && not_out) ? 1 : NCAT_ENOMEM;
+    uint32_t st = 0;
+    for (int32_t i = 0; i < top && result == 1; i++) {
+        size_t nedges = 0;
+        for (int32_t x = 0; x < h->n && result == 1; x++) {
+            if (h->dim[x] <= i) continue;
+            int32_t ncl = 0;
+            st++;
+            in_cl[x] = st; cl[ncl++] = x;
+            for (int32_t c = 0; c < ncl; c++) {
+                int32_t e = cl[c];
+                for (int32_t j = 0; j < h->in_n[e]; j++) { int32_t f = h->pool[h->in_at[e] + j]; if (in_cl[f] != st) { in_cl[f] = st; cl[ncl++] = f; } }
+                for (int32_t j = 0; j < h->out_n[e]; j++) { int32_t f = h->pool[h->out_at[e] + j]; if (in_cl[f] != st) { in_cl[f] = st; cl[ncl++] = f; } }
+            }
+            for (int32_t c = 0; c < ncl; c++) {
+                int32_t e = cl[c];
+                if (h->dim[e] != i + 1) continue;
+                for (int32_t j = 0; j < h->in_n[e]; j++) not_out[h->pool[h->in_at[e] + j]] = st;   /* an input of something: not on the output side */
+                for (int32_t j = 0; j < h->out_n[e]; j++) not_in[h->pool[h->out_at[e] + j]] = st;  /* an output of something: not on the input side */
+            }
+            for (int32_t c = 0; c < ncl; c++) {
+                int32_t e = cl[c];
+                if (h->dim[e] != i) continue;
+                if (nedges + 2 > cap_edges) {
+                    cap_edges *= 2;
+                    int32_t *nf = realloc(from, sizeof(int32_t) * cap_edges), *nt = realloc(to, sizeof(int32_t) * cap_edges);
+                    if (nf) from = nf;
+                    if (nt) to = nt;
+                    if (!nf || !nt) { result = NCAT_ENOMEM; break; }
+                }
+                if (not_out[e] != st) { from[nedges] = x; to[nedges] = e; nedges++; }  /* x, then what's on its output */
+                if (not_in[e] != st) { from[nedges] = e; to[nedges] = x; nedges++; }   /* what's on x's input, then x */
+            }
+        }
+        if (result != 1) break;
+        /* Kahn's algorithm over elements and i-elements together: a cycle here is a cycle of <_i. */
+        free(nextedge);
+        nextedge = malloc(sizeof(int32_t) * (nedges ? nedges : 1));
+        if (!nextedge) { result = NCAT_ENOMEM; break; }
+        for (int32_t e = 0; e < h->n; e++) { indeg[e] = 0; head[e] = -1; }
+        for (size_t m = 0; m < nedges; m++) {
+            nextedge[m] = head[from[m]];
+            head[from[m]] = (int32_t)m;
+            indeg[to[m]]++;
+        }
+        int32_t qh = 0, qt = 0, seen = 0;
+        for (int32_t e = 0; e < h->n; e++) if (indeg[e] == 0) queue[qt++] = e;
+        while (qh < qt) {
+            int32_t e = queue[qh++];
+            seen++;
+            for (int32_t m = head[e]; m >= 0; m = nextedge[m]) if (--indeg[to[m]] == 0) queue[qt++] = to[m];
+        }
+        if (seen != h->n) result = 0;
+    }
+    free(from); free(to); free(cl); free(indeg); free(head); free(queue); free(nextedge); free(in_cl); free(not_in); free(not_out);
+    return result;
+}
+
 /* ------------------------------------------------------------------ the public kernel */
 
 Ctx *ncat_new(void)
@@ -542,9 +617,14 @@ int32_t ncat_compose(Ctx *c, int32_t a, int32_t b, int32_t k)
                 for (int32_t i = 0; i < B.n; i++) mapb[i] = -1;
                 for (int32_t i = 0; i < nb; i++) mapb[ob[i]] = mapa[oa[i]];
                 host_load(&h, &B, mapb);
-                Walk w = { .c = c };
-                id = walk_ready(&w, &h, A.shape > B.shape ? A.shape : B.shape);
-                if (id >= 0) { host_all(&w); id = canon(&w, h.n, formal, NULL); }
+                int lf = loop_free(&h);
+                if (lf < 0) id = lf;
+                else if (!lf) id = NCAT_EUNSUPPORTED;
+                else {
+                    Walk w = { .c = c };
+                    id = walk_ready(&w, &h, A.shape > B.shape ? A.shape : B.shape);
+                    if (id >= 0) { host_all(&w); id = canon(&w, h.n, formal, NULL); }
+                }
             }
         }
         host_free(&h);
@@ -661,9 +741,14 @@ int32_t ncat_gen(Ctx *c, int32_t s, int32_t t)
             for (int32_t i = 0; i < S.n; i++) if (S.words[S.off[i]] == m) { h.pool[h.pool_len++] = ms[i]; h.in_n[x]++; }
             h.out_at[x] = h.pool_len; h.out_n[x] = 0;
             for (int32_t i = 0; i < T.n; i++) if (T.words[T.off[i]] == m) { h.pool[h.pool_len++] = mt[i]; h.out_n[x]++; }
-            Walk w = { .c = c };
-            id = walk_ready(&w, &h, d);
-            if (id >= 0) { host_all(&w); id = canon(&w, h.n, d, NULL); }
+            int lf = loop_free(&h);
+            if (lf < 0) id = lf;
+            else if (!lf) id = NCAT_EUNSUPPORTED;
+            else {
+                Walk w = { .c = c };
+                id = walk_ready(&w, &h, d);
+                if (id >= 0) { host_all(&w); id = canon(&w, h.n, d, NULL); }
+            }
             if (id >= 0) c->ngens++;
         }
     }
