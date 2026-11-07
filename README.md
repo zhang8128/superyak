@@ -54,7 +54,8 @@ Picture a patient who shares a lab result with her family and her doctor, then t
 while she says yes, and every release stays in a history she can read. The demo below is that story, with fictional
 people.
 
-You need `git`, `make` and [uv](https://docs.astral.sh/uv/) (uv fetches the right Python itself).
+You need `git`, `make` and [uv](https://docs.astral.sh/uv/) (uv fetches the right Python itself). It all takes about
+300 MB of disk, and the install took seconds on a fast connection.
 
 ```sh
 git clone https://github.com/zhang8128/superyak.git
@@ -64,8 +65,8 @@ make home-demo
 ```
 
 Open http://127.0.0.1:7435. The demo opens as Alex, a fictional patient, without a password, and nothing leaves your
-machine. The terminal shows two local lines you can pass over: where the demo keeps its fictional accounts' passwords
-(you don't need them), and a version check that reads only this clone's own git history. Then try the story:
+machine. The terminal says where the demo keeps its fictional accounts' passwords (you don't need them), and the `INFO`
+lines after it are normal. If it says the port is in use, use the other port it names. Then try the story:
 
 1. Open **My private notes**, which holds a fictional lab result. Add a line and click **Save private draft**. Only Alex
    can see it.

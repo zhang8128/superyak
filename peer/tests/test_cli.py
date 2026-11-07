@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import subprocess
 import sys
 import pytest
@@ -70,6 +71,75 @@ def test_local_demo_refuses_remote_bind_even_with_tls(tmp_path):
     assert result.returncode != 0
     assert 'loopback' in result.stderr
     assert not target.exists()
+
+def listening_port():
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as a server sets it; an old connection only stays reusable if it did
+    listener.bind(('127.0.0.1', 0))
+    listener.listen()
+    return listener, listener.getsockname()[1]
+
+
+def test_a_taken_port_is_said_plainly_and_starts_nothing(tmp_path):
+    """A person's first command, on a machine already using 7435: what to do, and no app start before it."""
+    target = tmp_path / 'peer'
+    listener, port = listening_port()
+    with listener:
+        result = run('serve', '--local-demo', '--data-dir', target, '--port', port)
+    assert result.returncode == 1
+    assert f'Port {port} is already in use on 127.0.0.1' in result.stderr
+    assert 'HOME_PORT=8080' in result.stderr and '--port 8080' in result.stderr
+    assert 'Errno' not in result.stderr and 'startup' not in result.stderr  # not uvicorn's own failure, after a startup
+    assert not target.exists()
+
+
+def test_federation_listen_says_a_taken_port_before_serving(tmp_path):
+    """Alex's second window on docs/two-people.md: its own port, and that command's own way to change it."""
+    from superyak_peer.db import Store
+    from superyak_peer.identity import PeerIdentity
+    target = tmp_path / 'peer'
+    store = Store(target)
+    store.claim_federation_mode('push')
+    PeerIdentity.load_or_create(target)
+    listener, port = listening_port()
+    with listener:
+        result = run('federation-listen', '--data-dir', target, '--port', port)
+    assert result.returncode == 1
+    assert f'Port {port} is already in use on 127.0.0.1' in result.stderr
+    assert '--port' in result.stderr and 'HOME_PORT' not in result.stderr  # make doesn't start this one
+    assert 'Errno' not in result.stderr and 'startup' not in result.stderr
+
+
+def test_a_recent_connection_is_not_a_taken_port():
+    """Restarting a server moments after it served someone: its old connections linger, and uvicorn would bind."""
+    from superyak_peer.__main__ import refuse_a_taken_port
+    listener, port = listening_port()
+    with listener:
+        client = socket.create_connection(('127.0.0.1', port))
+        served, _ = listener.accept()
+        served.close()  # this side closes first, so this port holds the TIME_WAIT
+        client.recv(1)
+        client.close()
+    refuse_a_taken_port('127.0.0.1', port, 'choose another')
+
+
+def test_a_name_that_will_not_resolve_is_left_for_the_server_to_report():
+    from superyak_peer.__main__ import refuse_a_taken_port
+    refuse_a_taken_port('no-such-host.invalid', 7435, 'choose another')
+
+
+def test_the_demo_has_no_version_line_and_a_home_keeps_it(tmp_path, monkeypatch):
+    """The demo has no ships to tell, and a newcomer reads the line as something to act on."""
+    import superyak_peer.__main__ as cli
+    calls, apps = [], []
+    monkeypatch.setattr(cli.agent_version, 'load', lambda: calls.append(1) or 'history')
+    monkeypatch.setattr('uvicorn.run', lambda app, **kwargs: apps.append(app))
+    cli.main(['demo', '--data-dir', str(tmp_path / 'demo')])
+    cli.main(['serve', '--local-demo', '--data-dir', str(tmp_path / 'demo'), '--port', '0'])
+    assert calls == [] and apps[-1].state.agent_history is None
+    cli.main(['serve', '--data-dir', str(tmp_path / 'home'), '--port', '0'])
+    assert calls == [1] and apps[-1].state.agent_history == 'history'
+
 
 def test_symlink_state_refused(tmp_path):
     from superyak_peer.db import Store

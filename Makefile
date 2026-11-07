@@ -267,7 +267,6 @@ check-peer:
 
 home-demo:
 	uv run --locked --project peer python -m superyak_peer demo --data-dir "$(HOME_DEMO_DATA)"
-	@echo "Superyak demo: http://127.0.0.1:$(HOME_PORT)"
 	uv run --locked --project peer python -m superyak_peer serve --local-demo --data-dir "$(HOME_DEMO_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
 
 dock:
@@ -614,7 +613,6 @@ wormhole-key:
 	python3 agent/run_agent.py wormhole-key --key-file "$(KEY_FILE)" --repo "$(STATION_VAULT_REPO)"
 
 home:
-	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"
 	uv run --locked --project peer python -m superyak_peer serve --data-dir "$(HOME_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
 
 peer-bundle:

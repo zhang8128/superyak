@@ -92,7 +92,7 @@ tailscale serve --tcp 7437 tcp://127.0.0.1:7437
 ```
 - **Alex:** keep `--tcp`: it passes your certificate through untouched, and Sam's home refuses any other.
 - **Both:** open http://127.0.0.1:7435 (`localhost` answers "Unrecognized host") and sign in. If `make home` says the
-  address is in use, add `HOME_PORT=8080` and open that port. Next time, repeat only this step; Ctrl-C stops a window.
+  port is in use, add `HOME_PORT=8080` and open that port. Next time, repeat only this step; Ctrl-C stops a window.
 - **Sam, then Alex:** on **Connections**, click **Check delivery now**. Sam should see `Last pulled`, and Alex
   `Fetches from us · last pull`.
 
