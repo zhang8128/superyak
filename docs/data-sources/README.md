@@ -3,7 +3,7 @@
 The dashboard now provides **Research & data**. Create a source of type
 **Papers and selected source records**, choose **Select source document**, and
 select the prepared `peer-import.json` described below. Review the three records,
-then choose **Import privately**. The source page provides pause/resume, provenance,
+then choose **Import**. The source page provides pause/resume, provenance,
 import receipts, and **Start evidence review**, which creates a private cited
 draft for manual review or the existing selected Gemma assistance. Importing does
 not run a model or grant training or publication rights.

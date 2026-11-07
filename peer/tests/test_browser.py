@@ -234,7 +234,7 @@ def test_the_old_promises_are_gone_from_every_screen():
     for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
                     r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
                     r"(?i)\bstays? private\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
-                    r"(?i)\bimport(ed)? privately\b",
+                    r"(?i)\bimport(ed)? privately\b", r"(?i)\bsaved? (them )?privately\b", r"(?i)\bkeep it private\b",
                     r"(?i)\bonly your account\b"):
         assert not re.search(promise, words), promise
 
@@ -754,7 +754,7 @@ def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
             patient.get_by_role("link", name="My sharing layers").click()
             expect(
                 patient.get_by_text(
-                    "Build your sharing layers at your own pace. Save them privately, "
+                    "Build your sharing layers at your own pace. Save them, "
                     "see what each audience would see, and turn them on when you're ready."
                 )
             ).to_be_visible()
@@ -4424,7 +4424,7 @@ CONSENT_LINES = (
     "Claude's HIPAA agreement doesn't cover connectors.",
     "Room text can contain instructions written by other people. Don't let a chat that uses this connector send email "
     "or post elsewhere without checking.",
-    "This home's admins can see that this connection exists and can end it. Their page doesn't show which rooms it "
+    "This home's super admins can see that this connection exists and can end it. Their page doesn't show which rooms it "
     "reads, but whoever runs this home's computer can look that up.",
     "Allow only if you just started connecting from your own Claude account.",
 )

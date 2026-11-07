@@ -19,7 +19,7 @@ const Dashboard = (() => {
   }
   function layerLink(layer) {
     const edit = state.layerEdits[layer.id];
-    return `<a class="item" href="#layers/${pathPart(layer.id)}"><span class="item-main"><strong>${escapeHtml(edit?.values.title || layer.title)}</strong><span>${edit?.dirty ? 'Unsaved words in this tab' : layer.active_revision ? 'A version is shared · draft stays editable' : 'Saved privately · sharing off'}</span></span><span aria-hidden="true">↗</span></a>`;
+    return `<a class="item" href="#layers/${pathPart(layer.id)}"><span class="item-main"><strong>${escapeHtml(edit?.values.title || layer.title)}</strong><span>${edit?.dirty ? 'Unsaved words in this tab' : layer.active_revision ? 'A version is shared · draft stays editable' : 'Saved · sharing off'}</span></span><span aria-hidden="true">↗</span></a>`;
   }
   function spaceCard(item) {
     return `<article class="card compact space-card"><p class="eyebrow">${kindLabel(item.kind)}</p><h3><a href="#spaces/${pathPart(item.id)}">${escapeHtml(item.name)}</a></h3><p class="meta">${item.member_ids.length} ${item.member_ids.length === 1 ? 'person' : 'people'} · ${item.owner_id === state.me.id ? 'You manage this space' : 'You are a member'}</p><p class="meta">${item.kind === 'organization' ? 'Organization access applies to explicitly shared releases.' : 'Shared versions keep their selected audience.'}</p></article>`;
