@@ -56,7 +56,7 @@ that spans two runs is simply whole in the second, and a recall whose outcome ar
 memory id, sorted; then roads by (source id, target id), sorted. A recipe names composites by key, never by a kernel id.
 So the same log gives the same file, whatever the row order.
 
-Opening the store makes a fresh `NCat` with an explicit `budget_words` and replays `generator` in id order. Replay
+Opening the store makes a fresh `NCat` with an explicit `budget_bytes` and replays `generator` in id order. Replay
 also checks that order (objects sorted by memory, then roads sorted by pair, each road's ends the objects its pair
 names), a composite's dimension, a session's count, and that a session's key is its own walk in `road_use`, so a
 swapped ref or a moved key is caught, not only a changed recipe. An unreadable or missing file is the same error. A composite
@@ -95,8 +95,7 @@ On the Pi, measured before this stage is called done:
 - Rebuild from 10,000 recall rows in under 10 s, including the SQLite reads.
 - Open a store of 100,000 generators in under 2 s.
 - Rebuild a session of 200 roads from its recipe in under 5 ms.
-- Keep the process under 256 MB, or say what drove it over: the kernel's resident memory runs about 5.7 times its counted
-  words, by the reviewer's measure.
+- Keep the process under 256 MB, or say what drove it over. The kernel's budget is 128 MB, in bytes since its revision 3.
 
 ## Tests
 

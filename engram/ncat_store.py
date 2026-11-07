@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ncat import NCat, NCatError
 
-BUDGET_WORDS = 1 << 22  # counted words; the kernel's resident memory runs about 5.7 times this, by its reviewer's measure
+BUDGET_BYTES = 128 << 20  # the kernel counts real bytes since its revision 3, within 1.25 times resident by its test
 MEMORY_TABLES = ("episodes", "semantics", "instincts")
 USED = "coalesce(outcome LIKE 'used%', 0)"
 
@@ -127,7 +127,7 @@ def _kernel_digest():
 
 def _write(path, engram, sessions, report):
     """Every cell through the kernel first, so the file holds only what the kernel accepted, in one transaction."""
-    cat = NCat(budget_words=BUDGET_WORDS)
+    cat = NCat(budget_bytes=BUDGET_BYTES)
     memories = sorted({m for walk in sessions.values() for m in walk})
     walks = {sid: list(zip(walk, walk[1:])) for sid, walk in sessions.items()}
     uses = Counter(road for roads in walks.values() for road in roads)
@@ -230,7 +230,7 @@ class Store:
     def _replay(self):
         """Generators in id order, as the rebuild made them: objects sorted by memory, then roads sorted by their pair,
         each road's ends the objects its pair names. A swapped or edited ref breaks that order, and is caught."""
-        self.cat = NCat(budget_words=BUDGET_WORDS)
+        self.cat = NCat(budget_bytes=BUDGET_BYTES)
         self._by_key, self._memories, self._cells, self._road_ids, self._road_cells = {}, {}, {}, {}, {}
         last_memory, last_road, seen_road = None, None, False
         for gid, dim, source, target, kind, ref, key in self._db.execute("SELECT * FROM generator ORDER BY id"):
