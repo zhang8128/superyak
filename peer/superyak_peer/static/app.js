@@ -733,8 +733,6 @@ async function askRoom() {
 async function roomRefused(room) {
   const gone = { who: identityKey(state.me), words: readChatDraft(room.id).body };
   const ended = () => showLogin("Your session ended. Sign in again; text in an open form has not been sent.");
-  state.room = null;  // nothing of this room stays drawn while the rest is read
-  state.unsentIn = null;  // the note below says where those words are; "still in the box" no longer would be true
   try { await loadData(); }
   catch (error) { if (error.status === 401) { ended(); return; } }  // another account took this browser: its screen isn't this person's
   try { await loadRoute(); }
@@ -742,6 +740,7 @@ async function roomRefused(room) {
   if (!state.me) return;
   if (state.room?.id !== room.id) {
     state.roomGone = gone;
+    state.unsentIn = null;  // the note says where those words are; "still in the box" wouldn't be true
     state.flash = null;
     announce("You can't open that room any more.");
   }
