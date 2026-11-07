@@ -3949,6 +3949,15 @@ def test_your_own_message_is_on_screen_after_you_send_it(browser_peer, size):
 NEW_MESSAGE_SHOWS_MS = 9000
 
 
+ON_SCREEN_UNCOVERED = """(selector) => {
+    const bar = document.querySelector(".sidebar");
+    const floor = getComputedStyle(bar).position === "fixed" ? bar.getBoundingClientRect().top : innerHeight;
+    const node = document.querySelector(selector), box = node.getBoundingClientRect();
+    const covering = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return box.top >= 0 && box.bottom <= floor && node.contains(covering);
+}"""
+
+
 def _open_room(page, base, room, size=DESKTOP):
     page.set_viewport_size(size)
     page.goto(f"{base}/#chats/{room['id']}")
@@ -3999,7 +4008,7 @@ def test_a_new_message_shows_in_an_open_room_with_nothing_done(browser_peer):
             assert page.evaluate("window.keptBox === document.querySelector('#message-body')")
             assert page.evaluate("document.activeElement === window.keptBox")
             assert page.evaluate("[window.keptBox.selectionStart, window.keptBox.value]") == [15, "half a sentence"]
-            assert page.evaluate("announcer.textContent") == "1 new message"
+            _until(page, "announcer.textContent === '1 new message'")
 
 
 def test_an_answer_with_nothing_new_changes_nothing_on_the_page(browser_peer):
@@ -4151,10 +4160,12 @@ def test_scrolled_up_to_read_the_page_stays_and_a_button_goes_to_the_newest(brow
             assert page.evaluate("window.scrollY") == 400
             button = page.get_by_role("button", name="New messages")
             expect(button).to_be_visible()
-            button.click()
+            assert page.evaluate(ON_SCREEN_UNCOVERED, ".new-messages")  # to_be_visible says yes at 10,000 px below the window
+            box = button.bounding_box()
+            page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)  # click() would scroll to it first
             _until(page, NEWEST_ON_SCREEN)
             expect(button).to_be_hidden()
-            assert page.evaluate("document.activeElement.id") == "message-body"
+            assert page.evaluate("document.activeElement === document.querySelector('.messages')")  # not the box: a phone's keyboard
             page.evaluate("window.scrollTo(0, 400)")
             _someone_says(browser_peer, room, "and another")
             _ask_soon(page)
@@ -4171,7 +4182,7 @@ def test_a_failed_ask_waits_longer_says_so_after_three_and_keeps_the_draft(brows
             page.get_by_role("textbox", name="Message", exact=True).fill("kept through it all")
             reach = page.locator("#room-reach")
             page.route(f"**/api/chats/{room['id']}?since=*", lambda route: route.abort())
-            waits = page.evaluate("""() => {
+            page.evaluate("""() => {
                 window.asked = [];
                 const original = window.setTimeout;
                 window.setTimeout = (run, wait) => { if (run === askRoom) window.asked.push(wait); return original(run, wait); };
@@ -4247,9 +4258,9 @@ def test_a_room_that_refuses_stops_asking_and_loads_the_route(browser_peer, stat
             assert "not touched" in page.evaluate("(key) => sessionStorage.getItem(key)", who)
 
 
-def test_a_message_sorting_earlier_isnt_appended_and_shows_at_the_next_render(browser_peer):
-    """A paired peer's message can carry an older `created`, and paging's seq cursor brings it in anyway. A render
-    shows it at the end until the room is reopened: chat paging's known limit, and Load earlier's test holds it."""
+def test_a_message_sorting_earlier_goes_on_the_end_where_a_render_draws_it_too(browser_peer):
+    """A step in the station's clock gives a message an older `created`, and paging's seq cursor brings it in anyway.
+    Holding it back hid it, and what came after it. It shows at the end until the room is reopened: chat paging's known limit."""
     base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "family") as (page, _):
@@ -4261,10 +4272,10 @@ def test_a_message_sorting_earlier_isnt_appended_and_shows_at_the_next_render(br
                 "total": 4, "first_position": 0}))
             _ask_soon(page)
             _until(page, "state.room.seq === 999999")
-            assert "said earlier elsewhere" not in _shown_words(page)
-            assert page.evaluate("state.room.messages.some((message) => message.id === 'from-a-peer')")
+            assert _shown_words(page)[-1] == "said earlier elsewhere"
             page.evaluate("render()")
             assert _shown_words(page)[-1] == "said earlier elsewhere"
+            assert _shown_words(page).count("said earlier elsewhere") == 1
 
 
 def page_room(browser_peer, room):
@@ -4391,6 +4402,154 @@ def test_a_poll_doesnt_start_while_another_refresh_is_on_its_way(browser_peer):
             assert page.evaluate("roomAskTimer") is not None
             held[0].continue_()
             _until(page, "refreshesRunning === 0")
+
+
+def test_your_reply_in_a_received_room_isnt_shown_twice_when_the_host_has_it(browser_peer):
+    """A queued reply has a local id, and the host's copy has its own. A received room's answer is the whole room."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            me = page.evaluate("state.me.id")
+            queued = page.evaluate("""(me) => {
+                const shown = state.room.messages[0];
+                const queued = { ...shown, id: 'local-copy', author_id: me, body: 'my reply' };
+                state.room = { ...state.room, paged: false, messages: [...state.room.messages, queued] };
+                render();
+                return queued;
+            }""", me)
+            assert _shown_words(page).count("my reply") == 1
+            whole = page.evaluate("state.room.messages.filter((message) => message.id !== 'local-copy')")
+            answer = {**page_room(browser_peer, room), "messages": [*whole, {**queued, "id": "hosts-copy"},
+                      {**queued, "id": "host-said", "author_id": whole[0]["author_id"], "body": "the host answers"}]}
+            page.route(f"**/api/chats/{room['id']}", lambda route: route.fulfill(json=answer))
+            _ask_soon(page)
+            expect(page.locator(".messages .message p").last).to_have_text("the host answers")
+            assert _shown_words(page).count("my reply") == 1
+            _until(page, "announcer.textContent === '1 new message'")  # your own words coming back aren't news
+
+
+def test_a_room_read_whole_at_each_ask_waits_longer_as_it_grows(browser_peer):
+    """Run on the Pi: a received room of 5,000 messages is 1.9 MB an ask, which at 5 s is 11 GB in 8 hours from one tab."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            assert page.evaluate("roomAskWait(state.room)") == 5000
+            assert page.evaluate("roomAskWait({ paged: false, messages: [] })") == 30000
+            assert page.evaluate("roomAskWait({ paged: false, messages: new Array(1000) })") == 30000
+            assert page.evaluate("roomAskWait({ paged: false, messages: new Array(5000) })") == 150000
+            assert page.evaluate("roomAskFailures = 3; roomAskWait({ paged: false, messages: [] })") == 60000
+            assert page.evaluate("roomAskFailures = 3; roomAskWait({ paged: false, messages: new Array(5000) })") == 150000
+            page.evaluate("roomAskFailures = 0")
+
+
+def test_an_arrival_while_sends_sync_waits_stays_on_screen(browser_peer):
+    """Send's own refresh has returned, so an ask can run, and Send used to assign its older answer after sync."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            held = []
+            page.route("**/api/sync", lambda route: route.continue_() if held else held.append(route))
+            page.get_by_role("textbox", name="Message", exact=True).fill("mine")
+            page.get_by_role("button", name="Send message").click()
+            _until(page, "state.room.messages.some((message) => message.body === 'mine') && refreshesRunning === 0 && document.querySelector('#chat-status').textContent.startsWith('Message saved.')")
+            assert len(held) == 1
+            _someone_says(browser_peer, room, "while sync waits")
+            _ask_soon(page)
+            expect(page.locator(".messages .message p").last).to_have_text("while sync waits")
+            held[0].continue_()
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            assert _shown_words(page)[-2:] == ["mine", "while sync waits"]
+            assert page.evaluate("state.room.messages.at(-1).body") == "while sync waits"
+
+
+def test_an_ask_that_hangs_gives_up_and_counts_as_a_failure(browser_peer):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.evaluate("""() => {
+                window.gaveUpAfter = [];
+                AbortSignal.timeout = (after) => { window.gaveUpAfter.push(after); return AbortSignal.abort(); };
+            }""")
+            _ask_soon(page)
+            _until(page, "!roomAsking && roomAskFailures === 1")
+            assert page.evaluate("window.gaveUpAfter") == [30000]
+            assert page.evaluate("roomAskTimer") is not None
+
+
+def test_being_removed_says_so_shows_your_words_and_takes_the_room_off_the_list(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.get_by_role("textbox", name="Message", exact=True).fill("half a thought <b>kept</b>")
+            store.remove_participant(users["patient"]["id"], room["id"], users["family"]["id"])
+            _ask_soon(page)
+            notice = page.locator(".split-detail .notice")
+            expect(notice).to_contain_text("You can't open that room any more.")
+            expect(notice.locator("pre.draft-kept")).to_have_text("half a thought <b>kept</b>")
+            expect(page.locator(".split-list .item", has_text="City of AI")).to_have_count(0)
+            assert page.evaluate("state.room") is None and page.evaluate("roomAskTimer") is None
+            page.goto(f"{base}/#home")
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.goto(f"{base}/#chats")
+            expect(page.locator(".split-detail .notice")).to_have_count(0)
+
+
+def test_a_leftover_timer_asks_nothing_for_the_next_person_signing_in(browser_peer):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            asks = []
+            page.on("request", lambda request: asks.append(request.url) if "?since=" in request.url else None)
+            page.evaluate("""() => {
+                const me = state.me, room = state.room;
+                clearTimeout(roomAskTimer); roomAskTimer = null;
+                showLogin();
+                if (state.room !== null) throw new Error('the room outlived the person');
+                state.me = me; state.room = room;   // the moment during a sign-in with a person and no home
+                askRoom();
+                state.me = null; state.room = null;
+            }""")
+            page.wait_for_timeout(200)
+            assert asks == []
+            expect(page.locator(".notice.error")).to_have_count(0)
+
+
+def test_an_ask_held_across_opening_the_room_leaves_load_earlier_working(browser_peer):
+    """first_position went to 0 with 101 of 151 messages held, and the button did nothing."""
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 150)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            expect(page.locator(".messages .message p").last).to_have_text("message 149")
+            page.get_by_role("button", name="Load earlier messages").click()
+            _until(page, "state.room.first_position === 0")
+            held = _hold_first_ask(page, room)
+            _someone_says(browser_peer, room, "one more")
+            _ask_soon(page)
+            _until(page, "roomAsking")
+            page.locator(".split-list .item", has_text="City of AI").click()
+            _until(page, "state.room.first_position === 51")
+            held[0].continue_()
+            _until(page, "!roomAsking")
+            _until(page, "state.room.first_position + state.room.messages.length === state.room.total")
+            page.get_by_role("button", name="Load earlier messages").click()
+            _until(page, "state.room.first_position === 0 && state.room.messages.length === 151")
+
+
+def test_a_replaced_room_can_say_it_cant_reach_this_home(browser_peer):
+    base, room = browser_peer["base_url"], _busy_room(browser_peer, 3)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            _open_room(page, base, room)
+            page.evaluate("() => { state.home.chats = [...state.home.chats, { id: 'newer', title: 'Newer', linked_room_id: state.room.id }]; state.roomUnreachable = true; render(); }")
+            expect(page.locator(".composer-replaced #room-reach")).to_be_visible()
 
 
 @pytest.mark.parametrize("size", [DESKTOP, PHONE], ids=["desktop", "phone"])

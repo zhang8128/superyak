@@ -1,8 +1,9 @@
 # A room shows its new messages
 
-Status: revision 3. A fresh reviewer approved it with changes (law section 3), and they're applied. One sentence is
-the author's answer to its last finding and hasn't been re-read: D2's rule that a poll's older answer is dropped. Andy
-can veto anything. Board item:
+Status: revision 4. A fresh reviewer approved revision 3 with changes (law section 3), and they're applied. Revision 4
+is the builder's corrections from what building and a reader's run found (D2, D4, D5, D6, D8, the tests), and the
+build's reader re-reads them; that reader also found D2's rule that a poll's older answer is dropped true as written.
+Andy can veto anything. Board item:
 `spec:a-room-shows-new-messages`. It serves goal 2, "Chats are performant", and adds to how that goal is measured.
 
 ## What a person meets today
@@ -32,6 +33,11 @@ way so a home's tabs don't fall into step. It uses the read that exists for this
 never stacks. A hidden tab asks nothing. Coming back asks at once. Leaving the room stops it. An answer for a room the
 person has left changes nothing. No other view polls.
 
+A room that isn't paged (a received room) has no `?since`: each ask reads it whole, which a reader measured at 1.9 MB and
+41 ms of the gate for 5,000 messages. Its news only comes by the pull, about once a minute, so it waits at least 30 s, or
+30 ms per message if that's longer. That keeps one visible tab near 350 MB in 8 hours at any size, for messages of about
+150 characters.
+
 Send, the board, the brief and a removal also call `refreshRoom`, and they keep doing so. It builds its answer from
 the room on screen when the answer arrives, so overlapping callers can't lose a message from `state.room`. But an
 older answer can move `seq` back and put what it fetched after newer messages (the reviewer ran it: `seed, msg2,
@@ -51,42 +57,46 @@ by neighbour). So an answer with something new does these together:
 1. `state.room` takes `refreshRoom`'s answer whole: `messages`, `seq`, `first_position`, `total` and the other fields.
    Every render draws from `state.room`, so a later one keeps what was appended, and the next ask doesn't fetch it
    again.
-2. Only if the `.messages` on screen is this room, the messages in `state.room.messages` that sort after the last one
-   shown and aren't on screen yet go on the end. `.messages` carries `data-room` for this, and the check is
-   `boardOnScreen`'s (`app.js:704`), the one the board panel already uses. Each message's markup gains its id, for
-   "aren't on screen yet".
+2. Only if the `.messages` on screen is this room, the messages in `state.room.messages` that aren't on screen yet go
+   on the end. `.messages` carries `data-room` for this, and the check is `boardOnScreen`'s (`app.js:704`), the one the
+   board panel already uses. Each message's markup gains its id, for "aren't on screen yet". A drawn message the answer
+   no longer has comes off the list: a whole room's answer does this when a queued reply in a received room comes back
+   with the host's id.
 
 Nothing else on the page is touched, so members, the brief and claims stay as drawn until the next render, as they do
-today. A message that sorts earlier (a peer's older `created`, which paging's seq cursor exists to catch) is in
-`state.room` and appears at the next render. It isn't drawn sooner: a full render here would bring back the page shift
-this decision avoids, for a rare case.
+today. A message that sorts earlier (a step in the station's clock, which paging's seq cursor brings in anyway) goes on
+the end at once, where a render also draws it until the room is reopened (chat paging's Known limits). Revision 3 held it
+back for the next render, and a reader's run showed that only hid it and what came after it, with no sign. Sorting at
+draw time would place it, and it isn't worth it for a clock step.
 
 **D5. Where the person is decides what moves.**
-- At the bottom (within 120 px of the page's end, `scrollHeight - scrollTop - clientHeight`): the page stays at the
-  bottom, so the newest message is on screen. It's measured from the page's end and not the composer, whose sticky
-  offset differs on phones (`app.css:323`, which outranks the `80px` at `app.css:243`). The composer is sticky, so it
-  stays in view either way.
-- Scrolled up to read: the page doesn't move. A small "New messages" button above the composer jumps to the newest, and
-  goes when they reach the bottom.
+- At the newest (the end of the messages with the composer under them, within 120 px of the window's bottom): the page
+  follows, so the newest message is on screen, or its start if it's too long to fit. It's measured from the end of the
+  messages and not the page's: a room's management sits below the composer, so an owner never gets near the page's end.
+- Scrolled up to read, or down past the messages: the page doesn't move. A small "New messages" button jumps to the
+  newest, and goes when they reach it. The composer stopped being sticky with D1, so the button is fixed in the window,
+  above a phone's bottom bar. Your own words coming back from another device or a host show but aren't announced, and
+  bring no button.
 - Screen readers: `announce()` says how many, "2 new messages", never the words, so a busy room doesn't talk over them.
 
 **D6. Failures are quiet, then said once.** A failed ask (connection, 5xx) doubles the wait: 5, 10, 20, 40, then 60 s,
 each with the same 20% jitter, so tabs don't come back in step after a station restart. After three in a row, one line
 in the composer's status: "Can't reach this home. New messages will show when it's back." It clears on the next good
-answer. A draft is never touched. A 401 does what `refresh()` does (`showLogin`, the draft kept in `sessionStorage`;
-`clearChatDrafts` runs only from `logout`). A 403 or 404 (removed, or the room is gone) stops asking and takes the
-ordinary route load.
+answer. A draft is never touched. An ask gives up after 30 s and counts as a failure: a hung answer would otherwise stop
+the asking, with no line. A 401 does what `refresh()` does (`showLogin`, the draft kept in `sessionStorage`;
+`clearChatDrafts` runs only from `logout`). A 403 or 404 (removed, or the room is gone) stops asking, the list catches up,
+and the person is told, with their unsent text where they can copy it. The note doesn't name the room.
 
 **D7. The room list isn't polled.** It's the heaviest read a person's page makes: in a timed run on a scratch store, a
 200-room list held the gate about 36 ms, before it moved to `reading()`. Nothing here needs it. So another room's news
 still waits until the person navigates, as today. A cheap "which rooms have news" read is a later spec, and nothing
 here claims to solve it.
 
-**D8. It lands after two others.** D4 means polling itself never rebuilds the page, but Send and much else still
-render, and today any render drops the focus of whoever is typing (the reviewer saw it through "Load earlier" too). A
-chat that shows replies and then loses what you type back is not the goal, so `fix-typing-keeps-its-place` lands
-first. So does the branch that marks the composer with its room: `.messages` takes the same mark, so "the room on
-screen" is one rule.
+**D8. It doesn't wait for two others (revised by the builder; the build's reader upheld it).** Revision 3 had
+`fix-typing-keeps-its-place` and the branch that marks the composer with its room landing first, because Send and much
+else still render, and any render drops the focus of whoever is typing. But D4 means an arrival never rebuilds the page,
+so polling doesn't make that worse, and D6's 401 and 404 remove the composer whichever lands first. Those two are still
+wanted. `.messages` takes the room's mark here; when the composer's mark lands, it's one rule.
 
 ## What it costs
 
@@ -142,19 +152,27 @@ same way.
   all of it, and 401, 403 and 404 each do what D6 says.
 - D1: a busy room opens with its newest message on screen, by click and by reload. A later render doesn't scroll.
   "Load earlier" still keeps the line.
-- An older-sorting peer message isn't appended out of order, and is in place after the next render.
+- An older-sorting message goes on the end at once, and a render keeps it there.
 - A person's own Send isn't shown twice when the next ask carries it.
 - After an append, a render keeps the message, and the next ask doesn't fetch it again (`state.room` in step).
 - An answer for a room no longer on screen appends nothing.
 - A poll overlapping Send, "Load earlier" or the board's refresh shows every message once and loses none.
 - A poll's held answer, released after a newer refresh, changes nothing, and the order stays right.
 - A poll doesn't start while another refresh of the room is on its way.
+- A received room's reply isn't shown twice when the host's copy comes back, and its asks wait longer as it grows.
+- An arrival during Send's wait for sync stays on screen.
+- An ask that hangs gives up and counts as a failure.
+- A removal says so, shows the unsent text, and takes the room off the list.
+- A leftover timer asks nothing for the next person signing in, and `state.room` doesn't outlive the person.
+- An ask held across opening the room leaves "Load earlier" working.
+- The "New messages" button is on screen and uncovered, measured in the window: `to_be_visible` says yes at 10,000 px
+  below it.
 - D5 at a phone width as well as a desktop one.
 
 ## Order of work
 
-1. `fix-typing-keeps-its-place` lands, and the branch that marks the composer with its room.
-2. Build D1 to D7, through a reader.
+1. Build D2 to D7, through a reader (D1 landed first, on its own branch).
+2. `fix-typing-keeps-its-place` and the branch that marks the composer with its room land when they're ready (D8).
 3. One timed arm at load: 20 pollers at 5 s on a 1,200-message room, with goal 2's read time as the bar. Rio Grande's,
    if it wants it; it holds the harness.
 4. After deploy, measure from the Mac, tailnet and Funnel, what this is for: **from a post to a person seeing it.**
