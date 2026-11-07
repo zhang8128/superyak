@@ -1,6 +1,6 @@
 # Two people, two laptops
 
-How Alex and Sam, each on their own laptop, get from nothing to a first private message and a shared document. **This
+How Alex and Sam, each on their own laptop, get from nothing to a first message and a shared document. **This
 page is new, and nobody has walked it across two real laptops;** [some steps couldn't be run](#what-hasnt-been-checked).
 Please report what goes wrong on the Discussions page linked from the [README](../README.md#not-invited-yet), leaving
 pairing codes out.

@@ -233,7 +233,8 @@ def test_the_old_promises_are_gone_from_every_screen():
     words = "\n".join(path.read_text() for path in (*static.glob("*.js"), static / "index.html", static / "consent.html"))
     for promise in (r"(?i)\bprivate (room|chat|conversation|message)s?\b", r"(?i)\bonly you\b",
                     r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
-                    r"(?i)\bstays? private to\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
+                    r"(?i)\bstays? private\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
+                    r"(?i)\bimport(ed)? privately\b",
                     r"(?i)\bonly your account\b"):
         assert not re.search(promise, words), promise
 
@@ -423,7 +424,7 @@ def test_source_library_import_pause_and_private_review(browser_peer):
             'name': 'evidence.json', 'mimeType': 'application/json', 'buffer': json.dumps(document).encode()})
         expect(page.get_by_role('heading', name='Review this import')).to_be_visible()
         assert browser_peer['app'].state.data_sources.list(actor)['sources'][0]['item_count'] == 0
-        page.get_by_role('button', name='Import privately', exact=True).click()
+        page.get_by_role('button', name='Import', exact=True).click()
         expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
         expect(page.locator('.evidence-card .eyebrow', has_text='Source record')).to_have_text(
             'Source record · No other account can open it', ignore_case=True)
@@ -542,11 +543,11 @@ def test_source_library_file_retry_replays_accepted_import(browser_peer):
             else:
                 route.continue_()
         page.route('**/api/data-sources/*/imports', lose_first_ack)
-        page.get_by_role('button', name='Import privately', exact=True).click()
+        page.get_by_role('button', name='Import', exact=True).click()
         expect(page.get_by_role('dialog')).to_contain_text('Connection lost')
         first = service.history(actor, source['id'])['imports']
         assert len(first) == 1 and first[0]['status'] == 'succeeded'
-        page.get_by_role('button', name='Import privately', exact=True).click()
+        page.get_by_role('button', name='Import', exact=True).click()
         expect(page.get_by_role('heading', name='fictional.csv', exact=True)).to_be_visible()
         assert service.history(actor, source['id'])['imports'] == first
         file = service.items(actor, source['id'])['items'][0]['file']
@@ -1638,7 +1639,7 @@ def test_source_browser_export_import_retains_private_attribution(browser_peer, 
         with signed_in_browser(playwright, browser_peer, 'doctor') as (page, _):
             page.get_by_role('link', name='My sharing layers').click()
             page.locator('#source-import').set_input_files(output)
-            expect(page.locator('#main-content').get_by_text('Imported privately. Recorded audiences did not grant access.', exact=True)).to_be_visible()
+            expect(page.locator('#main-content').get_by_text('Imported. Recorded audiences did not grant access.', exact=True)).to_be_visible()
             page.get_by_text('Fictional source', exact=True).click()
             expect(page.get_by_text('Active selected words', exact=True)).to_be_visible()
             expect(page.get_by_text('Origin ' + document['records'][0]['origin'], exact=False)).to_be_visible()
@@ -4423,7 +4424,8 @@ CONSENT_LINES = (
     "Claude's HIPAA agreement doesn't cover connectors.",
     "Room text can contain instructions written by other people. Don't let a chat that uses this connector send email "
     "or post elsewhere without checking.",
-    "This home's admins can see that this connection exists and can end it. They can't see which rooms it reads.",
+    "This home's admins can see that this connection exists and can end it. Their page doesn't show which rooms it "
+    "reads, but whoever runs this home's computer can look that up.",
     "Allow only if you just started connecting from your own Claude account.",
 )
 
