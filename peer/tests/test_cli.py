@@ -107,6 +107,7 @@ def test_federation_listen_says_a_taken_port_before_serving(tmp_path):
     assert result.returncode == 1
     assert f'Port {port} is already in use on 127.0.0.1' in result.stderr
     assert '--port' in result.stderr and 'HOME_PORT' not in result.stderr  # make doesn't start this one
+    assert 'the port in your card' in result.stderr  # docs/two-people.md: after pairing, the address can't change
     assert 'Errno' not in result.stderr and 'startup' not in result.stderr
 
 
@@ -121,6 +122,50 @@ def test_a_recent_connection_is_not_a_taken_port():
         client.recv(1)
         client.close()
     refuse_a_taken_port('127.0.0.1', port, 'choose another')
+
+
+def test_a_taken_port_on_any_of_a_hosts_addresses_is_refused(monkeypatch):
+    """A name can resolve to several addresses, and the server binds them all, so the probe tries them all."""
+    from superyak_peer.__main__ import refuse_a_taken_port
+    free, free_port = listening_port()
+    free.close()
+    listener, port = listening_port()
+    addresses = [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', free_port)), (socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', port))]
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: addresses)
+    with listener, pytest.raises(ValueError, match='already in use'):
+        refuse_a_taken_port('both.example', port, 'choose another')
+
+
+def test_ipv6_any_is_not_refused_for_an_ipv4_listener():
+    """asyncio binds :: as IPv6 only, so an IPv4 listener on the port doesn't stop it, and the probe agrees."""
+    from superyak_peer.__main__ import refuse_a_taken_port
+    if not socket.has_ipv6:
+        pytest.skip('no IPv6 here')
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('0.0.0.0', 0))
+    listener.listen()
+    with listener:
+        refuse_a_taken_port('::', listener.getsockname()[1], 'choose another')
+
+
+def test_the_port_it_suggests_is_not_the_one_it_refused(tmp_path):
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(('127.0.0.1', 8080))
+    except OSError:  # something here holds 8080, which refuses just the same
+        listener.close()
+        listener = None
+    else:
+        listener.listen()
+    try:
+        result = run('serve', '--local-demo', '--data-dir', tmp_path / 'peer', '--port', 8080)
+    finally:
+        if listener:
+            listener.close()
+    assert 'Port 8080 is already in use' in result.stderr
+    assert 'HOME_PORT=8081' in result.stderr and '--port 8081' in result.stderr and 'HOME_PORT=8080' not in result.stderr
 
 
 def test_a_name_that_will_not_resolve_is_left_for_the_server_to_report():
