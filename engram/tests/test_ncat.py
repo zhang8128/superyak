@@ -314,10 +314,40 @@ def test_a_4_cell_composes_with_itself_when_nothing_is_tangled():
     assert b.then(b, 3).target(3) == b.target(3)
 
 
+def a_cautious_refusal_at_dimension_3():
+    """A spec reviewer's example (2026-11-07). R and R' are parallel 2-cells from x->a->y to x->b->y: R passes through an edge t:
+    b -> a, and R' through t': a -> b. A 3-cell R => c => R' holds both, so its 1-skeleton has a directed cycle, and Steiner's
+    condition fails at i = 0. The reviewer's reference finds exactly one way to build it, so the cell is determined, and the
+    kernel refuses it anyway: the condition is sufficient, not necessary."""
+    C = NCat()
+    x, a, b, y = (C.object() for _ in range(4))
+    f1, f2, g1, g2 = C.generator(x, a), C.generator(a, y), C.generator(x, b), C.generator(b, y)
+    t, t2 = C.generator(b, a), C.generator(a, b)
+    p, q = f1.then(f2), g1.then(g2)
+    alpha, beta = C.generator(f1, g1.then(t)), C.generator(t.then(f2), g2)
+    r = alpha.then(f2, 0).then(g1.then(beta, 0), 1)
+    gamma, delta = C.generator(f1.then(t2), g1), C.generator(f2, t2.then(g2))
+    r2 = f1.then(delta, 0).then(gamma.then(g2, 0), 1)
+    c = C.generator(p, q)
+    return C, r, r2, c
+
+
+def test_a_determined_3_cell_can_still_be_refused_and_says_so():
+    C, r, r2, c = a_cautious_refusal_at_dimension_3()
+    assert r.source() == r2.source() and r.target() == r2.target()
+    into, out = C.generator(r, c), C.generator(c, r2)  # each alone is loop-free
+    with pytest.raises(NCatError) as caught:
+        into.then(out, 2)
+    assert caught.value.code == -5 and 'may still be determined' in str(caught.value)
+    with pytest.raises(NCatError) as caught:
+        C.generator(r, r2)  # an atom is checked too
+    assert caught.value.code == -5
+
+
 @pytest.mark.parametrize('seed', range(24))
-def test_nothing_up_to_dimension_3_is_refused_as_torsion(seed):
-    """Two blocks can't each feed the other in a planar 2-cell, since their wires would cross, so torsion can't start below 4."""
-    rng, _, pool = random_polygraph(seed, 3)
+def test_nothing_up_to_dimension_2_is_refused(seed):
+    """A planar 2-cell's edges all run one way, so no cycle can form, and the free strict 2-category is total here."""
+    rng, _, pool = random_polygraph(seed, 2)
     cells = everything(pool)
     for _ in range(1500):
         a, b = rng.choice(cells), rng.choice(cells)
@@ -397,6 +427,114 @@ def canonical_words(elements, rng):
     for e in seq:
         words += [dims[e], labels[e], len(ins[e]), len(outs[e]), *sorted(pos[f] for f in ins[e]), *sorted(pos[f] for f in outs[e])]
     return words
+
+
+# ---- Safe to use as a component: threads, ownership, ranges, budget, and what it will load
+
+def test_threads_sharing_one_category_dont_corrupt_it():
+    """A spec reviewer crashed 3 of 3 runs with four threads on one category, a use-after-free. Each call now holds the GIL and
+    the category's lock, so the same work from four threads gives the same cells as from one."""
+    import threading
+    C = NCat()
+    x = C.object()
+    f = C.generator(x, x)
+    a = C.generator(f, f.then(f))
+    errors, results = [], []
+
+    def work(offset):
+        try:
+            cell = f.identity()
+            for step in range(60):
+                cell = cell.then(whisker(C, a, f, (step + offset) % (step + 1), step - (step + offset) % (step + 1)), 1)
+            results.append(cell.size)
+        except Exception as error:  # noqa: BLE001
+            errors.append(error)
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors and len(results) == 4 and len(set(results)) == 1
+
+
+def test_cells_from_two_categories_never_mix():
+    one, two = NCat(), NCat()
+    f, g = one.generator(one.object(), one.object()), two.generator(two.object(), two.object())
+    for call in (lambda: g.then(f), lambda: f.then(g), lambda: one.generator(g.source(), g.target())):
+        with pytest.raises(NCatError) as caught:
+            call()
+        assert caught.value.code == -7
+
+
+def test_a_dimension_out_of_range_is_refused_not_wrapped():
+    C = NCat()
+    x = C.object()
+    f = C.generator(x, x)
+    for k in (2 ** 32, 2 ** 31, -1, 16, 1.0):
+        with pytest.raises(NCatError):
+            f.then(f, k)
+        with pytest.raises(NCatError):
+            f.source(k)
+
+
+def test_a_cell_cant_be_changed():
+    C = NCat()
+    f = C.generator(C.object(), C.object())
+    for name in ('id', '_id', 'cat', 'other'):
+        with pytest.raises(AttributeError):
+            setattr(f, name, 0)
+
+
+def test_the_kernel_checks_its_own_arguments():
+    import ncat
+    C = NCat()
+    f = C.generator(C.object(), C.object())
+    lib = ncat._kernel()
+    assert lib.ncat_words(C._ptr, f.id, None, -1) == -7
+    assert lib.ncat_words(C._ptr, f.id, None, 5) == -7
+    assert lib.ncat_compose(C._ptr, f.id, f.id, 99) == -7
+    assert lib.ncat_boundary(C._ptr, f.id, 99, 1) == -7
+    assert lib.ncat_boundary(C._ptr, 10 ** 6, 0, 1) == -7
+
+
+def test_the_budget_counts_everything_held_not_just_one_cell():
+    """Many small cells, none near the budget alone, still run out of it together."""
+    C = NCat(budget_words=3000)
+    made = 0
+    with pytest.raises(NCatError) as caught:
+        for _ in range(2000):
+            C.object()
+            made += 1
+    assert caught.value.code == -10
+    assert 100 < made < 1000 and 0 < C.words_held <= 3000
+
+
+def test_a_category_over_its_budget_refuses_and_keeps_working():
+    C = NCat(budget_words=400)
+    x = C.object()
+    f = C.generator(x, x)
+    cell = f
+    with pytest.raises(NCatError) as caught:
+        for _ in range(100):
+            cell = cell.then(f)
+    assert caught.value.code == -10
+    assert C.words_held <= 400
+    assert f.then(f) == f.then(f)  # what it already holds still answers
+
+
+def test_it_wont_load_a_library_or_cache_that_others_could_write(tmp_path, monkeypatch):
+    import ncat
+    loose = tmp_path / 'cache'
+    (loose / 'superyak' / 'ncat').mkdir(parents=True)
+    (loose / 'superyak' / 'ncat').chmod(0o777)
+    monkeypatch.setenv('XDG_CACHE_HOME', str(loose))
+    with pytest.raises(RuntimeError, match='writable by nobody else'):
+        ncat._built()
+    library = tmp_path / 'other.so'
+    library.write_bytes(b'')
+    library.chmod(0o666)
+    with pytest.raises(RuntimeError, match='writable by nobody else'):
+        ncat._private(library, 'library')
 
 
 @pytest.mark.parametrize('seed', range(12))

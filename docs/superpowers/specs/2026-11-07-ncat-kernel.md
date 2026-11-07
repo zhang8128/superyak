@@ -1,119 +1,170 @@
-# A real n-category: the kernel, and where the speed comes from
+# The n-category kernel: the loop-free fragment of the free strict n-category
 
-Tardis, 2026-11-07, for Andy's "even the basics aren't properly built like n category theory graph structure" and "write it in C
-if needed for performance". It answers stage 2 of Rio Grande's plan on issue #2, and the plan's open question about equality.
-It needs a fresh reviewer, like any spec. The code is `engram/ncat_kernel.c`, `engram/ncat.py`, `engram/tests/test_ncat.py`. It
-has no storage, and nothing in Engram calls it yet.
+Tardis, 2026-11-07, revision 2. It was written for Andy's "even the basics aren't properly built like n category theory graph
+structure" and "write it in C if needed for performance", and is stage 2 of the plan on issue #2. Revision 1 was rejected by a fresh
+spec reviewer; each of its must-changes is answered below. The code is `engram/ncat_kernel.c`, `engram/ncat.py` and
+`engram/tests/test_ncat.py`. It has no storage, and nothing in Engram calls it yet.
 
-## What it is
+## What it is, named for what it is
 
-The free strict n-category on a polygraph (computad), with n up to 15. Generators have checked boundaries, every cell has an
-identity, and cells compose along every lower dimension.
+**On a regular polygraph:** generators whose boundaries are round, never an identity, and loop-free. The kernel holds the cells of
+the free strict n-category whose labelled shape is loop-free in Steiner's sense, with n up to 15.
 
-A **cell is a labelled shape**: a regular molecule (Hadzihasanovic), meaning a graded poset with oriented faces built by pasting
-atoms, and a map from its elements to the generators. An identity is the same shape one formal dimension up.
+- **Up to n = 2 that's everything.** A planar 2-cell's edges all run one way, so no shape there can fail the check, and this is the
+  free strict 2-category with total composition.
+- **From n = 3, composition is partial.** A composite whose shape isn't loop-free is refused, so it's a fragment and not an
+  n-category. Boundaries and identities of a held cell are always held, since a closed part of a loop-free shape is loop-free.
 
-**Why not chain tables (Steiner).** There, composing is adding, so the laws hold by arithmetic, but addition commutes: two loops
-at one memory come out equal, and memory graphs have cycles. A labelled shape is the "unrolling" the plan found it needed. The
-shape stays loop-free and the map to the generators needn't be injective, so `f then g` and `g then f` differ with nothing extra.
+**A cell is a labelled shape:** a regular molecule (Hadzihasanovic), and a map from its elements to the generators. That map needn't
+be injective, so a loop used twice is two elements with one label, and the order of use stays. In chain tables (Steiner) composing
+is adding, and addition would make those two uses commute. An identity is the same shape one formal dimension up.
 
-**Equality, the plan's open question.** Molecules have no automorphisms, so a traversal that makes only choices the shape forces
-gives every element one canonical position (`walk`). Two cells are equal exactly when their canonical words are, and cells are
-interned, so comparing them is comparing two integers. In dimension 2 this is the known result: boundary-connected planar diagrams
-have linear-time equivalence (Delpeuch and Vicary). In general, isomorphism of these shapes is polynomial (Hadzihasanovic and
-Kessler, O(n³ log n), with rewalt as their implementation).
+**Equality.** Molecules have no automorphisms. So a traversal that makes only choices the shape forces gives every element one
+canonical position, and cells are interned. Equal canonical words mean equal integers.
 
-**Refused, and said:**
-- A generator with an identity boundary: it would bring Eckmann-Hilton, where 2-cells on an identity commute.
-- A generator whose boundary isn't round. Two 2-cells side by side touch at a point, so a 3-cell can't have that as its source.
-  This is a real limit against the full free 3-category, and a person could want such a cell.
-- A shape that isn't loop-free in Steiner's sense, which starts at dimension 4. Two top elements can each feed the other through a
-  lower dimension, so no way of building the cell keeps them apart, and interchange can't relate their two orders. They may also share
-  no face of the dimension below, so the shape can't record which came first. The free category tells them apart, and a shape can't.
+**Refused, each with its own code:**
+- **-2:** a generator with an identity boundary, which would bring Eckmann-Hilton.
+- **-4:** a generator whose boundary isn't round. Two 2-cells side by side touch at a point, so a 3-cell can't have that as its
+  source. This is a real gap against the free 3-category.
+- **-5:** a shape that isn't loop-free. This is cautious, and it starts at n = 3, not 4 as revision 1 said:
+  - **Determined cells refused.** At n = 3, a reviewer's example shows the kernel refusing a cell that one way of building
+    determines. Two parallel 2-cells pass through edges b → a and a → b, and a 3-cell between them holds both.
+  - **Real torsion refused.** From n = 4 it also refuses Rio Grande's example. There, two 4-cells sit on blocks that each feed the
+    other, so the free category tells their two orders apart and the shape can't.
+- **-8:** a traversal that can't finish. Its tests have never hit it, and no proof says it can't happen.
+- **-9:** a shape too large.
+- **-10:** over the category's budget.
 
-**A correction.** This spec first said the kernel "answers exactly or refuses". That was false at n = 4. Rio Grande's reference, written
-without seeing this code, found a composite of two 4-cells on round generators where the kernel said A;B == B;A and the reference
-said they differ. Rio Grande's hand argument holds: it's torsion in Forest's sense. Hence the third refusal above. It starts at 4 because
-in a planar 2-cell two blocks can't each feed the other without their wires crossing.
+**What revision 1 got wrong:**
+- It called this "a strict n-category, free on its generators".
+- It said the kernel "answers exactly or refuses".
+- It said the refusal "starts at dimension 4".
 
-**What's proved and what's tested.**
-- **n ≤ 2:** published results, as above.
-- **Loop-free shapes, any n:** Steiner's theorem says such a complex's free omega-category is generated freely by its atoms, so any way
-  of building the whole shape gives one cell, and a map to the generators sends it to one cell. That's my reading of his theorem and my own
-  step for labelled, non-injective shapes. It needs a mathematician's read.
-- **Laws:** by test, and known answers check that nothing's over-identified at the counts below.
-- **Differential:** Rio Grande's reference agreed at n ≤ 2 on 726,598 pairs and n ≤ 3 on 370,705 pairs, 0 disagreements. Rio Grande notes that
-  deep interchange at n = 3 may be thinly covered. Those runs predate the loop-free check.
+All three were false. The first two were caught by Rio Grande's independent reference, the third by the reviewer.
 
-**If the quotient is wanted.** Where independent rewrites commute might suit memory better than the free category does: lawful, and what the
-kernel did before this check. That would be a decision to make and name, not a default.
+## Why equality is right, in both directions
+
+**Same canonical words, so the same cell (soundness).** Let U be a held cell's shape, loop-free. By Steiner's theorem, as I read
+him and not re-checked against the text, the strict omega-category ν(U) is freely generated by U's atoms. So U has one top cell
+there, and every way of building U by composition names it. The labelling is a map of polygraphs, so it extends to a functor from
+ν(U) to the free category on the generators, and that functor sends the top cell to one cell. An accepted composite is, by induction
+on how it was built, the image of its own shape's top cell. So two composites with the same labelled shape are the same cell.
+
+**Different canonical words, so different cells (completeness).** The kernel's cells, with its composition, satisfy the strict laws
+up to the unique isomorphism of shapes. Rigidity makes it unique, and Hadzihasanovic proves pasting of molecules is associative with
+interchange up to isomorphism. So any two expressions the laws equate land on one shape, and the shape is an invariant of the cell:
+different shapes can't be the same cell. That rests on the laws holding for labelled pasting. They're tested here, at every
+dimension up to 5, and cited. I haven't proved them for non-injective labellings myself.
+
+**Needs a mathematician:** both directions lean on texts I haven't re-read for this, and on my step from Steiner's injective shapes
+to labelled ones. No agent's agreement is independent evidence, mine and the reviewer's included.
+
+## Safe as a component
+
+The reviewer ran these against revision 1 and they failed. Each now has a test:
+
+- **Threads.** Every call holds the GIL (`ctypes.PyDLL`) and the category's own lock. Four threads on one category used to crash with a
+  use-after-free. They now give the cells one thread gives, and the test is clean under ASan and UBSan.
+- **Ownership.** Cells from two categories are refused (-7), never silently mixed.
+- **Ranges.** A dimension must be an int from 0 to 15, checked in Python and again in C, so 2**32 is refused, not wrapped. The C checks
+  a negative or missing buffer too.
+- **Immutability.** A cell's fields can't be set.
+- **Sizes.** A cell holds at most 2²² elements and 2²⁶ words, checked before anything is allocated, so every count fits in 32 bits.
+- **Memory.** A category holds every cell it makes, so it has a budget, 2²⁷ words by default and set on creation. The budget counts
+  everything held, and the category keeps answering once it's full. Dropping the category frees all of it.
+- **The build.**
+  - **Compiler:** only `/usr/bin/cc`, `gcc` or `clang`, never one found on PATH.
+  - **Flags:** stack protection and `_FORTIFY_SOURCE`, plus full RELRO and a non-executable stack on Linux.
+  - **Cache:** the cache folder and the library must be this user's own and writable by nobody else, or nothing is loaded.
+  - **Failed compiles:** leave nothing behind.
+  - **Test builds:** `NCAT_TEST_SO` exists for these alone, such as sanitizer builds, and it's checked the same way.
+
+**Still to do (packaging, Rio Grande's part):** a prebuilt, verified library for each machine, so production compiles nothing.
+
+**What the C trusts:** nothing comes in from the network. It takes only cells it made and integers the binding has checked.
 
 ## Evidence (all run on Tardis, all synthetic)
 
-- **Known answers:** planar binary trees give the Catalan numbers, in dimension 2 up to m = 7 and in dimensions 3, 4 and 5 up to
-  m = 5. Beads on wires and marks on sheets, stacked and side by side, give stars and bars. Two bead types keep their order.
-- **Laws, on random polygraphs up to n = 5:** globularity, units, associativity, boundaries of composites, identities respecting
-  composition, interchange. Tests count that the top dimensions and interchange were really reached.
-- **A second traversal in Python, on randomly renumbered elements and faces,** recovers the same canonical words. Same author and
-  same algorithm, so it checks numbering-independence and the C, not the mathematics.
-- **Torsion:** Rio Grande's example is refused both ways round, and the same 4-cell twice still composes. 24 random seeds up to n = 3 never
-  hit the refusal.
-- **Under ASan and UBSan:** clean on the known answers, refusals and units.
-- **14 mutants of the C:** 10 caught. Of the 4 survivors, 1 was a real gap, now tested (only one side of the round check). 3 are
-  equivalent by argument: face lists keep their atom's order anyway, the hash already holds the formal dimension, and the unit
-  shortcut gives what gluing gives.
+- **Known answers:**
+  - Planar binary trees give the Catalan numbers, in dimension 2 up to m = 7 and in dimensions 3, 4 and 5 up to m = 5.
+  - Beads and marks give stars and bars.
+  - At n = 4, 4-cells on two 3-cells composed along each lower dimension commute, which are real exchanges.
+  - These are one-object towers, as the reviewer notes.
+- **Laws, on random polygraphs up to n = 5:** globularity, units, associativity, boundaries of composites, identities, interchange.
+  The random ones reach proper interchange only along dimensions 0 to 2. The n = 4 exchanges above are the only checks along 3.
+- **The two refusals:** the reviewer's n = 3 example and Rio Grande's n = 4 one are refused, and a 4-cell composed with itself isn't.
+  Random cells up to n = 2 never are.
+- **A second traversal in Python, on renumbered elements:** recovers the same words. Same author, so it checks the C, not the mathematics.
+- **Rio Grande's reference, written apart from this, and the reviewer's harness:**
+  - **n ≤ 2:** 726,598 pairs, 0 disagreements.
+  - **n ≤ 3:** 370,705 pairs, 0 disagreements, before the loop check.
+  - **n ≤ 4:** 230,398 pairs, 0 disagreements, at ab1c4978. 370 cells reached dimension 4, and 48 pairs there were equal.
+  - **The reviewer, on worlds built around Rio Grande's example:** about 659,000 pairs at n = 3 and 289,000 at n = 4, 214,000 of
+    those real exchanges. No false equality.
+- **Mutants:** `engram/experiments/ncat/mutants.py`, 21 of them, all committed.
+  - 18 are caught, including the reviewer's four survivors: the check only at i = top − 2, skipping dimension 3, top elements only,
+    and skipping generators.
+  - 3 are equivalent, each with its reason printed.
+- **Sanitizers:** ASan and UBSan, clean, on the threads, budget, argument, refusal and known-answer tests.
 
-**Not done:** the rewalt cross-check (installing it was refused on Tardis, so it needs Andy's yes or the Pi), a rerun of the differential
-at n ≤ 4 with the check in, and any independent mathematician's read. No agent's agreement counts as independent evidence.
+**Not done:**
+- The rewalt cross-check: installing it was refused on Tardis, so it needs Andy's yes or the Pi.
+- n ≥ 5 against the reference.
+- A proof that the traversal can't refuse a loop-free shape.
+- A mathematician's read of the two directions above.
 
 ## Is C needed? Measured
 
-One more composition, on one core of Tardis. The C column is the whole composition; the Python column is the canonicalising alone,
-in a straightforward port, so it understates the gap.
+One more composition, on one core of Tardis. C is the whole composition. Python is the canonicalising alone, in a plain port, so it
+understates the gap.
 
 | Shape | Elements | C | Python | Ratio |
 |---|---|---|---|---|
 | Path of 50 | 101 | 11 µs | 572 µs | 53 |
-| Path of 1,000 | 2,001 | 165 µs | 13.7 ms | 83 |
-| Tree of 100, front 101 | 403 | 549 µs | 28.4 ms | 52 |
-| Tree of 400, front 401 | 1,603 | 4.3 ms | 317 ms | 73 |
-| Stack of 50 sheets, 100 marks | 303 | 1.2 ms | 48.4 ms | 39 |
+| Path of 1,000 | 2,001 | 167 µs | 13.4 ms | 80 |
+| Tree of 400, front 401 | 1,603 | 4.6 ms | 318 ms | 69 |
+| Stack of 50 sheets, 100 marks | 303 | 1.2 ms | 54.6 ms | 45 |
 
-So yes for canonicalising, which every new composite pays for. No for the store's generators: Rio Grande measured 37 µs to write a
-1-cell in Python on SQLite, on the Pi. Only this kernel needs C, as one dependency-free file. Compiling needs a C compiler on each
-machine, and that's the cost to weigh: it's cached under `~/.cache/superyak/ncat`.
+So yes for canonicalising. But each composite is canonicalised whole, so building a long cell step by step is quadratic: the reviewer
+measured 44.6 s and 4.3 GB for a 2-cell tree grown one step at a time to 1,000 steps. The budget stops that from taking the machine.
+Making it incremental is future work, and only worth it if real sessions are that long.
 
-## Where the speed really comes from: the mathematics
+## Where speed comes from, beyond the language
 
-These matter more than the language, and they're the order I'd build in.
+The reviewer corrected four of these, so each now says its conditions.
 
-1. **A functor needs no normal form.** A functor respects the laws, so any presentation of a cell gives the same answer. Cost,
-   holonomy and restriction maps can be computed from how a cell was built, in constant time per composition, and memoised on the
-   interned cells. Only *equality* pays for canonicalising, and it pays once per distinct cell.
-2. **Store generators and used composites, interned.** The closure of even a small graph is enormous and never needed. This is
-   already the plan's choice, and interning makes it cheap.
-3. **Above the kernel, work in the thin quotient.** If a 2-cell only says a route can replace another at no more cost, hom-sets are
-   posets, and that's a category enriched in ([0,∞], ≥, +), a Lawvere metric space. Parallel 2-cells are then equal, so 3-cells say
-   nothing there, and n stops at 2 for cost. Keep the free kernel for provenance, and answer queries in the quotient. Composition
-   is the min-plus matrix product, and all-routes is its Kleene star.
-4. **A rail is a 2-cell.** A shortcut that costs no more than the route it replaces is exactly such a cell, and contraction
-   hierarchies and hub labels are systematic choices of them, known to give microsecond exact queries on road networks. Memory graphs
-   may be small-world, where these degrade, so that's a measurement to make, not an assumption.
-5. **A heuristic is a cochain.** A* with potential π is Dijkstra on w − δπ, and consistency is δπ ≤ w, the dual of shortest paths. So
-   the best heuristics are the largest feasible 0-cochains, which is where landmark bounds come from, and the cost's class in H¹ measures
-   how far it is from being path-independent.
-6. **Most sheaf cohomology needs one rank.** dim H⁰ − dim H¹ = Σ dim F(v) − Σ dim F(e), so rank δ gives both. With identity maps it needs
-   no linear algebra at all: H⁰ and H¹ are k·β₀ and k·β₁, which is union-find, near-linear. So the audit's warning has teeth: until
-   stores really differ, the maps are identities and cohomology carries no information about the data. Real maps need only a sparse,
-   matrix-free Laplacian.
+1. **A functor needs no normal form.** A strict functor respects the laws, so any presentation of a cell gives the same answer. It's
+   computed in constant time per composition only when the target is a scalar, such as a cost. Equality alone pays for canonicalising,
+   once per distinct cell.
+2. **Store generators and the composites actually used,** interned. The closure is never needed.
+3. **For cost, a quotient, with conditions.**
+   - **A poset per hom:** if a 2-cell only says a route can replace another at no more cost, each hom is a preorder, so the category is
+     enriched in posets. That holds only if every 2-generator satisfies cost(target) ≤ cost(source).
+   - **Down to one number per pair:** taking d(x, y) as the least cost of a route collapses further, to a Lawvere metric space.
+   - **What min-plus computes:** min-plus multiplication composes [0,∞]-matrices of those least costs, and its Kleene star gives the
+     least cost over every route. It works on those numbers, not on hom-objects.
+4. **Exact shortcut methods need equality.** Contraction hierarchies and hub labels answer exactly only when a shortcut costs exactly
+   what the route it replaces costs, not merely no more. Memory graphs may also be small-world, where they degrade. Measure, don't assume.
+5. **A heuristic is a cochain, per target.** A* with heuristic h is Dijkstra on reduced costs w − δπ with π = −h and π(target) = 0.
+   Consistency is δπ ≤ w. The largest feasible π is the exact distance to that one target, so "largest" holds per target only.
+   - **The H¹ class:** cost has one only on the bare graph. Once cost-reducing 2-cells are present, δw ≠ 0 on them.
+   - **"How far":** "how far from path-independent" needs a chosen norm.
+6. **Sheaf cohomology, with conditions.** On a 1-complex over a field, dim H⁰ − dim H¹ = Σ dim F(v) − Σ dim F(e), so one rank gives
+   both. k·β₀ and k·β₁ need equal stalks and trivial holonomy, which identity maps give. Sparse numerical rank is neither cheap nor
+   stable in general, so it needs an exact or certified method when the answer matters.
 
-## Next, as split with Rio Grande
+## Next
 
-Agreed on 2026-11-07. Tardis keeps this kernel, its sanitizer builds and its law tests. It parses nothing from the network and takes only
-validated input. Rio Grande has the spec's reviewer, the store, traversal in C, packaging, and the slow reference from the spec alone, which
-is the independent implementation this lacked and has already found one real error here. Each attacks the other's work. Then come the thin
-quotient and the sheaf (stages 4 and 5). Rails stay behind E1′, as the plan says: the mathematics can be right and rails can still not help
-anyone explore further.
+The split with Rio Grande, agreed on 2026-11-07:
+
+- **Tardis:** this kernel and its tests.
+- **Rio Grande:** the reviewer, the store, traversal in C, packaging, and the reference written from the spec alone. That reference
+  has already caught two of my claims.
+
+The store waits for this revision's verdict. Rails stay behind E1′.
+
+**If the quotient is wanted.** A structure where independent rewrites commute might suit memory better than the free category. That
+would be a decision to make and name, not a default.
 
 ## References
 
