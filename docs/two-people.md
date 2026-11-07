@@ -82,7 +82,7 @@ It names the card's person and address (`at None` for Sam, who has none), then a
 If the code doesn't match, ask them to read it again, and type only what they read you. Run `card` and `pair` yourself:
 they need a real terminal, so from an AI assistant's tools `card` shows no code and `pair` refuses.
 
-**7. Both: start your homes, only after `Paired`.** Before it, the second line stops with `serves a push peer only`. Alex
+**7. Both: start your homes, after `Paired`.** Before step 4, the second line stops with `serves a push peer only`. Alex
 needs three windows, one line each, left running: the web page (`--sync` makes it deliver), the door Sam's home dials, and
 Tailscale publishing that door. Sam needs only the first line.
 ```sh
