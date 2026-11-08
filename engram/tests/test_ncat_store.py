@@ -192,6 +192,41 @@ def test_nothing_but_ids_is_read_and_the_person_store_is_unchanged(tmp_path):
     assert not (tmp_path / "ncat.db-wal").exists() and not (tmp_path / "ncat.db-journal").exists()
 
 
+def test_the_query_in_a_recall_never_leaves_sqlite(tmp_path, monkeypatch):
+    """Engram's recall context holds the person's query beside the session id. Only the id may reach this process."""
+    engram = _engram(tmp_path / "graph.db")
+    for i, memory in enumerate(["a", "b"]):
+        _recall(engram, str(i), f"2026-11-07T10:0{i}:00+00:00", "s", [memory],
+                raw_context=json.dumps({"session_id": "s", "recall_id": f"r{i}", "query": "a private worry about a patient"}))
+    seen = []
+    connect = sqlite3.connect
+
+    class Watched:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, *args):
+            rows = self._conn.execute(*args).fetchall()
+            seen.extend(rows)
+            return Rows(rows)
+
+        def close(self):
+            self._conn.close()
+
+    class Rows(list):
+        def fetchall(self):
+            return list(self)
+
+        def fetchone(self):
+            return self[0] if self else None
+
+    monkeypatch.setattr(ncat_store.sqlite3, "connect", lambda *a, **k: Watched(connect(*a, **k)))
+    sessions, _ = ncat_store.read_engram(engram)
+    monkeypatch.undo()
+    assert sessions == {"s": ["a", "b"]}
+    assert seen and not any("private worry" in str(value) for row in seen for value in row)
+
+
 def test_replay_gives_the_same_keys_and_a_rebuild_the_same_content(tmp_path):
     engram = _engram(tmp_path / "graph.db")
     _recall(engram, "1", "2026-11-07T10:00:00+00:00", "s", ["a"])

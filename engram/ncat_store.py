@@ -69,22 +69,22 @@ def read_engram(engram):
         for table in MEMORY_TABLES:
             if table in tables:
                 known.update(row[0] for row in conn.execute(f"SELECT id FROM {table}"))
-        rows = conn.execute(f"SELECT id, timestamp, target_ids, context FROM memory_log "
-                            f"WHERE event_type = 'recall' AND {USED}").fetchall()
+        # Only the session id leaves SQLite: the context also holds the person's query, which this never reads.
+        # json_valid first, since json_extract on malformed JSON would fail the whole query.
+        rows = conn.execute(
+            "SELECT id, timestamp, target_ids, "
+            "CASE WHEN json_valid(context) THEN json_type(context) = 'object' ELSE 0 END, "
+            "CASE WHEN json_valid(context) AND json_type(context) = 'object' THEN json_extract(context, '$.session_id') END "
+            f"FROM memory_log WHERE event_type = 'recall' AND {USED}").fetchall()
         unused = conn.execute(f"SELECT count(*) FROM memory_log WHERE event_type = 'recall' AND NOT {USED}").fetchone()[0]
         conn.execute("COMMIT")
     finally:
         conn.close()
     skipped, naive, kept = Counter(), 0, []
-    for row_id, timestamp, targets, context in rows:
-        try:
-            context = json.loads(context)
-        except (TypeError, ValueError):
-            context = None
-        if not isinstance(context, dict):
+    for row_id, timestamp, targets, is_object, session in rows:
+        if not is_object:
             skipped["bad_context"] += 1
             continue
-        session = context.get("session_id")
         if not isinstance(session, str) or not session:
             skipped["no_session"] += 1
             continue

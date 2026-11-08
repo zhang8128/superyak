@@ -76,14 +76,17 @@ run exits saying another holds it.
 
 `ncat-store rebuild --engram <path to graph.db> [--store <path to ncat.db>]` opens Engram with a `mode=ro` URI and
 `query_only`, inside one read transaction, and reads `memory_log`'s recall rows and the ids in the episode and semantic
-tables. Memory ids and session ids are opaque strings; no content, query text or vector is read. A WAL store opened
+tables. Memory ids and session ids are opaque strings; no content, query text or vector is read. The recall context
+also holds the person's query, so the session id is extracted inside SQLite (`json_extract`, after `json_valid`), and
+nothing else of the context reaches this process. A WAL store opened
 read-only may still need to write its `-shm` file. If it can't, the run stops and says so, rather than open the store
 some other way: it runs as the store's owner.
 
 **Erasure:** an erased memory's id leaves the next rebuild, because only ids still in the store become cells: ids in
 `episodes`, `semantics` or `instincts`. A `target_ids` entry naming anything else is dropped and counted. When a person
 erases everything, or removes the store, `ncat.db` must be deleted with it. Between an
-erase and the next run the old file still holds it. So a rebuild runs after every erase, or hourly at most, whichever
+erase and the next run the old file still holds it, and its place in sessions. Nothing runs a rebuild by itself in this
+stage, so until the wiring stage adds a timer or an erase hook, that's until someone runs one. So a rebuild runs after every erase, or hourly at most, whichever
 the wiring stage can arrange; until then that window is a stated limit. An erased memory between two others joins
 them: a, b, c with b erased gives a road from a to c, by the rule above. In this stage it's run on this
 ship's own store only, by hand or on a timer, never inside a served process: the kernel's reviewer asked for that until
