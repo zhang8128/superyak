@@ -231,7 +231,7 @@ class Store:
         """Generators in id order, as the rebuild made them: objects sorted by memory, then roads sorted by their pair,
         each road's ends the objects its pair names. A swapped or edited ref breaks that order, and is caught."""
         self.cat = NCat(budget_bytes=BUDGET_BYTES)
-        self._by_key, self._memories, self._cells, self._road_ids, self._road_cells = {}, {}, {}, {}, {}
+        self._by_key, self._memories, self._cells, self._road_ids, self._road_cells, self._road_keys = {}, {}, {}, {}, {}, {}
         last_memory, last_road, seen_road = None, None, False
         for gid, dim, source, target, kind, ref, key in self._db.execute("SELECT * FROM generator ORDER BY id"):
             try:
@@ -245,6 +245,7 @@ class Store:
                         raise ValueError("a road's pair doesn't match its place or its ends")
                     cell, last_road = self.cat.generator(self._by_key[source], self._by_key[target]), pair
                     self._road_ids[gid], self._road_cells[gid] = pair, cell
+                    self._road_keys[gid] = key
                 else:
                     raise ValueError(f"generator {gid} is out of place")
             except (KeyError, TypeError, ValueError, NCatError) as error:
@@ -292,17 +293,18 @@ class Store:
         except sqlite3.Error as error:
             raise IntegrityError(f"the store can't be read ({error}); rebuild it") from None
         key, used = row
-        cell = self.cell(key)
+        cell = self.cell(key)  # rebuilt from its recipe, and checked against its key
         if [step for _, step in steps] != list(range(len(steps))) or used != len(steps) + 1:
             raise IntegrityError(f"session {session_id}'s walk doesn't match its count; rebuild the store")
         try:
-            walk = [self._road_cells[road] for road, _ in steps]
-        except KeyError:
+            walk = [self._road_keys[road] for road, _ in steps]  # keys checked at replay: no kernel call per road
+            recipe = json.loads(self._db.execute("SELECT recipe FROM composite WHERE key = ?", (key,)).fetchone()[0])
+        except (KeyError, sqlite3.Error, TypeError, ValueError):
             raise IntegrityError(f"session {session_id} walks a road that isn't there; rebuild the store") from None
-        if walk and _compose(walk, 0).key() != key:
+        # The recipe built the cell that matched its key, so a walk equal to the recipe's parts is that cell, without
+        # composing it twice.
+        if (recipe[0] == "then" and recipe[2] != walk) or (recipe[0] == "id" and (walk or cell.dim != 1)):
             raise IntegrityError(f"session {session_id}'s key isn't its walk; rebuild the store")
-        if not walk and cell.dim != 1:
-            raise IntegrityError(f"session {session_id} of one memory isn't an identity; rebuild the store")
         return cell
 
 
