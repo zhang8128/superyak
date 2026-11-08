@@ -82,6 +82,9 @@ The reviewer ran these against revision 1 and they failed. Each now has a test:
   category frees all of it, and a full category keeps answering.
   - **What it counts:** each cell's words, offsets and allocator overhead, plus the context's own arrays at their current sizes: cells,
     the interning table, the memo and the traversal's scratch.
+  - **It holds at rest, not during a call.** A call's own working copies aren't counted while it runs: the shape it's building, its
+    maps, and the new cell's words before they're interned. The reviewer's doubling of a path under a 160 MB budget peaked at 0.53
+    times, so it's room to spare there, not a bound.
   - **Revision 2 counted words only,** and the reviewer found 64 MB of them came to 364 MB resident.
   - **Measured now:** filling a 64 MB budget raised resident memory by 47 to 54 MB on Tardis, with 4 KB pages. On the Pi, with 16 KB
     pages, a 32 MB budget of long paths raised it 1.31 times, as Rio Grande measured three times.
