@@ -227,6 +227,15 @@ def test_the_query_in_a_recall_never_leaves_sqlite(tmp_path, monkeypatch):
     assert seen and not any("private worry" in str(value) for row in seen for value in row)
 
 
+def test_a_session_id_that_isnt_a_string_is_skipped_not_kept_as_text(tmp_path):
+    """Tardis ran it: json_extract gives an object back as its JSON text, which would have become the session id."""
+    engram = _engram(tmp_path / "graph.db")
+    _recall(engram, "1", "2026-11-07T10:00:00+00:00", None, ["a"], raw_context=json.dumps({"session_id": {"q": "words"}}))
+    _recall(engram, "2", "2026-11-07T10:01:00+00:00", None, ["b"], raw_context=json.dumps({"session_id": ["words"]}))
+    sessions, report = ncat_store.read_engram(engram)
+    assert sessions == {} and report["skipped"] == {"no_session": 2}
+
+
 def test_replay_gives_the_same_keys_and_a_rebuild_the_same_content(tmp_path):
     engram = _engram(tmp_path / "graph.db")
     _recall(engram, "1", "2026-11-07T10:00:00+00:00", "s", ["a"])

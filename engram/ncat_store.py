@@ -74,7 +74,8 @@ def read_engram(engram):
         rows = conn.execute(
             "SELECT id, timestamp, target_ids, "
             "CASE WHEN json_valid(context) THEN json_type(context) = 'object' ELSE 0 END, "
-            "CASE WHEN json_valid(context) AND json_type(context) = 'object' THEN json_extract(context, '$.session_id') END "
+            "CASE WHEN json_valid(context) AND json_type(context) = 'object' AND json_type(context, '$.session_id') = 'text' "
+            "THEN json_extract(context, '$.session_id') END "  # an object or array there would come out as its JSON text
             f"FROM memory_log WHERE event_type = 'recall' AND {USED}").fetchall()
         unused = conn.execute(f"SELECT count(*) FROM memory_log WHERE event_type = 'recall' AND NOT {USED}").fetchone()[0]
         conn.execute("COMMIT")
