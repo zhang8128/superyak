@@ -44,6 +44,7 @@ typedef struct {
 
 typedef struct { int32_t a, b, k, val; } MemoSlot;
 
+#define NCAT_MASK_MAX ((1u << 30) - 1)  /* the largest table or memo mask: one more doubling would still fit 32 bits */
 enum { U_MS, U_SEEN, U_FACE, U_OUT, U_DOWNST, U_INFRONT, U_DONE, U_COUNT };
 enum { I_S, I_SEQ, I_F, I_L, I_DOWN, I_STACKLESS, I_COUNT };
 
@@ -59,8 +60,8 @@ typedef struct {
     int64_t work, work_limit;          /* steps taken by the call in progress, and the most one call may take */
     /* traversal scratch, grown as needed */
     int32_t scr_n, scr_d;
-    uint32_t stamp;
-    uint32_t *scr_u;
+    uint64_t stamp;   /* 64 bits: no run of calls can wrap it, so a mark never meets an old one */
+    uint64_t *scr_u;
     int32_t *scr_i;
 } Ctx;
 
@@ -79,6 +80,7 @@ static uint64_t hash_words(const int32_t *w, int32_t n, int32_t formal)
 
 static int grow_table(Ctx *c)
 {
+    if (c->table_mask >= NCAT_MASK_MAX) return NCAT_ETOOBIG;  /* intern refuses first; this only guards */
     uint32_t cap = (c->table_mask + 1) * 2;
     int32_t *t = malloc(sizeof(int32_t) * cap);
     if (!t) return NCAT_ENOMEM;
@@ -107,7 +109,7 @@ static int64_t fixed_bytes(const Ctx *c)
 {
     return (int64_t)c->cap_cells * (int64_t)sizeof(Cell) + ((int64_t)c->table_mask + 1) * 4 +
            ((int64_t)c->memo_mask + 1) * (int64_t)sizeof(MemoSlot) +
-           (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
+           (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint64_t) + I_COUNT * (int64_t)sizeof(int32_t));
 }
 
 /* Would growing by more bytes take the context past its budget? */
@@ -131,7 +133,10 @@ static int32_t intern(Ctx *c, int32_t formal, int32_t shape, int32_t n, int32_t 
     int64_t bytes = cell_bytes(nwords, n);
     int64_t growth = 0;  /* the arrays that would double for this cell */
     if (c->ncells == c->cap_cells) growth += (int64_t)c->cap_cells * (int64_t)sizeof(Cell);
-    if ((uint32_t)(c->ncells + 1) * 2 > c->table_mask) growth += ((int64_t)c->table_mask + 1) * 4 * 2;
+    if ((uint32_t)(c->ncells + 1) * 2 > c->table_mask) {
+        if (c->table_mask >= NCAT_MASK_MAX) { free(words); return NCAT_ETOOBIG; }  /* refused before anything changes */
+        growth += ((int64_t)c->table_mask + 1) * 4 * 2;
+    }
     if (over_budget(c, bytes + growth)) { free(words); return NCAT_EBUDGET; }
     if (c->ncells == c->cap_cells) {
         if (c->cap_cells > INT32_MAX / 2) { free(words); return NCAT_ETOOBIG; }
@@ -177,6 +182,7 @@ static int32_t memo_get(Ctx *c, int32_t a, int32_t b, int32_t k)
 static int memo_put(Ctx *c, int32_t a, int32_t b, int32_t k, int32_t val)
 {
     if ((c->memo_used + 1) * 2 > c->memo_mask) {
+        if (c->memo_mask >= NCAT_MASK_MAX) return 0;  /* a memo at its largest only forgets; the answer stands */
         uint32_t cap = (c->memo_mask + 1) * 2;
         if (over_budget(c, (int64_t)cap * (int64_t)sizeof(MemoSlot))) return 0;  /* a full memo only forgets; the answer stands */
         MemoSlot *m = malloc(sizeof(MemoSlot) * cap);
@@ -253,7 +259,7 @@ typedef struct {
     int32_t N, D;
 } Walk;
 
-static uint32_t *uarr(Walk *w, int d, int which) { return w->c->scr_u + ((size_t)d * U_COUNT + (size_t)which) * (size_t)w->N; }
+static uint64_t *uarr(Walk *w, int d, int which) { return w->c->scr_u + ((size_t)d * U_COUNT + (size_t)which) * (size_t)w->N; }
 static int32_t *iarr(Walk *w, int d, int which) { return w->c->scr_i + ((size_t)d * I_COUNT + (size_t)which) * (size_t)w->N; }
 
 static int walk_ready(Walk *w, const Host *h, int32_t D)
@@ -263,11 +269,11 @@ static int walk_ready(Walk *w, const Host *h, int32_t D)
     if (c->scr_n < w->N || c->scr_d < w->D) {
         int32_t n = c->scr_n > w->N ? c->scr_n : w->N, dd = c->scr_d > w->D ? c->scr_d : w->D;
         /* the working space counts against the budget too, beside what's held */
-        int64_t scratch = (int64_t)n * dd * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
-        int64_t old = (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint32_t) + I_COUNT * (int64_t)sizeof(int32_t));
+        int64_t scratch = (int64_t)n * dd * (U_COUNT * (int64_t)sizeof(uint64_t) + I_COUNT * (int64_t)sizeof(int32_t));
+        int64_t old = (int64_t)c->scr_n * c->scr_d * (U_COUNT * (int64_t)sizeof(uint64_t) + I_COUNT * (int64_t)sizeof(int32_t));
         if (over_budget(c, scratch - old)) return NCAT_EBUDGET;
         free(c->scr_u); free(c->scr_i);
-        c->scr_u = calloc((size_t)n * (size_t)dd * U_COUNT, sizeof(uint32_t));
+        c->scr_u = calloc((size_t)n * (size_t)dd * U_COUNT, sizeof(uint64_t));
         c->scr_i = malloc(sizeof(int32_t) * (size_t)n * (size_t)dd * I_COUNT);
         c->scr_n = n; c->scr_d = dd;
         c->stamp = 0;
@@ -275,10 +281,6 @@ static int walk_ready(Walk *w, const Host *h, int32_t D)
     }
     w->N = c->scr_n;  /* the stride is the buffer's, so a smaller shape uses the same layout */
     w->D = c->scr_d;
-    if (c->stamp > 0xF0000000u) {  /* a stamp must never meet an old one */
-        memset(c->scr_u, 0, sizeof(uint32_t) * (size_t)c->scr_n * (size_t)c->scr_d * U_COUNT);
-        c->stamp = 0;
-    }
     return 0;
 }
 
@@ -287,8 +289,8 @@ static int32_t closure(Walk *w, int d, const int32_t *F, int32_t nF, const int32
 {
     const Host *h = w->h;
     int32_t *S = iarr(w, d, I_S);
-    uint32_t *ms = uarr(w, d, U_MS);
-    uint32_t st = ++w->c->stamp;
+    uint64_t *ms = uarr(w, d, U_MS);
+    uint64_t st = ++w->c->stamp;
     int32_t n = 0;
     for (int32_t i = 0; i < nF; i++) if (ms[F[i]] != st) { ms[F[i]] = st; S[n++] = F[i]; }
     for (int32_t i = 0; i < nL; i++) if (ms[L[i]] != st) { ms[L[i]] = st; S[n++] = L[i]; }
@@ -320,10 +322,10 @@ static int32_t walk(Walk *w, int d, int32_t nS)
         return 1;
     }
     if (d + 1 >= w->D) return NCAT_EWALK;
-    uint32_t *face = uarr(w, d, U_FACE), *outm = uarr(w, d, U_OUT), *downst = uarr(w, d, U_DOWNST);
-    uint32_t *infront = uarr(w, d, U_INFRONT), *seen = uarr(w, d, U_SEEN), *done = uarr(w, d, U_DONE);
+    uint64_t *face = uarr(w, d, U_FACE), *outm = uarr(w, d, U_OUT), *downst = uarr(w, d, U_DOWNST);
+    uint64_t *infront = uarr(w, d, U_INFRONT), *seen = uarr(w, d, U_SEEN), *done = uarr(w, d, U_DONE);
     int32_t *down = iarr(w, d, I_DOWN), *F = iarr(w, d, I_F), *L = iarr(w, d, I_L);
-    uint32_t st = ++w->c->stamp;
+    uint64_t st = ++w->c->stamp;
     int32_t tops = 0, nF = 0, nL = 0;
     for (int32_t i = 0; i < nS; i++) {
         int32_t e = S[i];
@@ -431,8 +433,8 @@ static void host_all(Walk *w)
 static int32_t boundary_set(Walk *w, int32_t k, int sign)
 {
     const Host *h = w->h;
-    uint32_t *mark = uarr(w, 0, U_OUT), *face = uarr(w, 0, U_FACE);
-    uint32_t st = ++w->c->stamp;
+    uint64_t *mark = uarr(w, 0, U_OUT), *face = uarr(w, 0, U_FACE);
+    uint64_t st = ++w->c->stamp;
     int32_t *F = iarr(w, 0, I_F);
     int32_t *L = iarr(w, 0, I_L);
     int32_t nF = 0, nL = 0;
@@ -497,9 +499,9 @@ static int loop_free(Ctx *ctx, const Host *h)
     int32_t *cl = malloc(sizeof(int32_t) * (size_t)h->n), *indeg = malloc(sizeof(int32_t) * (size_t)h->n);
     int32_t *head = malloc(sizeof(int32_t) * (size_t)h->n), *queue = malloc(sizeof(int32_t) * (size_t)h->n);
     int32_t *nextedge = NULL;
-    uint32_t *in_cl = calloc((size_t)h->n, sizeof(uint32_t)), *not_in = calloc((size_t)h->n, sizeof(uint32_t)), *not_out = calloc((size_t)h->n, sizeof(uint32_t));
+    uint64_t *in_cl = calloc((size_t)h->n, sizeof(uint64_t)), *not_in = calloc((size_t)h->n, sizeof(uint64_t)), *not_out = calloc((size_t)h->n, sizeof(uint64_t));
     int result = (from && to && cl && indeg && head && queue && in_cl && not_in && not_out) ? 1 : NCAT_ENOMEM;
-    uint32_t st = 0;
+    uint64_t st = 0;
     for (int32_t i = 0; i < top && result == 1; i++) {
         size_t nedges = 0;
         for (int32_t x = 0; x < h->n && result == 1; x++) {
@@ -507,13 +509,13 @@ static int loop_free(Ctx *ctx, const Host *h)
             int32_t ncl = 0;
             st++;
             in_cl[x] = st; cl[ncl++] = x;
-            ctx->work += ncl;
-            if (ctx->work > ctx->work_limit) { result = NCAT_EWORK; break; }
             for (int32_t c = 0; c < ncl; c++) {
                 int32_t e = cl[c];
                 for (int32_t j = 0; j < h->in_n[e]; j++) { int32_t f = h->pool[h->in_at[e] + j]; if (in_cl[f] != st) { in_cl[f] = st; cl[ncl++] = f; } }
                 for (int32_t j = 0; j < h->out_n[e]; j++) { int32_t f = h->pool[h->out_at[e] + j]; if (in_cl[f] != st) { in_cl[f] = st; cl[ncl++] = f; } }
             }
+            ctx->work += ncl;  /* the closure just walked, which also bounds the edges it adds below */
+            if (ctx->work > ctx->work_limit) { result = NCAT_EWORK; break; }
             for (int32_t c = 0; c < ncl; c++) {
                 int32_t e = cl[c];
                 if (h->dim[e] != i + 1) continue;
@@ -524,6 +526,7 @@ static int loop_free(Ctx *ctx, const Host *h)
                 int32_t e = cl[c];
                 if (h->dim[e] != i) continue;
                 if (nedges + 2 > cap_edges) {
+                    if (over_budget(ctx, (int64_t)cap_edges * 2 * (int64_t)sizeof(int32_t))) { result = NCAT_EBUDGET; break; }
                     cap_edges *= 2;
                     int32_t *nf = realloc(from, sizeof(int32_t) * cap_edges), *nt = realloc(to, sizeof(int32_t) * cap_edges);
                     if (nf) from = nf;

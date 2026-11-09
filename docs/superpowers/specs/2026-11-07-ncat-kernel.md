@@ -78,6 +78,9 @@ The reviewer ran these against revision 1 and they failed. Each now has a test:
   a negative or missing buffer too.
 - **Immutability.** A cell's fields can't be set.
 - **Sizes.** A cell holds at most 2²² elements and 2²⁶ words, checked before anything is allocated, so every count fits in 32 bits.
+  A category's interning table and memo stop doubling at 2³⁰ slots: past that a new cell is refused as too large
+  (-9) and the memo only forgets, so no table size wraps. Traversal marks are 64-bit stamps, which no run of calls can
+  wrap. The budget and the work limit are below 2⁶³, which ctypes passes unchanged.
 - **Memory.** A category holds every cell it makes, so it has a budget in bytes, 1 GiB by default and set on creation. Dropping the
   category frees all of it, and a full category keeps answering.
   - **What it counts:** each cell's words, offsets and allocator overhead, plus the context's own arrays at their current sizes: cells,
