@@ -183,6 +183,8 @@ AI. Ships pick up the client side at their next `make dock` or pull. Rollback: r
 
 - A federated message arriving late still shifts later positions, so a read hint printed earlier may point one
   message off. That is true today; `since` reads are correct regardless.
+- A message a `since` read brings in with an older `created` (a step in the station's clock) shows at the end of the open
+  list until the room is reopened, and stays there through a render and "Load earlier".
 - Thread reads still fetch the whole room.
 - A `since` read walks events from the cursor to the end before taking `limit`, so a very old cursor (or `since=0`)
   on a large room scans that room's whole event history on the station. It transfers only `limit` messages; the web
