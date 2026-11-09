@@ -336,7 +336,7 @@ def test_the_limits_are_the_specs():
 def test_a_prompt_sends_the_ship_the_prompt_cut_seen_and_limit_2_and_nothing_else(rail):
     rail.answers(*SERENITY)
     assert rail.run('UserPromptSubmit', prompt='p' * 2500, cwd=str(rail.root)) == [A, B]
-    assert rail.sent() == [{'ship': 'tardis', 'prompt': 'p' * 2000, 'limit': 2, 'window_seen': [], 'own': True}]
+    assert rail.sent() == [{'ship': 'tardis', 'prompt': 'p' * 2000, 'limit': 2, 'window_seen': [], 'seen': [], 'own': True}]
     assert rail.state_files() == []  # no record at a prompt
 
 
@@ -436,7 +436,8 @@ def test_one_budget_across_every_event(rail):
     rail.shown_at_prompt(lesson(C, ship='rio-grande'))  # an earlier prompt showed C; only the transcript knows
     rail.answers(lesson(A, ship='serenity'), lesson(D), lesson(B, ship='serenity'), kind='prompt')
     assert rail.run('UserPromptSubmit', prompt='one more prompt') == [D]
-    assert rail.sent()[-1]['window_seen'] == [A, B, C]  # a prompt sends the window's alone
+    last = rail.sent()[-1]
+    assert last['window_seen'] == last['seen'] == [A, B, C]  # a prompt sends the window's ids as both
     rail.shown_at_prompt(lesson(D))
     rail.answers(*SERENITY, kind='failure')
     assert rail.run('PostToolUseFailure', **failure(command='ls other')) is None
@@ -629,7 +630,7 @@ def test_seen_lessons_are_dropped_from_an_in_process_answer_too(rail):
     rail.shown_at_prompt(lesson(A))
     peer = FakePeer({'lessons': [lesson(A), lesson(B)]})
     assert rail.run('UserPromptSubmit', peer=peer, prompt='p') == [B]
-    assert peer.calls[0][0]['window_seen'] == [A]
+    assert peer.calls[0][0]['window_seen'] == peer.calls[0][0]['seen'] == [A]
 
 
 @pytest.mark.parametrize('module, shown', [

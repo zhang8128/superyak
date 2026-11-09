@@ -114,7 +114,7 @@ def test_the_requests_keys(rail):
     rail.run('UserPromptSubmit', prompt='p')
     rail.run('PostToolUseFailure', cwd=str(rail.root), **failure())
     prompt, fail = rail.sent()
-    assert prompt == {'ship': 'tardis', 'prompt': 'p', 'limit': 2, 'window_seen': [], 'own': True}
+    assert prompt == {'ship': 'tardis', 'prompt': 'p', 'limit': 2, 'window_seen': [], 'seen': [], 'own': True}
     fail.pop('budget_ms')
     assert fail == {'ship': 'tardis', 'cwd': str(rail.root), 'command': 'ls nowhere', 'error': fail['error'],
                     'limit': 3, 'seen': [], 'window_seen': [], 'own': True}
@@ -348,3 +348,27 @@ def test_a_real_case(rail):
     compact(rail)
     assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure('make check', 'Exit code 2\nboom')) == [REAL]
     assert (rail.data / 'receipts.txt').read_text().split() == [REAL]
+
+
+def test_a_compact_start_reads_no_tail_so_a_late_boundary_hides_nothing(rail):
+    rail.flag('count-receipts')
+    rail.answers(lesson(A, ship='serenity'), kind='failure')
+    assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure()) == [A]
+    rail.shown_at_prompt(lesson(B, ship='serenity'))  # shown at a prompt in the window that just ended
+    boundary(rail)  # the previous boundary: the new one is not on disk yet
+    rail.shown_at_prompt(lesson(B, ship='serenity'))
+    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='start')
+    assert rail.run('SessionStart', source='compact', cwd=str(rail.root)) == [A, B]
+    sent = rail.sent()[-1]
+    assert sent['window_seen'] == [] and A in sent['seen'] and B in sent['seen']
+    assert (rail.data / 'receipts.txt').read_text().split() == [A]  # reminders: no new receipt
+
+
+def test_an_old_peer_filters_a_prompt_by_the_window(rail):
+    """The stub reads only `seen`, as main's read_request does: the prompt sends the window's ids as both keys."""
+    (rail.data / 'ignore-window').touch()
+    rail.shown_at_prompt(lesson(A, ship='serenity'))
+    compact(rail)
+    rail.shown_at_prompt(lesson(B, ship='serenity'))
+    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='prompt')
+    assert rail.run('UserPromptSubmit', prompt='p') == [A]  # B is the window's; A is a reminder

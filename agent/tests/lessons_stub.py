@@ -12,6 +12,7 @@
   filter when the request has it (an old hook has only `seen`).
 - `count-receipts`: each lesson answered whose id is not in `seen` gets a `receipt` and its id is appended to
   `receipts.txt`, as the peer does for a first reach; a `reask` request gets none and answers ids already in `seen` only.
+- `ignore-window`: the peer is an old one, reading `seen` alone.
 - `receipt`: after the sleep, `receipt` is appended to `late.txt`, as the query's commit writes receipts after its work;
   `grandchild`: first a process of its own session is started that appends `grandchild` to `late.txt` 1.5 s later."""
 import json
@@ -44,7 +45,7 @@ kind = ('prompt' if 'prompt' in request else 'command' if request.get('words_onl
 fixture = data / f'answer-{kind}.json'
 lessons = json.loads((fixture if fixture.exists() else data / 'answer.json').read_text()) if \
     (fixture.exists() or (data / 'answer.json').exists()) else []
-seen = set() if (data / 'ignore-seen').exists() else set(request.get('window_seen', request.get('seen')) or [])
+seen = set() if (data / 'ignore-seen').exists() else set((request.get('seen') if (data / 'ignore-window').exists() else request.get('window_seen', request.get('seen'))) or [])
 limit = None if (data / 'ignore-limit').exists() else request['limit']  # a request without `limit` fails here
 told = set(request.get('seen') or [])
 if request.get('reask'):

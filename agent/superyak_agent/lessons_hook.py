@@ -7,7 +7,7 @@ branch, the command and its last error line. Before a command the shared hold en
 Every lesson arrives fenced with fence_external under HEADING, its short id and ship on the hook's own line outside the
 fence. Each lesson id shows at most once a context window and counts once a session (own-lessons spec): the session's
 record keeps `shown` for the session and `window_shown` for the window, which a compact SessionStart clears first,
-whatever its query does; the transcript, where the lessons shown at a prompt are read back, completes the window, since
+whatever its query does, and reads no transcript tail (its boundary may not be on disk yet); the transcript, where the lessons shown at a prompt are read back, completes the window, since
 the hook writes nothing at all at a prompt. A ship's own lessons (the query's `own` key, asked for with `own`) come
 last under OWN_HEADING, within the same cap, and never carry a receipt. A slow, missing or failing query, or any other failure, prints
 nothing, and the hook always exits 0. Imports stay light, without the station client: the prompt path has 150 ms."""
@@ -638,7 +638,8 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         return ''
     path = state_path(settings, session)
     state = read_state(path)
-    if name == START and event.get('source') == 'compact':
+    compacting = name == START and event.get('source') == 'compact'
+    if compacting:
         try:
             state = _clear(path, deadline - RESERVE, clock, monotonic) or state
         except OSError:
@@ -649,8 +650,10 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     here = {key: strings(state, 'window_' + key) + (strings(state, key) if windows == 0 else [])
             for key in ('shown', 'commands', 'errors')}
     transcript = event.get('transcript_path')
-    offset = last_boundary(transcript, deadline, monotonic=monotonic) if windows >= 1 else None
-    if windows >= 1 and offset is None and monotonic() > deadline:
+    # A compact SessionStart reads no tail: Claude Code stamps the boundary record some 230 ms before the hook starts and
+    # nothing shows it is on disk, so the tail could be the window that just ended, and every reminder would be lost.
+    offset = last_boundary(transcript, deadline, monotonic=monotonic) if windows >= 1 and not compacting else None
+    if windows >= 1 and not compacting and offset is None and monotonic() > deadline:
         return ''  # the search ran out of time: nothing is added
     request = {'ship': settings['ship']}
     if name == PROMPT:
@@ -662,7 +665,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
             return ''
         window_seen = seen_list(here['shown'], in_window)
         request.update(prompt=prompt[:CUTS['prompt']], limit=REQUEST_LIMITS[PROMPT], window_seen=window_seen[-SEEN_MAX:],
-                       own=True)
+                       seen=window_seen[-SEEN_MAX:], own=True)  # no receipt at a prompt: an old peer filters by the window
         answer = prompt_lessons(settings, request, deadline - PRINT_RESERVE, started, monotonic, peer)
         if not answer:
             return ''
@@ -671,7 +674,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     shown_there = transcript_ids(transcript, deadline, monotonic=monotonic)
     if shown_there is None:
         return ''
-    in_window = shown_there if offset is None else transcript_ids(transcript, deadline, monotonic=monotonic, start=offset)
+    in_window = [] if compacting else shown_there if offset is None else transcript_ids(transcript, deadline, monotonic=monotonic, start=offset)
     if in_window is None:
         return ''
     seen = seen_list(own, shown_there)
