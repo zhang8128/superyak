@@ -3362,6 +3362,11 @@ def recall(
         resonant_results = [r for r in resonant_results if (r.get("lane") or "personal") == lane]
         kept = {r["id"] for r in results} | {r["id"] for r in resonant_results}
         result_ids[:] = [rid for rid in result_ids if rid in kept]
+        # The hidden scores were kept before this filter, so dream_verify would name what the lane left out.
+        hidden = _recall_scores.get(recall_id)
+        if hidden is not None:
+            for part in ("matched", "uninvited"):
+                hidden[part] = {rid: s for rid, s in hidden[part].items() if rid in kept}
         # Update the already-written log entry so target_ids reflects what was returned
         _storage.conn.execute(
             "UPDATE memory_log SET target_ids = ? WHERE json_extract(context, '$.recall_id') = ?",
