@@ -35,7 +35,7 @@ PROBE_WAIT = ('--max-time', '10')
 SETTLE_SECONDS = 15  # a unit that dies at import reads active for a moment after its restart
 SLOW_STOP_SECONDS = 6  # past the lighthouse's 5 s grace (SHUTDOWN_GRACE)
 LOCKED_INPUTS = ('peer/uv.lock', 'peer/pyproject.toml')  # the units run peer/.venv as it is
-ENGRAM_INPUTS = ('engram/uv.lock', 'engram/pyproject.toml')  # the embedder runs engram/.venv as it is
+ENGRAM_INPUTS = ('engram/uv.lock', 'engram/pyproject.toml')  # the embedder and the publisher run engram/.venv as it is
 COMMIT_ID = re.compile(r'[0-9a-f]{7,40}')
 
 
