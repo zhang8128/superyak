@@ -1,0 +1,106 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "set",
+ "why": "Three places that pairwise share one item each. A stalk is a subset of the place's items, and restriction is intersection, as in the permission check. Subsets that agree in pairs always glue, to their union: here {a, c}. The global sections are the 8 subsets of {a, b, c}.",
+ "nodes": [
+  {
+   "id": "p",
+   "stalk": [
+    "",
+    "a",
+    "b",
+    "ab"
+   ]
+  },
+  {
+   "id": "q",
+   "stalk": [
+    "",
+    "b",
+    "c",
+    "bc"
+   ]
+  },
+  {
+   "id": "r",
+   "stalk": [
+    "",
+    "a",
+    "c",
+    "ac"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "tail": "p",
+   "head": "q",
+   "stalk": [
+    "",
+    "b"
+   ],
+   "tail_map": {
+    "": "",
+    "a": "",
+    "b": "b",
+    "ab": "b"
+   },
+   "head_map": {
+    "": "",
+    "b": "b",
+    "c": "",
+    "bc": "b"
+   }
+  },
+  {
+   "tail": "q",
+   "head": "r",
+   "stalk": [
+    "",
+    "c"
+   ],
+   "tail_map": {
+    "": "",
+    "b": "",
+    "c": "c",
+    "bc": "c"
+   },
+   "head_map": {
+    "": "",
+    "a": "",
+    "c": "c",
+    "ac": "c"
+   }
+  },
+  {
+   "tail": "p",
+   "head": "r",
+   "stalk": [
+    "",
+    "a"
+   ],
+   "tail_map": {
+    "": "",
+    "a": "a",
+    "b": "",
+    "ab": "a"
+   },
+   "head_map": {
+    "": "",
+    "a": "a",
+    "c": "",
+    "ac": "a"
+   }
+  }
+ ],
+ "local": {
+  "p": "a",
+  "q": "c",
+  "r": "ac"
+ },
+ "expect": {
+  "sections": 8,
+  "glued": true,
+  "residual_edges": []
+ }
+}

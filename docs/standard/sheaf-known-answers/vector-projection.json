@@ -1,0 +1,38 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Two planes that are only compared on their first coordinate. Stalks of different dimensions; three free numbers remain.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 1,
+   "tail_map": [
+    [
+     1,
+     0
+    ]
+   ],
+   "head_map": [
+    [
+     1,
+     0
+    ]
+   ]
+  }
+ ],
+ "expect": {
+  "dim_h0": 3,
+  "dim_h1": 0
+ }
+}

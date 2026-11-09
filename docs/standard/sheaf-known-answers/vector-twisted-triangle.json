@@ -1,0 +1,55 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "A triangle whose maps compose to a quarter turn. A global section x must satisfy x = Rx, so only x = 0. Every pair of nodes can still agree on its own edge.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "c",
+   "head": "a",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     -1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  }
+ ],
+ "expect": {
+  "dim_h0": 0,
+  "dim_h1": 0
+ }
+}

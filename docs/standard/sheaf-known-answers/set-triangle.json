@@ -1,0 +1,88 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "set",
+ "why": "Three switches that must all match: two global sections, all off or all on.",
+ "nodes": [
+  {
+   "id": "a",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "id": "b",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "id": "c",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "0",
+    "1": "1"
+   }
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "0",
+    "1": "1"
+   }
+  },
+  {
+   "tail": "c",
+   "head": "a",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "0",
+    "1": "1"
+   }
+  }
+ ],
+ "local": {
+  "a": "1",
+  "b": "1",
+  "c": "1"
+ },
+ "expect": {
+  "sections": 2,
+  "glued": true,
+  "residual_edges": []
+ }
+}

@@ -1,0 +1,71 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "The complete graph on 4 nodes, stalk 3, identity maps: dim H1 = 18 - 12 + 3.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 3
+  },
+  {
+   "id": "b",
+   "dim": 3
+  },
+  {
+   "id": "c",
+   "dim": 3
+  },
+  {
+   "id": "d",
+   "dim": 3
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "d",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "d",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "c",
+   "head": "d",
+   "dim": 3,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "expect": {
+  "dim_h0": 3,
+  "dim_h1": 9
+ }
+}

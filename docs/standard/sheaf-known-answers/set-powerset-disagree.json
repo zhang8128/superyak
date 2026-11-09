@@ -1,0 +1,108 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "set",
+ "why": "The same places. p includes b and q leaves it out, so they disagree on their overlap.",
+ "nodes": [
+  {
+   "id": "p",
+   "stalk": [
+    "",
+    "a",
+    "b",
+    "ab"
+   ]
+  },
+  {
+   "id": "q",
+   "stalk": [
+    "",
+    "b",
+    "c",
+    "bc"
+   ]
+  },
+  {
+   "id": "r",
+   "stalk": [
+    "",
+    "a",
+    "c",
+    "ac"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "tail": "p",
+   "head": "q",
+   "stalk": [
+    "",
+    "b"
+   ],
+   "tail_map": {
+    "": "",
+    "a": "",
+    "b": "b",
+    "ab": "b"
+   },
+   "head_map": {
+    "": "",
+    "b": "b",
+    "c": "",
+    "bc": "b"
+   }
+  },
+  {
+   "tail": "q",
+   "head": "r",
+   "stalk": [
+    "",
+    "c"
+   ],
+   "tail_map": {
+    "": "",
+    "b": "",
+    "c": "c",
+    "bc": "c"
+   },
+   "head_map": {
+    "": "",
+    "a": "",
+    "c": "c",
+    "ac": "c"
+   }
+  },
+  {
+   "tail": "p",
+   "head": "r",
+   "stalk": [
+    "",
+    "a"
+   ],
+   "tail_map": {
+    "": "",
+    "a": "a",
+    "b": "",
+    "ab": "a"
+   },
+   "head_map": {
+    "": "",
+    "a": "a",
+    "c": "",
+    "ac": "a"
+   }
+  }
+ ],
+ "local": {
+  "p": "ab",
+  "q": "c",
+  "r": "ac"
+ },
+ "expect": {
+  "sections": 8,
+  "glued": false,
+  "residual_edges": [
+   0
+  ]
+ }
+}

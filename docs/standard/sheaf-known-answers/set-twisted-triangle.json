@@ -1,0 +1,90 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "set",
+ "why": "The same triangle with one edge that flips. Each edge alone can be satisfied in two ways, and no assignment satisfies all three.",
+ "nodes": [
+  {
+   "id": "a",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "id": "b",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "id": "c",
+   "stalk": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "0",
+    "1": "1"
+   }
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "0",
+    "1": "1"
+   }
+  },
+  {
+   "tail": "c",
+   "head": "a",
+   "stalk": [
+    "0",
+    "1"
+   ],
+   "tail_map": {
+    "0": "0",
+    "1": "1"
+   },
+   "head_map": {
+    "0": "1",
+    "1": "0"
+   }
+  }
+ ],
+ "local": {
+  "a": "1",
+  "b": "1",
+  "c": "1"
+ },
+ "expect": {
+  "sections": 0,
+  "glued": false,
+  "residual_edges": [
+   2
+  ]
+ }
+}
