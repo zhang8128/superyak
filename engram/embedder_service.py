@@ -14,6 +14,11 @@ waiting batch unit, so a recall waits at most one unit, not one request. Batch
 requests still run one at a time in arrival order (the
 Pi, 2026-11-04: a lighthouse crossing's query waited about 2 minutes behind a
 4,096-text code-index request).
+A request may say how long its caller will still wait (remaining_ms). The
+service stamps its arrival on its own monotonic clock and, each time one of its
+units gets the lane, drops it if that time has run out, so a caller that gave
+up no longer holds the lane (the Pi, 2026-11-09: a short text took 74 s behind
+abandoned requests). A request that names no deadline runs to the end, as before.
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
 
 Protocol: one request per connection over a Unix socket. Each message is a
@@ -21,8 +26,10 @@ Protocol: one request per connection over a Unix socket. Each message is a
 
     {"op": "info"}
         -> {"ok": true, "model": ..., "dimension": 768}
-    {"op": "embed", "texts": [...], "prefix": "search_document"}
+    {"op": "embed", "texts": [...], "prefix": "search_document", "remaining_ms": 900}
         -> {"ok": true, "model": ..., "dimension": 768, "vectors": [[...], ...]}
+        -> {"ok": false, "error": "expired"}  when remaining_ms ran out first
+    remaining_ms is optional: a finite, non-negative number of milliseconds.
     any failure
         -> {"ok": false, "error": "..."}
 
@@ -40,12 +47,14 @@ import argparse
 import collections
 import json
 import logging
+import math
 import os
 import socketserver
 import struct
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from time import monotonic
 
 logger = logging.getLogger("engram.embedder")
 
@@ -53,7 +62,12 @@ MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 MAX_TEXTS = 4096
 CHUNK_TEXTS = 16  # texts per lane hold for a provider that names no units of its own
 QUERY_PREFIX = "search_query"
+EXPIRED = {"ok": False, "error": "expired"}
 _HEADER = struct.Struct(">I")
+
+
+class _Expired(Exception):
+    """A request's remaining_ms ran out before one of its units got the lane."""
 
 
 def recv_message(sock) -> dict:
@@ -206,6 +220,7 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             os.umask(old_umask)
 
     def respond(self, request: dict) -> dict:
+        arrived = monotonic()
         info = {"ok": True, "model": self.model_name, "dimension": self.provider.dimension()}
         op = request.get("op")
         if op == "info":
@@ -220,6 +235,11 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             return {"ok": False, "error": f"{len(texts)} texts exceeds {MAX_TEXTS} per request"}
         if not isinstance(prefix, str):
             return {"ok": False, "error": "prefix must be a string"}
+        remaining = request.get("remaining_ms")
+        if remaining is not None and (isinstance(remaining, bool) or not isinstance(remaining, (int, float))
+                                      or not math.isfinite(remaining) or remaining < 0):
+            return {"ok": False, "error": "remaining_ms must be a finite, non-negative number of milliseconds"}
+        deadline = None if remaining is None else arrived + remaining / 1000
         if not texts:
             return {**info, "vectors": []}
         units_of = getattr(self.provider, "embed_units", None)
@@ -230,20 +250,31 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
                      for start in range(0, len(texts), CHUNK_TEXTS)]
         if sorted(i for unit in units for i in unit) != list(range(len(texts))):
             return {"ok": False, "error": "the provider's units don't cover each text exactly once"}
-        if prefix == QUERY_PREFIX:
-            vectors = self._embed_units(texts, prefix, units, None)
-        else:
-            with self.lane.batch_request() as ticket:
-                vectors = self._embed_units(texts, prefix, units, ticket)
+        try:
+            if prefix == QUERY_PREFIX:
+                vectors = self._embed_units(texts, prefix, units, None, deadline)
+            else:
+                with self.lane.batch_request() as ticket:
+                    vectors = self._embed_units(texts, prefix, units, ticket, deadline)
+        except _Expired as expired:
+            logger.info("dropped an expired %s request: %s of %d texts embedded, %.0f ms after it arrived "
+                        "with %.0f ms left", "query" if prefix == QUERY_PREFIX else "batch", expired,
+                        len(texts), (monotonic() - arrived) * 1000, remaining)
+            return dict(EXPIRED)
         return {**info, "vectors": vectors}
 
-    def _embed_units(self, texts: list[str], prefix: str, units: list[list[int]], ticket: int | None) -> list:
+    def _embed_units(self, texts: list[str], prefix: str, units: list[list[int]], ticket: int | None,
+                     deadline: float | None = None) -> list:
         vectors: list = [None] * len(texts)
+        done = 0
         for unit in units:
             with self.lane.hold(ticket):
+                if deadline is not None and monotonic() >= deadline:  # checked at its turn, so it runs nothing
+                    raise _Expired(done)
                 part = self.provider.embed([texts[i] for i in unit], prefix=prefix)
             for index, vector in zip(unit, part, strict=True):
                 vectors[index] = vector
+            done += len(unit)
         return vectors
 
 
