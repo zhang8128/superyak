@@ -138,9 +138,11 @@ def test_the_clear(rail, monkeypatch, how):
         monkeypatch.setattr(lh, 'START_MARGIN', 5.0)
     elif how == 'failed query':
         rail.flag('exit', '3')
+    rail.shown_at_prompt(lesson(B, ship='serenity'))  # an id line before the boundary: the clear writes none from it
     boundary(rail)
     assert rail.run('SessionStart', source='compact', **fields) is None
     got = record(rail)
+    assert B not in got['shown'] and B not in got['window_shown']
     assert got['window_shown'] == got['window_commands'] == got['window_errors'] == [] and got['windows'] == 1
     assert {k: got[k] for k in ('shown', 'commands', 'errors', 'own_count')} == \
         {k: PRIOR[k] for k in ('shown', 'commands', 'errors', 'own_count')}
@@ -298,7 +300,7 @@ def test_a_reask_shows_a_reminder_with_no_new_receipt(rail):
 
 # Old with new.
 
-def test_old_hook_ignores_own():
+def test_this_check_answer_keeps_the_lessons_key_and_hangs_own_beside_it():  # main's check_answer never reads `own`
     raw = json.dumps({'lessons': [lesson(A)], 'own': [lesson(B, ship='tardis')]}).encode()
     assert [l['id'] for l in lh.check_answer(raw)] == [A]
 
@@ -340,35 +342,74 @@ def test_the_name_trick(rail):
 # A real case.
 
 def test_a_real_case(rail):
+    """Rio Grande's own `make check` lesson, as laid, reaching Rio Grande: shown, shown again after a compaction, never
+    with a receipt."""
     rail.flag('count-receipts')
-    laid = lesson(REAL, ship='rio-grande', claim='Run make check before every push.',
+    laid = lesson(REAL, ship='tardis', claim='Run make check before every push.',
                   why='A push without it broke main CI twice.', command='make check')
-    rail.answers(laid, kind='failure')
+    own_answers(rail, laid, kind='failure')
     assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure('make check', 'Exit code 2\nboom')) == [REAL]
     compact(rail)
     assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure('make check', 'Exit code 2\nboom')) == [REAL]
-    assert (rail.data / 'receipts.txt').read_text().split() == [REAL]
+    assert not (rail.data / 'receipts.txt').exists()
+    assert record(rail)['own_count'] == 2
 
 
-def test_a_compact_start_reads_no_tail_so_a_late_boundary_hides_nothing(rail):
-    rail.flag('count-receipts')
-    rail.answers(lesson(A, ship='serenity'), kind='failure')
-    assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure()) == [A]
-    rail.shown_at_prompt(lesson(B, ship='serenity'))  # shown at a prompt in the window that just ended
-    boundary(rail)  # the previous boundary: the new one is not on disk yet
-    rail.shown_at_prompt(lesson(B, ship='serenity'))
-    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='start')
-    assert rail.run('SessionStart', source='compact', cwd=str(rail.root)) == [A, B]
-    sent = rail.sent()[-1]
-    assert sent['window_seen'] == [] and A in sent['seen'] and B in sent['seen']
-    assert (rail.data / 'receipts.txt').read_text().split() == [A]  # reminders: no new receipt
+# M1: an answer of own lessons alone shows at every event.
+
+@pytest.mark.parametrize('name, fields', [('UserPromptSubmit', {'prompt': 'make check'}),
+                                          ('SessionStart', {'cwd': '/'}), ('PostToolUseFailure', failure())])
+def test_own_lessons_alone_show(rail, name, fields):
+    own_answers(rail, mine(B), kind={'UserPromptSubmit': 'prompt', 'SessionStart': 'start'}.get(name, 'failure'))
+    assert rail.run(name, **fields) == [B]
 
 
-def test_an_old_peer_filters_a_prompt_by_the_window(rail):
-    """The stub reads only `seen`, as main's read_request does: the prompt sends the window's ids as both keys."""
-    (rail.data / 'ignore-window').touch()
-    rail.shown_at_prompt(lesson(A, ship='serenity'))
-    compact(rail)
-    rail.shown_at_prompt(lesson(B, ship='serenity'))
-    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='prompt')
-    assert rail.run('UserPromptSubmit', prompt='p') == [A]  # B is the window's; A is a reminder
+def test_own_lessons_alone_through_the_real_in_process_answer_prompt(rail):
+    import sys
+    from pathlib import Path
+    from test_lessons_hook import ID_LINE
+    peer = str(lh.CHECKOUT / 'peer')
+    if peer not in sys.path:
+        sys.path.append(peer)
+    from superyak_peer import lessons
+    item = {'id': '0123abcd0000:4567cdef0000', 'author': 'acct-tardis', 'ship': 'tardis', 'learned_from': '',
+            'claim': 'Run make check first.', 'why': 'It broke main twice.', 'chain_time': None, 'vector': None,
+            'error': [], 'command': ['make check'], 'file': []}
+    lessons.write_index(Path(rail.data) / lessons.INDEX_FILE, {'lessons': [item], 'ships': {'tardis': 'acct-tardis'},
+                        'peer': 'p', 'watermark': 'w', 'dimension': None}, [], time.time())
+    rail.use_default_query()
+    text = lh.run(rail.event('UserPromptSubmit', prompt='please run make check now'), rail.settings, env={},
+                  peer=lh.load_peer_lessons)
+    out = json.loads(text)['hookSpecificOutput']['additionalContext']
+    assert out.startswith(OWN_HEADING) and [i for i, _ in ID_LINE.findall(out)] == [A] and 'Receipt' not in out
+
+
+# S1: the guard against a concurrent event runs over the window.
+
+def test_a_concurrent_reminder_shows_once_a_window(tmp_path):
+    path = tmp_path / 'state' / 'x.json'
+    path.parent.mkdir()
+    path.write_text(json.dumps({'shown': [A], 'window_shown': [], 'windows': 1}))  # after a compaction
+    start = lh.read_state(path)  # both events read this before either writes
+    args = dict(seen=[A], sent={}, limit=3, deadline=time.monotonic() + 5, clock=time.time, monotonic=time.monotonic,
+                own=lh.strings(start, 'shown'), window_seen=[], window_read=lh.strings(start, 'window_shown'))
+    assert [l['id'] for l in lh._record(path, [lesson(A)], **args)] == [A]
+    assert lh._record(path, [lesson(A)], **args) == []
+    assert lh.read_state(path)['window_shown'] == [A]
+
+
+# S2: one line of many planted hits is parsed once.
+
+def test_many_planted_hits_in_one_line_are_linear(tmp_path):
+    n = 3000
+    plant = json.dumps({'type': 'assistant', 'isSidechain': False, 'message': {'content': [{'type': 'tool_use',
+        'name': 'X', 'input': {'items': [{'type': 'system', 'subtype': 'compact_boundary'}] * n}}]}}, separators=(',', ':'))
+    head = json.dumps({'type': 'user'}) + '\n' + BOUNDARY + '\n'
+    path = tmp_path / 't.jsonl'
+    path.write_text(head + plant + '\n')
+    begun = time.monotonic()
+    assert lh.last_boundary(str(path), begun + 0.150) == len(head.encode())
+    assert time.monotonic() - begun < 0.150
+    assert lh.last_boundary(str(path), begun - 1) is None  # past the deadline: it returns at once
+    for window in (64, 1000):  # and across chunk edges
+        assert lh.last_boundary(str(path), float('inf'), window=window) == len(head.encode())

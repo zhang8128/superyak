@@ -195,7 +195,8 @@ def _checked(item):
 
 class Answer(list):
     """The checked lessons of an answer, as a list (what check_answer always returned), with the checked `own` entries
-    beside them: a list too, empty for an old peer's answer."""
+    beside them: a list too, empty for an old peer's answer. Beware: an empty Answer is falsy whatever `.own` holds, and any
+    copy, slice, `or []` or `list(...)` drops `.own`. Test `is None`, and keep the Answer itself."""
     own = ()
 
 
@@ -315,6 +316,8 @@ def last_boundary(path, deadline, window=WINDOW, monotonic=time.monotonic):
                     at = data.rfind(BOUNDARY, low, end)
                     if at < 0:
                         break
+                    if monotonic() > deadline:
+                        return None  # a line of many hits is parsed once, and the deadline is checked before each parse
                     begin = data.rfind(b'\n', 0, at) + 1
                     finish = data.find(b'\n', at)
                     try:
@@ -324,7 +327,8 @@ def last_boundary(path, deadline, window=WINDOW, monotonic=time.monotonic):
                     if isinstance(record, dict) and record.get('type') == 'system' \
                             and record.get('subtype') == 'compact_boundary' and record.get('isSidechain') is not True:
                         return size if finish < 0 else finish + 1
-                    end = at + width - 1
+                    end = begin + width - 1  # on past this line's start: its other hits are in the line just parsed
+                    low = min(low, begin)  # a line across the chunk's edge is not searched again from the next chunk
                 high = low
     except (OSError, ValueError):
         return None
@@ -573,12 +577,14 @@ def _clear(path, deadline, clock, monotonic):
         os.close(fd)
 
 
-def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=(), window_seen=None, own_lessons=()):
+def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=(), window_seen=None, own_lessons=(),
+            window_read=None):
     """At the events other than the prompt: under the session's lock, at most `limit` of the lessons not yet shown in
     this window (the others', then `own_lessons`), recorded with the digests sent before any is printed. Not yet shown
     means not in `window_seen` (`seen` when none is given: the ids the query was told) and not shown by a concurrent
     event since this one read the record as `own`: a lesson the query answered, and receipted, is never dropped for an
-    older id it wasn't told (Rio Grande's correction). Each lesson shown joins `shown` and `window_shown`; own ones add
+    older id it wasn't told (Rio Grande's correction). `window_read` is the `window_shown` this event read: an id added to
+    it since, by a concurrent event, is skipped too, so a reminder shows once a window. Each lesson shown joins `shown` and `window_shown`; own ones add
     to `own_count`. A record that can't be written shows nothing."""
     fd = _locked(path, deadline, monotonic)
     if fd is None:
@@ -588,6 +594,8 @@ def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=()
         state = read_state(path)
         shown = strings(state, 'shown')
         skip = set(seen if window_seen is None else window_seen) | (set(shown) - set(own))
+        if window_read is not None:
+            skip |= set(strings(state, 'window_shown')) - set(window_read)
         mine = {l['id'] for l in own_lessons}
         fresh = [l for l in [*lessons, *own_lessons] if l['id'] not in skip][:limit]
         ids = [l['id'] for l in fresh]
@@ -603,6 +611,18 @@ def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=()
         return fresh
     finally:
         os.close(fd)
+
+
+def own_shown(settings_path):
+    """`make lessons-own-shown`: the own lessons this machine's records say were shown, summed. An unreadable settings
+    file or record counts as none (a record that isn't a dict is read_state's {})."""
+    settings = read_settings(settings_path)
+    if settings is None:
+        return 0
+    try:
+        return sum(_count(read_state(f), 'own_count') for f in settings['state_dir'].glob('*.json'))
+    except OSError:
+        return 0
 
 
 def _prune(folder, keep, now):
@@ -667,7 +687,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         request.update(prompt=prompt[:CUTS['prompt']], limit=REQUEST_LIMITS[PROMPT], window_seen=window_seen[-SEEN_MAX:],
                        seen=window_seen[-SEEN_MAX:], own=True)  # no receipt at a prompt: an old peer filters by the window
         answer = prompt_lessons(settings, request, deadline - PRINT_RESERVE, started, monotonic, peer)
-        if not answer:
+        if answer is None or not (answer or getattr(answer, 'own', ())):
             return ''
         others, mine = combine(answer, settings['ship'], set(window_seen), REQUEST_LIMITS[PROMPT])
         return _output(name, others, settings['data_dir'], mine) if others or mine else ''
@@ -711,13 +731,15 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         return ''  # no time left for the query to answer inside the hook's: it isn't started
     request.update(limit=REQUEST_LIMITS[name], seen=seen[-SEEN_MAX:], window_seen=window_seen[-SEEN_MAX:], own=True,
                    budget_ms=budget_ms)
-    answer = ask(settings, request, deadline - RESERVE, monotonic) or []
-    if not answer and not sent:
+    answer = ask(settings, request, deadline - RESERVE, monotonic)
+    answer = Answer() if answer is None else answer  # the Answer itself: its `.own` must survive
+    if not answer and not getattr(answer, 'own', ()) and not sent:
         return ''
     others, mine = combine(answer, settings['ship'], set(), REQUEST_LIMITS[name])
     try:
         fresh = _record(path, others, seen[-SEEN_MAX:], sent, REQUEST_LIMITS[name], deadline, clock, monotonic,
-                        own=own, window_seen=window_seen[-SEEN_MAX:], own_lessons=mine)
+                        own=own, window_seen=window_seen[-SEEN_MAX:], own_lessons=mine,
+                        window_read=strings(state, 'window_shown'))
     except OSError:
         return ''  # what isn't recorded isn't shown, so the budget holds
     ids = {l['id'] for l in mine}
