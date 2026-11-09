@@ -9,6 +9,7 @@ within a budget of bytes, and each call has a bound on its work."""
 import ctypes
 import hashlib
 import os
+import platform
 import stat
 import subprocess
 import sys
@@ -22,6 +23,9 @@ MAX_DIM = 15
 FLAGS = ('-std=c11', '-O2', '-fPIC', '-shared', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=2', '-Wall')
 LINUX_FLAGS = ('-Wl,-z,relro', '-Wl,-z,now', '-Wl,-z,noexecstack')
 COMPILERS = ('/usr/bin/cc', '/usr/bin/gcc', '/usr/bin/clang')  # never one found on PATH
+# The compiler runs with this environment alone, so its assembler and linker come from the system's own directories
+# and no CPATH, COMPILER_PATH, GCC_EXEC_PREFIX or LIBRARY_PATH of the caller's reaches it.
+BUILD_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
 ERRORS = {-1: 'not composable: the boundaries differ', -2: 'a generator with an identity boundary is refused',
           -3: "the source and target aren't parallel", -4: "a generator's boundary must be round",
           -5: "this shape isn't loop-free, so the kernel won't say which cell it is (it may still be determined)",
@@ -48,7 +52,8 @@ def _built():
     if compiler is None:
         raise RuntimeError('ncat needs a C compiler at /usr/bin/cc, /usr/bin/gcc or /usr/bin/clang')
     flags = FLAGS + (LINUX_FLAGS if sys.platform.startswith('linux') else ())
-    tag = hashlib.blake2b(source + compiler.encode() + ' '.join(flags).encode(), digest_size=12).hexdigest()
+    machine = f'{sys.platform} {platform.machine()}'  # a home shared across architectures keeps one library each
+    tag = hashlib.blake2b(source + compiler.encode() + ' '.join(flags).encode() + machine.encode(), digest_size=12).hexdigest()
     cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'superyak' / 'ncat'
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     _private(cache, 'cache folder')
@@ -56,7 +61,7 @@ def _built():
     if not out.exists():
         partial = cache / f'.{out.name}.{os.getpid()}'
         try:
-            subprocess.run([compiler, *flags, str(SOURCE), '-o', str(partial)], check=True, capture_output=True)
+            subprocess.run([compiler, *flags, str(SOURCE), '-o', str(partial)], check=True, capture_output=True, env=BUILD_ENV)
             partial.chmod(0o700)
             partial.replace(out)
         finally:
@@ -115,7 +120,8 @@ def _checked(value):
 
 
 class Cell:
-    """A cell, equal to another exactly when the free n-category says so. Immutable, and tied to its category."""
+    """A cell, equal to another exactly when the free n-category says so, where the kernel answers. Immutable, and tied
+    to its category."""
     __slots__ = ('_cat', '_id')
 
     def __init__(self, cat, cell_id):
@@ -190,7 +196,7 @@ class NCat:
     def __init__(self, budget_bytes=1 << 30, work=1 << 30):
         """budget_bytes bounds the memory its cells hold, overheads counted; work bounds the steps one call may take."""
         for value in (budget_bytes, work):
-            if type(value) is not int or value < 1:
+            if type(value) is not int or not 1 <= value < 1 << 63:  # ctypes would wrap a larger one into a small one
                 raise NCatError(-7)
         self._lib = _kernel()
         self._lock = threading.RLock()

@@ -4,6 +4,7 @@ import itertools
 import os
 import math
 import random
+from pathlib import Path
 
 import pytest
 
@@ -433,8 +434,8 @@ def canonical_words(elements, rng):
 # ---- Safe to use as a component: threads, ownership, ranges, budget, and what it will load
 
 def test_threads_sharing_one_category_dont_corrupt_it():
-    """A spec reviewer crashed 3 of 3 runs with four threads on one category, a use-after-free. Each call now holds the GIL and
-    the category's lock, so the same work from four threads gives the same cells as from one."""
+    """A spec reviewer crashed 3 of 3 runs with four threads on one category, a use-after-free. Each call now holds its
+    category's lock (and lets the GIL go), so the same work from four threads gives the same cells as from one."""
     import threading
     C = NCat()
     x = C.object()
@@ -797,3 +798,34 @@ def test_the_top_dimensions_were_really_reached():
         for d, cells in pool.items():
             reached[d] += len(cells)
     assert all(reached[d] > 20 for d in range(6)), reached
+
+
+@pytest.mark.parametrize("value", [0, -1, 1 << 63, (1 << 64) + 5, 2.0, True])
+def test_a_budget_or_work_ctypes_would_wrap_is_refused(value):
+    """A reader's must (M1): ctypes passes an int64, so 2**64 + 5 reached the kernel as 5."""
+    for kwargs in ({"budget_bytes": value}, {"work": value}):
+        with pytest.raises(NCatError) as caught:
+            NCat(**kwargs)
+        assert caught.value.code == -7
+    assert NCat(budget_bytes=(1 << 63) - 1, work=(1 << 63) - 1).object().dim == 0
+
+
+def test_the_compiler_runs_with_the_systems_paths_alone_and_the_library_is_named_per_machine(tmp_path, monkeypatch):
+    """A reader's shoulds (S1, S6): the caller's PATH and gcc's own variables never reach the build, and one home shared by
+    two architectures keeps a library for each."""
+    import ncat
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((argv, kwargs.get("env")))
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{tmp_path}/evil:/usr/bin")
+    monkeypatch.setenv("COMPILER_PATH", str(tmp_path / "evil"))
+    monkeypatch.setattr(ncat.subprocess, "run", fake_run)
+    monkeypatch.setattr(ncat.platform, "machine", lambda: "aarch64")
+    first = ncat._built()
+    monkeypatch.setattr(ncat.platform, "machine", lambda: "x86_64")
+    second = ncat._built()
+    assert first != second and first.parent == second.parent == tmp_path / "superyak" / "ncat"
+    assert [env for _, env in seen] == [{"PATH": "/usr/bin:/bin", "LC_ALL": "C"}] * 2
