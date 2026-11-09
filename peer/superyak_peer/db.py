@@ -135,6 +135,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 db.execute('ALTER TABLE pairing_confirmations ADD COLUMN lessons_line INTEGER NOT NULL DEFAULT 0')
             if 'reason' not in {row['name'] for row in db.execute('PRAGMA table_info(member_changes)')}:
                 db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
+            # own lessons (spec 2026-11-09): a re-asked failure's query row is marked, and every measure leaves it out
+            if 'reask' not in {row['name'] for row in db.execute('PRAGMA table_info(lesson_queries)')}:
+                db.execute('ALTER TABLE lesson_queries ADD COLUMN reask INTEGER NOT NULL DEFAULT 0')
             if 'last_error' not in {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}:  # federation pull (spec §7)
                 db.execute('ALTER TABLE outbox ADD COLUMN last_error TEXT')
             # federation pull (spec §7, check 3 MF2): pairings made before the upgrade, and stores restored from older copies,
