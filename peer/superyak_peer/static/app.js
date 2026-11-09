@@ -2703,7 +2703,7 @@ async function logout() {
       return;
     }
     state.logoutError = "Sign-out could not be completed";
-    state.profileDialog = true;
+    state.profileDialog = !!state.home;  // the failed page has no dialog: the flash below says it
     if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
   }
@@ -3383,7 +3383,8 @@ document.addEventListener("click", (event) => { if (event.target.closest?.('a[hr
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
-  if (!state.home) { state.flash = null; await refresh(); return; }  // the failed page: no route loads without the home
+  // The failed page: no route loads without the home, so try it again, keeping an imprint link's code for its preview.
+  if (!state.home) { takeImprintCode(); state.flash = null; await refresh(); return; }
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;

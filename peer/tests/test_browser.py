@@ -2115,7 +2115,13 @@ def test_a_home_that_wont_open_says_so_and_tries_again(browser_peer, fails):
             expect(page.get_by_role("button", name="Try again", exact=True)).to_be_enabled()
             expect(page.get_by_role("button", name="Try again", exact=True)).to_be_focused()
             expect(page.locator("#main-content")).to_contain_text(said)
+            before = len(asked)
             page.evaluate("location.hash = 'layers'")  # a route on the failed page tries the home again, never a script error
+            for _ in range(100):
+                if len(asked) > before:
+                    break
+                page.wait_for_timeout(50)
+            assert len(asked) == before + 1
             expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
             expect(page.locator("#main-content")).to_contain_text(said)
             expect(page.locator("#main-content")).not_to_contain_text("Cannot")
@@ -2141,6 +2147,30 @@ def test_a_sign_out_that_fails_on_a_home_that_wont_open_says_so(browser_peer):
             page.unroute("**/api/logout")
             page.get_by_role("button", name="Sign out", exact=True).click()
             expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+
+
+def test_an_imprint_link_opened_on_a_home_that_wont_open_keeps_its_code(browser_peer):
+    """The second re-check's S1: an imprint confirm link opened in the failed page's tab kept its code until the home
+    answered, then lost it when a route on that page began trying the home again. Now the code is taken first, and once
+    the home answers, Try again asks for the imprint's preview."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", lambda route: route.abort("failed"))
+            page.goto(page.url.split("#")[0])
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            previews = []
+            page.on("request", lambda request: previews.append(request.url) if "/api/imprints/code/" in request.url else None)
+            page.evaluate("location.hash = 'imprint?code=abc123'")
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            page.wait_for_function("() => !location.hash.startsWith('#imprint?')")  # taken from the address bar
+            page.unroute("**/api/home")
+            page.get_by_role("button", name="Try again", exact=True).click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            for _ in range(100):
+                if previews:
+                    break
+                page.wait_for_timeout(50)
+            assert any(url.endswith("/api/imprints/code/abc123") for url in previews), previews
 
 
 def test_a_failed_send_is_said_again_when_the_chats_link_closes_the_room_on_a_phone(browser_peer):
