@@ -2038,8 +2038,16 @@ function closeDialogs() {
   render();
 }
 
+// Signed in, but the home's own data didn't load: refresh's catch set an error flash, and with no state.home nothing below
+// can draw. Say so where "Opening this home…" stood, with a way to try again or sign out, instead of leaving the opening
+// note up with no message (a reader's finding 3, all hands 08929c34).
+function openFailedPage(message) {
+  return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
+}
+
 function render() {
-  if (!state.me || !state.home) return;
+  if (!state.me) return;
+  if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
   const route = routeParts().route;
   const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, apps: connectedAppsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
@@ -2695,7 +2703,8 @@ async function logout() {
       return;
     }
     state.logoutError = "Sign-out could not be completed";
-    state.profileDialog = true;
+    state.profileDialog = !!state.home;  // the failed page has no dialog: the flash below says it
+    if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
   }
 }
@@ -2889,6 +2898,13 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (target.closest("section.editor") && refuseWhileSwitching()) return;
+  if (action === "retry-open") {  // openFailedPage's: the old reason goes, so a second failure is the only one shown
+    if (target.disabled) return;
+    target.disabled = true; state.flash = null;
+    await refresh();
+    if (!state.home) app.querySelector('[data-action="retry-open"]')?.focus();  // failed again: focus stays on the way out
+    return;
+  }
   if (action.startsWith("research-")) { await Research.action(target); return; }
   if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
@@ -3367,6 +3383,8 @@ document.addEventListener("click", (event) => { if (event.target.closest?.('a[hr
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
+  // The failed page: no route loads without the home, so try it again, keeping an imprint link's code for its preview.
+  if (!state.home) { takeImprintCode(); state.flash = null; await refresh(); return; }
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;

@@ -2082,6 +2082,97 @@ def test_a_page_opened_behind_a_sign_in_page_doesnt_take_it_for_the_person(brows
             assert page.evaluate("state.me") is None
 
 
+@pytest.mark.parametrize("fails", ["an error", "a lost connection"])
+def test_a_home_that_wont_open_says_so_and_tries_again(browser_peer, fails):
+    """/api/me answers and /api/home doesn't: render returned early on the missing home, so a signed-in person stayed on
+    "Opening this home…" with no message (a reader's finding 3, all hands 08929c34). Now the page says the home didn't
+    open and why, Try again opens it once the home answers, and Sign out is there if it never does."""
+    def fail(route):
+        if fails == "an error":
+            route.fulfill(status=500, content_type="application/json", body='{"error": "This home could not read its data."}')
+        else:
+            route.abort("failed")
+    said = "This home could not read its data." if fails == "an error" else "Connection lost. Try again when this home is reachable."
+    asked = []
+    def count_and_fail(route):
+        asked.append(route.request.url)
+        fail(route)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", count_and_fail)
+            page.goto(page.url.split("#")[0])
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            expect(page.locator("#main-content")).to_contain_text(said)
+            expect(page.get_by_text("Opening this home…")).to_have_count(0)
+            expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
+            before = len(asked)
+            page.get_by_role("button", name="Try again", exact=True).click()  # still failing: it asks again and says so again
+            for _ in range(100):
+                if len(asked) > before:
+                    break
+                page.wait_for_timeout(50)
+            assert len(asked) == before + 1
+            expect(page.get_by_role("button", name="Try again", exact=True)).to_be_enabled()
+            expect(page.get_by_role("button", name="Try again", exact=True)).to_be_focused()
+            expect(page.locator("#main-content")).to_contain_text(said)
+            before = len(asked)
+            page.evaluate("location.hash = 'layers'")  # a route on the failed page tries the home again, never a script error
+            for _ in range(100):
+                if len(asked) > before:
+                    break
+                page.wait_for_timeout(50)
+            assert len(asked) == before + 1
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            expect(page.locator("#main-content")).to_contain_text(said)
+            expect(page.locator("#main-content")).not_to_contain_text("Cannot")
+            page.evaluate("location.hash = 'home'")
+            expect(page.locator("#main-content")).to_contain_text(said)
+            page.unroute("**/api/home")
+            page.get_by_role("button", name="Try again", exact=True).click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            expect(page.locator("#app")).not_to_contain_text(said)  # the announcer outside it keeps its last words
+
+
+def test_a_sign_out_that_fails_on_a_home_that_wont_open_says_so(browser_peer):
+    """The re-check's S1: with the home unreachable, Sign out's failure set a flag only the account dialog shows, and
+    the failed page has no dialog, so nothing was said. Now the page says sign-out couldn't be completed, and why."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", lambda route: route.abort("failed"))
+            page.goto(page.url.split("#")[0])
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            page.route("**/api/logout", lambda route: route.abort("failed"))
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.locator("#main-content")).to_contain_text("Sign-out could not be completed. Connection lost.")
+            page.unroute("**/api/logout")
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+
+
+def test_an_imprint_link_opened_on_a_home_that_wont_open_keeps_its_code(browser_peer):
+    """The second re-check's S1: an imprint confirm link opened in the failed page's tab kept its code until the home
+    answered, then lost it when a route on that page began trying the home again. Now the code is taken first, and once
+    the home answers, Try again asks for the imprint's preview."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", lambda route: route.abort("failed"))
+            page.goto(page.url.split("#")[0])
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            previews = []
+            page.on("request", lambda request: previews.append(request.url) if "/api/imprints/code/" in request.url else None)
+            page.evaluate("location.hash = 'imprint?code=abc123'")
+            expect(page.get_by_role("heading", name="This home didn't open", exact=True)).to_be_visible()
+            page.wait_for_function("() => !location.hash.startsWith('#imprint?')")  # taken from the address bar
+            page.unroute("**/api/home")
+            page.get_by_role("button", name="Try again", exact=True).click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            for _ in range(100):
+                if previews:
+                    break
+                page.wait_for_timeout(50)
+            assert any(url.endswith("/api/imprints/code/abc123") for url in previews), previews
+
+
 def test_a_failed_send_is_said_again_when_the_chats_link_closes_the_room_on_a_phone(browser_peer):
     """On a phone the Chats link is the way between rooms, and it takes the status at the box away with the room."""
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
