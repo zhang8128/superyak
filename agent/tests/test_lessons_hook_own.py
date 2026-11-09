@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import time
+import threading
 
 import pytest
 
@@ -413,3 +414,71 @@ def test_many_planted_hits_in_one_line_are_linear(tmp_path):
     assert lh.last_boundary(str(path), begun - 1) is None  # past the deadline: it returns at once
     for window in (64, 1000):  # and across chunk edges
         assert lh.last_boundary(str(path), float('inf'), window=window) == len(head.encode())
+
+
+
+def test_a_compact_start_reads_no_tail_so_a_late_boundary_hides_nothing(rail):
+    rail.flag('count-receipts')
+    rail.answers(lesson(A, ship='serenity'), kind='failure')
+    assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure()) == [A]
+    rail.shown_at_prompt(lesson(B, ship='serenity'))  # shown at a prompt in the window that just ended
+    boundary(rail)  # the previous boundary: the new one is not on disk yet
+    rail.shown_at_prompt(lesson(B, ship='serenity'))
+    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='start')
+    assert rail.run('SessionStart', source='compact', cwd=str(rail.root)) == [A, B]
+    sent = rail.sent()[-1]
+    assert sent['window_seen'] == [] and A in sent['seen'] and B in sent['seen']
+    assert (rail.data / 'receipts.txt').read_text().split() == [A]  # reminders: no new receipt
+
+
+def test_an_old_peer_filters_a_prompt_by_the_window(rail):
+    """The stub reads only `seen`, as main's read_request does: the prompt sends the window's ids as both keys."""
+    (rail.data / 'ignore-window').touch()
+    rail.shown_at_prompt(lesson(A, ship='serenity'))
+    compact(rail)
+    rail.shown_at_prompt(lesson(B, ship='serenity'))
+    rail.answers(lesson(A, ship='serenity'), lesson(B, ship='serenity'), kind='prompt')
+    assert rail.run('UserPromptSubmit', prompt='p') == [A]  # B is the window's; A is a reminder
+
+
+def test_a_concurrent_reminder_shows_once_a_window_through_run(rail, monkeypatch):
+    """The re-check's S1, through `run`: after a compaction, two failures with different commands both read the record
+    and ask before either records, and the peer answers each the same reminder A. It shows once in the window."""
+    rail.answers(lesson(A, ship='serenity'), kind='failure')
+    assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure('ls one')) == [A]
+    compact(rail)
+    assert record(rail)['shown'] == [A] and record(rail)['window_shown'] == []
+    real_ask, barrier = lh.ask, threading.Barrier(2)
+
+    def held_ask(*args, **kwargs):
+        got = real_ask(*args, **kwargs)
+        barrier.wait(timeout=5)  # both have read the record and asked before either records
+        return got
+    monkeypatch.setattr(lh, 'ask', held_ask)
+    out = {}
+    threads = [threading.Thread(target=lambda c=c: out.__setitem__(c, rail.run('PostToolUseFailure', cwd=str(rail.root),
+                                                                                **failure(c)))) for c in ('ls two', 'ls three')]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(out) == 2 and [v for v in out.values() if v] == [[A]], out
+
+
+def test_the_boundary_search_is_quick_at_a_small_window_and_checks_the_clock_inside(tmp_path):
+    """The re-check's N1: S2's two lines pinned. At a 64-byte window the planted line is parsed once (without the
+    resume before the line's start it took 3.5 s), and a clock that runs out after the first chunk ends the search."""
+    plant = json.dumps({'type': 'assistant', 'isSidechain': False, 'message': {'content': [{'type': 'tool_use',
+        'name': 'X', 'input': {'items': [{'type': 'system', 'subtype': 'compact_boundary'}] * 3000}}]}}, separators=(',', ':'))
+    head = json.dumps({'type': 'user'}) + '\n' + BOUNDARY + '\n'
+    path = tmp_path / 't.jsonl'
+    path.write_text(head + plant + '\n')
+    begun = time.monotonic()
+    assert lh.last_boundary(str(path), float('inf'), window=64) == len(head.encode())
+    assert time.monotonic() - begun < 0.150
+    calls = []
+
+    def runs_out():  # the deadline holds for the first check only
+        calls.append(1)
+        return 0.0 if len(calls) == 1 else 10.0
+    assert lh.last_boundary(str(path), 1.0, window=64, monotonic=runs_out) is None
