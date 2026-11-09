@@ -526,7 +526,9 @@ static int loop_free(Ctx *ctx, const Host *h)
                 int32_t e = cl[c];
                 if (h->dim[e] != i) continue;
                 if (nedges + 2 > cap_edges) {
-                    if (over_budget(ctx, (int64_t)cap_edges * 2 * (int64_t)sizeof(int32_t))) { result = NCAT_EBUDGET; break; }
+                    if (cap_edges > (size_t)INT32_MAX / 2) { result = NCAT_ETOOBIG; break; }  /* head and nextedge index edges as int32 */
+                    /* both arrays at their new size, whole: they're the call's own, beside what the category holds */
+                    if (over_budget(ctx, (int64_t)cap_edges * 2 * 2 * (int64_t)sizeof(int32_t))) { result = NCAT_EBUDGET; break; }
                     cap_edges *= 2;
                     int32_t *nf = realloc(from, sizeof(int32_t) * cap_edges), *nt = realloc(to, sizeof(int32_t) * cap_edges);
                     if (nf) from = nf;
