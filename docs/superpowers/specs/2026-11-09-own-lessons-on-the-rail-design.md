@@ -87,7 +87,9 @@ an own lesson matches by the rule that event uses for others' lessons, through t
   then answers reminders only (see the rule above).
 
 `seen` stays as today at the 2-second events: the session's `shown` and the whole transcript's ids. The peer uses it
-only to decide receipts. At a prompt, no receipt is written, so the request sends `window_seen` alone.
+only to decide receipts. At a prompt, no receipt is written, so the request sends the window's ids as both
+`window_seen` and `seen`. The new peer loses nothing by it, and an old peer, reached only through a settings `query`
+that names another checkout, then filters by the window as the new one does.
 
 **The answer** gains `own`, after `lessons`, only when it isn't empty: a list of entries with the keys a lesson's entry
 has, never a `receipt`. A reminder in `lessons` carries no `receipt` either. The fit is measured on the exact bytes
