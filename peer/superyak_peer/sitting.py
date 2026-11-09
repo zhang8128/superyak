@@ -23,8 +23,10 @@ OLD_HISTORY_BASE = '60dd85175a1709627be63a4678694029c5721b74'
 FIRST_UNIT = 'superyak-lighthouse'
 OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormhole')
 # Restarted and checked when installed and running here, left alone otherwise: a station need not federate or embed,
-# and a stopped unit stays stopped (train 1102d restarted these by hand).
-OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder')
+# and a stopped unit stays stopped (train 1102d restarted these by hand). The publisher serves recalls to other
+# lighthouses from this checkout's engram code, after the embedder it may ask (train 1109 went public on Nov 4's code).
+OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder', 'superyak-engram-publisher')
+ENGRAM_UNITS = {'superyak-embedder': 'the embedder', 'superyak-engram-publisher': 'the publisher'}  # on engram/.venv
 # The connector isn't deployed (a person's act), so its routes stay closed on the public host.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
@@ -190,8 +192,11 @@ class Sitting:
     def locked_inputs_changed(self, old, commit):
         return bool(self.git('diff', '--name-only', old, commit, '--', *LOCKED_INPUTS, check=False))
 
+    def engram_units(self):
+        return [ENGRAM_UNITS[name] for name in self.optional if name in ENGRAM_UNITS]
+
     def engram_inputs_changed(self, old, commit):
-        return 'superyak-embedder' in self.optional and bool(
+        return bool(self.engram_units()) and bool(
             self.git('diff', '--name-only', old, commit, '--', *ENGRAM_INPUTS, check=False))
 
     def sync(self, engram=False):
@@ -285,7 +290,9 @@ class Sitting:
         if self.locked_inputs_changed(old, commit):
             self.note('  the train changes peer\'s lock inputs: the sitting runs uv sync before the restart')
         if self.engram_inputs_changed(old, commit):
-            self.note('  the train changes engram\'s lock inputs: the sitting syncs engram before the embedder restarts')
+            units = self.engram_units()
+            self.note(f'  the train changes engram\'s lock inputs: the sitting syncs engram before {" and ".join(units)} '
+                      + ('restarts' if len(units) == 1 else 'restart'))
         if self.dry_run:
             self.note('SITTING: dry run, nothing changed')
             return 0
