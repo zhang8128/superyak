@@ -2704,6 +2704,7 @@ async function logout() {
     }
     state.logoutError = "Sign-out could not be completed";
     state.profileDialog = true;
+    if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
   }
 }
@@ -2901,6 +2902,7 @@ document.addEventListener("click", async (event) => {
     if (target.disabled) return;
     target.disabled = true; state.flash = null;
     await refresh();
+    if (!state.home) app.querySelector('[data-action="retry-open"]')?.focus();  // failed again: focus stays on the way out
     return;
   }
   if (action.startsWith("research-")) { await Research.action(target); return; }
@@ -3381,6 +3383,7 @@ document.addEventListener("click", (event) => { if (event.target.closest?.('a[hr
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
+  if (!state.home) { state.flash = null; await refresh(); return; }  // the failed page: no route loads without the home
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
