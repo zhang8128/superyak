@@ -122,6 +122,7 @@ py-modules = [
     "sharing",
     "sheaf",
     "sheaf_core",
+    "sheaf_native",
     "storage",
     "store_identity",
     "store_reader",
@@ -130,7 +131,7 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/engram" = ["context_chat.html"]
+"share/engram" = ["context_chat.html", "sheaf_kernel.cpp"]
 "share/engram/migrations" = ["migrations/*.sql"]
 "share/engram/prompts" = ["prompts/*.txt"]
 "share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]

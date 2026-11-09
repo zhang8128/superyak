@@ -33,6 +33,8 @@ DEFAULT_BUDGET_STEPS = 1_000_000
 EXPECT_TOL = 1e-9
 # eigh on the Laplacian squares the singular values, so it cannot honour a tolerance below this
 LAPLACIAN_TOL_FLOOR = 1e-6
+# a map's singular values at most this, times its largest, count as zero in its pseudo-inverse (section 2.3)
+PINV_TOL = 1e-12
 
 Route = tuple[tuple[int, int], ...]
 
@@ -288,7 +290,7 @@ def transport(F: VectorSheaf, route: Route) -> np.ndarray:
     T = np.eye(F.node_dim[start])
     for e, direction in route:
         near, far = (F.tail_maps[e], F.head_maps[e]) if direction == 1 else (F.head_maps[e], F.tail_maps[e])
-        T = (np.linalg.pinv(far) @ near) @ T
+        T = (np.linalg.pinv(far, rcond=PINV_TOL) @ near) @ T
     return T
 
 
@@ -573,11 +575,11 @@ def _same(got, want) -> bool:
     return False
 
 
-def check_file(path, **budgets) -> dict:
+def check_file(path, *, compute=None, **budgets) -> dict:
     """Compute a file's answers and compare them with its 'expect'. Never raises for a bad file: it reports."""
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
-        got = answers(doc, **budgets)
+        got = (compute or answers)(doc, **budgets)
     except SheafBudgetError as exc:
         return {"file": str(path), "status": "refused", "reason": str(exc)}
     except (SheafError, OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
@@ -606,10 +608,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     check.add_argument("--json", action="store_true", help="print one JSON report per line")
     check.add_argument("--budget-bytes", type=int, default=DEFAULT_BUDGET_BYTES)
     check.add_argument("--budget-steps", type=int, default=DEFAULT_BUDGET_STEPS)
+    check.add_argument("--native", action="store_true", help="compute with the C++ core instead of this module")
     args = parser.parse_args(argv)
+    compute = answers
+    if args.native:
+        import sheaf_native
+        compute = sheaf_native.answers
     worst = 0
     for path in args.files:
-        report = check_file(path, budget_bytes=args.budget_bytes, budget_steps=args.budget_steps)
+        report = check_file(path, compute=compute, budget_bytes=args.budget_bytes,
+                            budget_steps=args.budget_steps)
         status = report["status"]
         worst = max(worst, {"ok": 0, "computed": 0, "mismatch": 1}.get(status, 2))
         if args.json:
@@ -627,4 +635,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import sheaf_core  # run the importable module, so its exception classes are the ones other modules raise
+
+    sys.exit(sheaf_core.main())

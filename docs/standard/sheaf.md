@@ -66,6 +66,7 @@ length). An implementation reports:
 ### 2.3 Comparing two routes
 
 Crossing edge e from tail to head carries a vector by T = B(e)⁺ · A(e), where ⁺ is the Moore–Penrose pseudo-inverse.
+In forming M⁺, a singular value of M counts as zero when it is at most 10⁻¹² times M's largest.
 From head to tail it is A(e)⁺ · B(e). A route's **transport** is the product of its steps' matrices, the first step
 rightmost. The **holonomy** of a face is the transport along its first route minus the transport along its second.
 It is zero when the two routes carry data the same way. An implementation reports its Frobenius norm.
