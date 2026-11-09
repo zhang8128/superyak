@@ -366,11 +366,15 @@ def test_the_kernel_is_clean_under_address_and_undefined_behaviour_sanitizers(tm
     so = tmp_path / "sheaf-sanitized.so"
     subprocess.run([compiler, *flags, str(sn.SOURCE), "-o", str(so)], check=True, capture_output=True)
     linked = subprocess.run(["ldd", str(so)], capture_output=True, text=True).stdout
-    runtime = next((line.split("=>")[1].split()[0] for line in linked.splitlines()
-                    if "libasan" in line and "=>" in line), None)
-    if not runtime:
-        pytest.skip("could not find the AddressSanitizer runtime the build linked")
-    done = run_sanitized(so, {"LD_PRELOAD": runtime, "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=1",
+    def linked_path(name):
+        return next((line.split("=>")[1].split()[0] for line in linked.splitlines()
+                     if name in line and "=>" in line and line.split("=>")[1].strip().startswith("/")), None)
+    runtime, cxx = linked_path("libasan"), linked_path("libstdc++")
+    if not runtime or not cxx:
+        pytest.skip("could not find the AddressSanitizer and C++ runtimes the build linked")
+    # Python doesn't link the C++ runtime, so it has to be loaded with the sanitizer, before the kernel is.
+    # Otherwise the sanitizer starts without a real __cxa_throw to wrap, and stops at the kernel's first throw.
+    done = run_sanitized(so, {"LD_PRELOAD": f"{runtime} {cxx}", "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=1",
                               "UBSAN_OPTIONS": "halt_on_error=1"})
     assert done.returncode == 0 and "sanitized ok" in done.stdout, done.stdout[-2000:] + done.stderr[-4000:]
 
