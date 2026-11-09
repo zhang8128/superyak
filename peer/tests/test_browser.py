@@ -2050,6 +2050,38 @@ def test_only_a_refusal_says_a_message_wasnt_sent(browser_peer, status, json, re
             expect(page.locator(".words-kept")).to_have_text(said_later)
 
 
+@pytest.mark.parametrize("answer", [
+    {"content_type": "text/html", "body": "<html><body>Sign in to this network</body></html>"},
+    {"content_type": "application/json", "body": '{"id": "cut sho'},
+], ids=["a sign-in page", "cut short"])
+def test_a_200_that_isnt_the_homes_answer_doesnt_read_as_sent(browser_peer, answer):
+    """A proxy or a sign-in page can answer 200 with no JSON, and an answer can be cut short. Neither is a yes, and the box was once emptied."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            box = page.get_by_role("textbox", name="Message", exact=True)
+            box.fill("Meant for X")
+            page.route(f"**/api/chats/{x['id']}/messages", lambda route: route.fulfill(status=200, **answer)
+                       if route.request.method == "POST" else route.fallback())
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_have_text(
+                "Connection lost. It may have reached the room anyway. Your message is still here.")
+            expect(box).to_have_value("Meant for X")
+            assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "Meant for X"
+
+
+@pytest.mark.parametrize("asked", ["**/api/**", "**/api/me"], ids=["every question", "who's signed in"])
+def test_a_page_opened_behind_a_sign_in_page_doesnt_take_it_for_the_person(browser_peer, asked):
+    """A 200 page in the way isn't anyone, whether it answers everything or only the question of who's signed in."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route(asked, lambda route: route.fulfill(status=200, content_type="text/html", body="<p>Sign in to this network</p>"))
+            page.goto(page.url.split("#")[0])
+            expect(page.get_by_text("Connection lost. Try again when this home is reachable.")).to_be_visible()
+            assert page.evaluate("state.me") is None
+
+
 def test_a_failed_send_is_said_again_when_the_chats_link_closes_the_room_on_a_phone(browser_peer):
     """On a phone the Chats link is the way between rooms, and it takes the status at the box away with the room."""
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
