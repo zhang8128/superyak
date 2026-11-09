@@ -3,8 +3,8 @@
 import fcntl
 import json
 import os
-import time
 import threading
+import time
 
 import pytest
 
@@ -416,7 +416,6 @@ def test_many_planted_hits_in_one_line_are_linear(tmp_path):
         assert lh.last_boundary(str(path), float('inf'), window=window) == len(head.encode())
 
 
-
 def test_a_compact_start_reads_no_tail_so_a_late_boundary_hides_nothing(rail):
     rail.flag('count-receipts')
     rail.answers(lesson(A, ship='serenity'), kind='failure')
@@ -467,7 +466,8 @@ def test_a_concurrent_reminder_shows_once_a_window_through_run(rail, monkeypatch
 
 def test_the_boundary_search_is_quick_at_a_small_window_and_checks_the_clock_inside(tmp_path):
     """The re-check's N1: S2's two lines pinned. At a 64-byte window the planted line is parsed once (without the
-    resume before the line's start it took 3.5 s), and a clock that runs out after the first chunk ends the search."""
+    resume before the line's start it took 3.5 s), and a clock that runs out after the first check ends the search: at the default window the outer check runs once,
+    so only the check before each parse can stop it."""
     plant = json.dumps({'type': 'assistant', 'isSidechain': False, 'message': {'content': [{'type': 'tool_use',
         'name': 'X', 'input': {'items': [{'type': 'system', 'subtype': 'compact_boundary'}] * 3000}}]}}, separators=(',', ':'))
     head = json.dumps({'type': 'user'}) + '\n' + BOUNDARY + '\n'
@@ -481,4 +481,4 @@ def test_the_boundary_search_is_quick_at_a_small_window_and_checks_the_clock_ins
     def runs_out():  # the deadline holds for the first check only
         calls.append(1)
         return 0.0 if len(calls) == 1 else 10.0
-    assert lh.last_boundary(str(path), 1.0, window=64, monotonic=runs_out) is None
+    assert lh.last_boundary(str(path), 1.0, monotonic=runs_out) is None
