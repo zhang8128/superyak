@@ -138,8 +138,12 @@ does. If they're in the session lists but not the window's, it asks with `reask:
   229 MiB. A second call, `transcript_ids(path, deadline, start=offset)`, reads the tail for `window_seen`, about 1 ms.
   One scan can't split the ids, since `transcript_ids` keeps each id's first appearance only: a lesson shown in window
   1 and again in window 2 would sit before the boundary.
-- **Late boundary.** If the boundary record is written after the compact SessionStart runs, that one event reads the
-  previous window's tail. It shows less, which is safe.
+- **At a compact SessionStart, no tail.** There `window_seen` is only the window lists just cleared, and the hook
+  doesn't read the transcript's tail. In Rio Grande's last three compactions, the boundary record was stamped 230 to
+  240 ms before the SessionStart hooks started, and nothing shows it's on disk by then. If it weren't, `last_boundary`
+  would find the previous boundary. The tail would then be the whole window that just ended, and every reminder would
+  be lost at the moment it matters most. The cost: a lesson the summary or a preserved message already quotes shows
+  once more, as a reminder with no receipt. Every other event reads the tail as written.
 
 **Finding the boundary.**
 - **Backward, in 4 MiB chunks** with an overlap, checking the deadline between chunks. No single call scans the whole
@@ -229,6 +233,8 @@ at a prompt, and it covers only the 14 days a record lives (`STATE_DAYS`).
   and never in Rio Grande's `own`, and the hold never holds on it in the session.
 - **A planted boundary.** A `tool_use` input holding `{"type":"system","subtype":"compact_boundary"}` after the real
   last boundary doesn't move the window, and an id shown between the two stays seen.
+- **No tail at a compact SessionStart.** With the new boundary record not yet written, a lesson shown in the window
+  that just ended shows again at the compact SessionStart, as a reminder with no receipt.
 - **The search is bounded.** With `windows` 1 and no boundary in a large transcript, the search checks the deadline
   between chunks, and past it the event adds nothing.
 - **Per-event rules.** An own lesson with only a 4-byte `command` value matches after a failure and never at a prompt.
