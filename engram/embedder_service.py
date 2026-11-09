@@ -236,9 +236,14 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         if not isinstance(prefix, str):
             return {"ok": False, "error": "prefix must be a string"}
         remaining = request.get("remaining_ms")
-        if remaining is not None and (isinstance(remaining, bool) or not isinstance(remaining, (int, float))
-                                      or not math.isfinite(remaining) or remaining < 0):
-            return {"ok": False, "error": "remaining_ms must be a finite, non-negative number of milliseconds"}
+        if remaining is not None:
+            try:  # float() of an int past about 309 digits raises OverflowError: the same refusal
+                remaining = None if isinstance(remaining, bool) or not isinstance(remaining, (int, float)) \
+                    else float(remaining)
+            except OverflowError:
+                remaining = None
+            if remaining is None or not math.isfinite(remaining) or remaining < 0:
+                return {"ok": False, "error": "remaining_ms must be a finite, non-negative number of milliseconds"}
         deadline = None if remaining is None else arrived + remaining / 1000
         if not texts:
             return {**info, "vectors": []}
@@ -257,8 +262,8 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
                 with self.lane.batch_request() as ticket:
                     vectors = self._embed_units(texts, prefix, units, ticket, deadline)
         except _Expired as expired:
-            logger.info("dropped an expired %s request: %s of %d texts embedded, %.0f ms after it arrived "
-                        "with %.0f ms left", "query" if prefix == QUERY_PREFIX else "batch", expired,
+            logger.info("dropped an expired %s request: %d of %d texts embedded, %.0f ms after it arrived "
+                        "with %.0f ms left", "query" if prefix == QUERY_PREFIX else "batch", expired.args[0],
                         len(texts), (monotonic() - arrived) * 1000, remaining)
             return dict(EXPIRED)
         return {**info, "vectors": vectors}

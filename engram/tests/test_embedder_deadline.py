@@ -67,12 +67,22 @@ def _wait_for(condition):
 
 def test_a_request_with_no_deadline_runs_to_the_end_as_before(socket_dir, clock):
     provider = UnitProvider(unit_size=1)
-    server = _serve(socket_dir / "e.sock", provider)
+    provider.gate = threading.Event()
+    path = socket_dir / "e.sock"
+    server = _serve(path, provider)
     try:
+        answer = []
+        batch = threading.Thread(target=lambda: answer.append(_ask(path, {"op": "embed", "texts": ["a", "b"]})),
+                                 daemon=True)
+        batch.start()
+        assert provider.entered.wait(5)  # its first unit is running
         clock.now += 10_000  # however long it takes, a request with no deadline never expires
-        answer = _ask(socket_dir / "e.sock", {"op": "embed", "texts": ["a", "b"]})
-        assert answer["ok"] is True and answer["vectors"] == [_vector("a"), _vector("b")]
+        provider.gate.set()
+        batch.join(5)
+        assert answer[0]["ok"] is True and answer[0]["vectors"] == [_vector("a"), _vector("b")]
+        assert [texts for texts, _ in provider.calls] == [["a"], ["b"]]
     finally:
+        provider.gate.set()
         server.shutdown()
         server.server_close()
 
@@ -153,7 +163,7 @@ def test_a_request_that_arrives_with_no_time_left_runs_nothing(socket_dir, clock
         server.server_close()
 
 
-@pytest.mark.parametrize("value", [-1, "500", True, float("nan"), float("inf"), [500], {"ms": 500}])
+@pytest.mark.parametrize("value", [-1, "500", True, float("nan"), float("inf"), 10**400, [500], {"ms": 500}])
 def test_a_deadline_that_isnt_a_finite_non_negative_number_is_refused(value):
     server = EmbedderServer.__new__(EmbedderServer)  # respond() needs only a provider and a lane
     server.provider, server.model_name, server.lane = UnitProvider(), UnitProvider.MODEL_NAME, embedder_service._Lane()
