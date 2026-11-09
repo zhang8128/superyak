@@ -71,6 +71,16 @@ From head to tail it is A(e)⁺ · B(e). A route's **transport** is the product 
 rightmost. The **holonomy** of a face is the transport along its first route minus the transport along its second.
 It is zero when the two routes carry data the same way. An implementation reports its Frobenius norm.
 
+### 2.4 The maps carry the meaning
+
+With identity maps everywhere, H⁰ and H¹ depend only on the graph's shape, and gluing only asks whether the numbers
+are equal. Three known answers show what real maps add, on the same three stores holding the same data:
+[identity maps](sheaf-known-answers/vector-frames-identity.json) report a disagreement on every edge;
+[maps that turn one store's coordinates into another's](sheaf-known-answers/vector-frames-aligned.json) show the
+stores agree; and [maps that are each reasonable and do not compose](sheaf-known-answers/vector-frames-inconsistent.json)
+leave no global section at all, with the fault visible on a single edge. This page does not say where maps come
+from. A use of the standard must.
+
 ## 3. A sheaf of finite sets
 
 It assigns:

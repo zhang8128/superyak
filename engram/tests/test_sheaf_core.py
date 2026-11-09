@@ -19,7 +19,7 @@ KNOWN = sorted((ENGRAM.parent / "docs" / "standard" / "sheaf-known-answers").glo
 # ---------------------------------------------------------------- the standard's known answers
 
 def test_known_answers_are_present():
-    assert len(KNOWN) >= 13
+    assert len(KNOWN) >= 16
     assert {json.loads(p.read_text())["kind"] for p in KNOWN} == {"vector", "set"}
 
 

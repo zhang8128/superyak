@@ -1,0 +1,72 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Three stores hold the same thing, each in its own coordinates: b's are a's turned a quarter, c's a half. Compared with identity maps, the three look as if they disagree on every edge. Nothing here reads the data's frames.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "local": {
+  "a": [
+   1,
+   0
+  ],
+  "b": [
+   0,
+   1
+  ],
+  "c": [
+   -1,
+   0
+  ]
+ },
+ "expect": {
+  "dim_h0": 2,
+  "dim_h1": 2,
+  "glued": false,
+  "residual_edges": [
+   0,
+   1,
+   2
+  ],
+  "residuals": [
+   1.4142135623730951,
+   1.4142135623730951,
+   2
+  ],
+  "distance_squared": 2.6666666666666665
+ }
+}
