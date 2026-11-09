@@ -1,9 +1,10 @@
 # What a person downloads
 
-Draft 2, 2026-11-09, Tardis. Board: `spec:what-a-person-downloads` (all hands). For the fresh Pi reader's scoped
-re-check (law section 3); Andy can veto. Built from goal 2's baseline (`docs/measures/goal-2.md`, on
-`tardis/goal-2-baseline`), Rio Grande's two points and doubt (city of AI, a57230dc), and the reader's APPROVE WITH
-CHANGES of draft 1 (0a4546eb). A table at the end maps every finding.
+Draft 3, final, 2026-11-09, Tardis. Board: `spec:what-a-person-downloads` (all hands). Approved by the fresh Pi
+reader's scoped re-check of draft 2 (707c60d5), with its four shoulds and seven notes written in here and no further
+read needed (law section 3); Andy can veto. Built from goal 2's baseline (`docs/measures/goal-2.md`, on
+`tardis/goal-2-baseline`), Rio Grande's two points and doubt (city of AI, a57230dc), the reader's APPROVE WITH
+CHANGES of draft 1 (0a4546eb), and its re-check of draft 2 (707c60d5). Tables at the end map every finding.
 
 **Depends on** `tardis/goal-2-baseline` merging first: it holds `scripts/first_paint_timing.py` and
 `docs/measures/goal-2.md`, which this spec measures with.
@@ -41,6 +42,16 @@ load after the first fetches only the 2,203-byte page and the answers it asks fo
   in `PUBLIC_ROUTES`. `/`, `/public/` and `/assets/index.html` serve the rewritten `index.html`. `/assets/consent.html`
   serves the rewritten `consent.html`. Names are looked up by exact key, with no normalization: `x/../app.js`,
   `//app.js` and `%61pp.js` are 404s, where StaticFiles served `app.js` for each.
+- **The key is `raw_path`.** Starlette gives a mounted app the percent-decoded `path`, so `/assets/%61pp.js` arrives as
+  `/assets/app.js`, and only `raw_path` keeps what was sent. The key is `raw_path` with `/assets/` removed, for the
+  in-memory app and for the middleware's cache check alike. A request with no `raw_path` gets a 404.
+- **The directory is an argument.** `create_app` takes the static directory, `STATIC_DIR` by default. Tests pass a
+  temporary copy, and no test writes under the package. The live peer on the Pi serves `static/` from the checkout the
+  suites run in, so a test writing there would serve its bytes to visitors during a run.
+- **Built once per directory per process.** A table build takes 14.5 ms on the Pi. Across about 2,270 tests that each
+  call `create_app`, that would add half a minute or more to a run, so the table is cached per directory.
+- **One change for whoever edits the app by hand:** under `make home-demo` or `serve`, an edit to `app.js` shows only
+  after a restart. No test, script or make target writes under `static/`.
 - **Why not from disk.** The live peer runs from the checkout a merge updates. Between a merge and its restart, and again
   after a law-2 revert, the disk holds other bytes than the ones read at start. Served from disk, new bytes would go out
   as immutable under an old hash, and a revert would pin a visitor to the wrong script for a year. A test overwrites a
@@ -62,21 +73,26 @@ never carries `Set-Cookie`. `door.py` and `listener.py`, which set their own `no
 **3. Every response carries the security headers, refusals included.** On main, BrowserBoundary's own 403s (an unknown
 Host, a write with no Origin) and its 413 go out on the raw `send`, and the 500 handler runs outside it. None of them
 carries `nosniff`, the CSP, `no-referrer` or `no-store`. This build sends them through the same headers, so "every
-response carries them" becomes true, and a test checks each of the four.
+response carries them" becomes true, and a test checks each of the four. "Every response" means every answer the app
+gives: uvicorn's own 400s for malformed HTTP never reach the app.
 
 **4. Compression, for `.js` and `.css` assets only.**
-- **Choosing.** The request's `Accept-Encoding` is parsed as a list of tokens, case-insensitively. `gzip` is chosen when
-  it appears with no `q`, or with a `q` above 0. `gzip;q=0` means no.
+- **Choosing.** The request's `Accept-Encoding` is parsed as a list of tokens, case-insensitively, allowing spaces around
+  `;` and `=` and a capital `Q`. `gzip` is chosen when it appears with no `q`, or with a `q` above 0. `gzip;q=0` means
+  no. A `q` that isn't an RFC 9110 qvalue counts as 0 and never raises, so `gzip;q=abc` from a stranger is a plain
+  answer, not a 500.
 - **The answer.** Gzip bytes with `Content-Encoding: gzip`, or the plain bytes. Either way it carries `Vary:
   Accept-Encoding`.
 - **ETags.** `"<hash>"` for the plain bytes and `"<hash>-gz"` for the gzip ones. `If-None-Match` is compared with the
-  ETag of the variant this request's `Accept-Encoding` selects. A 304 carries that ETag, `Vary`, and the same
-  `cache-control` the 200 would.
+  ETag of the variant this request's `Accept-Encoding` selects, as a whole header. A 304 carries that ETag, `Vary`, and
+  the same `cache-control` the 200 would. A weak `W/"..."`, a list or `*` doesn't match, and gets a 200. That's
+  intended, and safe.
 - **Ranges.** `Range` is ignored on every asset: a whole 200, with no `Accept-Ranges`.
 - **HEAD** gives each variant's headers and its `Content-Length`, with no body.
 - **The real path.** tailscaled's proxy might add gzip to a request that carries none and decode the answer itself,
-  which would leave plain bytes under the gzip ETag. The build checks this through Funnel and the tailnet with no
-  `Accept-Encoding` sent, and reports what it found.
+  which would leave plain bytes under the gzip ETag. Those are the right bytes for that client, and its revalidation
+  goes back through the same proxy, so the ETag still matches. The build checks this through Funnel and the tailnet with
+  no `Accept-Encoding` sent, and reports what it found.
 - **Nothing else is compressed.** That covers every response except a `.js` or `.css` asset: the pages, `consent.html`,
   `/api/`, `/authorize`, `/token`, `/mcp`, `.well-known`, `/public/layers/.../files/...`, and errors. `/api/me` carries
   `csrf_token`, and answers echo text a visitor typed. Compressing a secret beside chosen text over TLS is the BREACH
@@ -96,13 +112,23 @@ partner's yes before it lands. What the reader should check:
 ## Measures, before and after
 
 **`scripts/first_paint_timing.py`** gains:
-- `--warm`: a second load in the same browser context, with its cache and connection kept;
-- a form-visible time: when `#login-form` appears, measured from the navigation's start;
+- `--warm`: a second load in the same browser context, with its cache and connection kept, reporting its own bytes;
+- a form-visible time: an init script's MutationObserver takes `performance.now()` when `#login-form` is attached, so
+  it's noted in the page, not by polling after `load`;
 - a default of 50 loads per path, since at 10 the p95 is the slowest single load.
 
+It uses no Playwright route: routing turns the browser's HTTP cache off, and a warm load then fetches every asset again.
+
 Before this build, the baseline is taken again that way, cold and warm, tailnet and Funnel, with the hour recorded.
-After the build, the same runs are taken at a similar hour. **The goal is met** when the Funnel p95 of first paint is
-under 600 ms, cold and warm. The form-visible time says whether gzip helped a visitor.
+After the build, the same runs are taken at a similar hour.
+
+**What judges the build** is what it's built to change:
+- **cold bytes,** about 76,000, down from 276 KB;
+- **warm bytes,** the page and its API answers only;
+- **the form-visible time, cold,** through Funnel and the tailnet.
+
+Goal 2's first-paint line, a Funnel p95 under 600 ms cold and warm, is reported beside them as status. First paint waits
+only for the page and `app.css`, so its p95 may already be under 600 ms before the build, and it can't judge the build.
 
 **Room read,** for Rio Grande's doubt (a57230dc): `scripts/room_read_timing.py` gains `--keep`, one curl process reading
 `--runs` times over one connection, reported beside today's fresh connection per read. Clients already get HTTP/2 on
@@ -112,8 +138,9 @@ The numbers go in `docs/measures/goal-2.md`.
 
 ## Tests
 
-- **The table.** A file overwritten after `create_app` changes no response. Start refuses a page that names a missing
-  file. `x/../app.js`, `//app.js` and `%61pp.js` are 404s.
+- **The table.** On a temporary copy passed to `create_app`, a file overwritten after `create_app` changes no response.
+  Start refuses a page that names a missing file. `x/../app.js`, `//app.js` and `%61pp.js` are 404s, through the real
+  `raw_path`. No test writes under the package's `static/`.
 - **References.** Each `/assets/` reference in the two pages carries its file's current hash. No file under `static/`
   except those two pages names another static file's basename, which catches `import './x.js'`, `url(x.woff2)` and
   `new Worker(...)`.
@@ -124,8 +151,10 @@ The numbers go in `docs/measures/goal-2.md`.
 - **Security headers everywhere.** `nosniff`, the CSP and `no-referrer` are on every response, as
   `test_public_route.py`'s `SECURITY` checks, including the unknown-Host 403, the no-Origin 403, the 413 and a 500.
 - **Compression.** With `Accept-Encoding: gzip`, a `.js` or `.css` asset comes gzipped, decompresses to the file's bytes,
-  and carries `Vary` and `"<hash>-gz"`. With none, or with `gzip;q=0`, the plain bytes and `"<hash>"`. No other response
-  ever has a `Content-Encoding`, whatever the request accepts: the routes listed above.
+  and carries `Vary` and `"<hash>-gz"`. The test reads the raw stream to check the bytes and `Content-Length`, since
+  httpx's TestClient decodes bodies. With none, or with `gzip;q=0`, `gzip;q=abc` or `GZIP ; Q=0`, the plain bytes and
+  `"<hash>"`. "With none" removes the header, since TestClient sends `gzip, deflate` by default. No other response ever
+  has a `Content-Encoding`, whatever the request accepts: the routes listed above.
 - **Conditional requests, ranges, HEAD.** `If-None-Match` with the selected variant's ETag gives a 304 with that ETag,
   `Vary` and the same `cache-control`. The other variant's ETag gives a 200. `Range` gives a whole 200 with no
   `Accept-Ranges`. HEAD gives each variant's headers and `Content-Length` with no body.
@@ -159,3 +188,19 @@ The numbers go in `docs/measures/goal-2.md`.
 | Should 5, measures | 50 loads per path, the hour, form visible, warm before and after. |
 | Should 6, dependency | `tardis/goal-2-baseline` merges first. |
 | Notes 1 to 7 | Standard-library sizes and `mtime=0`; HTTP/2 noted; content types pinned; `door.py` and `listener.py` untouched; no `Set-Cookie` on immutable; start refuses a missing file; consent settled. |
+
+## The re-check's findings on draft 2
+
+| Finding | Draft 3 |
+|---|---|
+| Should 1, the exact key | `raw_path` with `/assets/` removed, for the app and the middleware; none gives a 404. |
+| Should 2, the overwrite test | `create_app` takes the directory; tests use a temporary copy; none writes under the package. |
+| Should 3, warm and form-visible | No Playwright route; an init script's observer; warm loads report their own bytes. |
+| Should 4, what judges the build | Cold bytes, warm bytes and cold form-visible time; first paint's line reported as status. |
+| Note 1, `Accept-Encoding` | A bad `q` counts as 0 and never raises; spaces and capital `Q`; both cases tested. |
+| Note 2, `If-None-Match` | Whole-header compare; weak, list and `*` fall to a 200, as intended. |
+| Note 3, TestClient | "With none" removes the header; the gzip test reads the raw stream. |
+| Note 4, every response | Every answer the app gives; uvicorn's own 400s are outside it. |
+| Note 5, the proxy | Settled: report only. |
+| Note 6, the cost | Cached per directory per process. |
+| Note 7, start-only reads | Settled; the restart-to-see-an-edit change is said. |
