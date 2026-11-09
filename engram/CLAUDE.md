@@ -112,6 +112,7 @@ a `project` key in `context`, or an instance whose `[memory] default_lane = "wor
 compression review (summary `lane` override re-lanes source episodes). Lane filtering applies
 to the ranked candidate set before the margin and truncation, so a lane-filtered
 recall can fill `max_results` and its margin describes the returned lane.
+A recall kept to one lane leaves out `transfers` and `knowledge`, which are fed from both lanes and keep none.
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
 Config routing warns when it ignores unknown section keys or falls back after a
 parse error or missing instance store.

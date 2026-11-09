@@ -110,3 +110,21 @@ def test_a_recall_kept_to_one_lane_returns_no_transfers(engram_server_env, monke
     out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
     assert "transfers" not in out
     assert "a personal question" not in json.dumps(out)
+
+
+def test_a_recall_kept_to_one_lane_returns_no_knowledge(engram_server_env, monkeypatch):
+    """The knowledge graph is fed episodes from both lanes and keeps no lane, so its facts can quote either."""
+    _seed_two_lanes()
+
+    class Knowledge:
+        enabled = True
+
+        def search(self, query, num_results=10):
+            return {"facts": [{"id": "f1", "relationship": "a personal fact about rivers"}], "historical": []}
+
+    monkeypatch.setattr(server, "_knowledge_graph", Knowledge())
+
+    assert server.recall(query="rivers", max_results=2, uninvited=0)["knowledge"]  # the graph is wired, and an unkept recall still sees it
+    out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
+    assert "knowledge" not in out
+    assert "a personal fact" not in json.dumps(out)

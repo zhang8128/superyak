@@ -3369,9 +3369,10 @@ def recall(
         )
         _storage.conn.commit()
 
-    # Knowledge graph: entities and temporal facts
+    # Knowledge graph: entities and temporal facts. It's fed episodes from both lanes and keeps no lane, so a recall
+    # kept to one lane leaves it out, as it does transfers.
     knowledge = None
-    if _knowledge_graph is not None and _knowledge_graph.enabled:
+    if _knowledge_graph is not None and _knowledge_graph.enabled and lane is None:
         try:
             knowledge = _knowledge_graph.search(query)
         except Exception:
