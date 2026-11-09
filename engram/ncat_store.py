@@ -376,6 +376,9 @@ def main(argv=None):
     except Busy as error:
         print(f"ncat_store: {error}", file=sys.stderr)
         return 3
+    except (NCatError, RuntimeError) as error:  # the kernel refused a generator, or there's no compiler: the old file stands
+        print(f"ncat_store: the kernel stopped the rebuild ({error}); the store is unchanged", file=sys.stderr)
+        return 4
     return 0
 
 

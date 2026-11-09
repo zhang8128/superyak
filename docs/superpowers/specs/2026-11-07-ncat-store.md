@@ -47,7 +47,7 @@ that spans two runs is simply whole in the second, and a recall whose outcome ar
 | Table | Holds |
 |---|---|
 | `generator(id, dim, source, target, kind, ref, key)` | Generators in creation order, each with its kernel key. `source` and `target` are the ends' keys (none for an object). `kind` is `object` or `road` for now, and `ref` is the memory id or the ordered pair. |
-| `composite(key, dim, recipe)` | Each held cell once, by the kernel's `key()`. The recipe is the expression that built it: a generator id, or (k, left key, right key). |
+| `composite(key, dim, recipe)` | Each held cell once, by the kernel's `key()`. The recipe is the expression that built it, as JSON: `["then", k, [road keys]]` for a session of roads composed in dimension k, or `["id", key]` for a session of one memory. |
 | `session(session_id, key, used)` | Each session's cell, and how many used memories it walked. |
 | `road_use(road, session_id, step)` | Each walk of a road, so its weight is a count, not a guess. |
 | `ingest(read_at, rows_read, rows_skipped, skip_reasons, engram_store, kernel)` | The run that wrote this file; `kernel` is a digest of the kernel's C source. |
@@ -66,16 +66,19 @@ rebuild.
 
 ## Writes are checked
 
-A generator or composite row is written only after the kernel accepted it. A refusal is counted in `ingest` and nothing
-else about that cell is written. The whole rebuild is one transaction on the temporary file, so a crash leaves the old
+A generator or composite row is written only after the kernel accepted it. A session the kernel refuses is counted in
+`ingest` (`refused_by_kernel`) and nothing else about it is written. All sessions share one budget, `BUDGET_BYTES`: once it
+fills, each later session, in session-id order, is refused and counted, so a small budget keeps the first sessions and
+drops the rest. A generator (a memory or a road) the kernel refuses stops the rebuild instead: the command exits 4, says
+so, and leaves the old `ncat.db` as it was, as it does when no compiler is installed. The whole rebuild is one transaction on the temporary file, so a crash leaves the old
 `ncat.db` untouched and a stray temporary file, which the next run removes. One run at a time: an exclusive `flock` on
 `ncat.db.lock`, which the system releases if the process dies, so the lock file's existence alone means nothing. A second
 run exits saying another holds it.
 
 ## Reading Engram
 
-`ncat-store rebuild --engram <path to graph.db> [--store <path to ncat.db>]` opens Engram with a `mode=ro` URI and
-`query_only`, inside one read transaction, and reads `memory_log`'s recall rows and the ids in the episode and semantic
+`python -m ncat_store rebuild --engram <path to graph.db> [--store <path to ncat.db>]` opens Engram with a `mode=ro` URI and
+`query_only`, inside one read transaction, and reads `memory_log`'s recall rows and the ids in the episode, semantic and instinct
 tables. Memory ids and session ids are opaque strings; no content, query text or vector is read. The recall context
 also holds the person's query, so the session id is extracted inside SQLite (`json_extract`, after `json_valid`), and
 nothing else of the context reaches this process. A WAL store opened
@@ -96,7 +99,7 @@ its GIL and memory-budget fixes land.
 
 On the Pi, measured before this stage is called done:
 - Rebuild from 10,000 recall rows in under 10 s, including the SQLite reads.
-- Open a store of 100,000 generators in under 2 s.
+- Open a store of 100,000 generators in under 2 s. Not yet a test: a reader measured 2.88 s on a busy Pi (2026-11-09).
 - Rebuild a session of 200 roads from its recipe in under 5 ms.
 - Keep the process under 256 MB, or say what drove it over. The kernel's budget is 128 MB, in bytes since its revision 3.
 
@@ -108,7 +111,8 @@ On the Pi, measured before this stage is called done:
 - **Erasure:** a memory removed from the store is gone from the next file, with its roads and its sessions' cells.
 - **Skips:** each skip reason is counted, and a repeat inside one row makes no a→a road.
 - **One writer:** a second rebuild while one holds the lock exits without touching the file.
-- **Checked writes:** a generator the kernel refuses leaves no row, and its refusal is counted.
+- **Checked writes:** a session the kernel refuses leaves no row and is counted; a generator it refuses exits 4 and
+  leaves the old file.
 - **Crash:** killing a rebuild leaves the old file opening and replaying, and the next run clears the temporary file.
 - **Integrity:** a tampered recipe or key is caught on open.
 - **Loops and order:** a→b→a and b→a→b differ, and a session walking a→a→a is one road used twice.

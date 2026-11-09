@@ -423,3 +423,17 @@ def test_the_budgets_on_this_machine(tmp_path):
     took, rebuilt, peak_mb = json.loads(done.stdout)
     print(f"rebuild {took:.2f} s, 200-road session {rebuilt * 1e3:.2f} ms, peak {peak_mb:.0f} MB")
     assert took < 10 and rebuilt < 0.005 and peak_mb < 256
+
+
+def test_a_generator_the_kernel_refuses_stops_the_rebuild_exits_4_and_keeps_the_old_file(tmp_path, monkeypatch):
+    """A reader's should (S2): a budget too small for the generators themselves ended in a traceback."""
+    engram = _engram(tmp_path / "graph.db")
+    _recall(engram, "r1", "2026-11-07T10:00:00+00:00", "s1", ["a", "b"])
+    assert ncat_store.main(["rebuild", "--engram", str(engram), "--store", str(tmp_path / "ncat.db")]) == 0
+    before = _keys(tmp_path / "ncat.db")
+    _recall(engram, "r2", "2026-11-07T10:01:00+00:00", "s2", ["c", "d"])
+    monkeypatch.setattr(ncat_store, "BUDGET_BYTES", 3_000)
+    assert ncat_store.main(["rebuild", "--engram", str(engram), "--store", str(tmp_path / "ncat.db")]) == 4
+    monkeypatch.undo()
+    assert _keys(tmp_path / "ncat.db") == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["graph.db", "ncat.db", "ncat.db.lock"]
