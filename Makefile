@@ -505,6 +505,16 @@ lessons-check:
 	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]'; exit 2; }
 	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)" < "$(FILE)"
 
+# Own lessons spec: a local count only. It misses own lessons shown at a prompt (the hook writes nothing there) and
+# covers the STATE_DAYS (14) a session record lives.
+lessons-own-shown:
+	@python3 -I -c 'import json, pathlib, sys; settings = pathlib.Path(sys.argv[1]); \
+	  read = lambda f: json.loads(f.read_text()); \
+	  state = pathlib.Path(read(settings).get("state_dir", settings.parent / "lessons-sessions")) if settings.is_file() else settings.parent / "lessons-sessions"; \
+	  counts = [read(f).get("own_count", 0) for f in (state.glob("*.json") if state.is_dir() else ())]; \
+	  print("own lessons shown, summed over this machine'"'"'s session records:", sum(n for n in counts if type(n) is int and n > 0)); \
+	  print("This misses own lessons shown at a prompt, and covers only the last 14 days (a record lives STATE_DAYS).")' "$(HOME)/.superyak/lessons-hook.installed.json"
+
 lessons-list:
 	$(LESSONS) list --data-dir "$(LESSONS_DATA)"
 

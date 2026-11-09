@@ -336,7 +336,7 @@ def test_the_limits_are_the_specs():
 def test_a_prompt_sends_the_ship_the_prompt_cut_seen_and_limit_2_and_nothing_else(rail):
     rail.answers(*SERENITY)
     assert rail.run('UserPromptSubmit', prompt='p' * 2500, cwd=str(rail.root)) == [A, B]
-    assert rail.sent() == [{'ship': 'tardis', 'prompt': 'p' * 2000, 'limit': 2, 'seen': []}]
+    assert rail.sent() == [{'ship': 'tardis', 'prompt': 'p' * 2000, 'limit': 2, 'window_seen': [], 'own': True}]
     assert rail.state_files() == []  # no record at a prompt
 
 
@@ -367,7 +367,8 @@ def test_session_start_sends_the_cwd_and_branch_and_limit_3_never_a_prompt(rail)
         subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True)
     rail.answers(*SERENITY)
     assert rail.run('SessionStart', cwd=str(repo), source='startup', prompt='never sent') == [A, B, C]
-    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(repo), 'branch': 'rail', 'limit': 3, 'seen': []}]
+    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(repo), 'branch': 'rail', 'limit': 3, 'seen': [],
+                                                          'window_seen': [], 'own': True}]
 
 
 def test_session_start_outside_a_repository_sends_no_branch_and_cuts_the_cwd(rail):
@@ -375,7 +376,8 @@ def test_session_start_outside_a_repository_sends_no_branch_and_cuts_the_cwd(rai
     deep.mkdir(parents=True)
     rail.answers()
     assert rail.run('SessionStart', cwd=str(deep)) is None
-    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(deep)[:200], 'limit': 3, 'seen': []}]
+    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(deep)[:200], 'limit': 3, 'seen': [],
+                                                        'window_seen': [], 'own': True}]
 
 
 def test_session_start_shows_at_most_three(rail):
@@ -388,7 +390,7 @@ def test_a_failed_command_sends_the_cwd_command_last_error_line_and_limit_3(rail
     rail.answers(*SERENITY)
     assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure(command='x' * 400)) == [A, B, C]
     assert budgeted(rail.sent(), 'PostToolUseFailure') == [{'ship': 'tardis', 'command': 'x' * 300, 'cwd': str(rail.root), 'limit': 3, 'seen': [],
-                            'error': "ls: cannot access 'nowhere': No such file or directory"}]
+                            'window_seen': [], 'own': True, 'error': "ls: cannot access 'nowhere': No such file or directory"}]
 
 
 def test_a_timed_out_command_sends_its_last_line(rail):
@@ -434,7 +436,7 @@ def test_one_budget_across_every_event(rail):
     rail.shown_at_prompt(lesson(C, ship='rio-grande'))  # an earlier prompt showed C; only the transcript knows
     rail.answers(lesson(A, ship='serenity'), lesson(D), lesson(B, ship='serenity'), kind='prompt')
     assert rail.run('UserPromptSubmit', prompt='one more prompt') == [D]
-    assert rail.sent()[-1]['seen'] == [A, B, C]
+    assert rail.sent()[-1]['window_seen'] == [A, B, C]  # a prompt sends the window's alone
     rail.shown_at_prompt(lesson(D))
     rail.answers(*SERENITY, kind='failure')
     assert rail.run('PostToolUseFailure', **failure(command='ls other')) is None
@@ -627,7 +629,7 @@ def test_seen_lessons_are_dropped_from_an_in_process_answer_too(rail):
     rail.shown_at_prompt(lesson(A))
     peer = FakePeer({'lessons': [lesson(A), lesson(B)]})
     assert rail.run('UserPromptSubmit', peer=peer, prompt='p') == [B]
-    assert peer.calls[0][0]['seen'] == [A]
+    assert peer.calls[0][0]['window_seen'] == [A]
 
 
 @pytest.mark.parametrize('module, shown', [
