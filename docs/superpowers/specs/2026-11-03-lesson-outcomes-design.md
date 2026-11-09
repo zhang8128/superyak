@@ -138,6 +138,9 @@ Pre-registered, read by the ships, never a gate.
   - **Secondary:** a rising `helped` share. Once the weight orders misled lessons lower, the share can rise with no
     better lessons, so it's never read alone.
 
+Every measure here leaves out a re-asked failure's query row (`reask`) and every reminder, which has no receipt, and
+the shadow counts first reaches only (own lessons spec, 2026-11-09).
+
 Repeats and outcomes don't cross-check each other. A verified repeat says a shown lesson didn't stop a mistake, which
 is about the hook's timing (section 6). It isn't counted as `misled`.
 
@@ -150,7 +153,7 @@ is about the hook's timing (section 6). It isn't counted as `misled`.
 - **No automatic outcome.** The hook never guesses one.
 - **No person's data:** only ids, times and one of three words.
 - **Gaming, accepted at 2 to 4 ships.**
-  - An author can't promote its own lesson: the query never shows a ship its own, and the verb needs a receipt.
+  - An author can't promote its own lesson: an own lesson is shown with no receipt, and the verb needs one.
   - A ship can mark another's lesson `misled` on every receipt it holds. With the 2-judge minimum and reorder-only,
     that can lower the lesson within the candidates once a second ship agrees, but never remove it.
 
