@@ -48,12 +48,12 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   (`log_outcome`), never recalls made for the count. Measure: used recalls per day on each ship, then E1′'s one run once
   a log holds a few hundred, read against its pre-registered outcomes.
 - R3 (goal 1): the n-category store, stage 3 of the plan on issue #2 (spec `2026-11-07-ncat-store.md`), on Tardis's
-  kernel. It has both ships' yes at 2ab883e1 and lands with the kernel on Andy's word. Nothing more is built on it
+  kernel. It has both ships' yes at 2ab883e1, a local branch on the Pi with its spec, and lands with the kernel on Andy's word. Nothing more is built on it
   until R2 shows real use. Measure: on the Pi, 10,000 recall rows rebuilt in under 10 s and a 200-road session in
   under 5 ms, under 256 MB (0.9 s, 3.7 ms and 66 MB at 2ab883e1), and the store holding real sessions.
-- R4 (goals 2 and 5): the chats people use. The send fix and room updates (train-1107f, 1c585762, Tardis's yes) land
-  on Andy's word, then their followers: the reader leftovers, a 200 that isn't the home, and recall's transfers kept to
-  one lane. Measure: the 97 wrong-room probes pass on main, and a new message shows within 6 s in an open paged room.
+- R4 (goals 2 and 5): the chats people use. The send fix and room updates (train-1107f, 1c585762) landed with train-1109
+  on Andy's word on 2026-11-09, with a 200 that isn't the home and recall's transfers kept to one lane; the send
+  fix's reader leftovers follow. Measure: the 97 wrong-room probes pass on main, and a new message shows within 6 s in an open paged room.
 - R5 (goals 3 and 2): ships that talk without waste. A mention is answered only by a reply to that mention (R7), so
   replies elsewhere left mentions to read-only runs two hours later; reply to the mention itself, one mention per ask,
   and `spec:mention-reaches-the-working-session` if that isn't enough. Hold the purpose, not the queue: post when
@@ -64,7 +64,7 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
 
 ## Tardis: federation, the public route, CI, and the visitor's view
 
-Refreshed 2026-11-08, in Tardis's words (all hands 1744e96a). Each line is tied to an overarching goal:
+Refreshed 2026-11-08, in Tardis's words (a station room post). Each line is tied to an overarching goal:
 - T1 (goal 1): a blind lessons crossing. Tardis isn't in the lessons room yet, and adding it needs Andy's word at Rio
   Grande's terminal. Then lay the lessons and run the task committed by hash. Measure as now.
 - T2 (goals 1 and 3): the crossing in use, not only built. 8 crossings ever, the last on 11-04. Measure: recalls in
@@ -74,4 +74,4 @@ Refreshed 2026-11-08, in Tardis's words (all hands 1744e96a). Each line is tied 
 - T4 (goal 4): the mark's words (approved; they follow the train), then the voice gateway once Andy approves its ship.
   Measure: someone outside us gets through the two-laptop guide or the gateway.
 - T5 (goals 2 and 5): CI and partner reads, unchanged.
-- Done since 11-03: the old T3 (4be306de), stage 2 of the crossing (4158fc61), and the sign-in and in-app words.
+- Done since 11-03: the old T3 (23c43e1a), stage 2 of the crossing (4158fc61), and the sign-in and in-app words.
