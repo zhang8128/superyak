@@ -96,8 +96,8 @@ WORDS_NO_CONTACT = ("The words don't name the contact by its short id ({short}, 
                     'taken: the yes names it')
 WORDS_NO_COUNT = ("The words don't name the expected count ({n}), as \"{n} ship{s}\" or as their only number apart from the "
                   'days, so they aren\'t taken: the yes names it')
-WORDS_NUMBER_SHAPE = ('The words give a signed number, a range or a fraction next to days, ships, pairings or machines, so '
-                      "they aren't taken: the yes gives each as one whole number")
+WORDS_NUMBER_SHAPE = ('The words give a signed or approximate number, a range or a fraction next to days, ships, pairings '
+                      "or machines, so they aren't taken: the yes gives each as one whole number")
 WORDS_DAYS_IN_DIGITS = ("The words give the days in words, so they aren't taken: write the number of days in digits "
                         '({days} days)')
 WORDS_COUNT_IN_DIGITS = ("The words give the count in words past ten, so they aren't taken: write it in digits "
@@ -106,33 +106,53 @@ WORDS_DAYS_DIFFER = ("A number of days in the words isn't DAYS ({days}), so they
                      'approves')
 WORDS_COUNT_DIFFER = ("A number of ships, pairings or machines in the words isn't the expected count ({n}), so they aren't "
                       'taken: the yes names the grant it approves')
-WORDS_NOT_A_YES = ("The words hold a no (no, not, never, nah, a word ending in n't, cannot, deny, decline, refuse, reject, "
-                   "revoke, veto, stop, wait, hold off, skip, pause, cancel or later), so nothing is granted: ask him "
-                   "again, and take only a yes that names the contact and the count")
-WORDS_NO_YES = ("The words don't say yes (yes, yeah, yep, ok, sure, approve, grant, go ahead, do it, confirm, agreed, "
-                "no problem, why not), so nothing is granted: ask him again")
+WORDS_NOT_A_YES = ("The words hold a no (no, not, never, nah, a word ending in n't or nt such as didnt, cannot, deny, "
+                   "decline, refuse, reject, revoke, veto, stop, wait, hold off, hang on, hold up, nvm, scratch that, "
+                   "skip, pause, cancel, later, tomorrow, maybe, hardly, if, unless, until, once, after), so nothing is "
+                   "granted: ask him again, and take only a yes that names the contact and the count")
+WORDS_NO_YES = ("The words don't say yes (yes, yeah, yep, ok, sure, fine, alright, approve, allow, accept, grant, go ahead, "
+                "go for it, do it, please do, confirm, agreed, sounds good, of course, absolutely, lgtm, no problem, why "
+                "not), so nothing is granted: ask him again")
+WORDS_QUESTION = ("The words ask a question ('?'), so nothing is granted: a yes doesn't ask (only \"why not?\" may), so "
+                  "ask him again")
 # Tardis's read of 26e4545f: words naming the contact and the count still granted when they said no ("deny <id>, 1
 # ship", "no, not <id>"); the reader's S7 (re-check 4) found whole families of nos a word list misses ("I won't
 # approve", "hold off", "nein"). So the words must hold a yes, from a short list, and hold no no. A few yes idioms that
 # carry a no-word ("no problem", "why not") count as a yes and are taken out before the no is looked for. A refusal
-# costs Andy one re-ask, while a misread no would grant a trust: "no more than 1 ship" refuses, on purpose.
+# costs Andy one re-ask, while a misread no would grant a trust: "no more than 1 ship" refuses, on purpose. The re-check
+# 5's S8: a listed yes-word inside a sentence that isn't a yes still granted, so the contractions written without an
+# apostrophe (each named, never a blanket "nt", which "want", "grant" and "count" end in), the retractions, the
+# conditions and the deferrals are nos too, and any question mark but "why not?"'s refuses. "until" naming the grant
+# line's own end date ("until 2027-04-15") echoes the line, so it is no deferral (`_says_yes`).
 APOSTROPHES = str.maketrans({'\u2019': "'", '\u2018': "'", '\u02bc': "'", '\u00b4': "'", '`': "'", '\u2032': "'"})
 YES_IDIOMS = re.compile(r"\b(?:no\s+problem|no\s+worries|not\s+a\s+problem|why\s+not|(?:i\s+)?don'?t\s+mind)\b")
-YES_WORDS = re.compile(r"\b(?:yes|yeah|yep|yup|ok|okay|sure|approve|approved|grant|granted|go\s+ahead|do\s+it|confirm|"
-                       r"confirmed|agree|agreed)\b|\U0001f44d|\u2705")
-NOT_A_YES = re.compile(r"\b(?:no|not|nope|nah|nein|non|never|cannot|\w+n't|dont|cant|wont|deny|denying|denied|decline|"
-                       r"declining|declined|refuse|refusing|refused|reject|rejecting|rejected|revoke|revoking|veto|stop|"
-                       r"stopping|wait|waiting|hold\s+off|hold\s+on|skip|pause|abort|halt|cancel|cancelling|canceling|"
-                       r"cancelled|canceled|later|do\s+not)\b")
+YES_WORDS = re.compile(r"\b(?:yes|yeah|yep|yup|yea|ok|okay|sure|fine|alright|all\s+right|approve|approved|allow|allowed|"
+                       r"accept|accepted|grant|granted|go\s+ahead|go\s+for\s+it|do\s+it|please\s+do|confirm|confirmed|"
+                       r"agree|agreed|sounds\s+good|of\s+course|absolutely|lgtm)\b|(?<![a-z0-9])o\.k\.?(?![a-z0-9])|"
+                       r"\U0001f44d|\U0001f44c|\u2705|\u2714")  # thumbs-up, OK hand, check marks (N17)
+NOT_A_YES = re.compile(r"\b(?:no|not|nope|nah|nay|nein|non|never|cannot|\w+n't|dont|cant|wont|isnt|wasnt|arent|werent|"
+                       r"doesnt|didnt|havent|hasnt|hadnt|wouldnt|couldnt|shouldnt|mustnt|neednt|deny|denying|denied|"
+                       r"decline|declining|declined|refuse|refusing|refused|reject|rejecting|rejected|revoke|revoking|"
+                       r"veto|stop|stopping|wait|waiting|hold\s+off|hold\s+on|hold\s+up|hang\s+on|nevermind|nvm|"
+                       r"scratch\s+that|let\s+me\s+think|skip|pause|abort|halt|cancel|cancelling|canceling|cancelled|"
+                       r"canceled|later|tomorrow|maybe|hardly|if|unless|until|once|after|do\s+not)\b")
+QUESTION_MARKS = re.compile('[?\u00bf\u061f]')
+WHY_NOT_ASKED = re.compile(r"\bwhy\s+not\s*\?")
 
 
-def _says_yes(folded):
-    """Spec revision 6, item 2a (Tardis's read, the re-check 4's S7): the words hold a yes and no no. Read on the NFKC,
-    case-folded words with every apostrophe form as "'"; a yes idiom counts as a yes and leaves the no-search."""
+def _says_yes(folded, until_day=None):
+    """Spec revision 6, item 2a (Tardis's read, the re-check 4's S7 and 5's S8): the words hold a yes, no no and no
+    question. Read on the NFKC, case-folded words with every apostrophe form as "'"; a yes idiom counts as a yes and
+    leaves the no-search, as does "until" with `until_day`, the grant line's own end date; a '?' after "why not" is the
+    idiom's, and any other refuses."""
     text = folded.replace(' \u0301', "'").translate(APOSTROPHES)  # NFKC folds U+00B4 to a space and a combining acute
     rest = YES_IDIOMS.sub(' ', text)
+    if until_day:
+        rest = re.sub(r'\buntil\s+' + re.escape(until_day) + r'(?![0-9])', ' ', rest)
     if NOT_A_YES.search(rest):
         raise Problem(400, WORDS_NOT_A_YES)
+    if QUESTION_MARKS.search(WHY_NOT_ASKED.sub(' ', text)):
+        raise Problem(400, WORDS_QUESTION)
     if not (YES_IDIOMS.search(text) or YES_WORDS.search(text)):
         raise Problem(400, WORDS_NO_YES)
 
@@ -299,7 +319,8 @@ def word_forms(words):
 # posts refuse no pairing code at all.
 INVISIBLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
              (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFEFF, 0xFEFF),
-             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE00FF),
+             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D159, 0x1D159), (0x1D173, 0x1D17A),
+             (0xE0000, 0xE00FF),
              (0xE01F0, 0xE0FFF))
 # The variation selectors. One splits a code or a key only where it follows an ASCII letter, a digit, '-' or '_', so it
 # is refused only there; elsewhere it is an emoji's (a heart, a check mark) and taken (the re-check 2's N11). The checks
@@ -356,18 +377,12 @@ def _refuse_codes(db, words):
 
 
 COUNT_NOUNS = {'ship', 'ships', 'pairing', 'pairings', 'machine', 'machines'}
+NOUN_WORD = r'(?:days?|ships?|pairings?|machines?)'
 NOUN = r'(days?|ships?|pairings?|machines?)(?![a-z])'
-# A number next to a noun the grant has a number for: "90 days", "a 90-day trust", "1 ship", "1,000 machines". The number
-# takes in any '.', ',' or '/' with a digit after it, so "1.5 ships" or "1/2 ships" is read whole and refused, while a
-# period or comma before a space or the end is punctuation ("count 1. ship it") (the re-check 2's N11).
-NUMBERED = re.compile(r'(?<![0-9a-z])([0-9](?:[0-9]|[.,/](?=[0-9]))*)(?:\s*-\s*|\s*)' + NOUN)
-WHOLE = re.compile(r'[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+')
-BARE = re.compile(r'(?<![0-9a-z.,/+-])([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?![0-9a-z])(?![.,/][0-9])')
-# What comes just before a number that makes it a range or a fraction: a whole number that stands alone (never the end
-# of an id or another word, the re-check 2's S6), then a dash, a slash, "to" or "or"; and what makes it signed: a minus
-# or a plus that follows no letter or digit ("-1 ships", where "x-1" is a hyphenated word).
-RANGE_BEFORE = re.compile(r'(?<![0-9a-z])([0-9][0-9,]*)(?:\s*[-\u2013\u2014/\u2044\u2215]\s*|\s+(?:to|or)\s+)$')
-SIGN_BEFORE = re.compile(r'(?:^|[^0-9a-z])[-+\u2212]$')
+# Between a number and its noun: nothing, a hyphen ("a 90-day trust"), or one other word ("10 more ships", "90
+# calendar days", the re-check 3's N14), so the number is read as that noun's and checked.
+GAP = r'(?:\s*-\s*|\s*|\s+(?!' + NOUN_WORD + r'(?![a-z]))[a-z]+\s+)'
+WORD_GAP = r'(?:\s*-\s*|\s+|\s+(?!' + NOUN_WORD + r'(?![a-z]))[a-z]+\s+)'  # after a number word: a space at least
 # Number words: one to ten before a counted noun are read as the number (the re-check 2's N11); any other, and any
 # before day or days, are refused with a request for digits, so a count or days written in words is never unchecked.
 ONE_TO_TEN = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
@@ -376,11 +391,36 @@ NUMBER_WORDS = sorted([*ONE_TO_TEN, 'eleven', 'twelve', 'thirteen', 'fourteen', 
                        'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty',
                        'ninety', 'hundred', 'thousand'], key=len, reverse=True)
 WORD_NUMBER = '(?:' + '|'.join(NUMBER_WORDS) + ')'
-WORDED = re.compile(r'(?<![0-9a-z-])(' + WORD_NUMBER + r'(?:(?:\s*-\s*|\s+)(?:and\s+)?' + WORD_NUMBER + r')*)'
-                    r'(?:\s*-\s*|\s+)' + NOUN)
+# A number next to a noun the grant has a number for: "90 days", "a 90-day trust", "1 ship", "1,000 machines". The number
+# takes in any '.', ',' or '/' with a digit after it, so "1.5 ships" or "1/2 ships" is read whole and refused, while a
+# period or comma before a space or the end is punctuation ("count 1. ship it") (the re-check 2's N11).
+NUMBERED = re.compile(r'(?<![0-9a-z])([0-9](?:[0-9]|[.,/](?=[0-9]))*)' + GAP + NOUN)
+WHOLE = re.compile(r'[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+')
+BARE = re.compile(r'(?<![0-9a-z.,/+-])([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?![0-9a-z])(?![.,/][0-9])')
+# What comes just before a number that makes it a range or a fraction: a number that stands alone, in digits or in
+# words (never the end of an id or another word, the re-check 2's S6), then a dash, a slash or a tilde, or "to", "or",
+# "and", "through" or "thru" ("one or two ships", "between 1 and 2 ships", "1 ~ 2 ships", the re-check 3's N13); and
+# what makes it signed or approximate: a minus, a plus or a tilde that follows no letter or digit ("-1 ships", "~2
+# ships", where "x-1" is a hyphenated word). A period right before the digits makes a fraction (".5 ships", N14).
+RANGE_BEFORE = re.compile(r'(?<![0-9a-z])([0-9][0-9,]*|' + WORD_NUMBER + r')'
+                          r'(?:\s*[-–—/⁄∕~∼]\s*|\s+(?:to|or|and|through|thru)\s+)$')
+SIGN_BEFORE = re.compile(r'(?:^|[^0-9a-z])[-+−~∼≈]$')
+# A number word after a letter or digit and a hyphen is part of a compound ("twenty-one", read whole); after a lone
+# minus it is signed ("-one ship").
+WORDED = re.compile(r'(?<![0-9a-z])(?<![0-9a-z]-)(' + WORD_NUMBER
+                    + r'(?:(?:\s*-\s*|\s+)(?:and\s+)?' + WORD_NUMBER + r')*)'
+                    + WORD_GAP + NOUN)
 
 
-def _names_the_grant(words, contact, days, expect):
+def _ranged_or_signed(before, naming):
+    """Whether what comes just before a number (`before`) makes it a range, a fraction, signed or approximate:
+    RANGE_BEFORE (unless the number before the dash is an id naming the contact), SIGN_BEFORE, or a period right
+    before it."""
+    ranged = RANGE_BEFORE.search(before)
+    return bool(SIGN_BEFORE.search(before) or before.endswith('.') or (ranged and ranged.group(1) not in naming))
+
+
+def _names_the_grant(words, contact, days, expect, until_day=None):
     """Spec revision 6, item 2a: the yes names the contact and the count, and its numbers mean what the grant does, so the
     stored words can be checked against the grant they approved. Read in the NFKC form, case folded.
     - The contact: a run of 8 or more ASCII letters and digits that starts its id (without remote_) or its participant
@@ -395,7 +435,7 @@ def _names_the_grant(words, contact, days, expect):
     - The words are a yes (`_says_yes`): a yes-word, and no no-word, checked before the naming and number checks.
     The refusals name what is missing or wrong, never the words."""
     folded = unicodedata.normalize('NFKC', words).lower()
-    _says_yes(folded)
+    _says_yes(folded, until_day)
     ids = (contact['id'].removeprefix('remote_').lower(), contact['user_id'].lower())
     naming = {token for token in re.findall(r'[0-9a-z]+', folded)
               if len(token) >= 8 and any(i.startswith(token) for i in ids)}
@@ -404,9 +444,7 @@ def _names_the_grant(words, contact, days, expect):
     counted, taken = [], []
     for match in NUMBERED.finditer(folded):
         number, noun, before = match.group(1), match.group(2), folded[:match.start()]
-        ranged = RANGE_BEFORE.search(before)
-        if (not WHOLE.fullmatch(number) or SIGN_BEFORE.search(before)
-                or (ranged and ranged.group(1) not in naming)):
+        if not WHOLE.fullmatch(number) or _ranged_or_signed(before, naming):
             raise Problem(400, WORDS_NUMBER_SHAPE)
         value = int(number.replace(',', ''))
         if noun in COUNT_NOUNS:
@@ -418,6 +456,8 @@ def _names_the_grant(words, contact, days, expect):
         taken.append(match.span(1))
     for match in WORDED.finditer(folded):
         phrase, noun = match.group(1), match.group(2)
+        if _ranged_or_signed(folded[:match.start()], naming):  # the re-check 3's N13: "one or two ships"
+            raise Problem(400, WORDS_NUMBER_SHAPE)
         if noun not in COUNT_NOUNS:
             raise Problem(400, WORDS_DAYS_IN_DIGITS.format(days=days))
         if phrase not in ONE_TO_TEN:
@@ -771,7 +811,7 @@ class OwnerTrust:
         text = _text(contact['label'], contact['peer_id'], until)
         _as_shown(text, shown)
         if words is not None:
-            _names_the_grant(words, contact, days, expect)
+            _names_the_grant(words, contact, days, expect, utc_day(until))
         db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect,line,words) '
                    "VALUES (?,'grant',?,?,?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor,
                                                          now, expect, None if words is None else text, words))

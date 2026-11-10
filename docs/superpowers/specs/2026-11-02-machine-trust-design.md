@@ -64,15 +64,19 @@ person whose own account a person confirmed with a code.
      bytes, with one trailing newline taken off; make never expands or exports any of the values. A code that doesn't
      match the view as it reads now (another day in the line, a renamed owner, other days or another count, or any
      grant, renewal or revocation of that owner since, so one code grants at most once) refuses, as do missing words,
-     words that hold no yes-word (yes, yeah, yep, ok, sure, approve, grant, go ahead, do it, confirm, agreed, or a
-     yes idiom such as "no problem" or "why not") and words that hold a no (no, not, never, nah, a word ending in
-     n't, cannot, deny, decline, refuse, reject, revoke, veto, stop, wait, hold off, skip, pause, cancel or later),
-     checked before the naming and number checks, so "no more than 1 ship" refuses too (Tardis's read of
-     26e4545f; the re-check 4's S7: a short list of yeses, not an endless list of nos),
+     words that hold no yes-word (a short list: yes, ok, sure, fine, approve, grant, go ahead and the like, an OK or
+     a thumbs-up, or a yes idiom such as "no problem" or "why not"), words that hold a no (no, not, never, nah, a
+     contraction ending in n't or written without its apostrophe, cannot, deny, revoke, stop, wait, hold off,
+     later), a retraction (hang on, nevermind, scratch that), a condition or a deferral (if, unless, until, once,
+     after, maybe, tomorrow; "until" naming the line's own end date excepted), and words that ask (any '?' but "why
+     not?"'s), all checked before the naming and number checks, so "no more than 1 ship" refuses too (Tardis's read
+     of 26e4545f; the re-checks 4 and 5, S7 and S8: a short list of yeses, not an endless list of nos),
      words that don't name the contact's short id (8 or more characters of its id or of its participant's, as the
      first run shows them) and the count, words whose numbers don't match the grant (a number next to day or days must
      be DAYS, one next to ship(s), pairing(s) or machine(s) must be EXPECT, each one whole number, never a range such as
-     "1-2 ships", a fraction such as "1/2 ships" or a sign such as "-1 ships", though a dash after an id and a period
+     "1-2 ships", "one or two ships", "between 1 and 2 ships" or "1 ~ 2 ships", a fraction such as "1/2 ships" or
+     ".5 ships", or a sign such as "-1 ships", each read with one word allowed before its noun ("10 more ships"),
+     though a dash after an id and a period
      that ends a sentence are punctuation; the count may be a word from one to ten ("one ship"), and days, or a count
      past ten, in words are refused with a request for digits; with no such noun, the count must be the words' only
      bare number), an unknown contact and a live trust, and nothing is granted. The grant's own transaction
