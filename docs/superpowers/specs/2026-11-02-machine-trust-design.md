@@ -67,15 +67,18 @@ person whose own account a person confirmed with a code.
      words that don't name the contact's short id (8 or more characters of its id or of its participant's, as the
      first run shows them) and the count, words whose numbers don't match the grant (a number next to day or days must
      be DAYS, one next to ship(s), pairing(s) or machine(s) must be EXPECT, each one whole number, never a range such as
-     "1-2 ships", a fraction such as "1/2 ships" or a sign such as "-1 ships"; with no such noun, the count must be the
-     words' only bare number), an unknown contact and a live trust, and nothing is granted. The grant's own transaction
+     "1-2 ships", a fraction such as "1/2 ships" or a sign such as "-1 ships", though a dash after an id and a period
+     that ends a sentence are punctuation; the count may be a word from one to ten ("one ship"), and days, or a count
+     past ten, in words are refused with a request for digits; with no such noun, the count must be the words' only
+     bare number), an unknown contact and a live trust, and nothing is granted. The grant's own transaction
      checks the owner's latest `owner_trust` row again, so an act on that owner between the two transactions refuses
      too. A refusal names what is missing or wrong, never the words. The command never asks for, reads or takes a password.
    - **What is recorded:** the same `owner_trust` 'grant' row the browser writes, by the same checks, plus two columns
      only a terminal grant fills: `line`, the grant line he said yes to, and `words`, his yes as typed (1 to 500
      characters). The notice posts the words, so they are refused when any character in them isn't shown as written:
-     a control or format character, or an invisible one (Unicode's default-ignorable characters, the variation
-     selectors and the Hangul fillers among them); every Unicode space counts as a plain one. They are refused, too,
+     a control or format character, or an invisible one (Unicode's default-ignorable characters, the Hangul fillers
+     among them, and the braille blank; a variation selector only after an ASCII letter, a digit, '-' or '_', where it
+     could split a code or a key, so an emoji's selector is taken); every Unicode space counts as a plain one. They are refused, too,
      when the words as typed, as posted, or the NFKC form of either holds a live ship key or 32 hex in a row once
      spaces and hyphens are taken out; the refusal says whether that is a pairing code or ids run together, to be
      given with commas between them. Look-alike letters are taken, as a room post takes them. At Odo's next cycle a one-off Ops notice

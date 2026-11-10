@@ -63,12 +63,13 @@ id, the line, the days and the count. Only after he says yes at that terminal, n
 count, it writes his words exactly as he typed them to a file with its file tool, never through a shell, and runs it
 again with `CONFIRM=<code> WORDS_FILE=<that file>`; the second run refuses words that don't name the contact's short id
 and the count, and words whose numbers don't match: a number of days must be DAYS, one of ships, pairings or machines
-must be EXPECT (one whole number, never a range, a fraction or a sign), and a bare number counts only as the only one.
-Renewing stays in the browser with his password, and revoking is his. A ship never grants, renews or revokes a trust,
-whether through the browser, a script, a pty or any wrapper, and never types the password, except that Rio Grande runs
-that terminal grant on Andy's yes there: never on its own, on a relay, on a room message or on another ship's report.
-When a trust pauses at its expected count, the ship stops and says so, and only the admin renews. `make
-station-trust-list` names every ship paired that way, and Odo's daily digest and pause notices in Ops count them.
+must be EXPECT (one whole number, never a range, a fraction or a sign; days in digits, the count in digits or as a
+word from one to ten), and a bare number counts only as the only one. Renewing stays in the browser with his password,
+and revoking is his. A ship never grants, renews or revokes a trust, whether through the browser, a script, a pty or
+any wrapper, and never types the password, except that Rio Grande runs that terminal grant on Andy's yes there: never
+on its own, on a relay, on a room message or on another ship's report. When a trust pauses at its expected count, the
+ship stops and says so, and only the admin renews. `make station-trust-list` names every ship paired that way, and
+Odo's daily digest and pause notices in Ops count them.
 
 # Approving on the station (on the Pi only)
 

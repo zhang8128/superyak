@@ -83,9 +83,9 @@ TERMINAL_TEXT = ("Owner trust {short} was granted at the Pi's terminal on {who}'
                  "ship{s} expected. make station-trust-list shows it; if {who} didn't say yes to it, revoke it in the "
                  "browser. {who}'s words: \"{words}\"")
 WORDS_SHAPE = f"words are the admin's yes as typed at the terminal: not empty, at most {WORDS_MAX} characters"
-WORDS_UNPRINTABLE = ('The words hold a control, format or invisible character (a variation selector, as some emoji carry, '
-                     'and a Hangul filler count), or another that Ops would not show as written, so they are not taken: '
-                     'only printable characters and spaces are')
+WORDS_UNPRINTABLE = ("The words hold a control, format or invisible character (a Hangul filler, a braille blank, and a "
+                     "variation selector after a letter, a digit, '-' or '_', count), or another that Ops would not "
+                     'show as written, so they are not taken: only printable characters and spaces are')
 WORDS_CODE_SHAPED = ("The words hold a run with a pairing code's shape (32 hex), so they aren't taken or shown; give the "
                      'yes without it')
 WORDS_IDS_RUN_TOGETHER = ("The words hold 32 or more hex characters in a row once spaces and hyphens are taken out, a "
@@ -98,6 +98,10 @@ WORDS_NO_COUNT = ("The words don't name the expected count ({n}), as \"{n} ship{
                   'days, so they aren\'t taken: the yes names it')
 WORDS_NUMBER_SHAPE = ('The words give a signed number, a range or a fraction next to days, ships, pairings or machines, so '
                       "they aren't taken: the yes gives each as one whole number")
+WORDS_DAYS_IN_DIGITS = ("The words give the days in words, so they aren't taken: write the number of days in digits "
+                        '({days} days)')
+WORDS_COUNT_IN_DIGITS = ("The words give the count in words past ten, so they aren't taken: write it in digits "
+                         '({n} ship{s})')
 WORDS_DAYS_DIFFER = ("A number of days in the words isn't DAYS ({days}), so they aren't taken: the yes names the grant it "
                      'approves')
 WORDS_COUNT_DIFFER = ("A number of ships, pairings or machines in the words isn't the expected count ({n}), so they aren't "
@@ -248,27 +252,45 @@ def posted_words(words):
 
 def word_forms(words):
     """Every form of the words a check reads (spec revision 6, the review's S2): as typed, as posted, and the NFKC form
-    of each, in which fullwidth or other compatibility letters read as the ASCII a person would type."""
+    of each, in which fullwidth or other compatibility letters read as the ASCII a person would type; each with its
+    variation selectors taken out (SELECTORS), so a selector the words may hold can't hide a run of hex or a key."""
     posted = posted_words(words)
-    return (words, posted, *(unicodedata.normalize('NFKC', form) for form in (words, posted)))
+    forms = (words, posted, *(unicodedata.normalize('NFKC', form) for form in (words, posted)))
+    return tuple(SELECTOR.sub('', form) for form in forms)
 
 
-# Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties), the Hangul fillers among them: drawn as nothing, so a
-# code or a key split by one reads whole in Ops. Most are format characters, which the printable rule refuses anyway;
-# the variation selectors, the combining grapheme joiner, the Mongolian selectors and the fillers are printable to
-# Python, so they are named here (the re-check's N7). Look-alike letters (a Cyrillic a, U+0430, for a Latin a) are
-# taken, as a room post takes them: parity with every message, since room posts refuse no pairing code at all.
+# Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties), the Hangul fillers among them, less the variation
+# selectors (SELECTORS, below), and U+2800 BRAILLE PATTERN BLANK, which is drawn blank but isn't default-ignorable (the
+# re-check 2's N12): each is drawn as nothing, so a code or a key split by one reads whole in Ops. Most are format
+# characters, which the printable rule refuses anyway; the combining grapheme joiner, the Mongolian selectors, the
+# fillers and the braille blank are printable to Python, so they are named here (the re-check's N7). Look-alike letters
+# (a Cyrillic a, U+0430, for a Latin a) are taken, as a room post takes them: parity with every message, since room
+# posts refuse no pairing code at all.
 INVISIBLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
-             (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
-             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+             (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFEFF, 0xFEFF),
+             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE00FF),
+             (0xE01F0, 0xE0FFF))
+# The variation selectors. One splits a code or a key only where it follows an ASCII letter, a digit, '-' or '_', so it
+# is refused only there; elsewhere it is an emoji's (a heart, a check mark) and taken (the re-check 2's N11). The checks
+# read every form with them taken out (word_forms).
+SELECTORS = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+SELECTOR = re.compile('[\ufe00-\ufe0f\U000e0100-\U000e01ef]')
 
 
-def _shown_as_written(c):
-    """A character the notice shows as typed: printable and not invisible (INVISIBLE), or a space of any kind (Unicode
-    Zs, the no-break space that macOS's Option-Space types included), which safe_line posts as a plain space."""
+def _within(ranges, c):
+    return any(low <= ord(c) <= high for low, high in ranges)
+
+
+def _shown_as_written(c, before=''):
+    """A character the notice shows as typed, after `before` (the character before it, or ''): a space of any kind
+    (Unicode Zs, the no-break space that macOS's Option-Space types included), which safe_line posts as a plain space;
+    a variation selector that follows no ASCII letter, digit, '-' or '_'; or any other printable character that isn't
+    invisible (INVISIBLE)."""
     if unicodedata.category(c) == 'Zs':
         return True
-    return c.isprintable() and not any(low <= ord(c) <= high for low, high in INVISIBLE)
+    if _within(SELECTORS, c):
+        return not re.fullmatch(r'[A-Za-z0-9_-]', before)
+    return c.isprintable() and not _within(INVISIBLE, c)
 
 
 def _words(words):
@@ -278,7 +300,7 @@ def _words(words):
     run in the grant's transaction (_refuse_codes)."""
     if not isinstance(words, str) or not words.strip() or len(words) > WORDS_MAX:
         raise Problem(400, WORDS_SHAPE)
-    if not all(_shown_as_written(c) for c in words):
+    if not all(_shown_as_written(c, words[i - 1] if i else '') for i, c in enumerate(words)):
         raise Problem(400, WORDS_UNPRINTABLE)
     return words
 
@@ -303,11 +325,28 @@ def _refuse_codes(db, words):
 
 
 COUNT_NOUNS = {'ship', 'ships', 'pairing', 'pairings', 'machine', 'machines'}
+NOUN = r'(days?|ships?|pairings?|machines?)(?![a-z])'
 # A number next to a noun the grant has a number for: "90 days", "a 90-day trust", "1 ship", "1,000 machines". The number
-# takes in any '.', ',' or '/' it runs on with, so "1.5 ships" or "1/2 ships" is read whole and refused.
-NUMBERED = re.compile(r'(?<![0-9a-z])([0-9][0-9.,/]*)(?:\s*-\s*|\s*)(days?|ships?|pairings?|machines?)(?![a-z])')
+# takes in any '.', ',' or '/' with a digit after it, so "1.5 ships" or "1/2 ships" is read whole and refused, while a
+# period or comma before a space or the end is punctuation ("count 1. ship it") (the re-check 2's N11).
+NUMBERED = re.compile(r'(?<![0-9a-z])([0-9](?:[0-9]|[.,/](?=[0-9]))*)(?:\s*-\s*|\s*)' + NOUN)
 WHOLE = re.compile(r'[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+')
 BARE = re.compile(r'(?<![0-9a-z.,/+-])([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?![0-9a-z])(?![.,/][0-9])')
+# What comes just before a number that makes it a range or a fraction: a whole number that stands alone (never the end
+# of an id or another word, the re-check 2's S6), then a dash, a slash, "to" or "or"; and what makes it signed: a minus
+# or a plus that follows no letter or digit ("-1 ships", where "x-1" is a hyphenated word).
+RANGE_BEFORE = re.compile(r'(?<![0-9a-z])([0-9][0-9,]*)(?:\s*[-\u2013\u2014/\u2044\u2215]\s*|\s+(?:to|or)\s+)$')
+SIGN_BEFORE = re.compile(r'(?:^|[^0-9a-z])[-+\u2212]$')
+# Number words: one to ten before a counted noun are read as the number (the re-check 2's N11); any other, and any
+# before day or days, are refused with a request for digits, so a count or days written in words is never unchecked.
+ONE_TO_TEN = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+              'ten': 10}
+NUMBER_WORDS = sorted([*ONE_TO_TEN, 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+                       'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty',
+                       'ninety', 'hundred', 'thousand'], key=len, reverse=True)
+WORD_NUMBER = '(?:' + '|'.join(NUMBER_WORDS) + ')'
+WORDED = re.compile(r'(?<![0-9a-z-])(' + WORD_NUMBER + r'(?:(?:\s*-\s*|\s+)(?:and\s+)?' + WORD_NUMBER + r')*)'
+                    r'(?:\s*-\s*|\s+)' + NOUN)
 
 
 def _names_the_grant(words, contact, days, expect):
@@ -317,7 +356,9 @@ def _names_the_grant(words, contact, days, expect):
       id, as the first run shows them.
     - Every number next to day or days is DAYS, and every one next to ship(s), pairing(s) or machine(s) is the count;
       each a whole number, thousands commas allowed, never signed ("-1 ships"), a range ("1-2 ships", "1 to 2 ships")
-      or a fraction ("1/2 ships", "1.5 ships") (the re-check's S5).
+      or a fraction ("1/2 ships", "1.5 ships") (the re-check's S5). A dash after an id is punctuation ("yes 64cd8098 -
+      1 ship"), and so is a period before a space ("count 1. ship it"). The words one to ten before a counted noun are
+      that number ("one ship"); days, and a count past ten, are refused unless written in digits.
     - The count appears so, or, when no such noun has a number, as the words' only bare number (the days' numbers, and
       an id naming the contact, apart).
     The refusals name what is missing or wrong, never the words."""
@@ -330,8 +371,9 @@ def _names_the_grant(words, contact, days, expect):
     counted, taken = [], []
     for match in NUMBERED.finditer(folded):
         number, noun, before = match.group(1), match.group(2), folded[:match.start()]
-        if (not WHOLE.fullmatch(number) or before[-1:] in ('-', '+', '\u2212')
-                or re.search(r'[0-9]\s*[-\u2013\u2014/\u2044\u2215]\s*$|[0-9]\s+(?:to|or)\s+$', before)):
+        ranged = RANGE_BEFORE.search(before)
+        if (not WHOLE.fullmatch(number) or SIGN_BEFORE.search(before)
+                or (ranged and ranged.group(1) not in naming)):
             raise Problem(400, WORDS_NUMBER_SHAPE)
         value = int(number.replace(',', ''))
         if noun in COUNT_NOUNS:
@@ -341,6 +383,15 @@ def _names_the_grant(words, contact, days, expect):
         elif value != days:
             raise Problem(400, WORDS_DAYS_DIFFER.format(days=days))
         taken.append(match.span(1))
+    for match in WORDED.finditer(folded):
+        phrase, noun = match.group(1), match.group(2)
+        if noun not in COUNT_NOUNS:
+            raise Problem(400, WORDS_DAYS_IN_DIGITS.format(days=days))
+        if phrase not in ONE_TO_TEN:
+            raise Problem(400, WORDS_COUNT_IN_DIGITS.format(n=expect, s='' if expect == 1 else 's'))
+        if ONE_TO_TEN[phrase] != expect:
+            raise Problem(400, WORDS_COUNT_DIFFER.format(n=expect))
+        counted.append(ONE_TO_TEN[phrase])
     if counted:
         return
     bare = [int(m.group(1).replace(',', '')) for m in BARE.finditer(folded)

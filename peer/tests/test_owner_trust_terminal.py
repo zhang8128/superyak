@@ -241,6 +241,73 @@ def test_every_unicode_space_counts_as_a_plain_one(paired):
     assert notice['text'].endswith(f'words: "yes, {short_of(owner)}, 1 ship please"')
 
 
+def digit_ended(owner):
+    """An 8 or more character start of the contact's id, or of its participant id, that ends in a digit."""
+    for ident in (owner['id'].removeprefix('remote_'), owner['user_id']):
+        for n in range(8, len(ident) + 1):
+            if ident[n - 1].isdigit():
+                return ident[:n]
+
+
+@pytest.mark.parametrize('dash', [' — ', ' – ', ' - ', ', ', '-'])
+def test_a_dash_after_an_id_ending_in_a_digit_is_punctuation(paired, dash):
+    """A dash or a slash makes a range only after a whole number that stands alone, never after the digit that ends an
+    id (the re-check 2's S6): "yes <id> — 1 ship" grants with an em dash, an en dash and a hyphen, whatever the id
+    ends in, while "1-2 ships" still refuses. Mutation: the range read from the one character before the dash."""
+    owner = paired[2]
+    ident = digit_ended(owner)
+    assert ident and ident[-1].isdigit()
+    assert confirm(paired, first(paired)['confirm'], words=f'yes {ident}{dash}1 ship')['granted']
+
+
+def test_a_range_after_a_whole_number_still_refuses_beside_an_id(paired):
+    owner = paired[2]
+    for words in (f'yes {digit_ended(owner)}, 1-2 ships', f'yes {digit_ended(owner)} 1 - 2 ships'):
+        refused(400, SHAPE, confirm, paired, first(paired, expect=2)['confirm'], words=words, expect=2)
+
+
+@pytest.mark.parametrize('words, expect', [
+    ('yes {short}, one ship', 1),                                 # N11: one to ten in words before a counted noun
+    ('yes, grant {short} for One ship', 1),
+    ('Yes. {short}. Two machines (Serenity and Tardis).', 2),
+    ('yes {short}, a one-ship trust', 1),
+    ('yes {short}, TEN ships', 10),
+    ('yes {short}, count 1. ship it', 1),                         # N11: a period before a space is punctuation
+    ('yes {short}, 1. That is all.', 1),
+    ('yes {short}, 1 ship ❤️', 1),                       # N11: an emoji's selector is taken
+    ('yes {short}, 1 ship ✔️', 1),
+    ('️yes {short}, 1 ship', 1),
+])
+def test_natural_yeses_of_re_check_2_grant(paired, words, expect):
+    """The re-check 2's N11: a count of one to ten written in words, a period that ends a sentence after the count, and
+    an emoji carrying its variation selector."""
+    owner = paired[2]
+    filled = words.format(short=short_of(owner))
+    assert confirm(paired, first(paired, expect=expect)['confirm'], words=filled, expect=expect)['granted']
+
+
+@pytest.mark.parametrize('words, expect, word', [
+    ('yes {short}, three ships', 1, COUNT_DIFFER),
+    ('yes {short}, one ship', 2, COUNT_DIFFER),
+    ('yes {short}, eleven ships', 11, 'write it in digits (11 ships)'),
+    ('yes {short}, twenty-one ships', 21, 'write it in digits (21 ships)'),
+    ('yes {short}, one hundred ships', 100, 'write it in digits (100 ships)'),
+    ('yes {short}, 1 ship, ninety days', 1, 'write the number of days in digits (90 days)'),
+    ('yes {short}, one ship, ten days', 1, 'write the number of days in digits (90 days)'),
+    ('yes {short}, 1 ship for a thirty-day trust', 1, 'write the number of days in digits (90 days)'),
+    ('yes {short}, 0.1', 1, NO_COUNT),
+    ('yes {short}, 1.5 ships', 1, SHAPE),
+    ('yes {short}, 1.0 ships', 1, SHAPE),
+])
+def test_number_words_and_decimals_that_still_refuse(paired, words, expect, word):
+    """Number words past ten before a counted noun, and any before day or days, are refused with a request for digits,
+    so a count or a number of days in words is never left unchecked; a decimal point still makes a fraction."""
+    station, _, owner, _ = paired
+    filled = words.format(short=short_of(owner))
+    error = refused(400, word, confirm, paired, first(paired, expect=expect)['confirm'], words=filled, expect=expect)
+    assert filled not in error.message and rows(station) == []
+
+
 def test_a_code_shown_before_midnight_is_stale_after_it(paired):
     """The code binds the line, and the line names the day the trust ends, so a code shown before a UTC midnight
     refuses after it, as the browser's `shown` does. Mutation: the code not bound to the line."""
@@ -462,6 +529,8 @@ def wide(text):
     (lambda code: split(code, '\u3164'), 'control, format or invisible'),   # N7: a Hangul filler, drawn blank
     (lambda code: split(code, '\u115f'), 'control, format or invisible'),
     (lambda code: split(code, '\uffa0'), 'control, format or invisible'),
+    (lambda code: split(code, '\u2800'), 'control, format or invisible'),   # N12: the braille blank
+    (lambda code: split(code, ' \ufe0f'), 'give the yes without it'),       # N11: taken after a space, read past
     (lambda code: split(code, '\u00a0'), 'give the yes without it'),        # N10: a no-break space is a space
     (lambda code: split(code, ' ', 8), 'give the yes without it'),           # not show_code's grouping, but a code typed here
     (lambda code: wide(code), 'give the yes without it'),        # P14: fullwidth, NFKC reads it as the code
