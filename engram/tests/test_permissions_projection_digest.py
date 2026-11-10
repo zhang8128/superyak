@@ -1,6 +1,7 @@
 """The permission ledger's projection digest (docs/superpowers/plans/2026-11-03-projection-digest.md): each test names
 its task and the decision it pins."""
 import dataclasses
+import gc
 import hashlib
 import json
 import multiprocessing
@@ -1144,6 +1145,8 @@ def test_m1_a_torn_meta_index_page_never_reads_a_gate_at_enforce_as_off(tmp_path
     led = Ledger.open(tmp_path)
     raise_gate(led, "enforce")
     led.close()
+    time.sleep(0.025)  # ctime moves at the kernel's coarse tick (4 ms on the Pi): a tear inside the last commit's tick
+    # keeps size, counter, head and ctime, so the key, and the marker that trusts it, can't see it (1 run in 3, 11-09)
     with open(path, "r+b") as f:                     # the tear: no connection is open on the file here
         f.seek(offset)
         f.write(before)
@@ -1282,3 +1285,134 @@ def test_s6_a_fresh_file_carries_its_parts_in_memory_and_writes_its_digest_once(
     finally:
         copy.close()
         led.close()
+
+
+@pytest.fixture
+def own_held_lock(monkeypatch):
+    """A fresh lock of the module's own kind, with its busy flag and its queue, for one test. If the deadlock comes
+    back, the stuck worker holds only this lock, and the rest of the session's ledgers still open."""
+    monkeypatch.setattr(permission_ledger, "_HELD_LOCK", type(permission_ledger._HELD_LOCK)())
+    monkeypatch.setattr(permission_ledger, "_HELD_BUSY", False)
+    monkeypatch.setattr(permission_ledger, "_DEFERRED", [])
+
+
+@pytest.fixture
+def no_automatic_collection():
+    """Only the test's own `gc.collect()` frees its cycle: an automatic collection in between would free it outside
+    the section the test means, in this thread or another."""
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+
+
+def _a_bare_connection(home):
+    return Ledger._connect(ledger_path(home), read_only=True)        # its own finalizer: `_release(key, True)`
+
+
+def _a_states_readers(home):
+    return Ledger.open_read_only(home).state()  # the Ledger's own connection, collected unclosed, and two readers'
+
+
+@pytest.mark.parametrize("make, open_before, queued", [
+    (_a_bare_connection, 1, [True]),
+    (_a_states_readers, 3, [False, False, True]),           # the readers' `conn.close`, then the Ledger's connection
+], ids=["a-bare-connection", "a-states-readers"])
+def test_a_release_the_collector_runs_inside_a_hold_is_counted_when_the_hold_ends(
+        tmp_path, monkeypatch, own_held_lock, no_automatic_collection, make, open_before, queued):
+    """The Pi's Engram suite, 2026-11-09, hung 56 minutes in a test that touched none of this: `_hold` kept
+    `_HELD_LOCK` across its `os.stat`, a collection started there, and a finalizer of an earlier connection, freed
+    only by the collector, waited on that lock in the thread that held it. Such a release now waits for the end of
+    the section it interrupted and is counted there: the hold returns, and every count comes out right."""
+    _created(tmp_path)
+    path = ledger_path(tmp_path)
+    key = (os.stat(path).st_dev, os.stat(path).st_ino)
+    box = [make(tmp_path)]
+    box.append(box)                                     # reachable only through itself: the collector frees it
+    assert permission_ledger._HELD[key].count == open_before
+    del box
+    seen, real = [], os.stat
+
+    def stat(p, *args, **kwargs):
+        if not seen:
+            gc.collect()                                # where the suite's collection started: inside the hold
+            seen.append((sorted(c for k, c in permission_ledger._DEFERRED if k == key),
+                         permission_ledger._HELD[key].count))
+        return real(p, *args, **kwargs)
+
+    monkeypatch.setattr(permission_ledger, "os", SimpleNamespace(**{**vars(os), "stat": stat}))
+    held = []
+    worker = threading.Thread(target=lambda: held.append(permission_ledger._hold(path)), daemon=True)
+    worker.start()
+    worker.join(30)
+    assert not worker.is_alive(), "the hold waited on its own lock"
+    assert seen == [(queued, open_before)]              # mid-section: every release queued, no count touched yet
+    assert held == [key] and permission_ledger._HELD[key].count == 1 and not permission_ledger._DEFERRED
+    permission_ledger._release(key)
+    assert key not in permission_ledger._HELD
+
+
+def test_a_release_the_collector_runs_inside_a_last_release_is_counted_after_it(
+        tmp_path, monkeypatch, own_held_lock, no_automatic_collection):
+    """Tardis's case: the last connection on one ledger file closes, and inside that section, after `_HELD` has
+    dropped its key, the collector runs a finalizer for a connection on a second file, that file's last. That release
+    waits and is counted when the first one's section ends. The first key can't come back that way: at its last count
+    no other connection of this process holds it, and `_Conn.close` detaches its own finalizer before it releases."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    _created(first)
+    _created(second)
+    kept = Ledger._connect(ledger_path(first), read_only=True, shared=True)   # closed from the worker
+    k1 = kept._key
+    box = [Ledger._connect(ledger_path(second), read_only=True)]
+    k2 = box[0]._key
+    box.append(box)
+    del box
+    seen, real = [], permission_ledger._close_unheld
+
+    def closing():
+        if not seen:
+            gc.collect()                                # inside the last release's section, after its key is gone
+            seen.append((k1 in permission_ledger._HELD, list(permission_ledger._DEFERRED)))
+        real()
+
+    monkeypatch.setattr(permission_ledger, "_close_unheld", closing)
+    worker = threading.Thread(target=kept.close, daemon=True)
+    worker.start()
+    worker.join(30)
+    assert not worker.is_alive(), "the release waited on its own lock"
+    assert seen == [(False, [(k2, True)])]              # mid-section: the first key gone, the second's release queued
+    assert k1 not in permission_ledger._HELD and k2 not in permission_ledger._HELD and not permission_ledger._DEFERRED
+    assert {k for k, _ in permission_ledger._UNHELD} == {k2}   # collected unclosed: its descriptors wait
+    Ledger.open_read_only(first).close()                # the next hold and release close them
+    assert not permission_ledger._UNHELD
+
+
+def test_a_release_closes_its_descriptors_before_another_thread_can_hold_the_file(tmp_path, monkeypatch):
+    """The reader's Should 3, older than the deadlock: `_release` closed the file's descriptors after letting go of
+    the lock, so a hold of the same file in between could open its own and take a SQLite lock, which the late close
+    dropped. Now the close comes first: a hold started while a release is closing waits for it."""
+    _created(tmp_path)
+    path = ledger_path(tmp_path)
+    conn = Ledger._connect(path, read_only=True, shared=True)              # closed from another thread
+    closing, go, order, real = threading.Event(), threading.Event(), [], os.close
+
+    def close(fd):
+        if not closing.is_set():
+            closing.set()
+            go.wait(10)                                 # the release is mid-close; let the other thread try to hold
+            order.append("closed")
+        return real(fd)
+
+    monkeypatch.setattr(permission_ledger, "os", SimpleNamespace(**{**vars(os), "close": close}))
+    releaser = threading.Thread(target=conn.close, daemon=True)
+    releaser.start()
+    assert closing.wait(10)
+    holder = threading.Thread(target=lambda: order.append(("held", permission_ledger._hold(path))), daemon=True)
+    holder.start()
+    holder.join(0.5)                                    # it must still be waiting for the lock
+    go.set()
+    releaser.join(10)
+    holder.join(10)
+    assert order[0] == "closed" and order[1][0] == "held"
+    permission_ledger._release(order[1][1])
