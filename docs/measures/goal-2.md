@@ -128,8 +128,9 @@ The downloads change (`tardis/downloads` 0793a1d1, train-1115 8b310ac2) lets a b
 at its current hash for a year, and compresses them. These rows test the claim above: a warm load's files end near its
 first byte, and a cold load moves about a quarter of the bytes.
 
-**How:** `scripts/first_paint_rounds.py run --rounds 4 --runs 10 --pin funnel=208.111.34.11`. Each round runs cold then
-warm on both paths, 10 loads each, so every set is 160 loads. Every load is kept in
+**How:** `uv run --project peer python scripts/first_paint_rounds.py run --label before --rounds 4 --runs 10 --pin
+funnel=208.111.34.11 --out docs/measures/data/goal-2-train-1115.jsonl`, with `--label before2` and `--label after` for
+the other two sets. Each round runs cold then warm on both paths, 10 loads each, so every set is 160 loads. Every load is kept in
 [`data/goal-2-train-1115.jsonl`](data/goal-2-train-1115.jsonl) (sha256 `cf7aedb1fc863545…`), and `summary` reads it back.
 The machine, connection, Playwright 1.62.0 and Chromium 151.0.7922.34 are as above. No load failed in any set.
 - **before:** main 728b0f64, 19:21:52Z to 19:23:33Z.
