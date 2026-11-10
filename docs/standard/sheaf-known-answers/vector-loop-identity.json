@@ -1,0 +1,35 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "One node with an identity loop. Both of the loop's maps land in the same columns of the coboundary, so they cancel: delta is zero, and the loop is a circle, H0 = 1 and H1 = 1. An implementation that writes the head map over the tail map, instead of adding them, gets H0 = 0.",
+ "nodes": [
+  {
+   "id": "v",
+   "dim": 1
+  }
+ ],
+ "edges": [
+  {
+   "tail": "v",
+   "head": "v",
+   "dim": 1,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "local": {
+  "v": [
+   3.0
+  ]
+ },
+ "expect": {
+  "dim_h0": 1,
+  "dim_h1": 1,
+  "glued": true,
+  "residual_edges": [],
+  "residuals": [
+   0.0
+  ],
+  "distance_squared": 0.0
+ }
+}

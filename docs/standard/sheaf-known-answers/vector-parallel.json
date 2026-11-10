@@ -1,0 +1,35 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Two parallel identity edges from a to b. Their rows of the coboundary are equal, so its rank is 1: H0 = 1, and the second edge adds a loop, H1 = 1.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 1
+  },
+  {
+   "id": "b",
+   "dim": 1
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 1,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 1,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "expect": {
+  "dim_h0": 1,
+  "dim_h1": 1
+ }
+}
