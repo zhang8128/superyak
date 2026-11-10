@@ -97,6 +97,67 @@ function announce(message) {
   });
 }
 
+// What was pressed says it's working, on a slow link only. It's on the thing pressed and not on main: aria-busy on main would
+// make a screen reader lose the page that's still there. It's held in state because render() replaces the element. There's
+// one at a time: a new press, or a sign-out, ends the last one's timer as well as its mark.
+const PRESSED_AFTER_MS = 300;
+let pressedTimer = null, pressedNow = null;
+function clearPressed() {
+  clearTimeout(pressedTimer);
+  pressedNow = null;
+  state.pressed = null;
+  document.querySelectorAll(".pressed-note").forEach((note) => { note.closest("[aria-busy]")?.removeAttribute("aria-busy"); note.remove(); });
+  drawComposerTo();
+}
+function drawPressed() {
+  const element = state.pressed && document.querySelector(state.pressed.selector);
+  if (!element || element.querySelector(".pressed-note")) return;
+  element.setAttribute("aria-busy", "true");
+  (element.querySelector(".item-side") || element).insertAdjacentHTML("beforeend", `<span class="pressed-note">${escapeHtml(state.pressed.words)}</span>`);
+}
+async function whilePressed(selector, words, work) {
+  clearPressed();
+  const mine = pressedNow = { selector, words };
+  pressedTimer = setTimeout(() => { state.pressed = mine; drawPressed(); drawComposerTo(); announce(words); }, PRESSED_AFTER_MS);
+  try { return await work(); }
+  finally { if (pressedNow === mine) clearPressed(); }
+}
+
+// Whose words these are at the box, always, because the heading and the room list can be screens away from it. While the next
+// room opens, the box still goes to this one, and the line says so.
+function chatTitle(id) { return (state.home?.chats || []).find((item) => item.id === id)?.title; }
+function composerTo(room) {
+  const next = state.pressed && state.selectedChatId && state.selectedChatId !== room.id ? chatTitle(state.selectedChatId) : null;
+  return next ? `${next} is opening. This still goes to ${room.title}.` : `To ${room.title}`;
+}
+function drawComposerTo() {
+  const line = document.querySelector("#composer-to");
+  if (line && state.room) line.textContent = composerTo(state.room);
+}
+// Where a failed send's words or someone's half a sentence went, said at the box they're now looking at, while that room is still theirs.
+function composerNote() {
+  const note = state.composerNote;
+  return note && chatTitle(note.roomId) ? `<p class="meta words-kept">${escapeHtml(note.words)}</p>` : "";
+}
+// A refusal is an answer. With no answer, or a server's or gateway's failure, the home may have taken it and only the answer was lost.
+function mayHaveGone(error) { return !(error.status >= 400 && error.status < 500); }
+function unsentWords(id) {
+  if (!readChatDraft(id).body.trim()) return null;
+  const where = chatTitle(id) || "the room you left";
+  return state.unsentMayHaveGone ? `Your message may not have been sent. It's still in the box in ${where}, so check that room before sending it again.` : `Your message wasn't sent. It's still in the box in ${where}.`;
+}
+// The failed send's status has just gone from the screen, so it's said once more.
+function sayUnsent() {
+  const words = state.unsentIn && unsentWords(state.unsentIn);
+  state.unsentIn = null;
+  if (words) setFlash(words, true);
+}
+function aboutRoom(room, words) { return state.room?.id === room.id ? words : `${room.title}: ${words}`; }  // the next room may have opened meanwhile
+function reasonOf(error) {
+  const reason = error.status === 0 ? "Connection lost." : error.message;
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
+}
+
 function setFlash(message, error = false) {
   state.flash = { message, error };
   announce(message);
@@ -116,7 +177,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -135,11 +196,14 @@ async function api(path, options = {}) {
   } catch (_) {
     throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   }
-  const type = response.headers.get("content-type") || "";
-  const data = type.includes("application/json") ? await response.json() : await response.text();
+  const isJson = (response.headers.get("content-type") || "").includes("application/json");
+  const data = await (isJson ? response.json() : response.text()).catch(() => undefined);
   if (!response.ok) {
     throw new ApiError(data?.error || "Request could not be completed", response.status);
   }
+  // Every route read here answers JSON. Anything else is something in the way, like a sign-in page, or an answer cut
+  // short. No yes can be read, and the home may or may not have taken it, so it's a lost connection and a send's words stay.
+  if (!isJson || data === undefined) throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
   return data;
 }
 
@@ -178,7 +242,7 @@ function layout(content) {
         ${state.connector ? navLink("apps", "Connected apps", "⇄") : ""}
         ${state.imprints ? navLink("accounts", "Accounts", "☺") : ""}
       </nav>
-      <div class="sidebar-foot">Private work stays on this peer until you choose an audience.</div>
+      <div class="sidebar-foot">Whoever runs this home, who may not be you, can read everything stored on it, and so can any AI agent they run on its computer.</div>
     </aside>
     <div class="main-column">
       <header class="topbar">
@@ -212,8 +276,12 @@ function demoChoices() {
 
 function showLogin(message = "") {
   dataLoadSequence++;
+  announcer.textContent = "";  // the next person on this browser is here, and a room's title isn't theirs
+  roomDrawn = null;
   state.me = null;
   state.home = null;
+  state.room = null;  // the next person on this browser starts from the route, and no timer asks about this room for them
+  state.roomGone = null;
   app.innerHTML = `<main class="login-page" id="main-content">
     <div class="login-wrap">
       <section class="login-story">
@@ -235,7 +303,7 @@ function showLogin(message = "") {
         </form>
         ${state.demoAccounts.length ? '</details>' : ''}
         <p class="meta login-help">This home is run by its owner, who can read what's stored here.</p>
-        <details class="invitation-redeem"><summary>Use an invitation</summary><p>The person who runs this home gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><p class="meta" data-testid="before-an-account">Whoever runs this home, and any AI agent they run on its computer, can read what's stored here. It's a prototype: please don't put real patient information in it yet.</p><button class="button secondary" type="submit">Create my account</button></form></details>
+        <details class="invitation-redeem"><summary>Use an invitation</summary><p>The person who runs this home gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><p class="meta" id="before-an-account" data-testid="before-an-account">Whoever runs this home, and any AI agent they run on its computer, can read what's stored here. It's a prototype: please don't put real patient information in it yet.</p><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" aria-describedby="before-an-account" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
         <p class="meta login-help">No account? The person who runs this home invites people: ask them for an invitation.</p>
       </section>
     </div>
@@ -304,7 +372,6 @@ function choiceSpace(space, selected) {
 }
 
 function effectiveAudience(active) {
-  if (!active) return "Nobody can see this draft.";
   const names = (active.audience_users || []).map(contactName);
   const spaces = (active.audience_details || []).map((space) => `${space.name}: ${space.members.map((member) => member.name).join(", ")} (${space.kind === "organization" ? "current and future members" : "selected at activation"})`);
   const routes = [...names, ...spaces];
@@ -345,13 +412,13 @@ function activePanel(layer, active) {
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<div class="active-panel unavailable"><h3>Active release details are unavailable</h3><p>The peer still reports an active release. Its current audience and controls could not be loaded, so no change is being claimed.</p></div>`;
   }
-  if (!active) return `<div class="active-panel"><h3>Sharing is off on this peer</h3><p>Your saved draft is private. Preview a concrete saved version before turning it on.</p></div>`;
+  if (!active) return `<div class="active-panel"><h3>Sharing is off on this peer</h3><p>No other account can open your saved draft. Preview a concrete saved version before turning it on.</p></div>`;
   const publicLink = `/public/?layer=${pathPart(layer.id)}`;
   const routeControls = [
     ...(active.audience_users || []).map((id) => `<button class="button ghost" data-action="revoke-route" data-route-kind="person" data-id="${escapeHtml(id)}">Stop sharing directly with ${escapeHtml(contactName(id))}</button>`),
     ...(active.audience_spaces || []).map((id) => `<button class="button ghost" data-action="revoke-route" data-route-kind="space" data-id="${escapeHtml(id)}">Turn off ${escapeHtml(spaceName(id))}</button>`),
   ].join("");
-  return `<div class="active-panel"><h3>Current release</h3><p><strong>Effective access:</strong> ${escapeHtml(effectiveAudience(active))}</p><p>Overlapping routes stay effective independently. A role or organization membership does not reveal anything you did not share.</p><div class="button-row">
+  return `<div class="active-panel"><h3>Current release</h3><p><strong>Effective access:</strong> ${escapeHtml(effectiveAudience(active))}</p><p>Overlapping routes stay effective independently. An account's role or organization membership does not reveal anything you did not share.</p><div class="button-row">
     ${active.public ? `<a class="button secondary" href="${escapeHtml(publicLink)}" target="_blank" rel="noopener">View as a visitor</a><button class="button secondary" data-action="public-off">Turn off public link</button>` : ""}
     <button class="button danger secondary" data-action="withdraw">Stop all sharing</button>
   </div>${routeControls ? `<div class="button-row" aria-label="Turn off individual audience routes">${routeControls}</div>` : ""}</div>`;
@@ -361,7 +428,7 @@ function previewDialog() {
   const layer = state.preview;
   if (!layer) return "";
   const spaces = layer.audience_details.map((space) => `${space.name}: ${space.members.map((member) => member.name).join(", ")} (${space.kind === "organization" ? "current and future members can see this release" : "these people selected at activation"})`);
-  return `<dialog aria-labelledby="preview-title"><div class="dialog-body"><p class="eyebrow">Audience preview</p><h2 id="preview-title">Preview version ${layer.version}</h2><p>This exact saved version will become active. Later draft edits stay private until you activate again.</p><div class="preview-paper"><h3>${escapeHtml(layer.title)}</h3><p>${escapeHtml(layer.body)}</p></div><h3>Selected attachments</h3>${layer.files.length ? layer.files.map((file) => `<p><a href="/api/files/${pathPart(file.id)}" target="_blank" rel="noopener">Inspect ${escapeHtml(file.name)}</a><small class="meta"> · ${formatBytes(file.size)} · ${escapeHtml(file.media_type)}</small></p><details><summary>File details</summary><p class="fingerprint meta">SHA-256: ${escapeHtml(file.digest)}</p></details>`).join("") : "<p>No attachments selected.</p>"}<h3>Who would see it</h3><p>${[...layer.people.map((person) => person.name), ...spaces, ...(layer.public ? ["Anyone with the public link"] : [])].map(escapeHtml).join(" · ") || "Only you — no audience is selected."}</p>${layer.public ? "<p>Public access cannot exclude an individual.</p>" : ""}<div class="button-row"><button class="button" data-action="activate">Turn on version ${layer.version}</button><button class="button secondary" data-action="close-dialog">Keep it private</button></div></div></dialog>`;
+  return `<dialog aria-labelledby="preview-title"><div class="dialog-body"><p class="eyebrow">Audience preview</p><h2 id="preview-title">Preview version ${layer.version}</h2><p>This exact saved version will become active. No other account can open later draft edits until you activate again.</p><div class="preview-paper"><h3>${escapeHtml(layer.title)}</h3><p>${escapeHtml(layer.body)}</p></div><h3>Selected attachments</h3>${layer.files.length ? layer.files.map((file) => `<p><a href="/api/files/${pathPart(file.id)}" target="_blank" rel="noopener">Inspect ${escapeHtml(file.name)}</a><small class="meta"> · ${formatBytes(file.size)} · ${escapeHtml(file.media_type)}</small></p><details><summary>File details</summary><p class="fingerprint meta">SHA-256: ${escapeHtml(file.digest)}</p></details>`).join("") : "<p>No attachments selected.</p>"}<h3>Who would see it</h3><p>${[...layer.people.map((person) => person.name), ...spaces, ...(layer.public ? ["Anyone with the public link"] : [])].map(escapeHtml).join(" · ") || "No other account — no audience is selected."}</p>${layer.public ? "<p>Public access cannot exclude an individual.</p>" : ""}<div class="button-row"><button class="button" data-action="activate">Turn on version ${layer.version}</button><button class="button secondary" data-action="close-dialog">Not yet</button></div></div></dialog>`;
 }
 
 function spaceDialog() {
@@ -393,12 +460,12 @@ function layerEditor(layer) {
   const instructions = layer.kind === "instructions";
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
-  return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your private workspace</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
+  return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
     <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
-      ${instructions ? `<fieldset class="field"><legend>Ships</legend><small>Only your own ships can read instructions, and only once you turn on a version.</small><div class="choices">${shipChoices(layer)}</div></fieldset>` : `<fieldset class="field"><legend>Named people</legend><small>People only see an activated version. Selecting someone here does not reveal the private draft.</small><div class="choices">${state.contacts.map((contact) => choiceContact(contact, layer.audience_users || [])).join("") || `<p class="meta">No contacts are available yet.</p>`}</div></fieldset>
+      ${instructions ? `<fieldset class="field"><legend>Ships</legend><small>Only your own ships get these, and only once you turn on a version. A ship sends them to its AI company.</small><div class="choices">${shipChoices(layer)}</div></fieldset>` : `<fieldset class="field"><legend>Named people</legend><small>People only see an activated version. Selecting someone here does not reveal the private draft.</small><div class="choices">${state.contacts.map((contact) => choiceContact(contact, layer.audience_users || [])).join("") || `<p class="meta">No contacts are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Care circles and spaces</legend><div class="choices">${state.home.spaces.map((space) => choiceSpace(space, layer.audience_spaces || [])).join("") || `<p class="meta">No spaces are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Public access</legend><label class="choice public-choice"><input type="checkbox" name="public" ${layer.public ? "checked" : ""}><span class="choice-copy"><strong>Anyone with the public link</strong><small>Only the activated version and its chosen attachments are public.</small></span></label></fieldset>
       <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/gif,.csv,.json"><p id="upload-status" class="inline-message" role="status"></p></fieldset>`}
@@ -415,7 +482,7 @@ function layerEditor(layer) {
 
 function layersView() {
   const layer = layerForEditor();
-  return `<header class="page-head"><div><p class="eyebrow">Private first</p><h1>My sharing layers</h1><p class="lede">Build your sharing layers at your own pace. Save them privately, see what each audience would see, and turn them on when you're ready.</p></div><button class="button" data-action="new-layer">New layer</button></header>
+  return `<header class="page-head"><div><p class="eyebrow">Draft first</p><h1>My sharing layers</h1><p class="lede">Build your sharing layers at your own pace. Save them, see what each audience would see, and turn them on when you're ready.</p></div><button class="button" data-action="new-layer">New layer</button></header>
     <div class="workspace"><aside class="workspace-list"><div class="item-list">${state.home.layers.map(layerItem).join("") || empty("No layers yet", "Start with a private draft. You do not need to choose an audience.")}</div></aside>${layer ? layerEditor(layer) : `<section>${empty("Choose a layer", "Select a draft from the list or start a new one.")}</section>`}</div>${sourcePanel()}`;
 }
 
@@ -542,18 +609,29 @@ const ROOM_PAGE = 100;
 const roomPath = (id) => `/api/chats/${pathPart(id)}`;
 const withoutRepeats = (older, newer) => { const seen = new Set(older.map((message) => message.id)); return newer.filter((message) => !seen.has(message.id)); };
 
-function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
+function loadRoom(id) { return countedRead(() => api(`${roomPath(id)}?limit=${ROOM_PAGE}`)); }
+
+// Every read of a room but an ask, so that an ask can step aside for them (askRoom).
+let refreshesStarted = 0, refreshesRunning = 0;
+async function countedRead(read) {
+  refreshesStarted++;
+  refreshesRunning++;
+  try { return await read(); }
+  finally { refreshesRunning--; }
+}
 
 // The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
 // (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
 // place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
 // refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
-async function refreshRoom(room) {
+function refreshRoom(room) { return countedRead(() => readRoomNews(room)); }
+
+async function readRoomNews(room, options = {}) {
   const shown = state.room?.id === room.id ? state.room : room;
-  if (!shown.paged) return api(roomPath(room.id));
+  if (!shown.paged) return api(roomPath(room.id), options);
   let fresh = [], seq = shown.seq, answer;
   do {
-    answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`);
+    answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`, options);
     if (!answer.paged) return answer;  // the station stopped paging this room: take it whole
     fresh = [...fresh, ...(answer.messages || [])];
     seq = answer.seq;
@@ -591,12 +669,158 @@ async function loadEarlier() {
   }
 }
 
+// A room shows its new messages (spec 2026-11-04). While a room is open and its tab visible, the page asks what's new,
+// one ask at a time, and an arrival goes on the end of the list: a render would drop a selection and close what's open.
+const ROOM_ASK_MS = 5000, ROOM_ASK_WHOLE_MS = 30000, ROOM_ASK_LONGEST_MS = 60000, ROOM_ASK_GIVE_UP_MS = 30000, ROOM_ASK_SAY_AFTER = 3, ROOM_NEAR_NEWEST_PX = 120;
+let roomAskTimer = null, roomAsking = false, roomAskFailures = 0, roomAsked = null;
+
+function roomToAsk() {
+  return state.me && state.home && state.room && routeParts().route === "chats" && document.visibilityState === "visible" ? state.room : null;
+}
+
+// A room that isn't paged (a received room) is read whole at every ask, and a home that pulls hears news about once a
+// minute. So it waits longer, and longer still as it grows, which keeps what a tab costs about level.
+function roomAskWait(room) {
+  const base = room.paged ? ROOM_ASK_MS : Math.max(ROOM_ASK_WHOLE_MS, (room.messages?.length || 0) * 30);
+  return Math.min(base * 2 ** roomAskFailures, Math.max(base, ROOM_ASK_LONGEST_MS));
+}
+
+// Another room starts over: no failures, and a long wait armed for a big received room doesn't carry into it.
+function startOverIfAnotherRoom(room) {
+  if (roomAsked === room.id) return;
+  roomAsked = room.id;
+  roomAskFailures = 0;
+  sayRoomUnreachable(false);
+  clearTimeout(roomAskTimer);
+  roomAskTimer = null;
+}
+
+function keepAskingRoom() {
+  const room = roomToAsk();
+  if (!room) return;
+  startOverIfAnotherRoom(room);
+  if (roomAskTimer !== null || roomAsking) return;
+  roomAskTimer = setTimeout(askRoom, roomAskWait(room) * (0.8 + Math.random() * 0.4));  // a home's tabs don't fall into step, or come back in step
+}
+
+async function askRoom() {
+  roomAskTimer = null;
+  const room = roomToAsk();
+  if (!room || roomAsking) return;
+  startOverIfAnotherRoom(room);
+  // An older answer can move the room's place back and put what it fetched after newer messages, so an ask never
+  // competes with another read: it steps aside, and its answer is dropped if one started after it did.
+  if (refreshesRunning) { keepAskingRoom(); return; }
+  const who = identityKey(state.me), started = refreshesStarted;
+  let answer = null, failure = null;
+  roomAsking = true;
+  try { answer = await readRoomNews(room, { signal: AbortSignal.timeout(ROOM_ASK_GIVE_UP_MS) }); }  // a hung answer would stop the asking
+  catch (error) { failure = error; }
+  roomAsking = false;
+  if (identityKey(state.me) !== who || state.room?.id !== room.id) { keepAskingRoom(); return; }
+  if (failure?.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+  if (failure?.status === 403 || failure?.status === 404) { await roomRefused(room); return; }
+  if (failure || !Array.isArray(answer?.messages)) {  // a page in the way can answer 200, and it isn't the room
+    roomAskFailures++;
+    if (roomAskFailures >= ROOM_ASK_SAY_AFTER) sayRoomUnreachable(true);
+    keepAskingRoom();
+    return;
+  }
+  roomAskFailures = 0;
+  sayRoomUnreachable(false);
+  try { if (refreshesStarted === started) showArrivals(answer); }
+  finally { keepAskingRoom(); }
+}
+
+// Removed, or the room is gone. The list catches up, the person is told, and what they'd typed is where they can copy it.
+async function roomRefused(room) {
+  const gone = { who: identityKey(state.me), words: readChatDraft(room.id).body };
+  const ended = () => showLogin("Your session ended. Sign in again; text in an open form has not been sent.");
+  try { await loadData(); }
+  catch (error) { if (error.status === 401) { ended(); return; } }  // another account took this browser: its screen isn't this person's
+  try { await loadRoute(); }
+  catch (error) { if (error.status === 401) { ended(); return; } setFlash(error.message, true); }
+  if (!state.me) return;
+  if (state.room?.id !== room.id) {
+    state.roomGone = gone;
+    state.unsentIn = null;  // the note says where those words are; "still in the box" wouldn't be true
+    state.flash = null;
+    announce("You can't open that room any more.");
+  }
+  render();
+}
+
+function roomGoneNote() {
+  const gone = state.roomGone;
+  if (!gone || gone.who !== identityKey(state.me)) return "";
+  return `<div class="notice"><p>You can't open that room any more.${gone.words ? " Your unsent text, to copy:" : ""}</p>${gone.words ? `<pre class="draft-kept">${escapeHtml(gone.words)}</pre>` : ""}</div>`;
+}
+
+function sayRoomUnreachable(on) {
+  state.roomUnreachable = on;
+  const line = document.querySelector("#room-reach");
+  if (line) line.hidden = !on;
+}
+
+// state.room takes the answer whole, so a later render keeps what's appended and the next ask doesn't fetch it. Nothing
+// else on the page is touched. What's new goes on the end, where a render draws it too, even a message with an older
+// `created` (chat paging's known limit): holding one back only hides it.
+function showArrivals(answer) {
+  const known = new Set((state.room.messages || []).map((message) => message.id));
+  if (!answer.messages.some((message) => !known.has(message.id))) return;
+  const following = seesNewestMessage();
+  state.room = answer;
+  const list = app.querySelector(".messages");
+  if (list?.dataset.room !== answer.id) return;
+  // A whole room's answer can drop what's drawn: a queued reply in a received room comes back with the host's id.
+  const current = new Set(answer.messages.map((message) => message.id)), drawn = new Set();
+  for (const node of list.querySelectorAll(".message[data-message]")) {
+    if (current.has(node.dataset.message)) drawn.add(node.dataset.message);
+    else node.remove();
+  }
+  const fresh = answer.messages.filter((message) => !drawn.has(message.id));
+  if (!fresh.length) return;
+  list.querySelector(":scope > .empty")?.remove();
+  list.insertAdjacentHTML("beforeend", fresh.map((message) => messageMarkup(message, answer)).join(""));
+  const news = fresh.filter((message) => !isSelf(message.author_id)).length;  // your own words coming back aren't news
+  if (news) announce(news === 1 ? "1 new message" : `${news} new messages`);
+  if (following) {
+    const { end, start } = newestMessagePlace();
+    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+  } else if (news) {
+    state.roomUnseen = answer.id;
+    const button = document.querySelector('[data-action="new-messages"]');
+    if (button) button.hidden = false;
+  }
+}
+
+function seenNewMessages() {
+  state.roomUnseen = null;
+  const button = document.querySelector('[data-action="new-messages"]');
+  if (button) button.hidden = true;
+}
+
+function newMessagesButton(room) {
+  return `<button class="button secondary new-messages" type="button" data-action="new-messages"${state.roomUnseen === room.id ? "" : " hidden"}>New messages</button>`;
+}
+
+function roomReachLine() {
+  return `<p id="room-reach" class="inline-message error" role="status"${state.roomUnreachable ? "" : " hidden"}>Can't reach this home. New messages will show when it's back.</p>`;
+}
+
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(roomAskTimer);
+  roomAskTimer = null;
+  if (document.visibilityState === "visible") askRoom();
+});
+window.addEventListener("scroll", () => { if (state.roomUnseen && seesNewestMessage()) seenNewMessages(); }, { passive: true });
+
 function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
   const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
   const author = mine ? "You" : system && message.author_id === system.id ? "Station" : message.unverified ? UNVERIFIED_AUTHOR : participantName(message.author_id);
   const delivery = messageDelivery(message, room);
-  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
+  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}" data-message="${escapeHtml(message.id)}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
 }
 
 // Ship briefs S4: whose words a revision is, from its own author fields and never from a name. The room's owner when
@@ -669,14 +893,19 @@ function roomBrief(room) {
   const editor = edit
     ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
     : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
-  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
+  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
 // Work board 5.2: the room's board, read from its own route and never from messages. A received room has none.
+async function readBoard(room) {
+  if (!room || room.origin) return null;
+  try { return { roomId: room.id, items: await api(`/api/chats/${pathPart(room.id)}/board`) }; }
+  catch (_) { return { roomId: room.id, items: null }; }
+}
+
 async function loadBoard(room) {
-  if (!room || room.origin) { state.board = null; return; }
-  try { state.board = { roomId: room.id, items: await api(`/api/chats/${pathPart(room.id)}/board`) }; }
-  catch (_) { state.board = { roomId: room.id, items: null }; }
+  const board = await readBoard(room);
+  if (state.room?.id === room?.id) state.board = board;  // or a late answer for a room the person has left
 }
 
 function boardStatus(item) {
@@ -699,8 +928,8 @@ function isReplaced(room) {
 // Board clicks are ignored for a moment after the panel renders: a double click's second press must not land on
 // whatever the first press's re-render moved under the pointer.
 const BOARD_CLICK_GUARD_MS = 400;
-// The panel on screen belongs to one room (data-room). While the next room loads, state.room is already that room but
-// the old panel is still shown: a write from it must not go to the room the person cannot see.
+// The panel on screen belongs to one room (data-room). state.room is the room on screen, and moves only when the next room is
+// ready to draw (openChat, loadRoute), so a write can't go to a room the person can't see; this is the second line.
 function boardOnScreen(room) { return document.querySelector(".room-board")?.dataset.room === room.id; }
 function boardClickBlocked() { return Date.now() - (state.boardRenderedAt || 0) < BOARD_CLICK_GUARD_MS; }
 
@@ -879,16 +1108,19 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
   if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
+  const who = identityKey(state.me);
   try {
     const answer = await api(`/api/chats/${pathPart(room.id)}${path}`, { method: "POST", json });
+    if (identityKey(state.me) !== who) return;  // finally still runs, and frees the panel
     saved();
     state.boardDone = null; state.boardAsk = null;
     // A close that released someone else's claim says whose (the station's name, escaped where shown).
-    setFlash(answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message);
+    setFlash(aboutRoom(room, answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message));
     ok = true;
   } catch (error) {
     if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
-    setFlash(error.message, true);
+    if (identityKey(state.me) !== who) return;
+    setFlash(aboutRoom(room, error.message), true);
   } finally {
     state.boardSaving = false;
     if (state.me && state.room?.id === room.id) {
@@ -897,7 +1129,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     }
     render();
     if (!ok && state.boardDone?.roomId === room.id) document.querySelector("#board-outcome")?.focus();
-    else if (focusKey !== undefined) focusBoardItem(focusKey);
+    else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
 
@@ -906,7 +1138,7 @@ async function postBoardItem(form) {
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -942,8 +1174,8 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
-    ${replaced ? `<div class="composer composer-replaced"><p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>`}
+  return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
+    ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
@@ -953,13 +1185,13 @@ function chatDialog() {
   const room = state.room;
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const picked = new Set(state.chatPicked || []);
-  const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  const title = state.chatDialog === "new" ? "Start a chat" : "Start a new linked chat";
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form" data-kind="${escapeHtml(state.chatDialog)}" data-room="${escapeHtml(room?.id || "")}">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
-  return `<header class="page-head"><div><p class="eyebrow">Private conversation</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New private chat</button></header>
-    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
+  return `<header class="page-head"><div><p class="eyebrow">Conversations</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New chat</button></header>
+    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item${room.id === state.room?.id ? " selected" : ""}" ${room.id === state.room?.id ? 'aria-current="true"' : ""} data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : `${roomGoneNote()}${empty("Choose a chat", "Open a room or create a new chat.")}`}</div></div>${chatDialog()}`;
 }
 
 // __main__.contact_state's words: held, and why (owner trust Task 7: a retired peer, or a ship whose owner's trust
@@ -1156,7 +1388,7 @@ function resourceDelivery(id) {
 
 function accountSupport() {
   if (!state.me.is_admin) return "";
-  return `<section class="section"><div class="section-head"><div><h2>Account support</h2><p class="meta">Account support does not open private chats or drafts.</p></div><button class="button secondary" data-action="invite">Create invitation</button></div>${state.invitation ? `<div class="notice"><strong>One-use invitation</strong><p>Share this token through a channel you trust. It expires ${formatDate(state.invitation.expires)}.</p><div class="code-box">${escapeHtml(state.invitation.token)}</div></div>` : ""}<div class="item-list">${state.accounts.map((account) => `<div class="item"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>@${escapeHtml(account.username)} · joined ${formatDate(account.created)}</span></span><span class="badge">${roleLabel(roleOf(account))}</span></div>`).join("")}</div></section>`;
+  return `<section class="section"><div class="section-head"><div><h2>Account support</h2><p class="meta">Account support does not open anyone's chats or drafts.</p></div><button class="button secondary" data-action="invite">Create invitation</button></div>${state.invitation ? `<div class="notice"><strong>One-use invitation</strong><p>Share this token through a channel you trust. It expires ${formatDate(state.invitation.expires)}.</p><div class="code-box">${escapeHtml(state.invitation.token)}</div></div>` : ""}<div class="item-list">${state.accounts.map((account) => `<div class="item"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>@${escapeHtml(account.username)} · joined ${formatDate(account.created)}</span></span><span class="badge">${roleLabel(roleOf(account))}</span></div>`).join("")}</div></section>`;
 }
 
 function accessRequests() {
@@ -1211,25 +1443,31 @@ function cloudControl(room, replaced) {
 }
 
 async function markRoom(room, earlier) {
+  const who = identityKey(state.me);
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "POST", json: { earlier } });
   } catch (error) {
-    setFlash(error.message, true);
+    if (identityKey(state.me) !== who) return;
+    setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
-  await refresh("This room is kept away from cloud models.");
+  if (identityKey(state.me) !== who) return;  // not the next person's news
+  await refresh(`${room.title} is kept away from cloud models.`);  // by name: another room may have opened while this was sent
 }
 
 async function clearMark(room) {
+  const who = identityKey(state.me);
   try {
     await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
-    setFlash(error.message, true);
+    if (identityKey(state.me) !== who) return;
+    setFlash(aboutRoom(room, error.message), true);
     render();
     return;
   }
-  await refresh("Your mark is cleared. Other members' marks still stand.");
+  if (identityKey(state.me) !== who) return;
+  await refresh(`Your mark on ${room.title} is cleared. Other members' marks still stand.`);
 }
 
 function shipBanner(room) {
@@ -1413,13 +1651,13 @@ function roleOf(account) {
 function accountRights() {
   if (!state.me.is_super_admin) return '';
   const names = new Map(state.accounts.map(account => [account.id, account.name]));
-  return `<section class="section card"><h2>Account rights</h2><p>Participants manage their own work. Admins invite people and pair peers. Super admins also grant and revoke administrative roles. These roles do not open private chats, drafts, or records.</p>${state.accounts.map(account => `<form class="item account-role-form" data-id="${escapeHtml(account.id)}"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>${escapeHtml(account.username)} · ${roleLabel(roleOf(account))}${account.activation_pending ? ' · Awaiting activation' : ''}</span></span><div class="field"><label for="role-${escapeHtml(account.id)}">Role for ${escapeHtml(account.name)}</label><select id="role-${escapeHtml(account.id)}" name="role" ${account.activation_pending ? 'disabled' : ''}>${['participant', 'admin', 'super_admin'].map(role => `<option value="${role}" ${role === roleOf(account) ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></div><button class="button secondary" type="submit" ${account.activation_pending ? 'disabled' : ''}>Review rights for ${escapeHtml(account.name)}</button></form>`).join('')}<details><summary>Recent rights changes</summary><ul>${state.roleChanges.map(change => `<li>${escapeHtml(names.get(change.actor_id) || 'Account')} changed ${escapeHtml(names.get(change.user_id) || 'Account')} from ${roleLabel(change.old_role)} to ${roleLabel(change.new_role)} · ${formatDate(change.created)}</li>`).join('') || '<li>No rights changes recorded.</li>'}</ul></details></section>`;
+  return `<section class="section card"><h2>Account rights</h2><p>Participants manage their own work. Admins invite people and pair peers. Super admins also grant and revoke administrative roles. These roles do not open anyone's chats, drafts, or records.</p>${state.accounts.map(account => `<form class="item account-role-form" data-id="${escapeHtml(account.id)}"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>${escapeHtml(account.username)} · ${roleLabel(roleOf(account))}${account.activation_pending ? ' · Awaiting activation' : ''}</span></span><div class="field"><label for="role-${escapeHtml(account.id)}">Role for ${escapeHtml(account.name)}</label><select id="role-${escapeHtml(account.id)}" name="role" ${account.activation_pending ? 'disabled' : ''}>${['participant', 'admin', 'super_admin'].map(role => `<option value="${role}" ${role === roleOf(account) ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></div><button class="button secondary" type="submit" ${account.activation_pending ? 'disabled' : ''}>Review rights for ${escapeHtml(account.name)}</button></form>`).join('')}<details><summary>Recent rights changes</summary><ul>${state.roleChanges.map(change => `<li>${escapeHtml(names.get(change.actor_id) || 'Account')} changed ${escapeHtml(names.get(change.user_id) || 'Account')} from ${roleLabel(change.old_role)} to ${roleLabel(change.new_role)} · ${formatDate(change.created)}</li>`).join('') || '<li>No rights changes recorded.</li>'}</ul></details></section>`;
 }
 
 function accountRoleDialog() {
   const preview = state.accountRolePreview;
   if (!preview) return '';
-  return `<dialog aria-labelledby="account-rights-title"><div class="dialog-content"><h2 id="account-rights-title">Review account rights</h2><p><strong>${escapeHtml(preview.name)}</strong> · ${escapeHtml(preview.username)}</p><p>${roleLabel(preview.oldRole)} → <strong>${roleLabel(preview.role)}</strong></p><p>${preview.role === 'super_admin' ? 'This person will be able to grant and revoke admin and super-admin rights, invite people, and pair peers.' : preview.role === 'admin' ? 'This person will be able to invite people and pair peers.' : 'This person will lose administrative rights. Unused invitations they created will be revoked.'}</p><p>Private chats, drafts, and records keep their existing sharing permissions.</p><div class="button-row"><button class="button" data-action="confirm-account-role">Grant these rights</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
+  return `<dialog aria-labelledby="account-rights-title"><div class="dialog-content"><h2 id="account-rights-title">Review account rights</h2><p><strong>${escapeHtml(preview.name)}</strong> · ${escapeHtml(preview.username)}</p><p>${roleLabel(preview.oldRole)} → <strong>${roleLabel(preview.role)}</strong></p><p>${preview.role === 'super_admin' ? 'This person will be able to grant and revoke admin and super-admin rights, invite people, and pair peers.' : preview.role === 'admin' ? 'This person will be able to invite people and pair peers.' : 'This person will lose administrative rights. Unused invitations they created will be revoked.'}</p><p>Chats, drafts, and records keep their existing sharing permissions.</p><div class="button-row"><button class="button" data-action="confirm-account-role">Grant these rights</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
 }
 
 // Lessons room adds, item 2: the line the station returns with a preview, said above the code box. Its first part is the
@@ -1666,7 +1904,7 @@ function profileDialog() {
   const corrections = state.corrections.length
     ? `<div class="history"><h3>Name correction history</h3>${state.corrections.slice().reverse().map((item) => `<div class="correction"><strong>${escapeHtml(item.old_name)} → ${escapeHtml(item.new_name)}</strong><span>Changed by ${item.actor_id === state.me.id ? `you (${escapeHtml(item.actor_id)})` : escapeHtml(item.actor_id)} · ${formatDate(item.created)}</span></div>`).join("")}</div>`
     : `<p class="meta">No name corrections recorded for this account.</p>`;
-  return `<dialog aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${demoChoices()}${corrections}</div></dialog>`;
+  return `<dialog aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${demoChoices()}${corrections}</div></dialog>`;
 }
 
 function reauthDialog() {
@@ -1748,15 +1986,26 @@ async function loadRoute() {
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
-    state.selectedChatId = id || state.selectedChatId || null;
+    // On a phone the rooms stack above the open room, thousands of pixels up, so the Chats link means the list and closes the room.
+    state.selectedChatId = id || (matchMedia("(max-width: 760px)").matches ? null : state.selectedChatId) || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
+      const wanted = state.selectedChatId, who = identityKey(state.me);
+      const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
       try {
-        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
-        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
-        await loadBoard(state.room);
+        const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
+        await landRoom(() => (paged ? refreshRoom(state.room) : loadRoom(wanted)), still);
       }
-      catch (_) { state.room = null; }
+      catch (error) {
+        if (still()) {
+          if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
+          // The room on screen stays when the newer read failed. A refusal isn't a failure: this person can't read it now.
+          const here = state.room?.id === wanted && error.status !== 403 && error.status !== 404;
+          if (!here) state.room = null;
+          setFlash(here ? `${chatTitle(wanted) || "This room"} couldn't be refreshed. ${reasonOf(error)}` : openFailedWords(wanted, error), true);
+        }
+      }
     } else {
+      if (state.room) sayUnsent();  // the Chats link on a phone closes the room, and the status at its box goes with it
       state.room = null;
     }
   }
@@ -1780,6 +2029,8 @@ async function loadRoute() {
 }
 
 let dialogReturn = null;
+let roomDrawn = null;  // the room last drawn, so a room opens at its newest once and a later render leaves the reader alone
+let leftByLink = false;  // a link was clicked: leaving a room that way starts the next view at its top; Back and Forward stay the browser's
 function closeDialogs() {
   state.accountRolePreview = null;
   state.docking = null; state.dockCode = null; state.imprint = null; state.imprintCode = null; state.imprintAsk = null;
@@ -1787,15 +2038,25 @@ function closeDialogs() {
   render();
 }
 
+// Signed in, but the home's own data didn't load: refresh's catch set an error flash, and with no state.home nothing below
+// can draw. Say so where "Opening this home…" stood, with a way to try again or sign out, instead of leaving the opening
+// note up with no message (a reader's finding 3, all hands 08929c34).
+function openFailedPage(message) {
+  return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
+}
+
 function render() {
-  if (!state.me || !state.home) return;
+  if (!state.me) return;
+  if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
   const route = routeParts().route;
   const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, apps: connectedAppsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
+  const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   app.innerHTML = layout(view);
+  if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
   // nav's own scroll moves, never the page's, so a render far down a page stays where it is.
   const nav = app.querySelector(".nav"), current = nav?.querySelector('[aria-current="page"]');
@@ -1816,16 +2077,50 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  const drawing = route === "chats" && state.room ? state.room.id : null;
+  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
+  roomDrawn = drawing;
+  leftByLink = false;
+  keepAskingRoom();
   document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
+  drawPressed();
+}
+
+// The newest message with the composer under it, clear of a phone's bottom bar. It measures from the end of the messages, which an
+// empty room has too, and not the page's end: a room's management sits below the composer. A message too long to fit shows its start.
+function showNewestMessage() {
+  seenNewMessages();
+  const place = newestMessagePlace();
+  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+}
+
+// How far down the page would have to move to show the end of the messages with the composer under them, and to show
+// the last message's start.
+function newestMessagePlace() {
+  const messages = app.querySelector(".messages"), composer = app.querySelector(".composer"), bar = app.querySelector(".sidebar");
+  if (!messages) return null;
+  const covered = bar && getComputedStyle(bar).position === "fixed" ? bar.offsetHeight : 0;
+  const under = (composer ? composer.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom : 0) + covered + 12;
+  const end = messages.getBoundingClientRect().bottom + under - window.innerHeight;
+  return { end, start: (messages.lastElementChild?.getBoundingClientRect().top ?? end + 1) - 12 };
+}
+
+// Measured from the end of the messages and not the page's: a room's management sits below the composer, so an owner
+// never gets near the page's end. Below the messages altogether, reading that management, isn't at the newest either.
+function seesNewestMessage() {
+  const place = newestMessagePlace();
+  return !!place && place.end <= ROOM_NEAR_NEWEST_PX && app.querySelector(".messages").getBoundingClientRect().bottom > 0;
 }
 
 async function refresh(message = null) {
+  const who = identityKey(state.me);
   try {
     if (!await loadData()) return;
     await loadRoute();
     await loadDocking();
     await loadImprintPreview();
-    if (message) setFlash(message);
+    if (message && identityKey(state.me) === who) setFlash(message);  // not the next person's news
     render();
   } catch (error) {
     if (error.status === 401) showLogin("Your session ended. Sign in again; text in an open form has not been sent.");
@@ -2070,49 +2365,111 @@ async function confirmWithdraw() {
   }
 }
 
+// state.room is the room on screen. It moves to another room here and only with that room's board, when the room is ready to
+// draw, so an action reading it means the room the person is looking at: a message, a mark, a removal, an add. A dialog opened
+// for the room they've left closes, and doesn't go on for the next one. Other writes refresh the same room, each checking it
+// after its read, or empty it.
+function showRoom(room, board) {
+  if (state.room?.id !== room.id) {
+    state.chatDialog = null; state.chatPicked = null; state.chatError = null;
+    // Their box is gone from under them, so say where the words are: a send that failed, or someone mid-sentence as this arrives.
+    const box = document.querySelector("#message-body"), typing = box && document.activeElement === box && box.value.trim();
+    const left = state.room;
+    const words = !left ? null : (state.unsentIn === left.id && unsentWords(left.id)) || (typing ? `Your words are kept in ${left.title}.` : null);
+    state.composerNote = words ? { roomId: left.id, words } : null;
+    state.unsentIn = null;
+    if (words) announce(words);
+  }
+  state.room = room;
+  state.board = board;
+}
+
+// A read of a room and its board, landing them. The room on screen takes its new read at once, since nothing moves, so what
+// changes during the board read stays, and a read that began before the room last changed is dropped: a message sent or a person
+// removed meanwhile isn't undone by the older answer. Another room waits for both.
+async function landRoom(read, still) {
+  const began = state.room;
+  const room = await read();
+  if (still() && began?.id === room.id && state.room === began) state.room = room;  // changed since it began: what's there is newer
+  const board = await readBoard(room);
+  if (!still()) return false;  // a late answer for a room or a page the person has left, or for another account
+  if (state.room?.id === room.id) state.board = board;
+  else showRoom(room, board);
+  return true;
+}
+
 async function openChat(id) {
+  state.roomGone = null;
   state.selectedChatId = id;
-  state.room = await loadRoom(id);
-  await loadBoard(state.room);
-  location.hash = `chats/${pathPart(id)}`;
-  state.flash = null;
-  state.transitionNote = null;
-  state.briefHistory = null;
-  render();
+  const who = identityKey(state.me), from = location.hash;
+  const still = () => state.selectedChatId === id && identityKey(state.me) === who && location.hash === from;
+  const open = async () => {
+    try { if (!await landRoom(() => loadRoom(id), still)) return; }
+    catch (error) {
+      if (still()) {
+        if (error.status === 401) { showLogin("Your session ended. Sign in again."); return; }
+        state.selectedChatId = state.room?.id ?? null;  // it follows what's on screen, so nothing opens this later by itself
+        const words = openFailedWords(id, error);
+        setFlash(words, true);
+        if (state.room && !state.composerNote) state.composerNote = { roomId: state.room.id, words };  // at the box too: the reader may be far below the flash; never over a note about unsent words
+        render();
+      }
+      return;
+    }
+    location.hash = `chats/${pathPart(id)}`;
+    state.flash = null;
+    state.transitionNote = null;
+    state.briefHistory = null;
+    render();
+  };
+  if (state.room?.id === id) { clearPressed(); await open(); }  // already on screen: there's nothing to wait for
+  else await whilePressed(`[data-action="open-chat"][data-id="${CSS.escape(id)}"]`, "Opening…", open);
+}
+
+function openFailedWords(id, error) {
+  return `${chatTitle(id) || "That room"} didn't open. ${reasonOf(error)} Try it again.`;
 }
 
 async function createChat(form) {
+  const who = identityKey(state.me);
   const members = [...form.querySelectorAll('[name="chat-member"]:checked:not(:disabled)')].map((input) => input.value);
   try {
     let room;
-    if (state.chatDialog === "new") {
+    if (form.dataset.kind === "new") {
       room = await api("/api/chats", { method: "POST", json: { title: form.elements.title.value, member_ids: members } });
       state.transitionNote = null;
     } else {
       const carry = form.querySelector('[name="carry-brief"]:checked');
-      room = await api(`/api/chats/${pathPart(state.room.id)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
+      room = await api(`/api/chats/${pathPart(form.dataset.room)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
       state.transitionNote = "New room · earlier messages stay in the original chat";
     }
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
+    if (identityKey(state.me) !== who) return;  // not for whoever signed in since
     state.selectedChatId = room.id;
-    state.room = await loadRoom(room.id);
-    await loadBoard(state.room);
+    const opened = await loadRoom(room.id);
+    const openedBoard = await readBoard(opened);
+    if (identityKey(state.me) !== who) return;
+    showRoom(opened, openedBoard);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
-    if (error.status === 409 && state.chatDialog === "linked" && state.room && !error.message.startsWith("The room brief changed")) {
+    if (identityKey(state.me) !== who) return;
+    const stillThisRoom = form.dataset.kind === "linked" && state.room?.id === form.dataset.room;
+    if (error.status === 409 && stillThisRoom) state.chatDialog = "linked";  // the address may have cleared it with the form still up: say why in it
+    if (error.status === 409 && stillThisRoom && !error.message.startsWith("The room brief changed")) {
       state.chatPicked = members;  // a room replaced since this page loaded: the station's own words, in the dialog
       state.chatError = error.message;
       announce(state.chatError);
       render();
       return;
     }
-    if (error.status === 409 && state.chatDialog === "linked" && state.room) {
+    if (error.status === 409 && stillThisRoom) {
       state.chatPicked = members;
       state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
       try {
-        state.room = await refreshRoom(state.room);
+        const latest = await refreshRoom(state.room);
+        if (state.room?.id === form.dataset.room) state.room = latest;
       } catch (_) {
         state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
       }
@@ -2121,7 +2478,8 @@ async function createChat(form) {
       document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
       return;
     }
-    setFlash(error.message, true);
+    const asked = form.dataset.kind === "linked" && state.room?.id !== form.dataset.room ? `${chatTitle(form.dataset.room) || "The room you left"}: ` : "";
+    setFlash(`${asked}${error.message}`, true);
     render();
   }
 }
@@ -2129,6 +2487,7 @@ async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
   // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
   if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
+  const who = identityKey(state.me);
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
   form.querySelector('button[type="submit"]').disabled = true;
@@ -2152,18 +2511,26 @@ async function saveBrief(form) {
       }
     }
     Object.assign(edit, { status: message, error: true, saving: false });
+    if (identityKey(state.me) !== who) return;
+    if (state.room?.id !== room.id) {  // they've moved on, so the editor and its message aren't on screen
+      setFlash(`${room.title}: the brief ${mayHaveGone(error) ? "may not have been" : "wasn't"} saved.${state.briefEdit === edit ? " Your text is still in its editor." : ""}`, true);
+      render();
+      return;
+    }
     announce(message);
     render();
     document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
-  if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
+  if (state.briefEdit === edit) state.briefEdit = null;
+  if (identityKey(state.me) !== who) return;  // only this editor closes: one opened since then stays
   try {
     const latest = await refreshRoom(room);
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
-  setFlash(body.trim() ? "Room brief saved." : "Room brief removed.");
+  if (identityKey(state.me) !== who) return;
+  setFlash(aboutRoom(room, body.trim() ? "Room brief saved." : "Room brief removed."));
   render();
 }
 
@@ -2198,24 +2565,29 @@ function useBriefRevision(room, revision, confirmed = false) {
 }
 
 async function removeParticipant(id) {
-  const room = state.room;
+  const room = state.room, who = identityKey(state.me);
   const name = participantName(id);
   let updated;
   try {
     updated = await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
   } catch (error) {
-    setFlash(`${error.message} Room access was not changed.`, true);
+    if (identityKey(state.me) !== who) return;
+    setFlash(aboutRoom(room, `${error.message} Room access was not changed.`), true);
     render();
     return;
   }
+  if (identityKey(state.me) !== who) return;
   if (state.room?.id === room.id) {
     state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
     state.transitionNote = `${name} no longer has access on this home; remote removal requires acknowledgement`;
     render();
-  }
+  } else setFlash(`${name} no longer has access to ${room.title} on this home; remote removal requires acknowledgement`);
   try {
     await loadData();
-    if (state.room?.id === room.id) state.room = await refreshRoom(room);
+    if (state.room?.id === room.id) {
+      const latest = await refreshRoom(room);
+      if (state.room?.id === room.id) state.room = latest;  // after the read: they may have moved on during it
+    }
     render();
   } catch (error) {
     if (error.status === 401) {
@@ -2228,7 +2600,9 @@ async function removeParticipant(id) {
 }
 
 async function sendMessage(form) {
-  const room = state.room;
+  // The room this composer was drawn for. By the time a send ends another room may be on screen, and a person's words go where
+  // they were looking.
+  const room = state.room?.id === form.dataset.room ? state.room : { id: form.dataset.room }, who = identityKey(state.me);
   const textarea = form.elements.body;
   const body = textarea.value;
   if (!body.trim()) return;
@@ -2243,35 +2617,57 @@ async function sendMessage(form) {
   try {
     accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
+    if (identityKey(state.me) !== who) return;  // their words went with their sign-out, and this isn't the next person's news
+    const why = reasonOf(error), gone = mayHaveGone(error);
+    if (!status.isConnected) {  // the person has moved on, so the words aren't here: say where they are
+      const where = chatTitle(room.id) || "the room you left";
+      const words = gone ? `Your message to ${where} may not have been sent. ${why} It's still in the box there, so check that room before sending it again.` : `Your message to ${where} wasn't sent. ${why} It's still in the box there.`;
+      setFlash(words, true);
+      state.composerNote = { roomId: room.id, words };  // at the box too: a room opens at its newest, far below the flash
+      render();
+      return;
+    }
+    state.unsentIn = room.id; state.unsentMayHaveGone = gone;  // said here, and again if the next room or page replaces this before they've seen it
     status.className = "inline-message error";
-    status.textContent = error.status === 0 ? "Connection lost. Your message is still here." : `${error.message} Your message is still here.`;
+    status.textContent = `${why} ${gone ? "It may have reached the room anyway. " : ""}Your message is still here.`;
     announce(status.textContent);
     return;
   }
+  if (state.unsentIn === room.id) state.unsentIn = null;
   const currentDraft = readChatDraft(room.id);
   if (currentDraft.clientId === draft.clientId && currentDraft.body === body) {
     if (textarea.isConnected && textarea.value === body) textarea.value = "";
     sessionStorage.removeItem(draftKey(room.id));
+    if (state.composerNote?.roomId === room.id) {  // those words have gone now, so it's no longer true
+      state.composerNote = null;
+      document.querySelector(".words-kept")?.remove();
+    }
     if (status.isConnected) status.textContent = "Message saved. Refreshing room…";
   }
-  if (state.room?.id === room.id) {
-    const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
-    if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
+  if (state.room?.id !== room.id) {  // the person has moved on while this was sending: the room they're in stays as it is
+    if (status.isConnected) status.textContent = "Message saved";
+    announce("Message saved");
+    try { const latest = await api("/api/sync"); if (identityKey(state.me) === who) state.sync = latest; } catch (_) { /* the next load reads it */ }  // or the message reads "Saved here" while a delivery is owed
+    return;
   }
+  const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
+  if (!duplicate) state.room = { ...state.room, messages: [...(state.room.messages || []), accepted] };  // a new object, so landRoom sees the change
+  // Taken when it comes: an ask can run while sync waits, and this answer mustn't overwrite what it showed.
+  const refreshed = refreshRoom(room).then((latestRoom) => { if (identityKey(state.me) === who && state.room?.id === room.id) state.room = latestRoom; });
   try {
-    const [latestRoom, latestSync] = await Promise.all([
-      refreshRoom(room),
-      api("/api/sync"),
-    ]);
-    if (state.room?.id === room.id) state.room = latestRoom;
+    const [, latestSync] = await Promise.all([refreshed, api("/api/sync")]);
+    if (identityKey(state.me) !== who) return;
     state.sync = latestSync;
     render();
     const refreshedStatus = document.querySelector("#chat-status");
     if (refreshedStatus && state.room?.id === room.id) refreshedStatus.textContent = "Message saved";
   } catch (error) {
+    await refreshed.catch(() => {});  // sync can fail first, and the render below draws what the room's answer brought
+    if (identityKey(state.me) !== who) return;
     setFlash("Message saved. Latest room status is unavailable.");
     render();
   }
+  if (state.room?.id === room.id) showNewestMessage();  // what you just sent, with the box still on screen
 }
 
 function clearChatDrafts() {
@@ -2293,6 +2689,7 @@ async function logout() {
     state.sources = [];
     Research.reset(); Dashboard.reset();
     state.editorIdentity = null;
+    state.selectedChatId = null; state.room = null; state.board = null; state.composerNote = null; state.unsentIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;
     location.hash = "";
     showLogin();
@@ -2306,7 +2703,8 @@ async function logout() {
       return;
     }
     state.logoutError = "Sign-out could not be completed";
-    state.profileDialog = true;
+    state.profileDialog = !!state.home;  // the failed page has no dialog: the flash below says it
+    if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
   }
 }
@@ -2374,6 +2772,8 @@ async function bootstrap() {
     const form = document.querySelector('#redeem-form');
     for (const key of ['token', 'username', 'name']) form.elements[key].value = state.activation[key];
     document.querySelector('.invitation-redeem').open = true;
+    // On a phone the form is far below the Sign in fields, so go to what's left to fill in: usually the new password.
+    [...form.elements].find((field) => field.required && !field.value)?.focus();
     return;
   }
   if (location.pathname === "/public/" || location.pathname.startsWith("/public/view")) {
@@ -2498,6 +2898,13 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (target.closest("section.editor") && refuseWhileSwitching()) return;
+  if (action === "retry-open") {  // openFailedPage's: the old reason goes, so a second failure is the only one shown
+    if (target.disabled) return;
+    target.disabled = true; state.flash = null;
+    await refresh();
+    if (!state.home) app.querySelector('[data-action="retry-open"]')?.focus();  // failed again: focus stays on the way out
+    return;
+  }
   if (action.startsWith("research-")) { await Research.action(target); return; }
   if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
@@ -2558,7 +2965,7 @@ document.addEventListener("click", async (event) => {
     state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; state.chatBoard = undefined;
     render();  // the dialog opens at once, with the help text only if there is a brief
     const room = state.room, items = await openBoardItems(room);
-    if (state.chatDialog !== "linked" || state.room !== room) return;
+    if (state.chatDialog !== "linked" || state.room?.id !== room.id) return;
     state.chatBoard = items;  // fill in the slot only, so nothing the owner already ticked is redrawn
     const slot = document.querySelector("dialog .carry-help-slot");
     if (slot) slot.innerHTML = carryHelp(room);
@@ -2645,6 +3052,12 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "load-earlier") await loadEarlier();
+  if (action === "new-messages") {
+    showNewestMessage();
+    // Focus goes with the button, and to the list and not the box, which would open a phone's keyboard.
+    const list = app.querySelector(".messages");
+    if (list) { list.tabIndex = -1; list.focus({ preventScroll: true }); }
+  }
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
@@ -2936,10 +3349,11 @@ document.addEventListener("input", (event) => {
     entry.text = event.target.value;
   }
   if (event.target.closest("#layer-form")) rememberLayerForm();
-  if (event.target.id === "message-body" && state.room) {
-    const previous = readChatDraft(state.room.id);
+  if (event.target.id === "message-body") {
+    const roomId = event.target.form.dataset.room;  // the room on screen: see sendMessage
+    const previous = readChatDraft(roomId);
     const next = { body: event.target.value, clientId: previous.body === event.target.value ? previous.clientId : null };
-    sessionStorage.setItem(draftKey(state.room.id), JSON.stringify(next));
+    sessionStorage.setItem(draftKey(roomId), JSON.stringify(next));
   }
 });
 
@@ -2965,11 +3379,17 @@ document.addEventListener("change", async (event) => {
   }
 });
 
+document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
+
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
+  // The failed page: no route loads without the home, so try it again, keeping an imprint link's code for its preview.
+  if (!state.home) { takeImprintCode(); state.flash = null; await refresh(); return; }
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
+  if (routeParts().route !== "chats") sayUnsent();
+  state.roomGone = null;
   if (!["apps", "connections"].includes(routeParts().route)) { state.appAsk = null; state.appRoomsEdit = null; }  // N3
   try {
     await loadRoute(); render();
@@ -2984,7 +3404,7 @@ bootstrap();
 // Assistance and source records use the authenticated API and account-bound memory.
 function assistantPanel(layer) {
   const entry = state.assistance[layer.id] || {};
-  return `<section class="section"><h3>Private drafting assistance</h3><p class="meta">${escapeHtml(state.assistant.message || "Assistant is disabled.")} The selected input is saved version ${layer.version} of this layer. Unsaved edits and attachments are excluded.</p><label for="assistant-request">Assistant request</label><textarea class="textarea" id="assistant-request" maxlength="8000" ${entry.pending ? "disabled" : ""}>${escapeHtml(entry.text || "")}</textarea><button class="button secondary" data-action="ask-assistant" ${!state.assistant.enabled || entry.pending ? "disabled" : ""}>${entry.pending ? "Waiting for Gemma…" : "Ask Gemma privately"}</button>${entry.error ? `<p role="status">${escapeHtml(entry.error)}</p>` : ""}${entry.result ? `<div class="notice"><p>Suggestion from saved version ${entry.result.version}</p><div class="shared-body">${escapeHtml(entry.result.suggestion)}</div><p class="meta">Appending keeps your current words. Review and save privately before choosing any release.</p><button class="button secondary" data-action="apply-suggestion">Append suggestion to my private draft</button></div>` : ""}</section>`;
+  return `<section class="section"><h3>Private drafting assistance</h3><p class="meta">${escapeHtml(state.assistant.message || "Assistant is disabled.")} The selected input is saved version ${layer.version} of this layer. Unsaved edits and attachments are excluded.</p><label for="assistant-request">Assistant request</label><textarea class="textarea" id="assistant-request" maxlength="8000" ${entry.pending ? "disabled" : ""}>${escapeHtml(entry.text || "")}</textarea><button class="button secondary" data-action="ask-assistant" ${!state.assistant.enabled || entry.pending ? "disabled" : ""}>${entry.pending ? "Waiting for Gemma…" : "Ask Gemma privately"}</button>${entry.error ? `<p role="status">${escapeHtml(entry.error)}</p>` : ""}${entry.result ? `<div class="notice"><p>Suggestion from saved version ${entry.result.version}</p><div class="shared-body">${escapeHtml(entry.result.suggestion)}</div><p class="meta">Appending keeps your current words. Review and save before choosing any release.</p><button class="button secondary" data-action="apply-suggestion">Append suggestion to my private draft</button></div>` : ""}</section>`;
 }
 
 async function askAssistant() {
@@ -3057,7 +3477,7 @@ async function exportSelection(kind) {
 }
 
 function sourcePanel() {
-  return `<section class="section"><h2>Selected source records</h2><p class="meta">Imported records stay private to your account. Their origins, authors and audiences are recorded claims; they do not grant access or establish trust. Source instructions and links are never run.</p><label class="button secondary" for="source-import">Import selected source document</label><input id="source-import" class="sr-only" type="file" accept="application/json,.json"><div class="history">${state.sources === null ? '<p>Source records are temporarily unavailable.</p>' : state.sources.map((source) => `<details><summary>${escapeHtml(source.record.content.title)}</summary><p class="meta">Origin ${escapeHtml(source.record.origin)} · Author ${escapeHtml(source.record.author)}</p><p class="meta">${escapeHtml(source.record.source_locator)} · Revision ${escapeHtml(source.record.revision)}</p><p class="meta">Source hash ${escapeHtml(source.record.source_hash)}</p><p class="meta">Previous ${escapeHtml(source.record.revision_of || "None recorded")} · Corrections ${escapeHtml(source.record.correction_of.join(", ") || "None recorded")}</p><p class="meta">Recorded audience: ${escapeHtml(JSON.stringify(source.record.audience))}. Access here: only you.</p><div class="shared-body">${escapeHtml(source.record.content.body)}</div><button class="button secondary" data-action="export-source" data-id="${escapeHtml(source.id)}">Export this source record</button></details>`).join("")}</div></section>`;
+  return `<section class="section"><h2>Selected source records</h2><p class="meta">No other account can open imported records. Their origins, authors and audiences are recorded claims; they do not grant access or establish trust. Source instructions and links are never run.</p><label class="button secondary" for="source-import">Import selected source document</label><input id="source-import" class="sr-only" type="file" accept="application/json,.json"><div class="history">${state.sources === null ? '<p>Source records are temporarily unavailable.</p>' : state.sources.map((source) => `<details><summary>${escapeHtml(source.record.content.title)}</summary><p class="meta">Origin ${escapeHtml(source.record.origin)} · Author ${escapeHtml(source.record.author)}</p><p class="meta">${escapeHtml(source.record.source_locator)} · Revision ${escapeHtml(source.record.revision)}</p><p class="meta">Source hash ${escapeHtml(source.record.source_hash)}</p><p class="meta">Previous ${escapeHtml(source.record.revision_of || "None recorded")} · Corrections ${escapeHtml(source.record.correction_of.join(", ") || "None recorded")}</p><p class="meta">Recorded audience: ${escapeHtml(JSON.stringify(source.record.audience))}. Access here: no other account.</p><div class="shared-body">${escapeHtml(source.record.content.body)}</div><button class="button secondary" data-action="export-source" data-id="${escapeHtml(source.id)}">Export this source record</button></details>`).join("")}</div></section>`;
 }
 
 document.addEventListener("change", async (event) => {
@@ -3071,7 +3491,7 @@ document.addEventListener("change", async (event) => {
     if (identityKey(state.me) !== identity) return;
     await api("/api/interchange/import", { method: "POST", json: document });
     if (identityKey(state.me) !== identity) return;
-    setFlash("Imported privately. Recorded audiences did not grant access.");
+    setFlash("Imported. Recorded audiences did not grant access.");
     const sources = await api("/api/sources").catch(() => null);
     if (identityKey(state.me) !== identity) return;
     state.sources = sources;

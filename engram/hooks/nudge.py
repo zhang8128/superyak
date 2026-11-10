@@ -41,6 +41,9 @@ MAX_ECHOES = 1          # Max memory echoes per message
 BIAS_DECAY = 0.1        # Strength lost per message
 BIAS_INITIAL = 1.0      # Starting strength of a new bias
 ECHO_MAX_LEN = 150      # Truncate echo content
+# A background task's result reaches this hook as a prompt. Nobody typed it, so it isn't a
+# person's words to remember, and there's nothing in it to answer with an echo.
+HARNESS_NOTICES = ("<task-notification>",)
 
 
 def _load_instance_config():
@@ -97,7 +100,7 @@ def nudge():
     if ctx["skip"]:
         return
     prompt = (ctx["prompt"] or "").strip()
-    if not prompt or len(prompt) < 10:
+    if not prompt or len(prompt) < 10 or prompt.startswith(HARNESS_NOTICES):
         return
 
     # Resolve DB
