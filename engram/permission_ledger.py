@@ -769,12 +769,18 @@ class _Held:
 
 
 _HELD: dict = {}
-_HELD_LOCK = threading.Lock()
+# Reentrant, because the collector can run a connection's finalizer (its own `_release(key, True)`, or a collected
+# reader's `conn.close`) inside a section of this table, in the thread that holds it. A plain lock waited on itself
+# there for good: the Pi's Engram suite, 2026-11-09, with a collection started by `_hold`'s `os.stat`. Such a release
+# waits in `_DEFERRED` and is counted when the section it interrupted ends, never in its middle.
+_HELD_LOCK = threading.RLock()
+_HELD_BUSY = False               # the lock's owner is inside a section; only that owner reads or writes it
+_DEFERRED: list = []             # (key, collected) of releases its collector ran meanwhile
 _UNHELD: list = []               # (key, fd) of connections collected unclosed: closed at the next hold or release
 
 
 def _close_unheld() -> None:
-    """Under `_HELD_LOCK`: close the descriptors a collected connection left, unless its file is held again."""
+    """In a section: close the descriptors a collected connection left, unless its file is held again."""
     for key, fd in _UNHELD:
         held = _HELD.get(key)
         if held is None:
@@ -784,47 +790,92 @@ def _close_unheld() -> None:
     _UNHELD.clear()
 
 
+def _enter() -> bool:
+    """Under `_HELD_LOCK`: start a section. False when one of this thread's is already running, so the caller is the
+    collector, called in from inside it."""
+    global _HELD_BUSY
+    if _HELD_BUSY:
+        return False
+    _HELD_BUSY = True
+    return True
+
+
+def _leave() -> list:
+    """End a section: count the releases its collector deferred, and return the descriptors they leave to close. One
+    that arrives after the last look here waits for the next section's end, its file's descriptors open until then."""
+    global _HELD_BUSY
+    try:
+        fds: list = []
+        while _DEFERRED:
+            fds.extend(_count_release(*_DEFERRED.pop()))
+        return fds
+    finally:
+        _HELD_BUSY = False
+
+
+def _count_release(key: tuple[int, int], collected: bool) -> tuple:
+    """In a section: one connection on that file closed. Returns the descriptors to close now: at the last, the file's,
+    unless that connection was collected unclosed and is still closing, when they wait in `_UNHELD`."""
+    held = _HELD.get(key)
+    if held is None:
+        return ()
+    held.count -= 1
+    if held.count > 0:
+        return ()
+    del _HELD[key]
+    fds = (held.fd, *held.spares)
+    if collected:
+        _UNHELD.extend((key, fd) for fd in fds)
+        return ()
+    return fds
+
+
 def _hold(path: Path) -> tuple[int, int]:
     """Count one more connection of this process on the file at `path`; for the first, open the descriptor its key
     read uses (`O_RDONLY | O_CLOEXEC`, so hooks and subprocesses don't inherit it), `fstat` it and keep it under the
     (dev, inode) it really has. Returns that (dev, inode)."""
     with _HELD_LOCK:
-        _close_unheld()
-        st = os.stat(path)
-        key = (st.st_dev, st.st_ino)
-        held = _HELD.get(key)
-        if held is not None:
-            held.count += 1
-            return key
-        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
-        st = os.fstat(fd)
-        real = (st.st_dev, st.st_ino)
-        held = _HELD.get(real)
-        if held is None:
-            _HELD[real] = _Held(fd)
-        else:                       # the path was replaced between the stat and the open, by a file held here
-            held.count += 1
-            held.spares.append(fd)
-        return real
+        outer = _enter()
+        try:
+            _close_unheld()
+            st = os.stat(path)
+            key = (st.st_dev, st.st_ino)
+            held = _HELD.get(key)
+            if held is not None:
+                held.count += 1
+                return key
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+            st = os.fstat(fd)
+            real = (st.st_dev, st.st_ino)
+            held = _HELD.get(real)
+            if held is None:
+                _HELD[real] = _Held(fd)
+            else:                       # the path was replaced between the stat and the open, by a file held here
+                held.count += 1
+                held.spares.append(fd)
+            return real
+        finally:
+            if outer:
+                for fd in _leave():
+                    os.close(fd)
 
 
 def _release(key: tuple[int, int], collected: bool = False) -> None:
     """One connection on that file closed. At the last, its descriptors close: no connection of this process is left
     there, so no SQLite lock of this process can be dropped. A connection collected unclosed is still closing, so its
-    descriptors wait for the next hold or release."""
+    descriptors wait for the next hold or release. A release the collector runs inside a section of this thread's is
+    counted when that section ends."""
     with _HELD_LOCK:
-        held = _HELD.get(key)
-        if held is None:
+        if not _enter():
+            _DEFERRED.append((key, collected))
             return
-        held.count -= 1
-        if held.count > 0:
-            return
-        del _HELD[key]
-        fds = (held.fd, *held.spares)
-        if collected:
-            _UNHELD.extend((key, fd) for fd in fds)
-            return
-        _close_unheld()
+        fds: tuple = ()
+        try:
+            fds = _count_release(key, collected)
+            if fds:
+                _close_unheld()
+        finally:
+            fds = (*fds, *_leave())
     for fd in fds:
         os.close(fd)
 

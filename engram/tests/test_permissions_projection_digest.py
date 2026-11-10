@@ -1,6 +1,7 @@
 """The permission ledger's projection digest (docs/superpowers/plans/2026-11-03-projection-digest.md): each test names
 its task and the decision it pins."""
 import dataclasses
+import gc
 import hashlib
 import json
 import multiprocessing
@@ -1282,3 +1283,44 @@ def test_s6_a_fresh_file_carries_its_parts_in_memory_and_writes_its_digest_once(
     finally:
         copy.close()
         led.close()
+
+
+def _a_bare_connection(home):
+    return Ledger._connect(ledger_path(home), read_only=True)        # its own finalizer: `_release(key, True)`
+
+
+def _a_states_readers(home):
+    return Ledger.open_read_only(home).state()                       # two readers whose finalizers call `conn.close`
+
+
+@pytest.mark.parametrize("make", [_a_bare_connection, _a_states_readers], ids=["a-bare-connection", "a-states-readers"])
+def test_a_release_the_collector_runs_inside_a_hold_is_counted_when_the_hold_ends(tmp_path, monkeypatch, make):
+    """The Pi's Engram suite, 2026-11-09, hung 56 minutes in a test that touched none of this: `_hold` kept
+    `_HELD_LOCK` across its `os.stat`, a collection started there, and a finalizer of an earlier connection, freed
+    only by the collector, waited on that lock in the thread that held it. Such a release now waits for the end of
+    the section it interrupted and is counted there: the hold returns, and every count comes out right."""
+    _created(tmp_path)
+    path = ledger_path(tmp_path)
+    key = (os.stat(path).st_dev, os.stat(path).st_ino)
+    box = [make(tmp_path)]
+    box.append(box)                                     # reachable only through itself: the collector frees it
+    open_before = permission_ledger._HELD[key].count
+    del box
+    ran, real = [], os.stat
+
+    def stat(p, *args, **kwargs):
+        if not ran:
+            ran.append(gc.collect())                    # where the suite's collection started: inside the hold
+        return real(p, *args, **kwargs)
+
+    monkeypatch.setattr(permission_ledger, "os", SimpleNamespace(**{**vars(os), "stat": stat}))
+    held = []
+    worker = threading.Thread(target=lambda: held.append(permission_ledger._hold(path)), daemon=True)
+    worker.start()
+    worker.join(30)
+    assert not worker.is_alive(), "the hold waited on its own lock"
+    assert held == [key] and ran and ran[0] > 0
+    assert permission_ledger._HELD[key].count == 1 and open_before >= 1    # the collected ones counted, the hold kept
+    assert not permission_ledger._DEFERRED
+    permission_ledger._release(key)
+    assert key not in permission_ledger._HELD
