@@ -15,11 +15,13 @@ cohomology. Version 1 says nothing about where a sheaf's maps come from.
 ## 1. The base
 
 A **base** is a finite list of **nodes**, each with a unique name, and a finite list of **edges**. Each edge has a
-**tail** node and a **head** node. The orientation is bookkeeping: reversing an edge (and swapping its two maps)
-changes no answer on this page. Parallel edges and loops are allowed. Edges are numbered from 0 in the order listed.
+**tail** node and a **head** node. The orientation is bookkeeping: reversing an edge changes no answer on this page,
+when its two maps are swapped and every route step that uses it has its direction flipped. Parallel edges and loops
+are allowed. Edges are numbered from 0 in the order listed.
 
-A **route** is a list of steps. A step is an edge number and a direction: `+1` goes tail to head, `−1` goes head to
-tail. Each step must start where the last one ended. A **face** is two routes with the same start and the same end.
+A **route** is a list of one or more steps. A step is an edge number and a direction: `+1` goes tail to head, `−1`
+goes head to tail. Each step must start where the last one ended. A list with no steps has no start, so it is not a
+route, and a file that holds one is refused. A **face** is two routes with the same start and the same end.
 
 ## 2. A sheaf of vector spaces
 
@@ -53,7 +55,9 @@ when σ ≤ tol · σ₁. If δ is the zero matrix, or has no rows or no columns
 
 An implementation reports the tolerance it actually used. If it cannot honour the requested one, it uses a larger one
 and says so. It also reports the **gap**: the smallest singular value it kept and the largest it dropped, each
-divided by σ₁. A wide gap means the rank is not in doubt.
+divided by σ₁. A wide gap means the rank is not in doubt. If nothing was kept there is no kept value, and if nothing
+was dropped there is no dropped value: an implementation reports a missing one as `null`, never as a number. When
+σ₁ is 0, a dropped value is reported as 0.
 
 ### 2.2 Gluing
 
@@ -62,6 +66,12 @@ length). An implementation reports:
 - the length of each residual, in edge order;
 - the edges whose residual is longer than `glue_tol`;
 - the **nearest global section**: the point of H⁰ closest to x in Euclidean distance, and the squared distance.
+
+H⁰ here is the rounded one of 2.1, at the same `tol`: the span of the directions whose singular values count as
+zero. So two maps that differ by less than the tolerance still leave a global section to be near. Take two edges
+from a to b, each of dimension 1, with tail maps 1 and head maps 1 and 1 + 2·10⁻¹², and x = (1, 1). The exact kernel
+is {0}, which would put x at squared distance 2. The rounded H⁰ has dimension 1, and the squared distance is about
+5·10⁻²⁵.
 
 ### 2.3 Comparing two routes
 
@@ -132,7 +142,8 @@ Anything else in the file is an error, and an implementation refuses the file.
 | `holonomy_frobenius` | vector | one number per face |
 | `sections` | set | the number of global sections |
 
-Numbers in `expect` are compared to within 10⁻⁹.
+Numbers in `expect` are compared by absolute difference: a computed number matches when it is within 10⁻⁹ of the
+expected one.
 
 ## 5. Conforming
 
