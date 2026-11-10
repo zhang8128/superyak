@@ -6572,6 +6572,134 @@ def test_moving_to_another_room_opens_that_room_at_its_newest(browser_peer):
             assert page.evaluate(NEWEST_ON_SCREEN)
 
 
+KEPT = "Words kept for Room B"
+
+
+def _two_rooms_one_draft(browser_peer, page, *, rooms=2):
+    """Room A and Room B, both long, with words kept in Room B's box, and Room A on screen. With `rooms`, more rooms
+    above them make the list long, as a phone shows it above the room."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    made = {}
+    for title in ["Room B", "Room A", *[f"Room {n:02}" for n in range(rooms - 2)]]:
+        made[title] = store.create_room(patient, title, [users["family"]["id"]])
+        if title in ("Room A", "Room B"):
+            for i in range(30):
+                store.send_message(patient, made[title]["id"], f"{title}-{i}", f"{title} {i}")
+    a, b = made["Room A"], made["Room B"]
+    page.goto(f"{base}/#chats/{b['id']}")
+    page.reload()
+    expect(page.locator(".messages .message p").last).to_have_text("Room B 29")
+    page.get_by_role("textbox", name="Message").fill(KEPT)
+    send = page.get_by_role("button", name="Send message").bounding_box()  # where Room B's Send sits once it's open
+    page.goto(f"{base}/#chats/{a['id']}")
+    page.reload()
+    expect(page.locator(".messages .message p").last).to_have_text("Room A 29")
+    return store, patient, a, b, (send["x"] + send["width"] / 2, send["y"] + send["height"] / 2)
+
+
+def _drawn(page, room):
+    _until(page, f"document.querySelector('#message-form')?.dataset.room === {json.dumps(room['id'])}")
+
+
+def _sent(store, patient, room, words, timeout_s=8):
+    """Whether the words reached the room, read from the store: a reread already out can draw the room without them."""
+    deadline = time.monotonic() + timeout_s
+    while words not in [m["body"] for m in store.get_room(patient, room["id"])["messages"]]:
+        assert time.monotonic() < deadline, f"never sent: {words}"
+        time.sleep(0.05)
+
+
+def test_a_double_tap_on_a_room_row_doesnt_send_its_kept_words(browser_peer):
+    """Tardis's finding (2026-11-07): on a phone, the second of two quick taps on a room's row lands on that room's Send
+    once it has drawn and moved to its newest, which sent the words kept in its box. The second press is dropped."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            store, patient, _a, b, (x, y) = _two_rooms_one_draft(browser_peer, page, rooms=12)
+            row = page.locator(".split-list .item", has_text="Room B")
+            row_box = row.bounding_box()
+            page.evaluate(f"scrollTo(0, scrollY + {row_box['y'] + row_box['height'] / 2 - y})")  # Room B's row under the finger
+            assert page.evaluate(f"document.elementFromPoint({x}, {y}).closest('.item')?.textContent.includes('Room B')")
+            page.mouse.click(x, y)
+            _drawn(page, b)
+            page.mouse.click(x, y)
+            page.wait_for_timeout(600)
+            assert page.evaluate(f"document.elementFromPoint({x}, {y}).textContent") == "Send message"  # where the press landed
+            assert page.get_by_role("textbox", name="Message").input_value() == KEPT
+            assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+
+
+SEND = "#message-form button[type=submit]"
+
+
+def _row(room):
+    return f'.split-list .item[data-id="{room["id"]}"]'
+
+
+def _down(page, selector):
+    """A press begun on what the selector finds now, with no click yet."""
+    page.evaluate("""(selector) => { const node = document.querySelector(selector), box = node.getBoundingClientRect();
+        node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: box.x + 4, clientY: box.y + 4 })); }""", selector)
+
+
+def _click(page, selector):
+    """A click with a mouse's detail and no pointerdown of its own, on what the selector finds as it fires: a handle
+    taken earlier can be a node the route's redraw has already replaced, whose form no longer submits."""
+    page.evaluate("(selector) => document.querySelector(selector).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))", selector)
+
+
+def test_a_press_aimed_at_the_new_rooms_send_still_sends(browser_peer):
+    """Only a press at the spot of the one before it is dropped: a press on Send right after the room draws, at another
+    spot, sends, and so does a click with no press of its own, as an accessibility tool sends one."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            page.locator(".split-list .item", has_text="Room B").click()
+            _drawn(page, b)
+            page.get_by_role("button", name="Send message").click()
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # the send's own redraw is done
+            page.locator(".split-list .item", has_text="Room A").click()
+            _drawn(page, a)
+            page.get_by_role("textbox", name="Message").fill("Sent with no press")
+            page.locator(".split-list .item", has_text="Room B").click()
+            _drawn(page, b)
+            page.locator(".split-list .item", has_text="Room A").click()
+            _drawn(page, a)
+            _click(page, SEND)  # at once, and the row's press is behind it
+            _sent(store, patient, a, "Sent with no press")
+
+
+def test_a_press_begun_before_the_room_drew_doesnt_land_on_it(browser_peer):
+    """A touch browser can fire a tap's click where the finger lifts, after the next room drew under it. Emulated in that
+    order: a press begun on Room B's row and ending on its Send sends nothing. A key press while a press is held, and a
+    press begun and ended on Send with the page moving itself between, each send."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            _down(page, _row(b))
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            _click(page, SEND)
+            page.wait_for_timeout(600)
+            box = page.get_by_role("textbox", name="Message")
+            assert box.input_value() == KEPT
+            assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            _down(page, _row(a))  # held, and the page moves under it
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")
+            assert page.evaluate("performance.now() - roomMovedAt < 400")
+            page.get_by_role("button", name="Send message").focus()
+            page.keyboard.press("Enter")  # its click has detail 0, which no press has
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done: the press and click meet one Send
+            box.fill("Begun and ended on Send")
+            _down(page, SEND)
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")  # an arrival's follow, mid-press
+            assert page.evaluate("performance.now() - roomMovedAt < 400")
+            _click(page, SEND)
+            _sent(store, patient, b, "Begun and ended on Send")
+
+
 def test_a_refresh_appends_a_new_message_once(browser_peer):
     """Break caught: a refresh after a brief save drops the messages shown, or shows a new one twice."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

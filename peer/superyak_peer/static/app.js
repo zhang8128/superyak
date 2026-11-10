@@ -786,7 +786,7 @@ function showArrivals(answer) {
   if (news) announce(news === 1 ? "1 new message" : `${news} new messages`);
   if (following) {
     const { end, start } = newestMessagePlace();
-    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+    if (Math.min(end, start) > 0) movingTheRoom(() => window.scrollBy(0, Math.min(end, start)));
   } else if (news) {
     state.roomUnseen = answer.id;
     const button = document.querySelector('[data-action="new-messages"]');
@@ -2078,7 +2078,7 @@ function render() {
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   const drawing = route === "chats" && state.room ? state.room.id : null;
-  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  if (drawing && drawing !== roomDrawn) { roomMovedAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
@@ -2092,8 +2092,43 @@ function render() {
 function showNewestMessage() {
   seenNewMessages();
   const place = newestMessagePlace();
-  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+  if (place) movingTheRoom(() => window.scrollTo(0, window.scrollY + Math.min(place.end, place.start)));
 }
+
+// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest, where
+// the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there before,
+// would land on the room's Send, Mark or Remove. Both are dropped in a room. A key press (detail 0) never is, nor a press
+// that began on the control it ends on, nor a later one at another spot: that's someone aiming at what they now see. A
+// press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room, so the
+// acts that can't be undone ask first (board fix:room-acts-ask-first). Each click takes the press it began with, so a
+// click with no press of its own, as an accessibility tool sends, is never measured against an old one.
+const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
+let roomMovedAt = -Infinity, pressDown = null, lastPress = null;
+function movingTheRoom(scroll) {
+  const before = window.scrollY;
+  scroll();
+  if (window.scrollY !== before) roomMovedAt = performance.now();
+}
+function pressTheRoomMoved(event, press, before) {
+  if (event.detail === 0 || !press) return false;
+  const control = event.target.closest?.(PRESSABLE);
+  if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
+  if (press.at < roomMovedAt) return control !== press.control;  // begun on what was here before
+  return performance.now() - roomMovedAt < MOVED_PRESS_MS && !!before && before.at < roomMovedAt
+    && Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
+}
+document.addEventListener("pointerdown", (event) => {
+  pressDown = { x: event.clientX, y: event.clientY, at: performance.now(), control: event.target.closest?.(PRESSABLE) || null };
+}, true);
+document.addEventListener("pointercancel", () => { pressDown = null; }, true);  // a scroll took the touch: no click comes
+document.addEventListener("click", (event) => {
+  const press = pressDown, before = lastPress;
+  pressDown = null;
+  if (press) lastPress = press;
+  if (!pressTheRoomMoved(event, press, before)) return;
+  event.preventDefault();  // a submit button's press sends nothing, and a box keeps its tick
+  event.stopImmediatePropagation();
+}, true);
 
 // How far down the page would have to move to show the end of the messages with the composer under them, and to show
 // the last message's start.
