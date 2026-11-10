@@ -70,16 +70,17 @@ lines after it are normal. If it says the port is in use, run `make home-demo HO
 instead. Then try the story:
 
 1. Open **My private notes**, which holds a fictional lab result. Add a line and click **Save private draft**. No other
-   account can open it.
+   account can open it. (The app calls a note a layer, and a home a peer.)
 2. Under **Care circles and spaces**, tick **Alex's care circle**, and click **Save private draft** again. Click
    **Preview audience**, read **Who would see it**, then click **Turn on version** (its number is the saved draft's).
 3. Click Alex's name at the top right, the account menu, and choose **Try doctor**. Under **Shared with you**, open
    **My private notes**: it says Shared by Alex Patient.
 4. Switch back to the patient, open **My private notes** again, click **Stop all sharing** and confirm. The doctor can
-   no longer see it, and **Release and correction history** still lists the release.
+   no longer see it, and **Release and correction history** still lists the release. The doctor's home may still list
+   a note with that title: it's the doctor's own.
 
 Save your work before switching accounts. Ctrl-C stops the demo; make then prints `Interrupt`, which is normal.
-To use another port, run `make home-demo HOME_PORT=8080`.
+To use another port, run `make home-demo HOME_PORT=8080`. To start over, stop the demo and delete `.engram/home-demo`.
 
 Questions, or want to try a station? Say hello in [Discussions](https://github.com/zhang8128/superyak/discussions/1).
 
@@ -96,7 +97,8 @@ make home
 --data-dir` and to `make home` as `HOME_DATA`; `HOME_PORT` picks another port. Open http://127.0.0.1:7435 and sign in.
 
 Your home listens only on this machine. For anyone else to reach it, give it a route you control, such as a private
-Tailscale network. Then you can invite people with one-use links, which work once their machine can reach your home.
+Tailscale network. Then you can invite people: **Create invitation** on the **Connections** page makes a one-use token.
+They paste it under **Use an invitation** on your sign-in page, which works once their machine can reach your home.
 To connect with someone else's home, pair the two by exchanging cards, as in "Pair two peers" in
 [peer/README.md](peer/README.md). [docs/two-people.md](docs/two-people.md) walks two people on two laptops through it,
 to a first message and a shared document. Pairing shares nothing by itself; a room or release still has to name the
@@ -113,8 +115,8 @@ A **station** is a home that also hosts rooms for agents. Your coding agent (Cla
   login. Unlike the demo, it runs on your own Python, which must be 3.11 or newer.
 - Once docked, your agent reads and posts only in the rooms it's a member of.
 - Docking also installs a **watcher** on your machine by default. When someone in a room mentions your ship, it runs
-  Claude there, and sends that room's last 30 messages and its brief to the model. It runs read-only, unless the
-  mention is your own. `make dock DOCK_ARGS='--no-service'` skips the watcher; see
+  Claude there, and sends that room's last 30 messages and its brief (the room's own note on what it's for) to the
+  model. It runs read-only, unless the mention is your own. `make dock DOCK_ARGS='--no-service'` skips the watcher; see
   [the watcher](agent/README.md#the-watcher).
 - Every ship there follows the station's **law**: instructions its people signed. Nothing an agent posts can change
   them.

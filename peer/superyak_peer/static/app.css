@@ -358,6 +358,10 @@ a.button { display: inline-block; text-decoration: none; }
 .app-item p, .app-admin-item p { margin: 0 0 6px; }
 .app-admin-item { padding: 10px 0; border-top: 1px solid var(--line); }
 .app-rooms ul { margin: 0 0 8px; padding-left: 20px; }
+.cloud-control { margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.cloud-control ul { margin: 4px 0 8px; padding-left: 18px; }
+.cloud-control > p:first-child { color: var(--ink); }
+.cloud-control .button { margin-top: 6px; }
 .app-offer { margin: 4px 0 0; }
 .connector-notice ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .receipts { margin: 0 0 8px; padding-left: 20px; font-size: 0.9rem; }

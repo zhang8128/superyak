@@ -1,7 +1,7 @@
-"""Never to a cloud model (remote connector spec, "Never to a cloud model"; D6, D8, D10): any person in a room can keep
-it away from cloud models. Each member's mark is their own, and the room is marked while one stands, even after its
-member leaves, since their words stay. Ships run on cloud models, so a marked room never has a ship: marking waits
-until there is none, and every add path refuses one (`_add_members`, which the participants route, a moderator,
+"""A room's mark (remote connector spec, "Never to a cloud model"; D6, D8, D10): any person in a room can mark it, to
+keep it from ships and connected apps on this home. Only the member who set a mark clears it, and the room is marked
+while one stands, even after its member leaves, since their words stay. Ships run on cloud models, so a marked room has
+no ship on this home: marking waits until there is none, and every add path refuses one (`_add_members`, which the participants route, a moderator,
 make station-add-ship and make station-bridge all take). Adding members makes a new linked room, and the marks go with
 it in the same transaction. Only a marked room's view carries `cloud`, as only a breakout's carries `breakout`."""
 from .common import REPLACED_ROOMS, Problem
@@ -13,14 +13,14 @@ ROOM_CLOUD_SCHEMA = ROOM_CLOUD_TABLE + ';\n'
 SHIPS_IN = 'This room has ships in it, and ships run on cloud models.'
 SHIPS_FIRST = SHIPS_IN + ' Remove them first.'
 ASK_OWNER = SHIPS_IN + ' Ask {owner} to remove them first.'
-OWNER_TOLD = 'A member asked to keep this room away from cloud models. Remove the ships to let them.'
-SHIP_REFUSED = 'A member keeps this room away from cloud models, and ships run on cloud models.'
+OWNER_TOLD = 'A member asked to mark this room, to keep it from ships and connected apps. Remove the ships to let them.'
+SHIP_REFUSED = "A member has marked this room, and a ship can't join a marked room."
 EARLIER_IN = "An earlier room you're in has ships in it, and ships run on cloud models. Mark this room alone, or"
 EARLIER_FIRST = EARLIER_IN + ' remove them first.'
 EARLIER_ASK = EARLIER_IN + ' ask {owner} to remove them first.'
 REPLACED_MARK = 'This room continues in a newer room. Mark that one.'
-REMOTE_REFUSED = ("A member keeps this room away from cloud models, and this home can't tell whether someone on another "
-                  "home is a ship, nor tell their home about the mark yet.")
+REMOTE_REFUSED = ("A member has marked this room, and nobody new from another home can join it: this home can't always "
+                  "tell whether they're a ship, nor tell their home about the mark yet.")
 QUIET = 86400  # the owner is told once a day at most, so a member who tries again doesn't flood the room (the plan's)
 
 
@@ -50,8 +50,8 @@ class RoomCloud:
                           (room_id, room_id)).fetchone() is not None
 
     def _refuse_ship_in_marked(self, db, room_id, member_ids):
-        """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't tell a
-        remote contact's kind (`card --as` exports any account's card), and their home doesn't know the mark until
+        """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't always
+        tell a remote contact's kind (`card --as` exports any account's card), and their home doesn't know the mark until
         federation carries it, so a new one is refused, failing closed. A room that had one before it was marked keeps
         them, as the spec says for "Rooms with members on other homes"."""
         if not member_ids or not self._marked(db, room_id):

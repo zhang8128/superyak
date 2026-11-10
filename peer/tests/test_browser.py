@@ -235,7 +235,9 @@ def test_the_old_promises_are_gone_from_every_screen():
                     r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
                     r"(?i)\bstays? private\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
                     r"(?i)\bimport(ed)? privately\b", r"(?i)\bsaved? (them )?privately\b", r"(?i)\bkeep it private\b",
-                    r"(?i)\bonly your account\b"):
+                    r"(?i)\bonly your account\b", r"(?i)\bnever to a cloud model\b", r"(?i)\baway from claude\b",
+                    r"(?i)\bfrom cloud models?\b", r"(?i)\bkeeps their copy\b", r"(?i)\bmarks? (is|are) their own\b",
+                    r"(?i)\bno ships or connected apps\b"):
         assert not re.search(promise, words), promise
 
 
@@ -1026,7 +1028,7 @@ def test_a_mark_goes_to_the_room_on_screen_while_another_opens(browser_peer):
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, y = two_rooms_with_x_open(page, store, owner)
             held = y_opening(page, y)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.cloud)", arg=x["id"])
             assert not read_room(page, y).get("cloud")
             release(held)
@@ -1361,13 +1363,13 @@ def test_a_mark_answered_after_the_next_room_opens_names_its_room(browser_peer):
             x, y = two_rooms_with_x_open(page, store, owner)
             held = y_opening(page, y)
             mark = held_routes(page, f"**/api/chats/{x['id']}/cloud")
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, mark)
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
             reads_settled(page, held=1)
             release(mark)
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")  # never read as being about Y
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")  # never read as being about Y
             reads_settled(page)
             assert read_room(page, x).get("cloud") and not read_room(page, y).get("cloud")
 
@@ -1406,8 +1408,8 @@ def test_after_a_room_fails_to_open_nothing_opens_it_by_itself(browser_peer):
             expect(page.locator(".notice.error")).to_contain_text("Room Y didn't open.")
             expect(page.locator(".words-kept")).to_contain_text("Room Y didn't open.")  # at the box too, for a reader far below the flash
             page.unroute(pattern)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")
             reads_settled(page)
             expect(page.get_by_role("heading", name="Room X")).to_be_visible()
 
@@ -1895,7 +1897,7 @@ def test_answers_for_a_room_left_name_it(browser_peer):
             page.get_by_role("button", name="Room Y").click()
             wait_for_hold(page, held)
             posts = held_routes(page, f"**/api/chats/{x['id']}/cloud")
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, posts)
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
@@ -2330,8 +2332,8 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             two_rooms_with_x_open(page, store, owner)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")
             page.evaluate("state.transitionNote = 'Sam no longer has access'; announcer.textContent = 'Your words are kept in Room X.'")
             page.evaluate("bindEditorIdentity({ ...state.me, id: 'the-next-account' })")
             for field in ("flash", "transitionNote"):
@@ -2340,7 +2342,7 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
 
 
 @pytest.mark.parametrize("press, route", [
-    ("Keep this room away from cloud models", "cloud"),
+    ("^Mark this room$", "cloud"),
     ("^Remove .* from this room", "participants/**"),
 ])
 def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, route):
@@ -2457,7 +2459,7 @@ def test_a_mark_made_as_the_person_signs_out_names_no_room_to_the_next(browser_p
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, _y = two_rooms_with_x_open(page, store, owner)
             held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))  # refresh's read, after the mark
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, held)
             signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
 
@@ -3016,6 +3018,81 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
                 expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
 
 
+def list_under(control, heading):
+    """The list right under a heading, so changing a word of either fails: "It can:" over these items is the promise itself."""
+    return control.locator(f'xpath=.//p[normalize-space()="{heading}"]/following-sibling::ul[1]/li')
+
+
+def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
+    """A person relies on the mark at the moment they set it, so it says there what it keeps out, what one mark does to
+    everyone, and what it can't do. The sign-in page's line isn't on screen then. A member someone else has marked for is
+    told it already holds, and why they might add theirs. A cold walker stopped at the second sentence of a paragraph,
+    so it starts with what a person most wants to know, and the rest is lists."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    limits = ["stop whoever runs this home, or an AI agent they run on its computer, reading or changing it",
+              "take back what a ship or app has already read",
+              "stop a member copying the words or giving them to an AI"]
+    room = store.create_room(users["patient"]["id"], "To be marked", [users["family"]["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        control = page.locator(".cloud-control")
+        expect(control).to_contain_text("Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.")
+        expect(list_under(control, "One member's mark holds for the whole room:")).to_have_text([
+            "No ship can join, and any ship here has to be removed first.", "No member's connected app can read it.",
+            "Nobody new from another home can join.",
+            "Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays."])
+        expect(list_under(control, "It can't:")).to_have_text(limits)
+        expect(control).not_to_contain_text("another home, who may be")  # nobody on another home here
+        page.get_by_role("button", name="Mark this room").click()
+        expect(page.locator(".notice", has_text="To be marked is kept away from ships and connected apps on this home.")).to_be_visible()
+        expect(control).to_contain_text("You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.")
+        expect(control).to_contain_text("another member's mark would still hold")
+        expect(control).not_to_contain_text("earlier rooms")  # this one has none
+        expect(list_under(control, "It can't:")).to_have_text(limits)
+        expect(page.locator(".split-detail").get_by_text("Marked · 1 mark (yours)", exact=True)).to_be_visible()
+        with signed_in_browser(playwright, browser_peer, "family") as (other, _):
+            other.goto(f"{base}/#chats/{room['id']}")
+            theirs = other.locator(".cloud-control")
+            expect(theirs).to_contain_text("A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it.")
+            expect(theirs).to_contain_text("Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.")
+            expect(theirs).to_contain_text("Add your own and it still holds if they clear theirs.")
+            expect(list_under(theirs, "It can't:")).to_have_text(limits)
+            expect(other.locator(".split-detail").get_by_text("Marked · 1 mark", exact=True)).to_be_visible()
+            other.get_by_role("button", name="Add my mark too").click()
+            expect(other.locator(".split-detail").get_by_text("Marked · 2 marks (one yours)", exact=True)).to_be_visible()
+            other.get_by_role("button", name="Clear my mark").click()
+            expect(other.locator(".notice", has_text="Your mark on To be marked is cleared. Other members' marks still stand.")).to_be_visible()
+        page.get_by_role("button", name="Clear my mark").click()
+        expect(page.locator(".notice", has_text="Your mark on To be marked is cleared. This room has no marks now.")).to_be_visible()
+
+
+def test_adding_my_mark_still_offers_the_earlier_rooms_and_says_so_only_if_marked(browser_peer):
+    """Another member's mark on the continuing room leaves the choice about the earlier one this person is in. Ticked, the
+    control says those marks stay. Unticked, it says nothing of them, because there are none."""
+    base, store = browser_peer["base_url"], browser_peer["app"].state.store
+    patient, family, doctor = (browser_peer["users"][name]["id"] for name in ("patient", "family", "doctor"))
+    first = store.create_room(patient, "Kept close", [family])["id"]
+    second = store.add_participants(patient, first, [doctor])["id"]
+    store.mark_room(doctor, second)
+    stays = "Your marks on its earlier rooms stay."
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "family") as (page, _):
+        page.goto(f"{base}/#chats/{second}")
+        box = page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")
+        expect(box).to_be_checked()
+        box.uncheck()
+        page.get_by_role("button", name="Add my mark too").click()
+        expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
+        expect(page.locator(".cloud-control")).not_to_contain_text(stays)  # she unticked it, and has none there
+        with store.transaction() as db:
+            assert db.execute("SELECT count(*) FROM room_cloud WHERE room_id=? AND member_id=?", (first, family)).fetchone()[0] == 0
+        page.get_by_role("button", name="Clear my mark").click()
+        page.get_by_role("button", name="Add my mark too").click()
+        expect(page.locator(".cloud-control")).to_contain_text(stays)
+        with store.transaction() as db:
+            assert db.execute("SELECT count(*) FROM room_cloud WHERE room_id=? AND member_id=?", (first, family)).fetchone()[0] == 1
+
+
 def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
     """Never to a cloud model (connector plan, Task 2): a member marks a continuing room and, by default, the earlier
     room they're in; every member sees the badge with its count, and only the marker sees "(yours)"."""
@@ -3040,14 +3117,14 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
                 family.goto(browser_peer["base_url"] + f"/#chats/{second}")
                 expect(family.get_by_role("heading", name="Kept close")).to_be_visible()
                 expect(family.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")).to_be_checked()
-                family.get_by_role("button", name="Keep this room away from cloud models").click()
-                expect(family.locator(".split-detail").get_by_text("Never to a cloud model · 1 (yours)")).to_be_visible()
-                expect(family.locator(".split-list").get_by_text("Never to a cloud model · 1 (yours)")).to_have_count(2)
+                family.get_by_role("button", name="Mark this room").click()
+                expect(family.locator(".split-detail").get_by_text("Marked · 1 mark (yours)")).to_be_visible()
+                expect(family.locator(".split-list").get_by_text("Marked · 1 mark (yours)")).to_have_count(2)
                 expect(family.get_by_role("button", name="Clear my mark")).to_be_visible()
-                expect(family.get_by_text("Clearing takes your mark off this room only; your marks on earlier rooms stay.")).to_be_visible()
+                expect(family.get_by_text("Clearing takes your mark off this room only, and another member's mark would still hold. Your marks on its earlier rooms stay.")).to_be_visible()
 
             page.reload()
-            expect(page.locator(".split-detail").get_by_text("Never to a cloud model · 1", exact=True)).to_be_visible()
+            expect(page.locator(".split-detail").get_by_text("Marked · 1 mark", exact=True)).to_be_visible()
         with store.transaction() as db:
             marked = {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
         assert marked == {first, second}
@@ -3056,7 +3133,7 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
 def test_the_mark_controls_say_what_they_do(browser_peer):
     """Rio Grande's section 2 of room-cloud-ui (M1, S2, N1, N2): unticking the earlier rooms marks this room alone;
     "Clear my mark" clears it; the owner's add dialog says the new room keeps the mark; a room with a member on another
-    home says the mark holds on this home; a received or replaced room offers no mark; the badge shows a number only."""
+    home says what still goes there; a received or replaced room offers no mark; the badge shows a number only."""
     store = browser_peer["app"].state.store
     patient, family, doctor = (browser_peer["users"][name]["id"] for name in ("patient", "family", "doctor"))
     first = store.create_room(patient, "Kept close", [family])["id"]
@@ -3074,7 +3151,7 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
         with signed_in_browser(playwright, browser_peer, "family") as (page, _):
             page.goto(base + f"/#chats/{second}")
             page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too").uncheck()
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Mark this room").click()
             expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
             assert marked() == {second}  # unticked: this room alone
 
@@ -3084,13 +3161,13 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
                 expect(owner.get_by_text("The new room keeps the mark: no ship, and no one on another home, can join it.")).to_be_visible()
                 owner.goto(base + f"/#chats/{across}")
                 expect(owner.get_by_role("heading", name="Across homes")).to_be_visible()
-                expect(owner.get_by_text("This mark holds on this home. Members' homes get it once federation carries it.")).to_be_visible()
+                expect(owner.locator(".cloud-control")).to_contain_text("stop what's said here still going to a member already on another home, who may be a person or a ship, under that home's rules. Their home isn't told about the mark.")
                 assert owner.evaluate("cloudControl({id: 'x', origin: 'a-peer', member_ids: []}, false)") == ""
-                assert "Keep this room away" not in owner.evaluate("cloudControl({id: 'x', member_ids: []}, true)")
+                assert "Mark this room" not in owner.evaluate("cloudControl({id: 'x', member_ids: []}, true)")
                 assert "<b>" not in owner.evaluate("cloudBadge({cloud: {count: '<b>1</b>', mine: false}})")
 
             page.get_by_role("button", name="Clear my mark").click()
-            expect(page.get_by_role("button", name="Keep this room away from cloud models")).to_be_visible()
+            expect(page.get_by_role("button", name="Mark this room")).to_be_visible()
             assert marked() == set()
 
 
@@ -3667,7 +3744,7 @@ def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(bro
     across = store.create_room(patient, "Across homes", [family, "remote_willa"])["id"]
     local = store.create_room(patient, "At home", [family])["id"]
     one = ("Willa <b>Away</b>: this room's title and messages are copied to their home; its brief and board stay here. "
-           "That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or "
+           "That home keeps its own copy under its own rules, and this home can't always tell whether the member is a person or "
            "a ship that sends text to Claude.")
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
         page.goto(f"{base}/#chats/{across}")
@@ -3683,7 +3760,7 @@ def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(bro
         two = page.evaluate("shipBanner({member_ids: ['remote_willa', 'remote_omar'], members: []})")
         assert "Some members of this room aren't on this home." in two and "Willa &lt;b&gt;Away&lt;/b&gt;, " in two
         assert ("this room's title and messages are copied to each one's home; its brief and board stay here. Each home "
-                "keeps its own copy under its own rules, and this home can't tell whether a member there is a person or "
+                "keeps its own copy under its own rules, and this home can't always tell whether a member there is a person or "
                 "a ship that sends text to Claude.") in two
         assert "other homes" not in two  # both may be on one home
         received = page.evaluate("shipBanner({origin: 'a-peer', member_ids: ['remote_willa'], members: []})")
@@ -6896,7 +6973,7 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
             plain, marked = page.get_by_label('Care plan'), page.get_by_label('Night notes')
             expect(plain).not_to_be_checked()
             expect(marked).to_be_disabled()
-            expect(page.get_by_text('Kept away from cloud models')).to_be_visible()
+            expect(page.get_by_text('Kept from connected apps')).to_be_visible()
             expect(page.get_by_text('Growing: earlier part of Growing')).to_be_visible()
             expect(page.get_by_text('<img src=x id=planted> notes')).to_be_visible()
             assert page.locator('#planted').count() == 0  # shown as text, never made into an element
@@ -6917,6 +6994,24 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
     assert (query['state'], query['iss']) == ('st-1', CONSENT_ORIGIN)
     with home['store'].transaction() as db:
         assert [row['rooms'] for row in db.execute('SELECT rooms FROM connector_grants')] == ['*']
+
+
+@pytest.mark.parametrize("who, line", [
+    ("jenn@example.org", "Growing: earlier part, not marked. An app with all your rooms can read it."),
+    ("sam@example.org", "Growing: earlier part of Growing"),
+])
+def test_a_marked_rooms_earlier_part_says_if_the_mark_doesnt_cover_it(connector_home, who, line):
+    """A member's mark covers the rooms they were in. Jenn joined only the continuing room, so the earlier part stays open
+    to an all-rooms app, under a row that says it's kept. Sam was in both."""
+    home, landed = connector_home, []
+    with home['store'].transaction() as db:
+        marker = db.execute('SELECT id FROM users WHERE username=?', (who,)).fetchone()[0]
+    home['store'].mark_room(marker, home['rooms']['growing'])
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            sign_in_to_consent(page)
+            expect(page.get_by_text(line, exact=True)).to_be_visible()
 
 
 def test_the_consent_page_says_when_a_request_has_expired_and_offers_no_form(connector_home):
@@ -6989,6 +7084,31 @@ def connected_apps(page):
     page.get_by_role("link", name="Connected apps").click()
     expect(page.get_by_role("heading", name="Connected apps", level=1)).to_be_visible()
     return page.locator(".app-item")
+
+
+@pytest.mark.connector
+def test_a_connection_says_it_cant_read_a_room_marked_since(browser_peer):
+    """The list says what the app reads, so a room a member has marked since says it can't, in place of a badge that reads
+    as being about the app's reading at all. An all-rooms connection says what it leaves out, in the row and in the form."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care, lab = (store.create_room(patient, title, [])["id"] for title in ("Care plan", "Lab notes"))
+    connect_claude(browser_peer, "patient", [care, lab])
+    store.mark_room(patient, lab)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        rooms = connected_apps(page).locator(".app-rooms")
+        expect(rooms.locator("li", has_text="Lab notes")).to_have_text("Lab notes: it can't read this one, because a member has marked it.")
+        expect(rooms.locator("li", has_text="Care plan")).to_have_text("Care plan")
+        page.get_by_role("button", name="Change rooms").click()
+        expect(page.get_by_text("Except rooms a member keeps from ships and apps.")).to_be_visible()
+
+
+@pytest.mark.connector
+def test_an_all_rooms_connection_says_what_it_leaves_out(browser_peer):
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    store.create_room(patient, "Care plan", [])
+    connect_claude(browser_peer, "patient", "*")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        expect(connected_apps(page).locator(".app-rooms")).to_have_text("It reads all your rooms on this home, including new ones, except rooms a member keeps from ships and apps.")
 
 
 @pytest.mark.connector
@@ -7110,7 +7230,7 @@ def test_receipts_show_what_was_read_a_page_at_a_time_and_start_again_when_the_l
         item.get_by_role("button", name="Show what it read").click()
         receipts = item.locator(".receipt")
         expect(receipts).to_have_count(20)
-        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from cloud models\)$"))
+        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from ships and apps\)$"))
         expect(receipts.nth(1)).to_have_text(re.compile(r"^[^·]+ · Read a room · Read: <i>Care</i> plan$"))
         assert page.locator("#main-content i").count() == 0
         item.get_by_role("button", name="Show earlier").dblclick()  # one read at a time: the next page once
@@ -7391,7 +7511,7 @@ def test_p5_a_rooms_save_that_meets_a_mark_400(browser_peer):
         item.get_by_label("Lab notes").uncheck()
         store.mark_room(family, care)  # a member marks Care plan while the form is open
         item.get_by_role("button", name="Save rooms").click()
-        expect(page.locator(".notice.error")).to_contain_text("keeps it away from cloud models")
+        expect(page.locator(".notice.error")).to_contain_text("A member has marked that room")
     with store.transaction() as db:
         [(rooms,)] = db.execute("SELECT rooms FROM connector_grants").fetchall()
     assert set(json.loads(rooms)) == {care, lab}

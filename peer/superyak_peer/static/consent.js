@@ -98,9 +98,11 @@ function consent(view) {
   view.rooms.filter((room) => !room.earlier_of).forEach((room, index) => {
     const box = el("input", { type: "checkbox", id: `room-${index}`, value: room.room, disabled: room.cloud });
     const row = el("div", { class: "choice" }, box, el("label", { for: box.id }, room.title || "Untitled"));
-    if (room.cloud) row.append(" ", el("span", { class: "badge" }, "Kept away from cloud models"));
+    if (room.cloud) row.append(" ", el("span", { class: "badge" }, "Kept from connected apps"));
     for (const part of earlier.get(room.room) || []) {
-      row.append(el("p", { class: "meta" }, `${part.title || "Untitled"}: earlier part of ${room.title || "Untitled"}`));
+      row.append(el("p", { class: "meta" }, room.cloud && !part.cloud  // a member's mark covers the rooms they were in
+        ? `${part.title || "Untitled"}: earlier part, not marked. An app with all your rooms can read it.`
+        : `${part.title || "Untitled"}: earlier part of ${room.title || "Untitled"}`));
     }
     if (!room.cloud) boxes.push(box);
     list.append(row);
