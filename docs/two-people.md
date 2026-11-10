@@ -99,8 +99,9 @@ tailscale serve --tcp 7437 tcp://127.0.0.1:7437
 **8. Alex, then Sam: a room and a message.**
 - **Alex:** **Chats**, **New chat**, a title, tick Sam, **Create chat**. Write something and click **Send
   message**. It says `Waiting for pull` until Sam's home fetches it, within about a minute.
-- **Sam:** pages don't update by themselves, so click **Check delivery now** on **Connections**, which also fetches at
-  once. Open the room under **Chats** and reply. Alex clicks it too, to see the reply.
+- **Sam:** Sam's home fetches about once a minute; **Check delivery now** on **Connections** fetches at once. Open the
+  room under **Chats** and reply. An open room shows a new message by itself within a few seconds of it reaching that
+  laptop's home, so Alex, with the room open, sees the reply once Sam's home sends it.
 
 **9. Alex, then Sam: a document.** A document here is a **layer**: a title, text and attached files. You turn on a saved
 version, called a release, for the people you name. It doesn't go into a room, so tell Sam in the room.
@@ -124,7 +125,8 @@ version, called a release, for the people you name. It doesn't go into a room, s
 ## What hasn't been checked
 
 - **`card` and `pair` weren't run for this page,** because pairing is a person's to do. They, and every button named
-  here, were checked by reading the code, its tests and `--help`.
+  here, were checked by reading the code, its tests and `--help`. On 2026-11-10 every button, label and number here was
+  checked again against the code on main (124a2343) and the trains waiting to land.
 - **Run on one machine, with no real message:** `init`, and `make home HOME_ARGS=--sync` beside `federation-listen`,
   with the delivery mode set by hand. `--sync` stands in for `peer/README.md`'s `federate` and runs the same loop.
   `peer/tests/test_federate.py` exchanges a room, a reply and a release on one machine; it was read, not run.
