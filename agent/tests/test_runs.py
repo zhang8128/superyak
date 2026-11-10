@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import time
 import pytest
-from superyak_agent.runs import ClaudeRunner, RunTimeout, persona
+from superyak_agent.runs import FAILED_NOTES, ClaudeRunner, RunFailed, RunTimeout, persona
 
 FAKE_CLAUDE = '''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
@@ -319,3 +319,75 @@ def test_tardis_answers_as_the_doctor_and_other_ships_as_themselves():
     assert tardis.startswith('You are the Doctor, answering for Tardis') and 'only the message that mentions you' in tardis
     serenity = persona({'ship': 'serenity', 'ship_name': 'Serenity', 'owner_id': 'u-andy', 'machine': 'andy-mac'})
     assert serenity.startswith('You are Serenity,') and 'plain, concise, friendly' in serenity
+
+
+def _claude_that(tmp_path, stdout, stderr='', code=1):
+    script = tmp_path / 'claude-fails'
+    script.write_text(f'#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nprint({stdout!r}, end="")\nprint({stderr!r}, end="", file=sys.stderr)\nsys.exit({code})\n')
+    script.chmod(0o755)
+    return str(script)
+
+
+@pytest.mark.parametrize('stdout, stderr, code, reason', [
+    ('Not logged in · Please run /login', '', 1, 'signed_out'),
+    ('', 'Invalid API key', 1, 'signed_out'),
+    ('Claude usage limit reached. Your limit will reset at 3pm', '', 1, 'usage'),
+    ('Credit balance is too low', '', 1, 'usage'),
+    ('', '', 3, 'exit'),
+    ('', '', 0, 'empty'),
+])
+def test_a_failed_run_names_its_reason_from_a_closed_set(repo, tmp_path, claude, stdout, stderr, code, reason):
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, stdout, stderr, code)).run('read', 'Why?', 'm1')
+    assert failed.value.reason == reason and failed.value.code == code
+
+
+def test_the_log_line_keeps_what_a_failed_run_wrote_to_stdout(repo, tmp_path, claude):
+    """A signed-out claude writes only to stdout, so the log line used to read `claude exited 1: ` and nothing else."""
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, 'Not logged in · Please run /login')).run('read', 'Why?', 'm1')
+    assert 'Not logged in' in str(failed.value) and 'claude exited 1' in str(failed.value)
+
+
+def test_a_long_answer_that_exits_badly_is_not_read_as_an_error_message(repo, tmp_path, claude):
+    """A run can die after writing a real answer, and an answer can talk about usage limits. Only a short output is read."""
+    answer = 'Here is what I found about the usage limit. ' * 20
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, answer)).run('read', 'Why?', 'm1')
+    assert failed.value.reason == 'exit'
+
+
+@pytest.mark.parametrize('stdout', [
+    'The fix is in /login',                       # a short answer can name the sign-in command
+    'That limit reached its peak',                # or say something near a usage limit
+    'Not logged in\nand a second line of answer',  # Claude's error is a line by itself
+])
+def test_a_short_answer_with_a_bad_exit_is_not_read_as_an_error_message(repo, tmp_path, claude, stdout):
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, stdout)).run('read', 'Why?', 'm1')
+    assert failed.value.reason == 'exit'
+
+
+def test_the_log_line_masks_a_key_before_it_is_cut(repo, tmp_path, claude):
+    """Cut first, and what's left of a key can be too short for the mask to know it."""
+    key = 'sk-ant-' + 'x' * 60
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, '', 'y' * 487 + ' ' + key + ' ' + 'y' * 800)).run('read', 'Why?', 'm1')
+    assert 'sk-ant' not in str(failed.value) and 'xxx' not in str(failed.value)
+
+
+def test_a_missing_claude_command_is_named(repo, tmp_path, claude):
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, str(tmp_path / 'no-such-claude')).run('read', 'Why?', 'm1')
+    assert failed.value.reason == 'missing' and 'no-such-claude' in str(failed.value)
+
+
+def test_every_reason_has_a_note_and_a_note_carries_no_output(repo, tmp_path, claude):
+    assert set(FAILED_NOTES) == {'signed_out', 'usage', 'missing', 'exit', 'empty'}
+    secret = 'Not logged in; token sk-ant-do-not-post'
+    with pytest.raises(RunFailed) as failed:
+        runner(repo, tmp_path, _claude_that(tmp_path, secret)).run('read', 'Why?', 'm1')
+    assert 'do-not-post' not in failed.value.note and failed.value.note == FAILED_NOTES['signed_out']
+    with pytest.raises(RunFailed) as coded:
+        runner(repo, tmp_path, _claude_that(tmp_path, '', code=7)).run('read', 'Why?', 'm1')
+    assert 'exit code 7' in coded.value.note

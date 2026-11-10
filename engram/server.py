@@ -3362,6 +3362,11 @@ def recall(
         resonant_results = [r for r in resonant_results if (r.get("lane") or "personal") == lane]
         kept = {r["id"] for r in results} | {r["id"] for r in resonant_results}
         result_ids[:] = [rid for rid in result_ids if rid in kept]
+        # The hidden scores were kept before this filter, so dream_verify would name what the lane left out.
+        hidden = _recall_scores.get(recall_id)
+        if hidden is not None:
+            for part in ("matched", "uninvited"):
+                hidden[part] = {rid: s for rid, s in hidden[part].items() if rid in kept}
         # Update the already-written log entry so target_ids reflects what was returned
         _storage.conn.execute(
             "UPDATE memory_log SET target_ids = ? WHERE json_extract(context, '$.recall_id') = ?",
@@ -3369,17 +3374,19 @@ def recall(
         )
         _storage.conn.commit()
 
-    # Knowledge graph: entities and temporal facts
+    # Knowledge graph: entities and temporal facts. It's fed episodes from both lanes and keeps no lane, so a recall
+    # kept to one lane leaves it out, as it does transfers.
     knowledge = None
-    if _knowledge_graph is not None and _knowledge_graph.enabled:
+    if _knowledge_graph is not None and _knowledge_graph.enabled and lane is None:
         try:
             knowledge = _knowledge_graph.search(query)
         except Exception:
             logger.warning("Knowledge graph search failed during recall", exc_info=True)
 
-    # ∞-category: surface relevant morphisms (cross-domain transfers)
+    # ∞-category: surface relevant morphisms (cross-domain transfers). Their text quotes earlier queries word for word
+    # and a cell doesn't know its lane, so a recall kept to one lane leaves them out.
     transfers = []
-    if _category_store:
+    if _category_store and lane is None:
         try:
             cat_results = _category_store.search(embedding, level=2, limit=3)
             for cr in cat_results:

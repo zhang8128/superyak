@@ -143,7 +143,7 @@ def test_serve_keeps_access_logs_off_with_a_public_origin(tmp_path, monkeypatch)
     from superyak_peer.__main__ import main
     ran = {}
     monkeypatch.setattr(uvicorn, 'run', lambda app, **options: ran.update(app=app, **options))
-    main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--proxy-headers',
+    main(['serve', '--data-dir', str(tmp_path / 'peer'), '--port', '0', '--origin', PUBLIC_ORIGIN, '--proxy-headers',
           '--public-origin', PUBLIC_ORIGIN, '--connector-callback', CALLBACK])
     assert ran['access_log'] is False and ran['app'].state.public_origin == PUBLIC_ORIGIN
 

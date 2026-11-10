@@ -94,3 +94,56 @@ def test_biased_lane_recall_counterfactual_stays_in_requested_lane(
         "survives": True,
         "displaced": None,
     }
+
+
+def test_a_recall_kept_to_one_lane_returns_no_transfers(engram_server_env, monkeypatch):
+    """A transfer's text quotes earlier queries word for word, and a cell doesn't know its lane."""
+    _seed_two_lanes()
+
+    class Transfers:
+        def search(self, embedding, level=None, limit=10):
+            return [{"content": "cross-domain: 'a personal question' connects to 'a work question'", "level": 2, "context": {}}]
+
+    monkeypatch.setattr(server, "_category_store", Transfers())
+
+    assert server.recall(query="rivers", max_results=2, uninvited=0)["transfers"]  # the store is wired, and both lanes still see them
+    out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
+    assert "transfers" not in out
+    assert "a personal question" not in json.dumps(out)
+
+
+def test_a_recall_kept_to_one_lane_returns_no_knowledge(engram_server_env, monkeypatch):
+    """The knowledge graph is fed episodes from both lanes and keeps no lane, so its facts can quote either."""
+    _seed_two_lanes()
+
+    class Knowledge:
+        enabled = True
+
+        def search(self, query, num_results=10):
+            return {"facts": [{"id": "f1", "relationship": "a personal fact about rivers"}], "historical": []}
+
+    monkeypatch.setattr(server, "_knowledge_graph", Knowledge())
+
+    assert server.recall(query="rivers", max_results=2, uninvited=0)["knowledge"]  # the graph is wired, and an unkept recall still sees it
+    out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
+    assert "knowledge" not in out
+    assert "a personal fact" not in json.dumps(out)
+
+
+def test_dream_verify_names_no_memory_from_another_lane(engram_server_env, monkeypatch):
+    """Hidden scores are kept before the lane filter runs; verifying them names only what the lane let through."""
+    _seed_two_lanes()
+    lanes = dict(server._storage.conn.execute("SELECT id, lane FROM episodes").fetchall())
+    personal = [i for i, lane in lanes.items() if lane == "personal"]
+    monkeypatch.setattr(server, "_has_active_residue", lambda: True)
+    monkeypatch.setattr(
+        server._storage, "sample_distant_memories",
+        lambda *a, **k: [(i, "episode", 0.5) for i in personal],
+    )
+
+    unkept = server.dream_verify(server.recall(query="rivers", max_results=2, uninvited=3)["recall_id"])
+    assert set(unkept["uninvited_scores"]) & set(personal)  # the draw reaches the other lane, and an unkept recall shows it
+
+    kept = server.dream_verify(server.recall(query="rivers", lane="work", max_results=2, uninvited=3)["recall_id"])
+    named = set(kept["scores"]) | set(kept["uninvited_scores"])
+    assert named and all(lanes.get(i) == "work" for i in named)

@@ -109,7 +109,8 @@ REPEAT_NO_SHIP = ('No ship account on this peer is a member of the lessons room,
 REPEAT_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the ship '
                 "is this peer's one ship account in the room, never an argument")
 REPEAT_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it records no repeat here"
-REPEAT_OWN = "A ship's own lesson is never its repeat: the query never shows a ship its own lesson (section 5, step 3)"
+REPEAT_OWN = ("A ship's own lesson is never its repeat: a repeat measures a lesson that reached another ship, and an own "
+              "lesson is shown with no receipt")
 REPEAT_NO_RECEIPT = ("This peer holds no receipt of that lesson for this ship, so the repeat can't be verified; record it "
                      'with --how read')
 
@@ -506,13 +507,25 @@ def seen_ok(seen):
 
 
 def read_request(raw):
-    """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else."""
+    """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else.
+
+    Own lessons, once a context window (2026-11-09 spec): `seen` is the session's ids and decides receipts;
+    `window_seen`, this window's, decides what is shown, and stands for `seen` when absent, so an old hook gets main's
+    answer. `own` asks for the ship's own lessons; `reask`, only at a failure, asks for reminders alone. Before a command
+    (`words_only`) there is neither a reminder nor an own lesson: the hold shows a lesson once a session, and
+    could_hold reads `seen` alone."""
     value = json.loads(raw)
     if not isinstance(value, dict) or not isinstance(value.get('ship'), str) or len(value['ship']) > 32:
         raise ValueError('ship')
     seen = value.get('seen', [])
     if not seen_ok(seen):
         raise ValueError('seen')
+    window_seen = value.get('window_seen', seen)
+    if not seen_ok(window_seen):
+        raise ValueError('window_seen')
+    for key in ('own', 'reask'):
+        if type(value.get(key, False)) is not bool:
+            raise ValueError(key)
     limit = value.get('limit', SHOWN)  # how many lesson slots the caller will render: 0 to 3
     if type(limit) is not int or not 0 <= limit <= SHOWN:
         raise ValueError('limit')
@@ -521,10 +534,13 @@ def read_request(raw):
         raise ValueError('budget_ms')
     if budget is not None:
         budget = min(budget, BUDGET_CAP_MS)  # 10**309 is past a float, and the deadlines below are floats
-    request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget}
+    request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget,
+               'window_seen': set(window_seen), 'own': value.get('own', False), 'reask': value.get('reask', False)}
     if 'prompt' in value:
         if not isinstance(value['prompt'], str) or len(value['prompt']) > PROMPT_CHARS:
             raise ValueError('prompt')
+        if request['reask']:  # a failure's key: a prompt writes no receipt, so there is nothing to re-ask
+            raise ValueError('reask')
         request.update(prompt=value['prompt'], limit=min(limit, SHOWN_AT_PROMPT))  # limit only lowers the 2
         return request
     for field, cap in CAPS.items():
@@ -535,16 +551,29 @@ def read_request(raw):
     if type(value.get('words_only', False)) is not bool:
         raise ValueError('words_only')
     request['words_only'] = value.get('words_only', False)
+    if request['words_only']:  # the hold's once a session, whatever a later hold sends
+        request.update(window_seen=request['seen'], own=False)
     return request
 
 
-def fit(entries):
-    """Section 5 step 5, in order: a lesson that would push the answer past 2,000 bytes is dropped whole."""
-    kept = []
-    for entry in entries:
+def fit(lessons, own=()):
+    """Section 5 step 5, in order: a lesson that would push the answer past 2,000 bytes is dropped whole. Then each own
+    lesson, last, while the answer still fits: the `own` key is measured in the exact bytes `dumps` writes, and left out
+    when it would be empty, so an own lesson never takes another's bytes (own lessons spec, "The answer")."""
+    kept, extra = [], []
+    for entry in lessons:
         if len(dumps({'lessons': kept + [entry]}).encode('utf-8')) <= ANSWER_BYTES:
             kept.append(entry)
-    return {'lessons': kept}
+    for entry in own:
+        if len(dumps({'lessons': kept, 'own': extra + [entry]}).encode('utf-8')) <= ANSWER_BYTES:
+            extra.append(entry)
+    return {'lessons': kept, 'own': extra} if extra else {'lessons': kept}
+
+
+def new_keys(request):
+    """(`window_seen`, `own`, `reask`) of a request, each as read_request reads it when absent: a request built in
+    process without them, as before own lessons, gets main's answer."""
+    return request.get('window_seen', request['seen']), request.get('own', False), request.get('reask', False)
 
 
 def dumps(answer):
@@ -571,26 +600,35 @@ def near_deadline(request, start, own):
     return start + (own if budget is None else min(own, budget / 1000))
 
 
-def prompt_answer(request, index, age, socket_path, deadline, monotonic):
-    """Section 5's prompt path: this peer's index file and nothing else; no store, no database, no write."""
-    if index is None or age > STALE_SECONDS or request['limit'] == 0:
-        return {'lessons': []}
-    asking = index['ships'].get(request['ship'])
-    if asking is None:
-        return {'lessons': []}
-    prompt, pool, limit = request['prompt'], [], request['limit']
-    for item in index['lessons']:
-        if item['author'] != asking and item['learned_from'] != request['ship'] and short_lesson_id(item['id']) not in request['seen']:
-            pool.append(item)
+def prompt_words(items, prompt):
+    """The prompt's words rule, for others' lessons and own ones alike: a value of at least HOLD_BYTES, not a held
+    tool's name, found in the prompt (item 3). [(item, the first matched `command` value or None)], the most matched
+    values first, then by id."""
     matched = []
-    for item in pool:
+    for item in items:
         found = [(k, v) for k in APPLIES for v in item[k]
                  if len(v.encode('utf-8')) >= HOLD_BYTES and v not in HELD_TOOLS and v in prompt]  # item 3
         if found:
             matched.append((-len(found), item['id'], item, next((v for k, v in found if k == 'command'), None)))
     matched.sort(key=lambda m: m[:2])
-    picked = [shown(item, 'words', command) for _, _, item, command in matched[:limit]]
-    taken = {item['id'] for _, _, item, _ in matched[:limit]}
+    return [(item, command) for _, _, item, command in matched]
+
+
+def prompt_answer(request, index, age, socket_path, deadline, monotonic):
+    """Section 5's prompt path: this peer's index file and nothing else; no store, no database, no write. What this
+    window has shown (`window_seen`) is skipped; own lessons, when asked, come last, by the same words rule."""
+    if index is None or age > STALE_SECONDS or request['limit'] == 0:
+        return {'lessons': []}
+    asking = index['ships'].get(request['ship'])
+    if asking is None:
+        return {'lessons': []}
+    prompt, pool, limit, (skip, asked, _) = request['prompt'], [], request['limit'], new_keys(request)
+    for item in index['lessons']:
+        if item['author'] != asking and item['learned_from'] != request['ship'] and short_lesson_id(item['id']) not in skip:
+            pool.append(item)
+    matched = prompt_words(pool, prompt)
+    picked = [shown(item, 'words', command) for item, command in matched[:limit]]
+    taken = {item['id'] for item, _ in matched[:limit]}
     if (len(picked) < limit and len(prompt.split()) >= PROMPT_WORDS and index.get('model') and index.get('dimension')
             and socket_path and deadline is not None and deadline > monotonic()):  # no vectors: nothing to embed for
         try:
@@ -602,7 +640,11 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
             near = sorted((theta, item['id'], item) for item in pool if item['id'] not in taken and item['id'] in stored
                           for theta in [angle(vector, stored[item['id']])] if theta <= R_PROMPT)
             picked += [shown(item, round(theta, 4)) for theta, _, item in near[:limit - len(picked)]]
-    return fit(picked)
+    own = []
+    if asked:  # by author id, never by the `ship:` text; words only, never Near
+        mine = [item for item in index['lessons'] if item['author'] == asking and short_lesson_id(item['id']) not in skip]
+        own = [shown(item, 'words', command) for item, command in prompt_words(mine, prompt)[:limit]]
+    return fit(picked, own)
 
 
 def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None):
@@ -700,7 +742,10 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     opening the store included, is waited for only until it ends. Step 4 checks it right before its inserts, and past
     it writes nothing. After that check, its commit waits for a reader outside the gate only for the time left, and is
     rolled back when that runs out. So a receipt can follow the deadline only by the commit's own write. Without a
-    budget, step 4 has no deadline: Near's 800 ms is the embedder's limit, not the answer's."""
+    budget, step 4 has no deadline: Near's 800 ms is the embedder's limit, not the answer's. Own lessons spec: what this
+    window has shown (`window_seen`) is skipped; first reaches (not in the session's `seen`) come first, by words then
+    Near, then reminders by words; a re-ask keeps reminders alone and runs no Near. `own`, when asked, is the asking
+    ship's own words matches, which step 4 checks as it checks the rest."""
     if 'prompt' in request:
         return answer_prompt(request, data_dir, socket_path, clock, monotonic, started), None
     if request['limit'] == 0:
@@ -712,14 +757,20 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     asking = index['ships'].get(request['ship'])
     if asking is None:  # C47: not a member at the last index run, so nothing is embedded for it
         return {'lessons': []}, None
+    seen, (skip, asked, reask) = request['seen'], new_keys(request)
     pool = [item for item in index['lessons'] if item['author'] != asking and item['learned_from'] != request['ship']
-            and short_lesson_id(item['id']) not in request['seen']]
+            and short_lesson_id(item['id']) not in skip]
     matched = sorted(((-n, item['id'], item, command) for item in pool for n, command in [words(item, request)] if n),
                      key=lambda m: m[:2])
-    candidates = [(item, 'words', command) for _, _, item, command in matched]
+    # Own lessons spec, "The answer": first reaches (not in the session's `seen`) first, as today, then reminders.
+    # A re-asked failure makes no first reach, so it has no Near either: Near runs over first reaches only.
+    reminders = [(item, 'words', command) for _, _, item, command in matched if short_lesson_id(item['id']) in seen]
+    candidates = [] if reask else [(item, 'words', command) for _, _, item, command in matched
+                                   if short_lesson_id(item['id']) not in seen]
+    fresh = [] if reask else [item for item in pool if short_lesson_id(item['id']) not in seen]
     nearest, unavailable = None, False
     text, deadline = context_text(request), near_deadline(request, started, NEAR_SECONDS)
-    if not request['words_only'] and len(candidates) < request['limit'] and text and pool:
+    if not request['words_only'] and len(candidates) < request['limit'] and text and fresh:
         model = None
         if not (index.get('model') and index.get('dimension') and socket_path):  # C24: no model, no vectors or no socket
             unavailable = True
@@ -735,9 +786,17 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
         if model is not None and not unavailable:
             taken = {item['id'] for item, _, _ in candidates}
             stored = vectors_of(index)
-            angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in pool if item['id'] in stored)
+            angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in fresh if item['id'] in stored)
             nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
             candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
+    candidates += reminders
+    own = []
+    if asked:  # by author id, never by the `ship:` text; words only, never Near; at a re-ask, reminders only
+        mine = [item for item in index['lessons'] if item['author'] == asking and short_lesson_id(item['id']) not in skip
+                and (short_lesson_id(item['id']) in seen or not reask)]
+        own = [(item, 'words', command) for _, _, item, command in sorted(
+            ((-n, item['id'], item, command) for item in mine for n, command in [words(item, request)] if n),
+            key=lambda m: m[:2])]
     from contextlib import nullcontext
     import sqlite3
     from .db import Store
@@ -750,7 +809,7 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
             with bound:
                 # Opening the store waits for another connection's lock only until `end` too (a backup's reader, say)
                 store = Store(data_dir, signing=False, clock=clock, busy_until=end, monotonic=monotonic)
-                answer = store._lessons_answer(request, candidates, nearest, end, monotonic)
+                answer = store._lessons_answer(request, candidates, nearest, end, monotonic, own)
         except GateTimeout:
             pass
         except sqlite3.OperationalError as error:  # busy while opening, at most until `end` (or SQLite's 30 s): nothing written
@@ -758,7 +817,8 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
                 raise
             busy = True  # a lock, not the embedder, kept the answer: never "unavailable" (C24)
     late = end is not None and (busy or monotonic() >= end)  # out of time, so never "unavailable" (C24)
-    return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
+    empty = not answer['lessons'] and not answer.get('own')
+    return answer, ('embedder unavailable' if unavailable and empty and not late else None)
 
 
 # A remote member as a lessons room view names it (owner trust, Task 6): by its label, and whether a trust paired it.
@@ -1379,9 +1439,12 @@ class Lessons:
                            'lessons': lessons}, rows, read_at)
         return {'status': 'written', 'lessons': len(lessons), 'vectors': len(rows)}
 
-    def _lessons_answer(self, request, candidates, nearest, deadline=None, monotonic=time.monotonic):
+    def _lessons_answer(self, request, candidates, nearest, deadline=None, monotonic=time.monotonic, own=()):
         """Section 5 step 4: one short transaction re-checks each candidate against the room as it stands, keeps the
-        first 3 that pass, writes a receipt for each and one query row. Once `deadline` on `monotonic` has passed (the
+        first 3 that pass, writes a receipt for each and one query row. Own lessons spec: a candidate already in the
+        session's `seen` is a reminder, answered with no receipt; `own` (the asking ship's own lessons, by author id)
+        passes the same live check, goes in the answer's `own` list after the others, and never has a receipt. The
+        row's `shown` counts first reaches only, and a re-ask's row is marked. Once `deadline` on `monotonic` has passed (the
         hook's budget; None without one), it writes nothing and answers nothing (Serenity's review of first-rail, S1).
         In rollback mode the commit waits for every reader's SHARED lock, and a reader outside the dispatch gate (the
         nightly backup's copy) can hold one: with a deadline, that wait is the time left, and a commit it refuses is
@@ -1396,29 +1459,42 @@ class Lessons:
                 if snapshot is None or ship is None or full not in snapshot.members:
                     return {'lessons': []}
                 live = {item.id: item for item in chain_lessons(snapshot)[0]}
+                seen, (skip, asked, reask) = request['seen'], new_keys(request)
                 kept = []
                 for item, match, command in candidates:
                     found = live.get(item['id'])
                     if (found is None or found.author == full or found.lesson.learned_from == request['ship']
-                            or short_lesson_id(found.id) in request['seen']):
+                            or short_lesson_id(found.id) in skip):
                         continue
-                    key = uid()  # drawn before the fit, so the answer's receipt and the row written for it agree
-                    kept.append((found, key, shown(item, match, command, key[:RECEIPT_SHORT])))
+                    first = short_lesson_id(found.id) not in seen
+                    if first and reask:  # a re-ask makes no first reach
+                        continue
+                    key = uid() if first else None  # drawn before the fit, so the answer's receipt and its row agree
+                    kept.append((found, key, shown(item, match, command, key and key[:RECEIPT_SHORT])))
                     if len(kept) == request['limit']:
                         break
-                answer = fit([entry for _, _, entry in kept])
+                mine = []
+                for item, match, command in own if asked else ():
+                    found = live.get(item['id'])  # retracted since the index ran, or no longer this ship's: not shown
+                    if (found is None or found.author != full or short_lesson_id(found.id) in skip
+                            or (reask and short_lesson_id(found.id) not in seen)):
+                        continue
+                    mine.append(shown(item, match, command))
+                    if len(mine) == request['limit']:
+                        break
+                answer = fit([entry for _, _, entry in kept], mine)
                 if deadline is not None:
                     left = deadline - monotonic()
                     if left <= 0:  # nobody waits for it: no receipt nobody saw
                         raise _Late
                     db.execute(f'PRAGMA busy_timeout={max(1, min(BUSY_MS, int(left * 1000)))}')
                 now = self.clock()
-                for found, key, entry in kept:
-                    if entry in answer['lessons']:  # a receipt only for a lesson shown
-                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
-                                                                                        None if entry['match'] == 'words' else entry['match']))
-                db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
-                           (now, ship['id'], nearest, len(answer['lessons'])))
+                reached = [(found, key, entry) for found, key, entry in kept if key is not None and entry in answer['lessons']]
+                for found, key, entry in reached:  # a receipt only for a first reach shown
+                    db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
+                                                                                    None if entry['match'] == 'words' else entry['match']))
+                db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown, reask) VALUES(?,?,?,?,?)',
+                           (now, ship['id'], nearest, len(reached), int(reask)))
                 return answer
         except _Late:
             return {'lessons': []}
@@ -1566,7 +1642,7 @@ class Lessons:
             one = lambda sql: db.execute(sql).fetchone()[0]
             counts = {'receipts': one('SELECT count(*) FROM lesson_receipts'), 'outcomes': sum(by_word.values()),
                       **{word: by_word.get(word, 0) for word in OUTCOMES},
-                      'queries': one('SELECT count(*) FROM lesson_queries'),
+                      'queries': one('SELECT count(*) FROM lesson_queries WHERE reask=0'),  # a re-ask counts nowhere
                       'verified_repeats': one("SELECT count(*) FROM lesson_repeats WHERE how='receipt'")}
         return rows, counts
 
@@ -1621,7 +1697,7 @@ CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES pee
 CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
 CREATE TABLE IF NOT EXISTS lessons_addable(contact_id TEXT PRIMARY KEY REFERENCES remote_contacts(id), code_digest TEXT NOT NULL, typed_by TEXT, listed REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
-CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL, reask INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id),
     lesson_id TEXT NOT NULL CHECK(length(lesson_id)=129 AND substr(lesson_id,65,1)=':' AND substr(lesson_id,1,64) NOT GLOB '*[^0-9a-f]*' AND substr(lesson_id,66) NOT GLOB '*[^0-9a-f]*'),
     how TEXT NOT NULL CHECK(how IN ('receipt','read')), receipt_id TEXT REFERENCES lesson_receipts(id), hook TEXT NOT NULL CHECK(hook IN ('on','off')),
