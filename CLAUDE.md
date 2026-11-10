@@ -61,8 +61,9 @@ many ships to expect. In the terminal case, Rio Grande runs `make station-trust-
 EXPECT=`, with DAYS and EXPECT only as Andy says them, and shows him the first run's whole output: the contact, its peer
 id, the line, the days and the count. Only after he says yes at that terminal, naming the contact's short id and the
 count, it writes his words exactly as he typed them to a file with its file tool, never through a shell, and runs it
-again with `CONFIRM=<code> WORDS_FILE=<that file>`; the second run refuses words that don't name the contact's short id
-and the count, and words whose numbers don't match: a number of days must be DAYS, one of ships, pairings or machines
+again with `CONFIRM=<code> WORDS_FILE=<that file>`; the second run refuses words that say no (a whole-word no, not,
+never, deny, stop, wait, cancel or don't), words that don't name the contact's short id and the count, and words
+whose numbers don't match: a number of days must be DAYS, one of ships, pairings or machines
 must be EXPECT (one whole number, never a range, a fraction or a sign; days in digits, the count in digits or as a
 word from one to ten), and a bare number counts only as the only one. Renewing stays in the browser with his password,
 and revoking is his. A ship never grants, renews or revokes a trust, whether through the browser, a script, a pty or

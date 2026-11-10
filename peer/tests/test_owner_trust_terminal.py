@@ -492,10 +492,10 @@ def test_the_notice_never_cuts_the_words(paired):
     """Each '@' posts as '(at)', so 500 characters can post as up to 2,000; the notice keeps them all (the review's
     N2, P12)."""
     station, _, owner, _ = paired
-    words = '@' * 120 + f' but only {short_of(owner)}, count 1, not more'
+    words = '@' * 120 + f' but only {short_of(owner)}, count 1, nothing more'   # a no would refuse
     confirm(paired, first(paired)['confirm'], words=words)
     [notice] = terminal_notices(station)
-    assert notice['text'].endswith('(at)' * 120 + f' but only {short_of(owner)}, count 1, not more"')
+    assert notice['text'].endswith('(at)' * 120 + f' but only {short_of(owner)}, count 1, nothing more"')
     words = '@' * 480 + f' {short_of(owner)} 1'
     station.revoke_owner_trust(paired[1]['id'], rows(station)[0]['grant_id'])
     confirm(paired, first(paired)['confirm'], words=words)
@@ -772,3 +772,24 @@ def test_every_phony_name_has_a_rule_and_none_is_glued_to_another():
     assert len(phony) == len(set(phony))
     glued = [name for name in set(phony) | rules if any(name == a + b for a in rules for b in rules)]
     assert glued == []
+
+
+@pytest.mark.parametrize('words', [
+    'no, not {short}, 1 ship', "don't grant {short}, 1 ship", 'dont grant {short}, 1 ship', 'do not grant {short}, 1 ship',
+    'deny {short}, 1 ship', 'never {short} for 1 ship', 'wait. {short} 1 ship? not yet', 'stop, {short} 1 ship',
+    'cancel {short}, 1 ship', 'I refuse {short}, 1 ship', 'reject {short}, 1 ship', 'decline {short} 1 ship',
+    'nope {short} 1 ship', 'Don\u2019t: {short}, 1 ship', 'NO {short} 1 ship', 'yes {short}, no more than 1 ship',
+])
+def test_words_that_say_no_never_grant(paired, words):
+    """Tardis's read of 26e4545f: words that name the contact and the count but say no granted. A whole-word no now
+    refuses, before the naming check, and nothing is granted. Mutation: the NOT_A_YES check removed."""
+    owner = paired[2]
+    refused(400, 'hold a no', confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
+
+
+@pytest.mark.parametrize('words', ['yes {short}, 1 ship', 'Yes, notably {short} for 1 ship', 'yes {short} 1 ship, nothing more',
+                                   'yes {short}, 1 ship, knot and all'])
+def test_a_yes_whose_words_only_contain_no_inside_another_word_grants(paired, words):
+    """The no is a whole word: "notably", "nothing" and "knot" aren't one."""
+    owner = paired[2]
+    assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']

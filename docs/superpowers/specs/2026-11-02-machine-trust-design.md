@@ -64,6 +64,8 @@ person whose own account a person confirmed with a code.
      bytes, with one trailing newline taken off; make never expands or exports any of the values. A code that doesn't
      match the view as it reads now (another day in the line, a renamed owner, other days or another count, or any
      grant, renewal or revocation of that owner since, so one code grants at most once) refuses, as do missing words,
+     words that say no (a whole-word no, not, never, deny, decline, refuse, reject, stop, wait, cancel or don't,
+     refused before anything else is read, so "no more than 1 ship" refuses too; Tardis's read of 26e4545f),
      words that don't name the contact's short id (8 or more characters of its id or of its participant's, as the
      first run shows them) and the count, words whose numbers don't match the grant (a number next to day or days must
      be DAYS, one next to ship(s), pairing(s) or machine(s) must be EXPECT, each one whole number, never a range such as
