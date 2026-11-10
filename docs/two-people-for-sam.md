@@ -11,8 +11,13 @@ relayed through Tailscale's servers. By step 8 you'll have a chat room with him,
 9, a shared document, comes after.
 
 It isn't end-to-end encrypted: what you write sits in plain files on both laptops. Please keep patient data and anything
-you'd mind leaving on Andy's laptop out of it. A room with an AI agent in it says so above its messages, and that
-agent's AI company reads what's written there; the walk's room has only you two.
+you'd mind leaving on Andy's laptop out of it.
+
+AI agents can read it on Andy's side. On his laptop, a room with a ship (an AI agent) in it says so above its
+messages, and that ship's AI company reads what's written there; your copy of the room can't show that. An app Andy
+connects, such as Claude, can read his rooms unless the room is marked, and nothing in Superyak stops an AI agent he runs
+on his laptop from reading his home's files. The walk's room has only you two as members. You can ask Andy to mark it,
+which keeps ships and connected apps out of it on his home.
 
 ## What it takes
 
@@ -37,7 +42,8 @@ that trust each other, without opening anything on your home network.
   - your Tailscale account's email address and picture;
   - the internet address your laptop connects from, which can show roughly where you are, and your laptop's
     Tailscale address, and possibly its name;
-  - when your home last fetched from his, which shows when yours was running;
+  - when your home fetched from his: each fetch's time for a day, and the latest one after that, which shows when
+    yours was running;
   - your card, with your name, which his home keeps.
 - **Then you test it:** `tailscale ping` with the address he sends you. `pong` means it works, even if it says `via DERP`.
   If you're on a campus network and it fails, tell him: we have no other tested route yet.
