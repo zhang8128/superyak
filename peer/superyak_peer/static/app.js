@@ -2097,11 +2097,14 @@ function showNewestMessage() {
 
 // A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest, where
 // the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there before,
-// would land on the room's Send, Mark or Remove. Both are dropped in a room. A key press (detail 0) never is, nor a press
-// that began on the control it ends on, nor a later one at another spot: that's someone aiming at what they now see. A
-// press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room, so the
-// acts that can't be undone ask first (board fix:room-acts-ask-first). Each click takes the press it began with, so a
-// click with no press of its own, as an accessibility tool sends, is never measured against an old one.
+// would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press isn't the
+// press before the next one. A key press (detail 0) never is, nor a press that began on the control it ends on, nor one at
+// another spot or 400 ms after the move: that's someone aiming at what they now see. A press aimed elsewhere that the room
+// draws under just before it lands isn't told from one meant for the new room; the acts that can't be undone are to ask
+// first (board fix:room-acts-ask-first, not done yet). Each click takes the press it began with, and a press that ends in
+// no click (a right or middle button, a long press's menu, a touch a scroll took) leaves none, so a click with no press of
+// its own, as an accessibility tool may send, is measured against none. A press is timed when it happened, not when its
+// handler ran, so one that landed while a long room drew counts as begun before.
 const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
 let roomMovedAt = -Infinity, pressDown = null, lastPress = null;
 function movingTheRoom(scroll) {
@@ -2114,20 +2117,20 @@ function pressTheRoomMoved(event, press, before) {
   const control = event.target.closest?.(PRESSABLE);
   if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
   if (press.at < roomMovedAt) return control !== press.control;  // begun on what was here before
-  return performance.now() - roomMovedAt < MOVED_PRESS_MS && !!before && before.at < roomMovedAt
+  return press.at - roomMovedAt < MOVED_PRESS_MS && !!before && before.at < roomMovedAt
     && Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
 }
 document.addEventListener("pointerdown", (event) => {
-  pressDown = { x: event.clientX, y: event.clientY, at: performance.now(), control: event.target.closest?.(PRESSABLE) || null };
+  pressDown = event.button !== 0 ? null
+    : { x: event.clientX, y: event.clientY, at: event.timeStamp, control: event.target.closest?.(PRESSABLE) || null };
 }, true);
-document.addEventListener("pointercancel", () => { pressDown = null; }, true);  // a scroll took the touch: no click comes
+for (const type of ["pointercancel", "contextmenu", "auxclick"]) document.addEventListener(type, () => { pressDown = null; }, true);
 document.addEventListener("click", (event) => {
   const press = pressDown, before = lastPress;
   pressDown = null;
-  if (press) lastPress = press;
-  if (!pressTheRoomMoved(event, press, before)) return;
+  if (!pressTheRoomMoved(event, press, before)) { if (press) lastPress = press; return; }
   event.preventDefault();  // a submit button's press sends nothing, and a box keeps its tick
-  event.stopImmediatePropagation();
+  event.stopImmediatePropagation();  // and a data-action button's never reaches the handler below
 }, true);
 
 // How far down the page would have to move to show the end of the messages with the composer under them, and to show
