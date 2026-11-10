@@ -411,7 +411,25 @@ def test_the_daemon_gets_the_frame_with_the_ref_and_the_mapped_publisher(world):
     serve(world, request(world, frame))
     [got] = world.daemon.frames
     ref = f'urn:superyak:{world.m[2].identity.peer_id}:store:{INSTANCE}'
+    left = got.pop('remainingMs')  # the hosting peer's own deadline (spec 2026-11-10), never the asker's frame's
     assert got == {**frame, 'receiver': ref, 'publisher': 'rio-grande'}
+    assert type(left) is int and 0 < left <= 2000  # the request's deadline_ms, at most
+
+
+def test_a_read_goes_to_the_daemon_with_no_deadline_field(world):
+    """Only a recall embeds, so only a recall carries remainingMs (spec 2026-11-10, D1)."""
+    serve(world, request(world, frame_of('read')))
+    [got] = world.daemon.frames
+    assert 'remainingMs' not in got
+
+
+def test_an_askers_frame_carrying_a_deadline_is_refused_and_the_digested_shape_is_unchanged(world):
+    """The asker's signed request never carries remainingMs: FRAME_KEYS stays as it was, so the request, its signature
+    and crossing_digest don't change, and a frame with the field is refused at the shape check (spec 2026-11-10, D3)."""
+    from superyak_peer.identity import FRAME_KEYS
+    assert 'remainingMs' not in FRAME_KEYS['recall'] | FRAME_KEYS['read']
+    refused(world, request(world, {**frame_of(), 'remainingMs': 10}), 400, 'Invalid crossing request')
+    daemon_saw_nothing(world)
 
 
 def test_the_answer_is_signed_binds_the_request_and_is_recorded(world):
