@@ -106,13 +106,37 @@ WORDS_DAYS_DIFFER = ("A number of days in the words isn't DAYS ({days}), so they
                      'approves')
 WORDS_COUNT_DIFFER = ("A number of ships, pairings or machines in the words isn't the expected count ({n}), so they aren't "
                       'taken: the yes names the grant it approves')
-WORDS_NOT_A_YES = ("The words hold a no (no, not, never, deny, decline, refuse, reject, stop, wait, cancel or don't), so "
-                   "nothing is granted: ask him again, and take only a yes that names the contact and the count")
+WORDS_NOT_A_YES = ("The words hold a no (no, not, never, nah, a word ending in n't, cannot, deny, decline, refuse, reject, "
+                   "revoke, veto, stop, wait, hold off, skip, pause, cancel or later), so nothing is granted: ask him "
+                   "again, and take only a yes that names the contact and the count")
+WORDS_NO_YES = ("The words don't say yes (yes, yeah, yep, ok, sure, approve, grant, go ahead, do it, confirm, agreed, "
+                "no problem, why not), so nothing is granted: ask him again")
 # Tardis's read of 26e4545f: words naming the contact and the count still granted when they said no ("deny <id>, 1
-# ship", "no, not <id>"). A whole-word no refuses, whatever else the words say: a refusal costs Andy one re-ask, while a
-# misread no would grant a trust. "no more than 1 ship" refuses too, on purpose.
-NOT_A_YES = re.compile(r"\b(?:no|not|nope|never|deny|denied|decline|declined|refuse|refused|reject|rejected|stop|wait|"
-                       r"cancel|cancelled|canceled|don'?t|do\s+not)\b")
+# ship", "no, not <id>"); the reader's S7 (re-check 4) found whole families of nos a word list misses ("I won't
+# approve", "hold off", "nein"). So the words must hold a yes, from a short list, and hold no no. A few yes idioms that
+# carry a no-word ("no problem", "why not") count as a yes and are taken out before the no is looked for. A refusal
+# costs Andy one re-ask, while a misread no would grant a trust: "no more than 1 ship" refuses, on purpose.
+APOSTROPHES = str.maketrans({'\u2019': "'", '\u2018': "'", '\u02bc': "'", '\u00b4': "'", '`': "'", '\u2032': "'"})
+YES_IDIOMS = re.compile(r"\b(?:no\s+problem|no\s+worries|not\s+a\s+problem|why\s+not|(?:i\s+)?don'?t\s+mind)\b")
+YES_WORDS = re.compile(r"\b(?:yes|yeah|yep|yup|ok|okay|sure|approve|approved|grant|granted|go\s+ahead|do\s+it|confirm|"
+                       r"confirmed|agree|agreed)\b|\U0001f44d|\u2705")
+NOT_A_YES = re.compile(r"\b(?:no|not|nope|nah|nein|non|never|cannot|\w+n't|dont|cant|wont|deny|denying|denied|decline|"
+                       r"declining|declined|refuse|refusing|refused|reject|rejecting|rejected|revoke|revoking|veto|stop|"
+                       r"stopping|wait|waiting|hold\s+off|hold\s+on|skip|pause|abort|halt|cancel|cancelling|canceling|"
+                       r"cancelled|canceled|later|do\s+not)\b")
+
+
+def _says_yes(folded):
+    """Spec revision 6, item 2a (Tardis's read, the re-check 4's S7): the words hold a yes and no no. Read on the NFKC,
+    case-folded words with every apostrophe form as "'"; a yes idiom counts as a yes and leaves the no-search."""
+    text = folded.replace(' \u0301', "'").translate(APOSTROPHES)  # NFKC folds U+00B4 to a space and a combining acute
+    rest = YES_IDIOMS.sub(' ', text)
+    if NOT_A_YES.search(rest):
+        raise Problem(400, WORDS_NOT_A_YES)
+    if not (YES_IDIOMS.search(text) or YES_WORDS.search(text)):
+        raise Problem(400, WORDS_NO_YES)
+
+
 WORDS_TRUSTS_CHANGED = ("That owner's trusts changed since the first run (a grant, a renewal or a revocation), so nothing "
                         'is granted; run it again without CONFIRM')
 WORDS_FIRST = ("Words come with the second run, with CONFIRM: they are the admin's yes to the line the first run shows, "
@@ -368,11 +392,10 @@ def _names_the_grant(words, contact, days, expect):
       that number ("one ship"); days, and a count past ten, are refused unless written in digits.
     - The count appears so, or, when no such noun has a number, as the words' only bare number (the days' numbers, and
       an id naming the contact, apart).
-    - The words are a yes: a whole-word no (`NOT_A_YES`) refuses before anything else is read (Tardis's read).
+    - The words are a yes (`_says_yes`): a yes-word, and no no-word, checked before the naming and number checks.
     The refusals name what is missing or wrong, never the words."""
     folded = unicodedata.normalize('NFKC', words).lower()
-    if NOT_A_YES.search(folded.replace('\u2019', "'").replace('\u02bc', "'")):
-        raise Problem(400, WORDS_NOT_A_YES)
+    _says_yes(folded)
     ids = (contact['id'].removeprefix('remote_').lower(), contact['user_id'].lower())
     naming = {token for token in re.findall(r'[0-9a-z]+', folded)
               if len(token) >= 8 and any(i.startswith(token) for i in ids)}

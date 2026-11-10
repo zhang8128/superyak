@@ -208,7 +208,7 @@ def test_the_words_must_name_the_contact_and_the_count_and_their_numbers_mean_th
     ('Yes, {SHORT}. Count: 1.', 90, 1),
     ('ok {participant} (1)', 90, 1),
     ('yes {short_long} for 1 ship', 90, 1),
-    ('{short}: 1', 90, 1),
+    ('ok {short}: 1', 90, 1),
     ('yes {short}, a 90-day trust for 1 ship', 90, 1),
     ('yes {short} 1 ship 90 days', 90, 1),
     ('yes {short}, 1 ship, until 2027-04-15', 90, 1),             # a date beside a counted noun
@@ -492,11 +492,11 @@ def test_the_notice_never_cuts_the_words(paired):
     """Each '@' posts as '(at)', so 500 characters can post as up to 2,000; the notice keeps them all (the review's
     N2, P12)."""
     station, _, owner, _ = paired
-    words = '@' * 120 + f' but only {short_of(owner)}, count 1, nothing more'   # a no would refuse
+    words = '@' * 120 + f' yes but only {short_of(owner)}, count 1, nothing more'   # a no would refuse
     confirm(paired, first(paired)['confirm'], words=words)
     [notice] = terminal_notices(station)
-    assert notice['text'].endswith('(at)' * 120 + f' but only {short_of(owner)}, count 1, nothing more"')
-    words = '@' * 480 + f' {short_of(owner)} 1'
+    assert notice['text'].endswith('(at)' * 120 + f' yes but only {short_of(owner)}, count 1, nothing more"')
+    words = '@' * 476 + f' ok {short_of(owner)} 1'
     station.revoke_owner_trust(paired[1]['id'], rows(station)[0]['grant_id'])
     confirm(paired, first(paired)['confirm'], words=words)
     assert terminal_notices(station)[1]['text'].endswith(f' {short_of(owner)} 1"')
@@ -791,5 +791,40 @@ def test_words_that_say_no_never_grant(paired, words):
                                    'yes {short}, 1 ship, knot and all'])
 def test_a_yes_whose_words_only_contain_no_inside_another_word_grants(paired, words):
     """The no is a whole word: "notably", "nothing" and "knot" aren't one."""
+    owner = paired[2]
+    assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']
+
+
+@pytest.mark.parametrize('words', [
+    'yes? nah, {short}, 1 ship', 'yes, but hold off on {short}, 1 ship', 'yes, hold on, {short} 1 ship',
+    'yes, skip {short}, 1 ship', 'yes, {short} 1 ship later', 'yes, pause {short}, 1 ship', 'yes, abort {short} 1 ship',
+    'yes, revoke {short}, 1 ship', "yes, I won't approve {short}, 1 ship", "yes, can't do {short}, 1 ship",
+    "yes, shouldn't grant {short}, 1 ship", 'yes, denying {short}, 1 ship', 'yes, rejecting {short}, 1 ship',
+    'nein, yes {short} 1 ship', 'non, yes {short} 1 ship', 'yes cannot {short} 1 ship',
+    'yes, don‘t: {short}, 1 ship', 'yes, don´t: {short}, 1 ship', 'yes, don`t: {short}, 1 ship',
+])
+def test_a_no_beside_a_yes_still_refuses(paired, words):
+    """The re-check 4's S7: the nos a word list missed ("I won't approve", "hold off", "nein", other apostrophes) refuse
+    even when the words also say yes. Mutation: NOT_A_YES back to its round-4 list."""
+    owner = paired[2]
+    refused(400, 'hold a no', confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
+
+
+@pytest.mark.parametrize('words', ['{short}, 1 ship', '{short} for 1 ship, 90 days', 'maybe {short}, 1 ship'])
+def test_words_without_a_yes_never_grant(paired, words):
+    """The re-check 4's S7, the sounder half: the words must hold a yes, from a short list, so an endless list of nos
+    isn't what stands between a misread answer and a trust. Mutation: the yes requirement removed."""
+    owner = paired[2]
+    refused(400, "don't say yes", confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
+
+
+@pytest.mark.parametrize('words', [
+    'ok {short}, 1 ship', 'Sure, {short}, 1 ship', 'approve {short} 1 ship', 'go ahead with {short}, 1 ship',
+    '\U0001f44d {short} 1 ship', 'yep {short} 1 ship', 'confirmed: {short}, 1 ship',
+    'no problem, {short}, 1 ship', 'why not, {short} 1 ship', "I don't mind: {short}, 1 ship",
+    'no worries {short} 1 ship', 'not a problem, {short}, 1 ship',
+])
+def test_a_yes_word_or_a_yes_idiom_grants(paired, words):
+    """The re-check 4's N15: a yes idiom that carries a no-word ("no problem", "why not") is a yes."""
     owner = paired[2]
     assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']
