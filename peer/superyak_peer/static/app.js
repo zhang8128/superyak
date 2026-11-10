@@ -23,6 +23,7 @@ const state = {
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
+  revisionsOf: null,
   room: null,
   selectedLayerId: null,
   selectedSharedId: null,
@@ -177,7 +178,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -404,6 +405,7 @@ function editorState(layer, active) {
 }
 
 function revisionHistory() {
+  if (state.revisionsOf !== state.selectedLayerId) return `<p class="meta">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
   return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
@@ -1987,10 +1989,9 @@ async function loadRoute() {
   if (route === "layers") {
     state.selectedLayerId = id || state.selectedLayerId || state.home.layers[0]?.id || null;
     if (state.selectedLayerId && state.home.layers.some((item) => item.id === state.selectedLayerId)) {
-      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);
+      await loadRevisions(state.selectedLayerId);
     } else {
       state.selectedLayerId = null;
-      state.revisions = [];
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
@@ -2292,11 +2293,45 @@ async function uploadFile(input) {
   }
 }
 
+// One layer's release history. A read counts only while the person is still on that layer's page, and only if no newer
+// read has already been taken: an answer that comes late, good or bad, changes nothing here. revisionHistory shows only
+// what's held for the layer on screen.
+let revisionsRead = 0, revisionsTaken = 0;
+async function loadRevisions(id) {
+  const read = ++revisionsRead;
+  const current = () => state.me && routeParts().route === "layers" && state.selectedLayerId === id;
+  try {
+    const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
+    if (!current() || read < revisionsTaken) return false;
+    revisionsTaken = read;
+    state.revisions = revisions;
+    state.revisionsOf = id;
+    return true;
+  } catch (error) {
+    if (current() && read === revisionsRead) throw error;
+    return false;
+  }
+}
+
+function forgetRevisions() {
+  state.revisions = [];
+  state.revisionsOf = null;
+  state.selectedLayerId = null;
+}
+
 async function openLayer(id) {
   state.selectedLayerId = id;
-  location.hash = `layers/${pathPart(id)}`;
-  state.revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
-  state.flash = null;
+  const address = `layers/${pathPart(id)}`;
+  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read
+    location.hash = address;
+    return;
+  }
+  try {
+    if (!await loadRevisions(id)) return;  // a newer read renders itself
+    state.flash = null;
+  } catch (error) {
+    setFlash(error.message, true);
+  }
   render();
 }
 
@@ -2759,6 +2794,7 @@ async function logout() {
     state.assistance = {};
     state.sources = [];
     Research.reset(); Dashboard.reset();
+    forgetRevisions();
     state.editorIdentity = null;
     state.selectedChatId = null; state.room = null; state.board = null; state.composerNote = null; state.unsentIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;

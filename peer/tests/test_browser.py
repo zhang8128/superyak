@@ -4721,6 +4721,14 @@ def hold_revisions(page, layer_id):
     return held
 
 
+def wait_for_held(page, held, count=1):
+    for _ in range(100):
+        if len(held) >= count:
+            return
+        page.wait_for_timeout(50)
+    raise AssertionError(f"{len(held)} held of {count}")
+
+
 def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_layer(browser_peer):
     """Break caught: while a layer's revisions load the old editor is still on screen but the selection is already the
     new layer, so the old form's text was filed as the new layer's unsaved edit."""
@@ -4735,7 +4743,7 @@ def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_l
             page.wait_for_url(lambda url: second["id"] in url)
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")  # the old editor, still on screen
             page.get_by_label("Layer title").fill("Alpha typed")
-            assert held
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             title = page.get_by_label("Layer title")
@@ -4761,7 +4769,7 @@ def test_save_clicked_while_another_layer_opens_sends_nothing_to_the_new_layer(b
             page.wait_for_url(lambda url: second["id"] in url)
             page.get_by_label("Layer title").fill("Alpha typed")
             page.get_by_role("button", name="Save private draft").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
@@ -4786,7 +4794,7 @@ def test_new_layer_has_the_same_window_closed(browser_peer):
             page.wait_for_url(lambda url: "#layers/" in url and first["id"] not in url)
             page.get_by_label("Layer title").fill("Alpha typed")
             page.get_by_role("button", name="Save private draft").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Untitled")
@@ -5218,13 +5226,381 @@ def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_l
             page.get_by_role("button", name="Beta layer").click()
             page.wait_for_url(lambda url: second["id"] in url)
             page.get_by_role("button", name="Turn off public link").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
             page.wait_for_timeout(300)
     assert store.active_layer(second["id"], public=True)["body"] == "B."
     assert store.active_layer(first["id"], public=True)["body"] == "A."
+
+
+def released(browser_peer, layer):
+    browser_peer["app"].state.store.activate_layer(browser_peer["users"]["patient"]["id"], layer["id"], layer["version"])
+
+
+def editor_history(page):
+    return page.locator("section.editor .history")
+
+
+def test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers(browser_peer):
+    """Break caught: a failed revisions fetch left the last layer's releases, words and all, under this layer's title."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    thrown = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: thrown.append(str(error)))
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.reload()  # a layer reached by its address, not a click, shows its own history too
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.route(f"**/api/layers/{second['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}'))
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            expect(editor_history(page)).not_to_contain_text("Release 1")
+            expect(editor_history(page)).not_to_contain_text("Alpha body.")
+            expect(editor_history(page)).not_to_contain_text("No releases yet")  # we don't know that
+            expect(editor_history(page)).to_contain_text("isn't loaded")
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+            assert thrown == []
+            page.reload()  # nothing held at all: the first read fails, with no click to speak for it
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            expect(editor_history(page)).to_contain_text("isn't loaded")
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+            page.unroute(f"**/api/layers/{second['id']}/revisions")
+            page.get_by_role("button", name="Beta layer").click()  # the same layer again reads it again
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)  # the announcer keeps its last words
+
+
+def test_opening_the_layer_already_open_says_when_its_history_cant_be_read(browser_peer):
+    """The same layer again changes no address, so no route load runs: only the click can say the read failed."""
+    first, _ = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_role("button", name="Alpha layer")).to_be_visible()
+            with page.expect_response(lambda response: response.url.endswith(f"/{first['id']}/revisions")):
+                page.get_by_role("button", name="Alpha layer").click()  # that read must be done, or it's the one that fails below
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(100)
+            page.route(f"**/api/layers/{first['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}'))
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+
+
+def test_a_late_history_answer_doesnt_land_on_the_layer_now_open(browser_peer):
+    """Break caught: Beta's slow answer replaced Alpha's history after the person had gone back to Alpha, with no error."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, second)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            answers = []
+            page.on("response", lambda response: answers.append(response) if second["id"] in response.url else None)
+            for route in held:
+                route.continue_()
+            for _ in range(100):
+                if len(answers) >= len(held):
+                    break
+                page.wait_for_timeout(50)
+            assert len(answers) >= len(held)
+            page.wait_for_timeout(300)  # a render, if the answer brought one
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            expect(editor_history(page)).not_to_contain_text("Release 1")
+
+
+def test_an_older_history_answer_for_the_same_layer_doesnt_replace_a_newer_one(browser_peer):
+    """Break caught (the reader's F1): A, then B, then A again, and the first A answer, arriving last, put back the older
+    history, with the right layer's words and no error."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            answered = []  # answered by the server now, delivered to the page later
+
+            def hold_the_first_answer(route):
+                if answered:
+                    route.continue_()
+                else:
+                    answered.append((route, route.fetch()))
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first_answer)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            wait_for_held(page, answered)
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            saved = store.save_layer(owner, first["id"], {"version": first["version"], "body": "Alpha body, later."})
+            store.activate_layer(owner, first["id"], saved["version"])  # a second tab would do this
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 2")
+            for route, response in answered:
+                route.fulfill(response=response)
+            page.wait_for_timeout(300)
+            expect(editor_history(page)).to_contain_text("Release 2")
+
+
+def test_an_older_failure_for_the_same_layer_says_nothing(browser_peer):
+    """The same A, B, A: the first A read fails last, and the right history is on screen, so no error goes above it."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            held = []
+
+            def hold_the_first(route):
+                if held:
+                    route.continue_()
+                else:
+                    held.append(route)
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            held[0].fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+            expect(editor_history(page)).to_contain_text("Release 1")
+
+
+def test_a_late_answer_for_the_open_layer_doesnt_wipe_what_the_page_said(browser_peer):
+    """The reader's case: a click's read still on its way when the page says something new, like a save. An older answer
+    has nothing to add, so it neither clears that nor renders."""
+    first, _ = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(200)
+            held = []
+
+            def hold_the_first(route):
+                if held:
+                    route.continue_()
+                else:
+                    held.append(route)
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first)
+            page.get_by_role("button", name="Alpha layer").click()  # at its address: this click reads, and is held
+            wait_for_held(page, held)
+            answered = []
+            page.on("response", lambda response: answered.append(response) if response.url.endswith("/revisions") else None)
+            page.get_by_role("button", name="Alpha layer").click()  # the newer read, taken
+            for _ in range(100):
+                if answered:
+                    break
+                page.wait_for_timeout(50)
+            assert answered
+            page.get_by_label("Layer title").fill("Alpha, edited")
+            page.get_by_role("button", name="Save private draft").click()
+            said = page.locator('[role="status"]', has_text="Private draft saved").first
+            expect(said).to_be_visible()
+            held[0].continue_()
+            page.wait_for_timeout(400)
+            expect(said).to_be_visible()
+
+
+@pytest.mark.parametrize("answer", ["good", "bad"])
+def test_a_read_held_across_a_sign_in_does_nothing(browser_peer, answer):
+    """One account's read, answered after someone else has signed in on this page, who has no layer open."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, second)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []  # answered now, as the account that asked; let through, it would be answered as whoever is signed in by then
+            page.route(f"**/api/layers/{second['id']}/revisions", lambda route: held.append((route, route.fetch())))
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            assert held[0][1].status == 200 and "Beta body." in held[0][1].text()
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("family")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_role("heading", name="My sharing layers")).to_be_visible()
+            for route, response in held:
+                if answer == "good":
+                    route.fulfill(response=response)
+                else:
+                    route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+            assert page.evaluate("[state.revisions.length, state.revisionsOf]") == [0, None]
+
+
+@pytest.mark.parametrize("answer", ["good", "bad"])
+def test_a_read_landing_after_the_session_ended_does_nothing(browser_peer, answer):
+    """The reader's N1: a session that ends shows the sign-in page with no sign-out, so nothing has been forgotten yet. A
+    good answer mustn't be taken, and a bad one mustn't be waiting for whoever signs in next."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []
+            page.route(f"**/api/layers/{second['id']}/revisions", lambda route: held.append((route, route.fetch())))
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.evaluate("showLogin('Your session ended.')")
+            for route, response in held:
+                if answer == "good":
+                    route.fulfill(response=response)
+                else:
+                    route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            assert page.evaluate("state.revisionsOf") != second["id"]
+            assert page.evaluate("state.flash") is None
+
+
+def test_one_click_reads_a_layers_history_once(browser_peer):
+    """Break caught (the reader's F3): the click and the hash change each read it, each answer rendered, and one failing
+    put an error above a good history. The same layer again, with no hash change, still reads."""
+    first, second = two_layers(browser_peer)
+    reads = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(200)
+            page.on("request", lambda request: reads.append(request.url) if request.url.endswith("/revisions") else None)
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+            assert len(reads) == 1 and second["id"] in reads[0]
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_timeout(300)
+            assert len(reads) == 2
+
+
+def test_a_late_failure_after_going_home_says_nothing(browser_peer):
+    """The reader's F4: leaving the page is leaving the layer, though the selection stays."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("link", name="Home", exact=True).click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            for route in held:
+                route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+
+
+def test_signing_out_forgets_the_release_history(browser_peer):
+    """The reader's F2: one account's release words stayed in page memory after sign-out, for the next account."""
+    first, _ = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            assert page.evaluate("[state.revisions.length, state.revisionsOf, state.selectedLayerId]") == [0, None, None]
+
+
+def test_a_new_account_on_the_page_forgets_the_release_history(browser_peer):
+    """The other way an account changes with no sign-out: a session that ended, and someone else signing in."""
+    first, _ = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.evaluate("bindEditorIdentity({ peer_id: 'elsewhere', id: 'someone-else' })")
+            assert page.evaluate("[state.revisions.length, state.revisionsOf, state.selectedLayerId]") == [0, None, None]
+
+
+def test_a_late_failure_for_a_layer_the_person_left_says_nothing(browser_peer):
+    """Break caught: a failed answer for the layer left behind raised its error over the one now open."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            for route in held:
+                route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.get_by_text("Not just now")).to_have_count(0)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+
+
+def test_a_late_answer_doesnt_clear_what_the_open_layer_said(browser_peer):
+    """The open layer's own failure stays on screen when a late answer for the layer left behind comes in."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.route(f"**/api/layers/{first['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Alpha not just now"}'))
+            page.get_by_role("button", name="Alpha layer").click()
+            alpha_failed = page.locator('[role="status"]').first
+            expect(alpha_failed).to_contain_text("Alpha not just now")
+            for route in held:
+                route.continue_()
+            page.wait_for_timeout(400)
+            expect(alpha_failed).to_contain_text("Alpha not just now")
+            expect(editor_history(page)).to_contain_text("No releases yet")  # what's held is this layer's own, so it stays
 
 
 def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_peer):
