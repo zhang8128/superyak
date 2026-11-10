@@ -461,7 +461,7 @@ function layerEditor(layer) {
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
-    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
+    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}" data-version="${escapeHtml(String(layer.version))}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
@@ -2173,12 +2173,18 @@ function rememberLayerForm(form = document.querySelector("#layer-form")) {
     dirty: true,
     conflict: previous?.conflict || false,
     generation: (previous?.generation || 0) + 1,
-    // The version these words were begun from. A refresh gives the page the newest draft, and if the save went by that, it would
-    // overwrite another tab's words with no conflict.
-    baseVersion: previous?.baseVersion ?? layer.version,
+    // The version these words were begun from: the one the form was drawn from, not the page's. A refresh gives the page the
+    // newest draft before it redraws the form, and if the save went by that, it would overwrite another tab's words with no
+    // conflict.
+    baseVersion: previous?.baseVersion ?? drawnVersion(form, layer),
   };
   state.layerEdits[layer.id] = edit;
   return edit;
+}
+
+function drawnVersion(form, layer) {
+  const drawn = Number(form.dataset.version);
+  return Number.isInteger(drawn) && drawn > 0 ? drawn : layer.version;
 }
 
 function updateLayer(layer) {
@@ -2192,10 +2198,12 @@ async function saveLayer(form) {
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
   const status = form.querySelector("#layer-status");
+  const who = identityKey(state.me);
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
     const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: submitted.baseVersion, ...values } });
+    if (identityKey(state.me) !== who) return;  // answered after the person changed: not the next person's news
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     const newerEdits = current && current.generation !== submitted.generation;
@@ -2204,6 +2212,7 @@ async function saveLayer(form) {
     setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     if (error.status === 401) {
       const current = state.layerEdits[layer.id] || submitted;
       current.conflict = false;
@@ -2296,8 +2305,10 @@ async function resolveConflict() {
   const layer = selectedLayer();
   const initial = rememberLayerForm();
   if (!layer || !initial) return;
+  const who = identityKey(state.me);
   try {
     const latest = await api(`/api/layers/${pathPart(layer.id)}`);
+    if (identityKey(state.me) !== who) return;
     const submitted = state.layerEdits[layer.id];
     // "My text": who can see it stays as the latest draft has it, or this tab's old boxes put back someone just turned off.
     const { audience_users: users, audience_spaces: spaces, public: isPublic, ...text } = submitted.values;
@@ -2305,6 +2316,7 @@ async function resolveConflict() {
       method: "PUT",
       json: { version: latest.version, ...text },
     });
+    if (identityKey(state.me) !== who) return;
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
@@ -2318,6 +2330,7 @@ async function resolveConflict() {
     setFlash(moved ? "Your text is saved. Who can see it stays as the latest draft has it, so check that before you turn on a version." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(`${error.message} Your text is still here.`, true);
     render();
   }
@@ -2341,13 +2354,23 @@ async function activateLayer() {
 // them, or the next save would turn it back on.
 function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
   // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
+  // The page's copy moves as the station's did: its version and what was narrowed, together. If only the version moved and the
+  // refresh after this failed, the editor would be drawn from that copy with the old boxes ticked, under a version the station
+  // takes, and the next Save would put back what was just turned off.
+  const moved = answer.layer_version !== answer.layer_version_before;
   const layer = state.home?.layers?.find((item) => item.id === layerId);
-  if (layer && layer.version === answer.layer_version_before) layer.version = answer.layer_version;
+  if (layer && moved && layer.version === answer.layer_version_before) {
+    layer.version = answer.layer_version;
+    if (off) layer.public = false;
+    layer.audience_users = (layer.audience_users || []).filter((id) => !users.includes(id));
+    layer.audience_spaces = (layer.audience_spaces || []).filter((id) => !spaces.includes(id));
+  }
   const edit = state.layerEdits[layerId];
   if (edit?.baseVersion === answer.layer_version_before) edit.baseVersion = answer.layer_version;
   // The form on screen first: a Save before the page's next draw reads these boxes.
   const form = document.querySelector("#layer-form");
   if (form?.dataset.layerId === layerId) {
+    if (moved && form.dataset.version === String(answer.layer_version_before)) form.dataset.version = String(answer.layer_version);
     if (off && form.elements.public) form.elements.public.checked = false;
     for (const [name, ids] of [["audience-user", users], ["audience-ship", users], ["audience-space", spaces]]) {
       for (const id of ids) { const box = form.querySelector(`[name="${name}"][value="${CSS.escape(id)}"]`); if (box) box.checked = false; }

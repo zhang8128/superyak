@@ -175,7 +175,7 @@ def test_roster_cannot_add_to_existing_room(two_peers):
         b[2].receive(event)
 
 
-def test_revoke_preserves_private_draft_and_delivers_tombstone(two_peers):
+def test_revoke_keeps_the_drafts_text_and_delivers_tombstone(two_peers):
     a,b,ca,cb=two_peers
     layer=a[0].create_layer(a[1],{'body':'released','audience_users':[ca['id']]})
     a[0].activate_layer(a[1],layer['id'],1)

@@ -184,7 +184,7 @@ Only local known users, spaces the author belongs to, and owned file IDs may be
 selected. Unknown layer fields, including an acting `owner_id`, are rejected.
 
 Draft response adds `{id,owner_id,version,resource_version,active_revision,state}`.
-`version` starts at 1 and increments only on draft save. `resource_version` starts
+`version` starts at 1 and increments on a draft save, and on a revoke that narrows the draft. `resource_version` starts
 at 0 and increments on activation, restriction or withdrawal. `active_revision`
 is null or the active immutable resource revision. `state` says `draft` or
 `active` (an active layer can ALSO have newer unpublished draft text; compare the
