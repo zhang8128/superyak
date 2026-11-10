@@ -203,9 +203,9 @@ The admin may also grant a trust by their yes at the station's own terminal, wit
 runs twice. The first run shows the contact, its peer id, the exact line the browser would show, the days and the
 expected count (both the admin's own numbers) and a confirm code, and grants nothing. Once the admin says yes there,
 naming the contact's short id and the count, their words go into a file exactly as typed, never through a shell, and
-the second run, with the code and that file, grants. It refuses words that don't name the contact and the count, and
-words the notice couldn't post as written (an unprintable character, or a pairing code's or a live ship key's shape in
-any form). The grant keeps the line and the words, and Odo posts a notice in Ops at its next cycle naming each grant
+the second run, with the code and that file, grants. It refuses words that don't name the contact and the count,
+words whose numbers of days or of ships differ from the days and the count, and words the notice couldn't post as
+written (an unprintable or invisible character, or a pairing code's or a live ship key's shape in any form). The grant keeps the line and the words, and Odo posts a notice in Ops at its next cycle naming each grant
 made this way, with the line and the words. Renewing stays in the browser:
 
 ```sh

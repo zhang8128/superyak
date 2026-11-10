@@ -93,7 +93,8 @@ def test_a_first_run_grants_nothing_and_shows_the_browsers_exact_line(paired, mo
     assert code_in(out) == view['confirm'] and lines[4].startswith('Nothing is granted yet.')
     assert "DAYS and EXPECT are andy's own numbers" in lines[4]
     assert 'the contact, its peer, the grant line, the days and the count' in lines[4]
-    assert f'naming contact {short_of(owner)} and the count 1' in lines[4] and 'WORDS_FILE=<that file>' in lines[4]
+    assert f'naming contact {short_of(owner)} and the count ("1 ship"; any number of days must be 90)' in lines[4]
+    assert 'WORDS_FILE=<that file>' in lines[4]
     assert pairing_code(card) not in out and show_code(pairing_code(card)) not in out
     assert rows(station) == []
 
@@ -130,15 +131,15 @@ def test_the_confirm_run_grants_and_station_trust_list_names_it(paired, tmp_path
     ({'words': None}, 400, 'words are'),
     ({'words': '   '}, 400, 'words are'),
     ({'words': 'y' * 501}, 400, 'at most 500'),
-    ({'words': 'yes {short} 1 ' + '1a2b-3c4d ' * 4}, 400, "pairing code's shape"),
-    ({'words': 'yes {short} 1\nand more'}, 400, 'control or format'),
-    ({'words': 'yes {short}\t1'}, 400, 'control or format'),
-    ({'words': 'yes {short}\u00a01'}, 400, 'control or format'),
+    ({'words': 'yes {short} 1 ' + '1a2b-3c4d ' * 4}, 400, 'give the yes without it'),
+    ({'words': 'yes {short} 1\nand more'}, 400, 'control, format or invisible'),
+    ({'words': 'yes {short}\t1'}, 400, 'control, format or invisible'),
+    ({'words': 'yes {short}\u31641'}, 400, 'control, format or invisible'),
 ])
 def test_a_changed_view_or_bad_words_refuse_and_grant_nothing(paired, change, status, word):
     """Each refusal of the confirm run writes nothing: a wrong code, other days or another count than the code was
     shown for, missing, empty or over-long words, words that hold a run shaped like a pairing code (the notice would
-    post it in Ops), and words with a newline, a tab or a non-breaking space, which Ops would not show as typed.
+    post it in Ops), and words with a newline, a tab or a Hangul filler, which Ops would not show as typed.
     Mutations: the code not bound to the count (the days are bound twice over: the line names the day the trust ends);
     words unchecked."""
     owner = paired[2]
@@ -151,45 +152,93 @@ def test_a_changed_view_or_bad_words_refuse_and_grant_nothing(paired, change, st
     assert len(confirm(paired, code, yes_for(owner) + ' ' + 'y' * 450)['grant_id']) == 32  # good words grant
 
 
-@pytest.mark.parametrize('words, word', [
-    ('yes, grant it', 'short id ({short}'),
-    ('yes {partial}, count 1', 'short id ({short}'),
-    ('yes x{short}, count 1', 'short id ({short}'),
-    ('yes {short}', 'expected count (1)'),
-    ('yes {short}, 10 ships', 'expected count (1)'),
-    ('yes {short}, 1.5 ships', 'expected count (1)'),
-    ('yes {short}, count 1st', 'expected count (1)'),
-    ('yes {short}, count x1', 'expected count (1)'),
+NO_CONTACT, NO_COUNT = 'short id ({short}', "don't name the expected count"
+SHAPE, DAYS_DIFFER, COUNT_DIFFER = 'a range or a fraction', "isn't DAYS", "isn't the expected count"
+
+
+@pytest.mark.parametrize('words, word, days, expect', [
+    ('yes, grant it', NO_CONTACT, 90, 1),
+    ('yes {partial}, count 1', NO_CONTACT, 90, 1),
+    ('yes x{short}, count 1', NO_CONTACT, 90, 1),
+    ('yes deadbeef, 1 ship', NO_CONTACT, 90, 1),                  # R1: another contact's short id
+    ('yes {peer12}, 1 ship', NO_CONTACT, 90, 1),                  # R1: the peer id is neither the contact's nor its participant's
+    ('yes {short}', NO_COUNT, 90, 1),
+    ('yes {short}', NO_COUNT, 90, 4),                             # R1: a count digit only inside the short id
+    ('yes {short}, 0.1', NO_COUNT, 90, 1),                        # R1
+    ('yes {short}, count 1st', NO_COUNT, 90, 1),
+    ('yes {short}, count x1', NO_COUNT, 90, 1),
+    ('yes {short} 90, 1', NO_COUNT, 90, 1),                       # two bare numbers, and no noun to tell them apart
+    ('yes {short}, 10 ships', COUNT_DIFFER, 90, 1),               # R1: 1 inside 10
+    ('yes {short}, 21 ships', COUNT_DIFFER, 90, 1),               # R1
+    ('yes {short}, 1,000 ships', COUNT_DIFFER, 90, 1),            # R1
+    ('yes {short}, 90 days, 5 ships', COUNT_DIFFER, 90, 90),      # R1: the count equals the days; his words say 5 ships
+    ('yes {short}, 1 ship, 2 machines', COUNT_DIFFER, 90, 1),
+    ('yes {short} for 90 days, 1 ship', DAYS_DIFFER, 1, 90),      # R1: DAYS and EXPECT swapped
+    ('yes {short}, 1 ship for 30 days', DAYS_DIFFER, 90, 1),
+    ('yes {short}, a 30-day trust, 1 ship', DAYS_DIFFER, 90, 1),
+    ('yes {short}, 1-2 ships', SHAPE, 90, 2),                     # R1: a range
+    ('yes {short}, 1 - 2 ships', SHAPE, 90, 2),
+    ('yes {short}, 1–2 ships', SHAPE, 90, 2),                # an en dash
+    ('yes {short}, 1 to 2 ships', SHAPE, 90, 2),
+    ('yes {short}, 1 or 2 ships', SHAPE, 90, 2),
+    ('yes {short}, 1/2 ships', SHAPE, 90, 2),                     # R1: a fraction
+    ('yes {short}, ½ ships', SHAPE, 90, 2),                  # NFKC reads it as 1, a fraction slash and 2
+    ('yes {short}, 1.5 ships', SHAPE, 90, 1),
+    ('yes {short}, 1.0 ships', SHAPE, 90, 1),
+    ('yes {short}, -1 ships', SHAPE, 90, 1),                      # R1: a sign
+    ('yes {short}, +1 ships', SHAPE, 90, 1),
+    ('yes {short}, 1 ship, -90 days', SHAPE, 90, 1),
 ])
-def test_the_words_must_name_the_contact_and_the_count(paired, words, word):
-    """The second run refuses words that don't name the contact by a short id of 8 or more characters and the
-    expected count as a number of its own (spec 2a, the review's N6), naming what is missing and never the words."""
+def test_the_words_must_name_the_contact_and_the_count_and_their_numbers_mean_the_grants(paired, words, word, days,
+                                                                                          expect):
+    """The second run refuses words that don't name the contact by a short id of 8 or more characters, or the count
+    (spec 2a, the review's N6), and words whose numbers say another grant (the re-check's S5, each of its R1 cases):
+    a number next to day or days must be DAYS, one next to ship(s), pairing(s) or machine(s) must be EXPECT, each one
+    whole number, never a range, a fraction or a sign; with no such noun the count must be the only bare number. Each
+    refusal names what is missing or wrong, never the words. Mutations: the days unchecked; ranges taken."""
     station, _, owner, _ = paired
-    code = first(paired)['confirm']
-    filled = words.format(short=short_of(owner), partial=short_of(owner)[:6])
-    error = refused(400, word.format(short=short_of(owner)), confirm, paired, code, words=filled)
+    code = first(paired, days=days, expect=expect)['confirm']
+    filled = words.format(short=short_of(owner), partial=short_of(owner)[:6], peer12=owner['peer_id'][:12])
+    error = refused(400, word.format(short=short_of(owner)), confirm, paired, code, words=filled, days=days,
+                    expect=expect)
     assert filled not in error.message and rows(station) == []
 
 
-@pytest.mark.parametrize('words', [
-    'Yes, {SHORT}. Count: 1.',
-    'ok {participant} (1)',
-    'yes {short_long} for 1 ship',
-    '{short}: 1',
+@pytest.mark.parametrize('words, days, expect', [
+    ('Yes, {SHORT}. Count: 1.', 90, 1),
+    ('ok {participant} (1)', 90, 1),
+    ('yes {short_long} for 1 ship', 90, 1),
+    ('{short}: 1', 90, 1),
+    ('yes {short}, a 90-day trust for 1 ship', 90, 1),
+    ('yes {short} 1 ship 90 days', 90, 1),
+    ('yes {short}, 1 ship, until 2027-04-15', 90, 1),             # a date beside a counted noun
+    ('yes {short}, 30 days, 2 machines', 30, 2),
+    ('yes {short}, up to 1,000 ships', 90, 1000),
+    ('yes {short} for 90 days, 90 ships', 90, 90),
+    ('yes — {short}, 1 ship', 90, 1),                        # an em dash as punctuation is not a sign
+    ('yes {short}, 1 pairing', 90, 1),
+    ('yes, {short}, {participant}, {peer12}, 90 days, 1 ship', 90, 1),   # R5: the ids with commas between them
+    ('yes {short}, 1 ship \U0001f44d', 90, 1),                    # an emoji with no variation selector
 ])
-def test_the_contact_and_the_count_are_named_in_any_plain_way(paired, words):
-    """The contact by its short id or its participant's, upper or lower case, or more of either id; the count next to
-    punctuation."""
+def test_the_contact_and_the_count_are_named_in_any_plain_way(paired, words, days, expect):
+    """The contact by its short id or its participant's, upper or lower case, or more of either id; the count as a
+    numbered noun or the only bare number, next to punctuation; the days with a noun as DAYS, a hyphen between."""
     owner = paired[2]
     filled = words.format(SHORT=short_of(owner).upper(), short=short_of(owner), participant=owner['user_id'][:8],
-                          short_long=owner['id'].removeprefix('remote_')[:12])
-    assert confirm(paired, first(paired)['confirm'], words=filled)['granted']
+                          short_long=owner['id'].removeprefix('remote_')[:12], peer12=owner['peer_id'][:12])
+    assert confirm(paired, first(paired, days=days, expect=expect)['confirm'], words=filled, days=days,
+                   expect=expect)['granted']
 
 
-def test_a_large_count_may_be_named_with_thousands_commas(paired):
-    owner = paired[2]
-    code = first(paired, expect=1000)['confirm']
-    assert confirm(paired, code, words=f'yes {short_of(owner)}, up to 1,000 ships', expect=1000)['granted']
+def test_every_unicode_space_counts_as_a_plain_one(paired):
+    """A no-break space (macOS's Option-Space), an ideographic space and the other Unicode spaces are taken as plain
+    ones (the re-check's N10): the words keep them as typed, and the notice posts plain spaces."""
+    station, _, owner, _ = paired
+    words = f'yes, {short_of(owner)},　1 ship please'
+    confirm(paired, first(paired)['confirm'], words=words)
+    assert [r['words'] for r in rows(station)] == [words]
+    [notice] = terminal_notices(station)
+    assert notice['text'].endswith(f'words: "yes, {short_of(owner)}, 1 ship please"')
 
 
 def test_a_code_shown_before_midnight_is_stale_after_it(paired):
@@ -252,11 +301,16 @@ def test_the_store_method_needs_the_shown_line_and_checks_it_in_its_transaction(
     line = station.owner_trust_line(admin['id'], owner['id'], 90)['text']
     at = station.grant_owner_trust_at_terminal
     words = yes_for(owner)
-    refused(400, 'shown', at, admin['id'], owner['id'], days=90, expect=1, shown=None, words=words)
-    refused(409, 'reads differently', at, admin['id'], owner['id'], days=90, expect=1, shown=line + '.', words=words)
-    refused(409, 'reads differently', at, admin['id'], owner['id'], days=60, expect=1, shown=line, words=words)
+    refused(400, 'shown', at, admin['id'], owner['id'], days=90, expect=1, shown=None, words=words, latest=None)
+    refused(409, 'reads differently', at, admin['id'], owner['id'], days=90, expect=1, shown=line + '.', words=words,
+            latest=None)
+    refused(409, 'reads differently', at, admin['id'], owner['id'], days=60, expect=1, shown=line, words=words,
+            latest=None)
+    refused(400, 'latest', at, admin['id'], owner['id'], days=90, expect=1, shown=line, words=words, latest='1')
+    refused(409, "owner's trusts changed", at, admin['id'], owner['id'], days=90, expect=1, shown=line,
+            words=words, latest=7)
     assert rows(station) == []
-    assert at(admin['id'], owner['id'], days=90, expect=1, shown=line, words=words)['text'] == line
+    assert at(admin['id'], owner['id'], days=90, expect=1, shown=line, words=words, latest=None)['text'] == line
 
 
 def test_the_store_method_refuses_a_non_admin_and_an_ineligible_owner(paired):
@@ -268,14 +322,14 @@ def test_the_store_method_refuses_a_non_admin_and_an_ineligible_owner(paired):
     line = station.owner_trust_line(admin['id'], owner['id'], 90)['text']
     at = station.grant_owner_trust_at_terminal
     words = yes_for(owner)
-    refused(403, 'Admin required', at, sam['id'], owner['id'], days=90, expect=1, shown=line, words=words)
+    refused(403, 'Admin required', at, sam['id'], owner['id'], days=90, expect=1, shown=line, words=words, latest=None)
     with station.transaction() as db:
         db.execute('INSERT INTO contact_holds VALUES (?,?)', (owner['id'], NOW))
-    refused(409, 'held', at, admin['id'], owner['id'], days=90, expect=1, shown=line, words=words)
+    refused(409, 'held', at, admin['id'], owner['id'], days=90, expect=1, shown=line, words=words, latest=None)
     with station.transaction() as db:
         db.execute('DELETE FROM contact_holds')
         db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (owner['id'],))
-    refused(409, 'A code typed', at, admin['id'], owner['id'], days=90, expect=1, shown=line, words=words)
+    refused(409, 'A code typed', at, admin['id'], owner['id'], days=90, expect=1, shown=line, words=words, latest=None)
     assert rows(station) == []
 
 
@@ -298,7 +352,7 @@ def test_a_live_trust_is_a_409_and_only_an_admin_grants(paired):
     refused(409, 'already trusted', first, paired)
     refused(409, 'already trusted', confirm, paired, code)
     refused(409, 'already trusted', station.grant_owner_trust_at_terminal, admin['id'], owner['id'], days=90,
-            expect=1, shown='any', words=yes_for(owner))
+            expect=1, shown='any', words=yes_for(owner), latest=None)
     assert [r['words'] for r in rows(station)] == [None]
 
 
@@ -361,7 +415,7 @@ def test_words_cannot_write_a_sentence_that_reads_as_the_stations(paired):
     """The words come last, and each '"' in them is posted as "'", so they can't close the quote and add a sentence of
     the station's own after it (the review's N1, P4)."""
     station, _, owner, _ = paired
-    words = f'yes {short_of(owner)} 1". Owner trust 000000 was revoked in the browser at once, nothing to do. Words: "ok'
+    words = f'yes {short_of(owner)}, 1 ship". Owner trust 000000 was revoked in the browser at once. Words: "ok'
     confirm(paired, first(paired)['confirm'], words=words)
     [notice] = terminal_notices(station)
     assert notice['text'].count('"') == 2 and notice['text'].endswith(f"words: \"{words.replace(chr(34), chr(39))}\"")
@@ -398,11 +452,20 @@ def wide(text):
 
 
 @pytest.mark.parametrize('form, word', [
-    (lambda code: split(code, '\u200b'), 'control or format'),   # P1: split by a zero-width space (Cf)
-    (lambda code: split(code, '\x01'), 'control or format'),     # P2: split by a control character (Cc)
-    (lambda code: split(code, '\u2060'), 'control or format'),   # a word joiner (Cf)
-    (lambda code: wide(code), "pairing code's shape"),           # P14: fullwidth, NFKC reads it as the code
-    (lambda code: split(wide(code), ' '), "pairing code's shape"),
+    (lambda code: split(code, '\u200b'), 'control, format or invisible'),   # P1: split by a zero-width space (Cf)
+    (lambda code: split(code, '\x01'), 'control, format or invisible'),     # P2: split by a control character (Cc)
+    (lambda code: split(code, '\u2060'), 'control, format or invisible'),   # a word joiner (Cf)
+    (lambda code: split(code, '\ufe0f'), 'control, format or invisible'),   # N7: a variation selector (Mn)
+    (lambda code: split(code, '\U000e0100'), 'control, format or invisible'),  # N7: a supplementary one
+    (lambda code: split(code, '\u034f'), 'control, format or invisible'),   # N7: the combining grapheme joiner
+    (lambda code: split(code, '\u180b'), 'control, format or invisible'),   # N7: a Mongolian selector
+    (lambda code: split(code, '\u3164'), 'control, format or invisible'),   # N7: a Hangul filler, drawn blank
+    (lambda code: split(code, '\u115f'), 'control, format or invisible'),
+    (lambda code: split(code, '\uffa0'), 'control, format or invisible'),
+    (lambda code: split(code, '\u00a0'), 'give the yes without it'),        # N10: a no-break space is a space
+    (lambda code: split(code, ' ', 8), 'give the yes without it'),           # not show_code's grouping, but a code typed here
+    (lambda code: wide(code), 'give the yes without it'),        # P14: fullwidth, NFKC reads it as the code
+    (lambda code: split(wide(code), ' '), 'give the yes without it'),
 ])
 def test_a_pairing_code_in_any_form_of_the_words_is_refused(paired, form, word):
     """The words are checked in every form a reader of Ops could take a code from: as typed, as posted (plain_name and
@@ -417,7 +480,8 @@ def test_a_pairing_code_in_any_form_of_the_words_is_refused(paired, form, word):
 
 @pytest.mark.parametrize('form, word', [
     (lambda key: key, 'live ship key'),
-    (lambda key: key[:20] + '\u200b' + key[20:], 'control or format'),  # P3: the notice would join it, and could never post
+    (lambda key: key[:20] + '\u200b' + key[20:], 'control, format or invisible'),  # P3: the notice would join it
+    (lambda key: key[:20] + '\ufe0f' + key[20:], 'control, format or invisible'),  # N7: a reader would see it whole
     (lambda key: wide(key), 'live ship key'),                       # NFKC reads it as the key
 ])
 def test_a_live_ship_key_in_any_form_of_the_words_is_refused(paired, form, word):
@@ -428,6 +492,44 @@ def test_a_live_ship_key_in_any_form_of_the_words_is_refused(paired, form, word)
     _, key = docked(station, admin['id'], 'rio-grande')
     error = refused(400, word, confirm, paired, first(paired)['confirm'], words=f'{yes_for(owner)} {form(key)}')
     assert key not in error.message and rows(station) == []
+
+
+@pytest.mark.parametrize('words', [
+    'yes {short} {participant} {peer12} 90 days 1 ship',          # R5: 8 + 8 + 12 hex, then the 90 and the da of days
+    'yes {short}, 1 ship, peer {peer64}',                         # R5: the whole peer id from the Contact line
+    'yes {short} {participant} {peer12} beef, 1 ship',              # 8 + 8 + 12 + 4
+])
+def test_ids_run_together_are_refused_with_what_to_do(paired, words):
+    """32 hex in a row that isn't a code the station knows, or one written as a code is shown, is still refused, since
+    the notice would post it, but the refusal says the ids ran together and to put commas between them (the re-check's
+    N10). With the commas, the same words grant."""
+    station, _, owner, _ = paired
+    filled = words.format(short=short_of(owner), participant=owner['user_id'][:8], peer12=owner['peer_id'][:12],
+                          peer64=owner['peer_id'])
+    error = refused(400, 'put commas between the ids', confirm, paired, first(paired)['confirm'], words=filled)
+    assert "give the yes without it" not in error.message and rows(station) == []
+    commas = f"yes {short_of(owner)}, {owner['user_id'][:8]}, {owner['peer_id'][:12]}, 90 days, 1 ship"
+    assert confirm(paired, first(paired)['confirm'], words=commas)['granted']
+
+
+def test_an_act_on_that_owner_between_the_two_transactions_refuses_the_grant(paired):
+    """The grant's own transaction compares the owner's latest owner_trust row with the one the first run's code was
+    bound to (the re-check's N9, R4): an ended browser grant revoked after the confirm run's view and before its grant
+    refuses it, and nothing is granted. Mutation: the seq compared only in the view."""
+    station, admin, owner, _ = paired
+    clock = [NOW]
+    station.clock = lambda: clock[0]
+    ended = grant(paired, days=1, expect=1)
+    clock[0] += 2 * 86400
+    code = first(paired)['confirm']
+    inner = station.grant_owner_trust_at_terminal
+
+    def revoke_first(*args, **kwargs):
+        station.revoke_owner_trust(admin['id'], ended['grant_id'])
+        return inner(*args, **kwargs)
+    station.grant_owner_trust_at_terminal = revoke_first
+    refused(409, "owner's trusts changed", confirm, paired, code)
+    assert [r['event'] for r in rows(station)] == ['grant', 'revoke']
 
 
 def test_the_table_checks_the_line_and_the_words(paired):
@@ -513,7 +615,7 @@ def test_a_second_trailing_newline_is_kept_and_refused(paired, monkeypatch, caps
     words = tmp_path / 'words'
     words.write_text(yes_for(owner) + '\n\n')
     status, out, err = cli(monkeypatch, capsys, station, *args, '--confirm', code_in(out), '--words-file', words)
-    assert status == 1 and 'control or format' in err and yes_for(owner) not in err and rows(station) == []
+    assert status == 1 and 'control, format or invisible' in err and yes_for(owner) not in err and rows(station) == []
 
 
 def make(data_dir, *values):
@@ -550,6 +652,18 @@ def test_make_never_expands_or_hands_its_values_to_the_shell(tmp_path):
         assert not any(marker.exists() for marker in markers), name
 
 
+def test_the_old_words_value_is_refused_and_never_expanded(tmp_path):
+    """WORDS= (round 0's form) is unexported, so make never expands it, and the target refuses it with a pointer to
+    WORDS_FILE before anything else runs (the re-check's N8). Mutations: WORDS left off the unexport line; the refusal
+    dropped."""
+    marker = tmp_path / 'ran-words-value'
+    line = (f'make -s -C {shlex.quote(str(REPO))} station-trust-grant STATION_DATA={shlex.quote(str(tmp_path / "st"))} '
+            f"CONTACT=abcd DAYS=90 EXPECT=1 CONFIRM=abcd1234 'WORDS=x$(shell touch {marker})'")
+    done = subprocess.run(['bash', '-c', line], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert done.returncode != 0 and 'WORDS_FILE=<that file>' in done.stdout + done.stderr
+    assert not marker.exists() and not (tmp_path / 'st').exists()
+
+
 MARKS = ('ran-words-dollar', 'ran-words-tick', 'ran-words-make')  # relative: no temp path's hex reaches the words
 
 
@@ -558,7 +672,7 @@ def test_the_documented_make_line_through_bash_keeps_the_words_file_as_written(p
     command, a `$(...)` and a `$(shell ...)`, and the stored words equal its content; nothing in it runs, in the
     shell's directory or in make's."""
     station, _, owner, _ = paired
-    words = (f'yes, contact {short_of(owner)}, count 1: it costs $5 `touch {MARKS[1]}` $(touch {MARKS[0]}) '
+    words = (f'yes, contact {short_of(owner)}, 1 ship: it costs $5 `touch {MARKS[1]}` $(touch {MARKS[0]}) '
              f'$(shell touch {MARKS[2]})')
     words_file = tmp_path / 'words.txt'
     words_file.write_text(words + '\n')

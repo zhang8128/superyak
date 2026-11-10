@@ -582,8 +582,9 @@ def describe_trust_grant(view):
         admin = safe_line(view['admin'], 40)
         lines.append(f"Nothing is granted yet. Confirm code: {view['confirm']}. DAYS and EXPECT are {admin}'s own numbers. "
                      f"Show {admin} all of these lines: the contact, its peer, the grant line, the days and the count. Only "
-                     f"once {admin} says yes at this terminal, naming contact {short} and the count {view['expect']}, "
-                     f"write those words to a file exactly as typed and run it again with CONFIRM={view['confirm']} "
+                     f"once {admin} says yes at this terminal, naming contact {short} and the count (\"{view['expect']} "
+                     f"{'ship' if view['expect'] == 1 else 'ships'}\"; any number of days must be {view['days']}), write "
+                     f"those words to a file exactly as typed and run it again with CONFIRM={view['confirm']} "
                      'WORDS_FILE=<that file>.')
     return '\n'.join(lines)
 

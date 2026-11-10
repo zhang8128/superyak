@@ -422,18 +422,20 @@ station-trust-list:
 
 # Owner trust at the terminal (machine trust spec, revision 6). Andy's words never pass through a shell or make: Rio
 # Grande writes them, exactly as he typed them, to a file with its file tool, and WORDS_FILE names that file. Make
-# neither expands nor exports CONTACT, DAYS, EXPECT, CONFIRM or WORDS_FILE: unexport keeps each out of every recipe's
-# environment (GNU Make exports, and so expands, every command-line variable unless told not to), and $(value ...)
-# hands each one, unexpanded, to its own TG_ variable, which reaches the recipe through the environment, never as
-# shell text. No other recipe reads these names from its environment. A CONTACT shaped like a pairing code is
-# refused before the command runs, unshown.
-unexport CONTACT DAYS EXPECT CONFIRM WORDS_FILE
+# neither expands nor exports CONTACT, DAYS, EXPECT, CONFIRM, WORDS_FILE or the old WORDS: unexport keeps each out of
+# every recipe's environment (GNU Make exports, and so expands, every command-line variable unless told not to), and
+# $(value ...) hands each one, unexpanded, to its own TG_ variable, which reaches the recipe through the environment,
+# never as shell text. No other recipe reads these names from its environment. A set WORDS is refused, pointing to
+# WORDS_FILE, and a CONTACT shaped like a pairing code is refused before the command runs, unshown.
+unexport CONTACT DAYS EXPECT CONFIRM WORDS_FILE WORDS
 station-trust-grant: export TG_CONTACT = $(value CONTACT)
 station-trust-grant: export TG_DAYS = $(value DAYS)
 station-trust-grant: export TG_EXPECT = $(value EXPECT)
 station-trust-grant: export TG_CONFIRM = $(value CONFIRM)
 station-trust-grant: export TG_WORDS_FILE = $(value WORDS_FILE)
+station-trust-grant: export TG_WORDS_GIVEN = $(if $(value WORDS),yes)
 station-trust-grant:
+	@test -z "$$TG_WORDS_GIVEN" || { echo 'WORDS= is not taken here (make and a shell would read his words first): write Andy'"'"'s words to a file with the file tool, exactly as typed, and pass WORDS_FILE=<that file>'; exit 2; }
 	@test -n "$$TG_CONTACT" && test -n "$$TG_DAYS" && test -n "$$TG_EXPECT" || { echo 'Usage: make station-trust-grant CONTACT=<contact short id> DAYS=90 EXPECT=1 [CONFIRM=<code> WORDS_FILE=<file holding Andy'"'"'s words as typed>] [APPROVER=andy]'; exit 2; }
 	@c=$$(printf '%s' "$$TG_CONTACT" | tr -d '[:space:]-'); case "$$c" in *[!0-9a-fA-F]*) ;; *) test "$${#c}" -ne 32 || { echo "CONTACT takes a contact's short id; this one has a pairing code's shape (32 hex), so it isn't taken (not shown, in case it was a code)"; exit 2; };; esac
 	uv run --locked --project peer python -m superyak_peer station-trust-grant --data-dir "$(STATION_DATA)" --contact "$$TG_CONTACT" --days "$$TG_DAYS" --expect "$$TG_EXPECT" --as "$(APPROVER)"$${TG_CONFIRM:+ --confirm "$$TG_CONFIRM"}$${TG_WORDS_FILE:+ --words-file="$$TG_WORDS_FILE"}
