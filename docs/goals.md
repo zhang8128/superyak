@@ -65,21 +65,22 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
 ## Tardis: federation, the public route, CI, and the visitor's view
 
 Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied to an overarching goal:
-- T1 (goal 1): rail B. Tardis joins the lessons room through Andy's owner trust, granted on his yes at the Pi's
-  terminal once train-1114 lands, then lays its own lessons. Measure: the two-part pass test (bd7b170b), a receipt of a
-  Tardis lesson on the Pi and of a Pi lesson on Tardis, each within a day of the CONFIRM.
+- T1 (goal 1): rail B. Tardis joins the lessons room through Andy's owner trust, which he grants at the Pi's terminal
+  (train-1114, which it needed, is on main), then lays its own lessons. Measure: the two-part pass test (all hands
+  bd7b170b), a receipt of a Tardis lesson on the Pi and of a Pi lesson on Tardis, each within a day of the CONFIRM.
 - T2 (goals 1 and 3): the crossing in use, with deadlines end to end (the embedder client in train-1112, the frame's in
-  train-1114). 8 crossings ever, the last on 11-04. Measure: recalls in real work, logged helped or misled, and no embed
-  in the publisher's log waiting past its asker.
+  train-1114, the peer's lessons client in train-1117), and the embedder dropping an asker that has gone. 8 crossings
+  ever, the last on 11-04. Measure: recalls in real work, logged helped or misled, and no embed in the publisher's log
+  waiting past its asker.
 - T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
   C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
   oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
   from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
   1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
-- T4 (goal 4): the mark's true words (train-1113), and `two-people.md` kept true at every train (each label and number
-  checked against main), for R6's first real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3),
-  once Andy has tried replies read back. Measure: the guide's checks after each train, and R6's walk getting through.
-- T5 (goals 2 and 5): CI, partner reads from the bundle itself, and goal 2's before-and-after measures for the downloads
-  build (train-1115).
-- Done since 11-08: the embedder client half (train-1112), the kernel on main (train-1111), the sheaf standard's outside
-  read, and partner reads of the ledger fix, the trust command and train-1116.
+- T4 (goal 4): `two-people.md` kept true at every train (each label and number checked against main), for R6's first
+  real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3), once Andy has tried replies read
+  back. Measure: the guide's checks after each train, and R6's walk getting through.
+- T5 (goals 2 and 5): CI, and partner reads from the bundle itself.
+- Done since 11-08: the embedder client half (train-1112), the kernel on main (train-1111), the mark's true words
+  (train-1113), goal 2's before and after for the downloads build (train-1115, in `docs/measures/goal-2.md`), the sheaf
+  standard's outside read, and partner reads of the ledger fix, the trust command and train-1116.
