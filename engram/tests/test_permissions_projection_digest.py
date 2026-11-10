@@ -1145,6 +1145,8 @@ def test_m1_a_torn_meta_index_page_never_reads_a_gate_at_enforce_as_off(tmp_path
     led = Ledger.open(tmp_path)
     raise_gate(led, "enforce")
     led.close()
+    time.sleep(0.025)  # ctime moves at the kernel's coarse tick (4 ms on the Pi): a tear inside the last commit's tick
+    # keeps size, counter, head and ctime, so the key, and the marker that trusts it, can't see it (1 run in 3, 11-09)
     with open(path, "r+b") as f:                     # the tear: no connection is open on the file here
         f.seek(offset)
         f.write(before)
