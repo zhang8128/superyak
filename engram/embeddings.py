@@ -6,6 +6,7 @@ Supports task-specific prefixes for better clustering vs retrieval quality.
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -305,7 +306,14 @@ class RemoteEmbedProvider:
         if not self._verified:
             self._check_model(self._call({"op": "info"}))
             self._verified = True
-        response = self._call({"op": "embed", "texts": list(texts), "prefix": prefix})
+        request = {"op": "embed", "texts": list(texts), "prefix": prefix}
+        if math.isfinite(self._response_timeout) and self._response_timeout >= 0:
+            # This client hangs up once its response timeout passes, so it says so: the service then drops the request
+            # if it hasn't reached the lane by then, instead of embedding for nobody (embedder_service.py's
+            # remaining_ms; the Pi, 2026-11-09: a short text took 74 s behind abandoned requests). An older service
+            # ignores the field.
+            request["remaining_ms"] = self._response_timeout * 1000
+        response = self._call(request)
         self._check_model(response)
         vectors = response.get("vectors")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
