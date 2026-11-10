@@ -499,7 +499,7 @@ def served(monkeypatch, tmp_path, *args):
     from superyak_peer.__main__ import main
     calls = []
     monkeypatch.setattr(uvicorn, 'run', lambda app, **kwargs: calls.append(kwargs))
-    main(['serve', '--data-dir', str(tmp_path / 'peer'), *args])
+    main(['serve', '--data-dir', str(tmp_path / 'peer'), '--port', '0', *args])  # any free port: this machine may be using 7435
     return calls[0]
 
 

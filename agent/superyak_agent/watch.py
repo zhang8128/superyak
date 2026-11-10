@@ -4,7 +4,7 @@ import logging
 import subprocess
 import time
 from superyak_team.teamlib import redact
-from .runs import RunTimeout
+from .runs import RunFailed, RunTimeout
 from .station import BREAKOUT_MARK, MESSAGE_LIMIT, REPLACED_SEND, StationError, authors, brief_block, describe, fence_message, label, quoted_title, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
@@ -212,7 +212,7 @@ class Watcher:
             self.save()
             if failures < MAX_FAILURES:
                 return False, 0
-            reply = FALLBACK
+            reply = error.note if isinstance(error, RunFailed) else FALLBACK
         self.state['failures'].pop(mid, None)
         return True, self._reply(mention['room_id'], mid, reply)
 

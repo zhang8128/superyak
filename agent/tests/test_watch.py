@@ -1,7 +1,7 @@
 import json
 import sys
 import pytest
-from superyak_agent.runs import RunResult, RunTimeout
+from superyak_agent.runs import FAILED_NOTES, RunFailed, RunResult, RunTimeout
 from superyak_agent.station import StationClient, StationError
 from superyak_agent.watch import FALLBACK, READ_ONLY_LINE, Watcher, build_prompt
 
@@ -740,3 +740,23 @@ def test_resident_reads_after_its_cursor_and_keeps_it_when_nothing_is_newer(stat
     second = fake.say(dm, andy, 'and the lift?')
     assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [first['id'], second['id']]
     assert all(room_gets(fake, dm))
+
+
+def test_three_failed_runs_post_why_and_never_the_output(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity first')
+    error = RunFailed('signed_out', 1, 'claude exited 1: Not logged in; token sk-ant-do-not-post')
+    w = watcher(fake, ship_config, tmp_path, FakeRunner(error=error))
+    assert w.cycle() == 0 and w.cycle() == 0 and w.cycle() == 1
+    posted = bodies(fake, room)[-1]
+    assert posted == FAILED_NOTES['signed_out'] and posted != FALLBACK and 'do-not-post' not in posted
+
+
+def test_a_failure_that_is_not_a_run_still_posts_the_fallback(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity first')
+    w = watcher(fake, ship_config, tmp_path, FakeRunner(error=RuntimeError('git worktree: secret-path')))
+    assert w.cycle() == 0 and w.cycle() == 0 and w.cycle() == 1
+    assert bodies(fake, room)[-1] == FALLBACK

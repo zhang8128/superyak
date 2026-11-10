@@ -534,3 +534,31 @@ def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_em
     calls = [argv for argv, _ in host.calls]
     assert calls.index(next(a for a in calls if a[0] == 'uv' and 'engram' in a)) < calls.index(
         ('systemctl', '--user', 'restart', 'superyak-embedder.service'))
+
+
+def test_a_running_engram_publisher_restarts_after_the_embedder_and_is_checked(station):
+    host = Host(station['repo'])
+    host.loaded = {'superyak-embedder', 'superyak-engram-publisher'}
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 0
+    assert host.restarts() == [FIRST_UNIT, *OTHER_UNITS, 'superyak-embedder', 'superyak-engram-publisher']
+    assert any('engram-publisher active (0 restarts)' in line for line in lines)
+
+
+def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_publisher_alone(station):
+    repo = station['repo']
+    git(repo, 'checkout', '-q', 'train')
+    (repo / 'engram').mkdir()
+    commit(repo, 'engram/uv.lock', 'new lock')
+    train = head(station)
+    git(repo, 'checkout', '-q', 'main')
+    host = Host(repo)
+    host.loaded = {'superyak-engram-publisher'}
+    dry, _, dry_lines = sitting(station, Host(repo), train=train, dry_run=True)
+    dry._run.loaded = {'superyak-engram-publisher'}
+    assert dry.sit() == 0 and any('syncs engram before the publisher restarts' in line for line in dry_lines)
+    made, _, _ = sitting(station, host, train=train)
+    assert made.sit() == 0
+    calls = [argv for argv, _ in host.calls]
+    assert calls.index(next(a for a in calls if a[0] == 'uv' and 'engram' in a)) < calls.index(
+        ('systemctl', '--user', 'restart', 'superyak-engram-publisher.service'))

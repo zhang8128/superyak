@@ -139,7 +139,7 @@ function consent(view) {
     `What ${app} reads can't be taken back.`,
     `${app}'s HIPAA agreement doesn't cover connectors.`,
     "Room text can contain instructions written by other people. Don't let a chat that uses this connector send email or post elsewhere without checking.",
-    "This home's admins can see that this connection exists and can end it. They can't see which rooms it reads.",
+    "This home's super admins can see that this connection exists and can end it. Their page doesn't show which rooms it reads, but whoever runs this home's computer can look that up.",
     `Allow only if you just started connecting from your own ${app} account.`,
   ];
   show(
