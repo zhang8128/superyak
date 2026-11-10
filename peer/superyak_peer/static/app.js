@@ -1170,25 +1170,48 @@ function carryHelp(room) {
   return `<p class="meta carry-help">${CARRY_HELP}</p>${list}`;
 }
 
-// Removing someone and clearing your mark can't be undone, so each asks first, in place: the question takes the button's
-// place, so a hurried second press lands on words, and the safe choice is focused. An ask belongs to one drawing of its
-// room: opening the room again starts without it.
+// Removing someone can't be undone, and nor can what reads a room while it's unmarked, so Remove and Clear my mark each
+// ask first, in place: the question takes the button's place, so a hurried second press lands on words, and the safe
+// choice is focused. An ask belongs to one drawing of its room and to what it asks about: opening the room again, or the
+// person or the mark being gone, starts without it. Once Yes is pressed, its place says what's happening until the answer.
 function roomAskOnScreen(kind) { return state.room ? roomAskFor(state.room, kind) : null; }
 function roomAskFor(room, kind) {
   const ask = state.roomAsk;
   return ask?.roomId === room.id && ask.kind === kind ? ask : null;
 }
+// The rooms this one continues that still have this member, as the station finds them (_earlier_with): a removal takes
+// them out of those too.
+function earlierRoomsWith(room, memberId) {
+  const known = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  let count = 0, key = room.linked_room_id;
+  const seen = new Set();
+  while (key && !seen.has(key) && known.has(key)) {
+    seen.add(key);
+    const earlier = known.get(key);
+    if ((earlier.owner_id ?? room.owner_id) === room.owner_id && (earlier.member_ids || []).includes(memberId)) count += 1;
+    key = earlier.linked_room_id;
+  }
+  return count;
+}
+function roomAskMarkup(question, words, cancel, yes) {
+  return `<div class="board-ask room-ask" role="group" aria-label="${question}" aria-describedby="room-ask-words"><p id="room-ask-words">${question} ${words}</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">${cancel}</button>${yes}</div></div>`;
+}
 function removeControl(room, id) {
-  const name = escapeHtml(participantName(id));
-  if (roomAskFor(room, "remove")?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
-  return `<div class="board-ask room-ask" role="group" aria-label="Remove ${name} from this room?"><p>Remove ${name} from this room? Their access here stops at once, and copies they have can't be erased.</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">Cancel</button><button class="button danger" type="button" data-action="remove-participant-confirm" data-id="${escapeHtml(id)}" aria-label="Yes, remove ${name}">Yes, remove</button></div></div>`;
+  const name = escapeHtml(participantName(id)), ask = roomAskFor(room, "remove");
+  if (ask?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
+  if (ask.pending) return `<p class="meta room-ask" role="status">Removing ${name}…</p>`;
+  const earlier = earlierRoomsWith(room, id);
+  const where = earlier === 1 ? "this room and the room before it" : earlier ? `this room and the ${earlier} rooms before it` : "this room";
+  return roomAskMarkup(`Remove ${name} from ${where}?`, "Their access here stops at once, and copies they have can't be erased.", "Cancel",
+    `<button class="button danger" type="button" data-action="remove-participant-confirm" data-id="${escapeHtml(id)}" aria-label="Yes, remove ${name}">Yes, remove</button>`);
 }
 
 function roomDetail(room) {
-  if (state.roomAsk && (state.roomAsk.roomId !== room.id || roomDrawn !== room.id)) state.roomAsk = null;  // a new drawing
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
+  const ask = state.roomAsk, removable = (id) => canManage && !replaced && !isSelf(id) && (room.member_ids || []).includes(id);
+  if (ask && (ask.roomId !== room.id || roomDrawn !== room.id || (ask.kind === "clear" ? !room.cloud?.mine || room.origin : !removable(ask.id)))) state.roomAsk = null;
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
     ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
@@ -1451,9 +1474,11 @@ function cloudControl(room, replaced) {
   const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
     ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
   if (room.cloud?.mine) {
-    const clear = roomAskFor(room, "clear")
-      ? `<div class="board-ask room-ask" role="group" aria-label="Clear your mark?"><p>Clear your mark on this room? Other members' marks stay. A room nobody has marked can take ships, and ships in a room send its text to Claude.</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">Cancel</button><button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button></div></div>`
-      : `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`;
+    const ask = roomAskFor(room, "clear");
+    const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
+      : ask.pending ? `<p class="meta room-ask" role="status">Clearing your mark…</p>`
+      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a connected app that reads all of a member's rooms can read this one from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
+        "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
     return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}${clear}</div>`;
   }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
@@ -2124,7 +2149,7 @@ function showNewestMessage() {
 // the same drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its
 // node): that's someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it
 // lands isn't told from one meant for the new room, and nor is a redraw in place moving the next button under a second
-// press; the acts that can't be undone are to ask first (board fix:room-acts-ask-first, not done yet). Each click takes
+// press; Remove and Clear my mark ask first, so such a press only opens an ask. Each click takes
 // the first finger's or the mouse's primary press it began with, and a press a long press's menu or a scroll ended
 // leaves none. Each kind of pointer has its own first one, so a palm's touch cancelled during a pen's press clears the
 // pen's: that only ever lets a click through. A mouse press held while the room redraws ends in no click and stays, but
@@ -3126,15 +3151,21 @@ document.addEventListener("click", async (event) => {
     document.querySelector(ask.kind === "clear" ? '[data-action="cloud-clear"]' : `[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`)?.focus();
   }
   if (action === "remove-participant-confirm" && roomAskOnScreen("remove")?.id === target.dataset.id) {
-    state.roomAsk = null;
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
-    await removeParticipant(target.dataset.id);
+    try { await removeParticipant(target.dataset.id); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    // not the page's top: the next one to remove, or the way to change who's here, or the button again if it failed
+    const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
+    if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
   }
   if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
   if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
-    state.roomAsk = null;
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
-    await clearMark(state.room);
+    try { await clearMark(state.room); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    if (state.room?.id === roomId) app.querySelector('[data-action="cloud-mark"], [data-action="cloud-clear"]')?.focus();
   }
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
