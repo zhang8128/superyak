@@ -6680,6 +6680,7 @@ def test_a_double_tap_on_a_room_row_doesnt_send_its_kept_words(browser_peer, by)
             assert len(late) == 2 and all(0 <= ms < 400 for ms in late), late  # both inside the window, so both were judged
             assert page.get_by_role("textbox", name="Message").input_value() == KEPT
             assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            assert held  # the hold caught the route's read: if that read moved, this test would flake again unseen
             for route in held:
                 route.continue_()
             page.unroute(news)
@@ -6841,6 +6842,71 @@ def test_a_press_that_landed_as_the_room_drew_and_a_second_finger_are_dropped(br
             open_(b)
             _click(page, SEND)
             nothing_sent()
+            open_(a)  # the second re-check's Nit 1: a later move that replaces no node, between its handling and its click
+            page.evaluate("window.earlyPress = new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, clientX: 300, clientY: 300, button: 0 })")
+            open_(b)
+            page.evaluate(f"""() => {{ document.querySelector({json.dumps(SEND)}).dispatchEvent(earlyPress);
+                movingTheRoom(() => scrollBy(0, -40));
+                document.querySelector({json.dumps(SEND)}).dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, detail: 1 }})); }}""")
+            nothing_sent()
+
+
+def test_a_second_press_of_a_control_counts_only_on_the_drawing_it_was_made_on(browser_peer):
+    """The second re-check's Should 1: a press of Remove for someone in Room A, then Room B opened with no pointer press (a
+    key's Enter on its row, or Back), then a hurried press at the same spot on Room B's Remove for the same person removes
+    nobody; and Room B's Send, pressed, left and drawn again with no pointer press, doesn't send what's left in its box. On
+    one drawing, a press of Remove for one person and then, after a move, a hurried press at its spot on Remove for another
+    removes nobody: the same action on another person isn't the same control."""
+    users = browser_peer["users"]
+    patient, family, doctor = users["patient"]["id"], users["family"]["id"], users["doctor"]["id"]
+    c = browser_peer["app"].state.store.create_room(patient, "Room C", [family, doctor])
+    for i in range(30):
+        browser_peer["app"].state.store.send_message(patient, c["id"], f"c-{i}", f"Room C {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            spot, remove = [200, 300], f'[data-action="remove-participant"][data-id="{family}"]'
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, remove, spot) >= 400  # an ordinary press, long after any move
+            deadline = time.monotonic() + 8
+            while family in store.get_room(patient, a["id"])["member_ids"]:
+                assert time.monotonic() < deadline, "Room A's Remove never acted"
+                time.sleep(0.05)
+            reads_settled(page)
+            page.evaluate(f"openChat({json.dumps(b['id'])})")  # no pointer press
+            _drawn(page, b)
+            assert _press(page, remove, spot) < 400
+            page.wait_for_timeout(600)
+            assert family in store.get_room(patient, b["id"])["member_ids"], "Room B's member was removed"
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, SEND, spot) >= 400
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done
+            page.get_by_role("textbox", name="Message").fill("Left in the box")
+            page.evaluate(f"openChat({json.dumps(a['id'])})")
+            _drawn(page, a)
+            reads_settled(page)
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            assert _press(page, SEND, spot) < 400
+            page.wait_for_timeout(600)
+            assert "Left in the box" not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            page.evaluate(f"openChat({json.dumps(c['id'])})")
+            _drawn(page, c)
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, remove, spot) >= 400
+            deadline = time.monotonic() + 8
+            while family in store.get_room(patient, c["id"])["member_ids"]:
+                assert time.monotonic() < deadline, "Room C's Remove never acted"
+                time.sleep(0.05)
+            reads_settled(page)
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")
+            assert _press(page, f'[data-action="remove-participant"][data-id="{doctor}"]', spot) < 400
+            page.wait_for_timeout(600)
+            assert doctor in store.get_room(patient, c["id"])["member_ids"], "Room C's other member was removed"
 
 
 def test_a_refresh_appends_a_new_message_once(browser_peer):

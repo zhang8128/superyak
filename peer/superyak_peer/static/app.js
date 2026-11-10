@@ -2078,7 +2078,7 @@ function render() {
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   const drawing = route === "chats" && state.room ? state.room.id : null;
-  if (drawing && drawing !== roomDrawn) { roomMovedAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
+  if (drawing && drawing !== roomDrawn) { roomMovedAt = roomDrawnAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
@@ -2100,43 +2100,44 @@ function showNewestMessage() {
 // would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press isn't the
 // press before the next one. A press that landed while the room drew is handled only after, on what replaced what it
 // landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on the control
-// it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control (the same room's
-// Send, or the same action on the same thing, though a redraw replaced its node): that's someone aiming at what they now
-// see. A press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room,
+// it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on the same
+// drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its node): that's
+// someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room,
 // and nor is a redraw in place moving the next button under a second press; the acts that can't be undone are to ask
 // first (board fix:room-acts-ask-first, not done yet). Each click takes the first finger's or the mouse's primary press
-// it began with, and a press a long press's menu or a scroll ended leaves none. A mouse press held while the room redraws
+// it began with, and a press a long press's menu or a scroll ended leaves none. Each kind of pointer has its own first
+// one, so a palm's touch cancelled during a pen's press clears the pen's: that only ever lets a click through. A mouse press held while the room redraws
 // ends in no click and stays, but the clicks that come with no press of their own (a key's, element.click()) have
 // detail 0 and are never measured.
 const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
-let roomMovedAt = -Infinity, pressDown = null, lastPress = null;
+let roomMovedAt = -Infinity, roomDrawnAt = -Infinity, pressDown = null, lastPress = null;
 function movingTheRoom(scroll) {
   const before = window.scrollY;
   scroll();
   if (window.scrollY !== before) roomMovedAt = performance.now();
 }
-// What a control is across the redraws that replace its node: the box's Send by its room, a button by its action and
-// what that acts on.
+// What a control is across the redraws that replace its node: the box's Send, or a button by its action and what that
+// acts on. It's compared only within one drawing of a room, so Send needs no room.
 function controlKey(control) {
   if (!control) return null;
-  if (control.matches('#message-form button[type="submit"]')) return `send:${control.form?.dataset.room}`;
+  if (control.matches('#message-form button[type="submit"]')) return "send";
   const action = control.dataset?.action;
-  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? ""}` : null;
+  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? control.dataset.revision ?? ""}` : null;
 }
 function pressTheRoomMoved(event, press, before) {
   if (event.detail === 0 || !press) return false;
   const control = event.target.closest?.(PRESSABLE);
   if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
-  if (press.at < roomMovedAt) return press.seen > roomMovedAt || control !== press.control;  // begun on what was here before
+  if (press.at < roomMovedAt) return press.found || control !== press.control;  // begun on what was here before
   if (press.at - roomMovedAt >= MOVED_PRESS_MS || !before || before.at >= roomMovedAt) return false;
   const key = controlKey(control);
-  if (key && key === controlKey(before.control)) return false;
+  if (key && before.at > roomDrawnAt && key === controlKey(before.control)) return false;  // pressed again on this drawing of the room
   return Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
 }
 document.addEventListener("pointerdown", (event) => {
   if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it
   pressDown = event.button !== 0 ? null : {
-    x: event.clientX, y: event.clientY, at: event.timeStamp, seen: performance.now(), control: event.target.closest?.(PRESSABLE) || null,
+    x: event.clientX, y: event.clientY, at: event.timeStamp, found: event.timeStamp < roomMovedAt, control: event.target.closest?.(PRESSABLE) || null,
   };
 }, true);
 document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
