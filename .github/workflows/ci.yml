@@ -13,7 +13,7 @@ jobs:
   peer:
     name: Standalone peer, browser, and package checks
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # 15 cut the suite at 15m18s on 7d46e2b6; 35 cut it at 96% with 0 failures on 16c41c76, after a slow apt mirror. Green runs took 24.3, 29.4 and 29.6 min
+    timeout-minutes: 60  # 15 cut the suite at 15m18s on 7d46e2b6; 35 cut it at 96% with 0 failures on 16c41c76, after a slow apt mirror; 45 cut the job on 728b0f64 just after 3,705 passed in 44m20s. Green runs took 24.3, 29.4 and 29.6 min
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
