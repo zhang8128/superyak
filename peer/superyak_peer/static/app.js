@@ -2173,6 +2173,9 @@ function rememberLayerForm(form = document.querySelector("#layer-form")) {
     dirty: true,
     conflict: previous?.conflict || false,
     generation: (previous?.generation || 0) + 1,
+    // The version these words were begun from. A refresh gives the page the newest draft, and if the save went by that, it would
+    // overwrite another tab's words with no conflict.
+    baseVersion: previous?.baseVersion ?? layer.version,
   };
   state.layerEdits[layer.id] = edit;
   return edit;
@@ -2192,12 +2195,12 @@ async function saveLayer(form) {
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
-    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: layer.version, ...values } });
+    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: submitted.baseVersion, ...values } });
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     const newerEdits = current && current.generation !== submitted.generation;
     if (!newerEdits) delete state.layerEdits[layer.id];
-    else current.conflict = false;
+    else { current.conflict = false; current.baseVersion = saved.version; }
     setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
@@ -2268,6 +2271,7 @@ async function uploadFile(input) {
       dirty: true,
       conflict: current?.conflict || false,
       generation: (current?.generation || 0) + 1,
+      baseVersion: current?.baseVersion ?? savedLayer.version,
     };
     if (state.selectedLayerId === layerId) {
       render();
@@ -2295,15 +2299,23 @@ async function resolveConflict() {
   try {
     const latest = await api(`/api/layers/${pathPart(layer.id)}`);
     const submitted = state.layerEdits[layer.id];
+    // "My text": who can see it stays as the latest draft has it, or this tab's old boxes put back someone just turned off.
+    const { audience_users: users, audience_spaces: spaces, public: isPublic, ...text } = submitted.values;
     const saved = await api(`/api/layers/${pathPart(layer.id)}`, {
       method: "PUT",
-      json: { version: latest.version, ...submitted.values },
+      json: { version: latest.version, ...text },
     });
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
-    else if (current) current.conflict = false;
-    setFlash("Private draft saved");
+    else if (current) {
+      current.conflict = false;
+      current.baseVersion = saved.version;
+      Object.assign(current.values, { audience_users: saved.audience_users, audience_spaces: saved.audience_spaces, public: saved.public });
+    }
+    const same = (a = [], b = []) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    const moved = !same(users, saved.audience_users) || !same(spaces, saved.audience_spaces) || Boolean(isPublic) !== Boolean(saved.public);
+    setFlash(moved ? "Your text is saved. Who can see it stays as the latest draft has it, so check that before you turn on a version." : "Private draft saved");
     render();
   } catch (error) {
     setFlash(`${error.message} Your text is still here.`, true);
@@ -2325,11 +2337,35 @@ async function activateLayer() {
   }
 }
 
+// A revoke narrows the draft on the station too. Unsaved words in the editor stay, and what was just turned off stays off in
+// them, or the next save would turn it back on.
+function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
+  // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
+  const layer = state.home?.layers?.find((item) => item.id === layerId);
+  if (layer && layer.version === answer.layer_version_before) layer.version = answer.layer_version;
+  const edit = state.layerEdits[layerId];
+  if (edit?.baseVersion === answer.layer_version_before) edit.baseVersion = answer.layer_version;
+  // The form on screen first: a Save before the page's next draw reads these boxes.
+  const form = document.querySelector("#layer-form");
+  if (form?.dataset.layerId === layerId) {
+    if (off && form.elements.public) form.elements.public.checked = false;
+    for (const [name, ids] of [["audience-user", users], ["audience-ship", users], ["audience-space", spaces]]) {
+      for (const id of ids) { const box = form.querySelector(`[name="${name}"][value="${CSS.escape(id)}"]`); if (box) box.checked = false; }
+    }
+  }
+  const values = state.layerEdits[layerId]?.values;
+  if (!values) return;
+  if (off) values.public = false;
+  values.audience_users = (values.audience_users || []).filter((id) => !users.includes(id));
+  values.audience_spaces = (values.audience_spaces || []).filter((id) => !spaces.includes(id));
+}
+
 async function publicOff() {
   const layer = selectedLayer();
   const active = state.activeLayers[layer.id];
   try {
     const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
+    narrowEdit(layer.id, { off: true }, narrowed);
     const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
     await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
@@ -2350,6 +2386,7 @@ async function revokeRoute(kind, id) {
         space_ids: kind === "space" ? [id] : [],
       },
     });
+    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] }, narrowed);
     const remainingNames = [
       ...(narrowed.audience_users || []).map(contactName),
       ...(narrowed.audience_spaces || []).map(spaceName),

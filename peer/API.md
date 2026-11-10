@@ -197,7 +197,7 @@ release's `draft_version` with draft `version`).
 | GET `/api/layers/{id}/preview` | — | Owner-only saved draft, selected `files`, named `people`, `audience_details`, and `space_versions` |
 | PUT `/api/layers/{id}` | `{version,...changedDraftFields}` | Saved draft; omitted fields preserved |
 | POST `/api/layers/{id}/activate` | `{version,space_versions?}` | Exact current draft activated; supplied space versions must still match |
-| POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision |
+| POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision, with `layer_version` and `layer_version_before`: the draft's version after and before |
 | POST `/api/layers/{id}/withdraw` | none | Draft with no active release |
 | GET `/api/layers/{id}/revisions` | — | Immutable revision array; owner only |
 | GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only (see Signed records) |
@@ -240,14 +240,15 @@ cannot exclude an individual. Personal exclusions are not implemented in this sl
 `revoke` requires the current active `revision`. `public:true` means remove public
 access; user_ids remove direct person grants and space_ids remove entire selected
 space grants. It narrows the ACTIVE snapshot, appends an immutable revision/event,
-and never copies or changes a newer private draft. Other routes remain effective.
+and takes what it removed out of the draft too, so it doesn't come back with the next
+version. It publishes none of the draft's other changes. Other routes remain effective.
 Removing a direct person grant does not revoke a separate space/public route.
 For frozen spaces, remove the space route or activate a newly selected audience.
-Existing private draft selections remain available for deliberate later activation;
-the UI must preview them again before reactivation.
 
 `withdraw` stops all hosted sharing, emits one ordered withdrawal event, and is
-idempotent while already withdrawn. Historical revisions remain owner-only.
+idempotent while already withdrawn. Historical revisions remain owner-only. The draft's
+selections remain available for deliberate later activation; the UI must preview them
+again before reactivation.
 Public responses contain ONLY `{id,revision,title,body,attachment_ids}`. Public
 JSON has no owner-account, audience, draft, chat, or private citation metadata.
 All incoming JSON keys/values, domain text and audience IDs must encode as valid
