@@ -1180,7 +1180,8 @@ function roomAskFor(room, kind) {
   return ask?.roomId === room.id && ask.kind === kind ? ask : null;
 }
 // The rooms this one continues that still have this member, as the station finds them (_earlier_with): a removal takes
-// them out of those too.
+// them out of those too. It walks only the rooms this home lists, so after the owner has left an earlier room it can
+// count fewer than the station removes from: the ask then understates, never overstates.
 function earlierRoomsWith(room, memberId) {
   const known = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
   let count = 0, key = room.linked_room_id;
@@ -1199,7 +1200,7 @@ function roomAskMarkup(question, words, cancel, yes) {
 function removeControl(room, id) {
   const name = escapeHtml(participantName(id)), ask = roomAskFor(room, "remove");
   if (ask?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
-  if (ask.pending) return `<p class="meta room-ask" role="status">Removing ${name}…</p>`;
+  if (ask.pending) return `<p class="meta room-ask" role="status" tabindex="-1">Removing ${name}…</p>`;
   const earlier = earlierRoomsWith(room, id);
   const where = earlier === 1 ? "this room and the room before it" : earlier ? `this room and the ${earlier} rooms before it` : "this room";
   return roomAskMarkup(`Remove ${name} from ${where}?`, "Their access here stops at once, and copies they have can't be erased.", "Cancel",
@@ -1476,7 +1477,7 @@ function cloudControl(room, replaced) {
   if (room.cloud?.mine) {
     const ask = roomAskFor(room, "clear");
     const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
-      : ask.pending ? `<p class="meta room-ask" role="status">Clearing your mark…</p>`
+      : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
       : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a connected app that reads all of a member's rooms can read this one from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
         "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
     return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}${clear}</div>`;
@@ -3153,6 +3154,7 @@ document.addEventListener("click", async (event) => {
   if (action === "remove-participant-confirm" && roomAskOnScreen("remove")?.id === target.dataset.id) {
     const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
+    app.querySelector('.room-ask[role="status"]')?.focus();  // the button that had it is gone until the answer
     try { await removeParticipant(target.dataset.id); }
     finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
     // not the page's top: the next one to remove, or the way to change who's here, or the button again if it failed
@@ -3163,6 +3165,7 @@ document.addEventListener("click", async (event) => {
   if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
     const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
+    app.querySelector('.room-ask[role="status"]')?.focus();
     try { await clearMark(state.room); }
     finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
     if (state.room?.id === roomId) app.querySelector('[data-action="cloud-mark"], [data-action="cloud-clear"]')?.focus();

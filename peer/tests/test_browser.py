@@ -7047,7 +7047,7 @@ def test_remove_names_the_earlier_rooms_it_reaches(browser_peer):
             removal = held_routes(page, f"**/api/chats/{third['id']}/participants/**")
             page.get_by_role("button", name="Yes, remove Sam Family").click()
             wait_for_hold(page, removal)
-            expect(page.get_by_role("status").filter(has_text="Removing Sam Family…")).to_be_visible()  # its place holds until the answer
+            expect(page.get_by_role("status").filter(has_text="Removing Sam Family…")).to_be_focused()  # its place, and the focus, hold until the answer
             expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
             release(removal)
             expect(page.locator(".room-ask")).to_have_count(0)
