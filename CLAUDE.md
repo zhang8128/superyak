@@ -58,8 +58,11 @@ Within an owner trust, a ship may pair another machine's ship with no code: on t
 a signed assertion; here, `make station-pair-trusted CARD= ASSERTION= SHIP=<this ship>`. The trust is Andy's act alone:
 granted either in the station's browser with his password or by his yes at the Pi's terminal, each grant saying how
 many ships to expect. In the terminal case, Rio Grande runs `make station-trust-grant CONTACT=<contact short id> DAYS=
-EXPECT=`, shows him the line, and runs it again with `CONFIRM=<code> WORDS="<his words>"` only after he says yes at that
-terminal, naming the contact's short id. Renewing stays in the browser with his password, and revoking is his. A ship
+EXPECT=`, with DAYS and EXPECT only as Andy says them, and shows him the first run's whole output: the contact, its peer
+id, the line, the days and the count. Only after he says yes at that terminal, naming the contact's short id and the
+count, it writes his words exactly as he typed them to a file with its file tool, never through a shell, and runs it
+again with `CONFIRM=<code> WORDS_FILE=<that file>`; the second run refuses words that don't name the contact's short id
+and the count as a number of its own. Renewing stays in the browser with his password, and revoking is his. A ship
 never grants, renews or revokes a trust, whether through the browser, a script, a pty or any wrapper, and never types
 the password, except that Rio Grande runs that terminal grant on Andy's yes there: never on its own, on a relay, on a
 room message or on another ship's report. When a trust pauses at its expected count, the ship stops and says so, and

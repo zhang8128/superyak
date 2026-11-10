@@ -568,22 +568,59 @@ def describe_trust_grant(view):
     pairing code is ever shown, and no password is asked for."""
     from .owner_trust import plain_name
     short = safe_line(view['contact_short'], 8)
-    ships = f"{view['expect']} ship" + ('' if view['expect'] == 1 else 's')
+    pairings = 'pairing' if view['expect'] == 1 else 'pairings'
     lines = [TRUST_GRANT_HEADER,
              f"Contact {short} (participant {safe_line(view['user_short'], 8)}): {safe_line(plain_name(view['label']))} "
              f"on peer {view['peer_id']}",
              f"Grant line: {safe_line(plain_name(view['line']['text']), 400)}",
-             f"For {view['days']} days, expecting up to {ships}."]
+             f"Days: {view['days']}. Expected count: {view['expect']} (the trust pauses after {view['expect']} {pairings})."]
     if view['granted']:
         until = datetime.fromtimestamp(view['until'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
         lines.append(f"Granted owner trust {view['grant_id'][:6]}, until {until}. Odo posts it in Ops at its next cycle, "
                      'with the line and the words.')
     else:
         admin = safe_line(view['admin'], 40)
-        lines.append(f"Nothing is granted yet. Confirm code: {view['confirm']}. Show {admin} this line; only once {admin} "
-                     f"says yes at this terminal, naming contact {short}, run it again with CONFIRM={view['confirm']} "
-                     f"WORDS=\"<{admin}'s words>\".")
+        lines.append(f"Nothing is granted yet. Confirm code: {view['confirm']}. DAYS and EXPECT are {admin}'s own numbers. "
+                     f"Show {admin} all of these lines: the contact, its peer, the grant line, the days and the count. Only "
+                     f"once {admin} says yes at this terminal, naming contact {short} and the count {view['expect']}, "
+                     f"write those words to a file exactly as typed and run it again with CONFIRM={view['confirm']} "
+                     'WORDS_FILE=<that file>.')
     return '\n'.join(lines)
+
+
+WORDS_FILE_MAX = 2000  # bytes: 500 characters of four UTF-8 bytes each, and no more
+
+
+def read_words_file(path):
+    """`--words-file` (machine trust spec, revision 6): the admin's words as Rio Grande wrote them with its file tool,
+    so no shell or make ever reads them. A regular file only, opened without following a link and without blocking
+    (a FIFO is refused, never waited on), of at most WORDS_FILE_MAX bytes, read as UTF-8, with one trailing newline
+    taken off and nothing else changed; the store's rules for words then apply. No refusal shows the file's content."""
+    import stat
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise Problem(400, 'The words file is missing') from None
+    except OSError:
+        raise Problem(400, 'The words file is not a regular file that can be read') from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Problem(400, 'The words file is not a regular file that can be read')
+        data = b''
+        while len(data) <= WORDS_FILE_MAX:
+            chunk = os.read(fd, WORDS_FILE_MAX + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        os.close(fd)
+    if len(data) > WORDS_FILE_MAX:
+        raise Problem(400, f'The words file is over {WORDS_FILE_MAX} bytes')
+    try:
+        words = data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise Problem(400, 'The words file is not UTF-8') from None
+    return words[:-2] if words.endswith('\r\n') else words[:-1] if words.endswith('\n') else words
 
 
 def describe_deliveries(rows):
@@ -710,7 +747,8 @@ def main(argv=None):
     trust_grant.add_argument('--days', type=int, required=True, help='Whole days, 1 to 90')
     trust_grant.add_argument('--expect', type=int, required=True, help='How many ships the person expects, 1 to 10000')
     trust_grant.add_argument('--confirm', help='The confirm code the first run showed (second run)')
-    trust_grant.add_argument('--words', help="The admin's yes as typed at this terminal (second run, with --confirm)")
+    trust_grant.add_argument('--words-file', type=Path, help="A file holding the admin's yes exactly as typed at this "
+                             'terminal, naming the contact and the count (second run, with --confirm)')
     trust_grant.add_argument('--as', dest='person', required=True, help='The admin granting')
     join = commands.add_parser('join-plan', help="Trusted local, read-only: every step of bringing another machine's "
                                'peer into the lessons room, done or left, and whose (make join-machine-plan)')
@@ -916,7 +954,8 @@ def main(argv=None):
                 print(describe_trust_list(listed_trusts(db, store.clock())))
         elif args.command == 'station-trust-grant':  # no password is asked for or read: the yes was said at this terminal
             print(describe_trust_grant(Store(args.data_dir, signing=False).station_trust_grant(
-                args.person, args.contact, days=args.days, expect=args.expect, confirm=args.confirm, words=args.words)))
+                args.person, args.contact, days=args.days, expect=args.expect, confirm=args.confirm,
+                words=None if args.words_file is None else read_words_file(args.words_file))))
         elif args.command == 'join-plan':
             import re
             from .join_plan import describe, plan

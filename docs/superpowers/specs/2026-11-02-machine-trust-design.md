@@ -51,26 +51,37 @@ person whose own account a person confirmed with a code.
      moderator (`make station-moderate`): "this should not be something on me. We've had problems where I grant
      approval and then you ask again and again."
    - **Two runs.** `make station-trust-grant CONTACT=<contact short id> DAYS= EXPECT=` names the owner contact by the
-     short id `station-lessons-add` takes (the start of its id, or of its participant id). The first run prints the
-     contact's label and full peer id, the exact grant line the browser shows (`grant_line`, by the station's clock),
-     the days, the expected count and an 8-hex confirm code bound to all of them, as `station-lessons-room` builds its
-     own; it grants nothing, and refuses what a grant would (no admin, an owner that isn't eligible, a live trust).
-     Rio Grande shows Andy the line. Only after he says yes at that terminal, naming the contact's short id, it runs
-     again with `CONFIRM=<code> WORDS="<his words>"`. A code that doesn't match the view as it reads now (another day
-     in the line, a renamed owner, other days or another count) refuses, as do missing words, an unknown contact and a
-     live trust, and nothing is granted. The command never asks for, reads or takes a password.
+     short id `station-lessons-add` takes (the start of its id, or of its participant id). DAYS and EXPECT are Andy's
+     numbers: Rio Grande runs them only as he says them, since the line names neither the count nor the days, and the
+     count is the bound item 4a makes his. The first run prints the contact's label and full peer id, the exact grant
+     line the browser shows (`grant_line`, by the station's clock), the days and the expected count, each plainly,
+     and an 8-hex confirm code bound to all of them and to that owner's latest `owner_trust` row, as
+     `station-lessons-room` builds its own; it grants nothing, and refuses what a grant would (no admin, an owner that
+     isn't eligible, a live trust). Rio Grande shows Andy that whole output: the contact, its peer id, the line, the
+     days and the count. Only after he says yes at that terminal, naming the contact's short id and the count, it
+     writes his words exactly as he typed them to a file with its file tool, never through a shell, and runs it again
+     with `CONFIRM=<code> WORDS_FILE=<that file>`. The command reads the file as UTF-8: a regular file of at most 2,000
+     bytes, with one trailing newline taken off; make never expands or exports any of the values. A code that doesn't
+     match the view as it reads now (another day in the line, a renamed owner, other days or another count, or any
+     grant, renewal or revocation of that owner since, so one code grants at most once) refuses, as do missing words,
+     words that don't name the contact's short id (8 or more characters of its id or of its participant's, as the
+     first run shows them) and the count as a number of its own, an unknown contact and a live trust, and nothing is
+     granted. A refusal names what is missing, never the words. The command never asks for, reads or takes a password.
    - **What is recorded:** the same `owner_trust` 'grant' row the browser writes, by the same checks, plus two columns
      only a terminal grant fills: `line`, the grant line he said yes to, and `words`, his yes as typed (1 to 500
-     characters; words shaped like a pairing code, or holding a live ship key, are refused, since the notice posts
-     them). At Odo's next cycle a one-off Ops notice says that an owner trust was granted at the Pi's terminal on his
-     yes, with no password, with the grant's short id, the line and his words; `make station-trust-list` marks the
-     trust as granted at the terminal.
+     characters). The notice posts the words, so they are refused when any character in them is not printable (a
+     control or format character, or any space but a plain one), or when the words as typed, as posted, or the NFKC
+     form of either holds a run shaped like a pairing code or a live ship key. At Odo's next cycle a one-off Ops notice
+     says that an owner trust was granted at the Pi's terminal on his yes, with no password, with the grant's short
+     id, the line, the count and, last, his words whole, each `"` in them posted as `'`; `make station-trust-list`
+     marks the trust as granted at the terminal.
    - **What doesn't change:** the browser grant, with its password; renewal, in the browser only; revocation, which
      needs no password; the expected count (item 4a), which the terminal requires as the browser does; and the cap of
      200 a day (item 4).
    - **The threat:** a ship could run the command without Andy's yes, the same exposure `station-approve` has. The
-     guard is the procedural rule in CLAUDE.md: his yes at that terminal, naming the contact's short id, never a relay
-     or a room message. The Ops notice makes every grant visible, and he revokes one he didn't say yes to.
+     guard is the procedural rule in CLAUDE.md: his yes at that terminal, naming the contact's short id and the count,
+     never a relay, a room message or another ship's report. The Ops notice makes every grant visible, and he revokes
+     one he didn't say yes to.
 3. **Pairing within it, a ship's act:** `pair-trusted --card <file> --assertion <file> --as <ship>`, with no
    terminal and no code. It refuses, and writes nothing, unless all of these hold:
    - the assertion verifies under the paired card's signing key, hasn't expired, and names that peer;
@@ -206,8 +217,11 @@ Each refusal writes nothing:
   again, up to its own count; a count of 0 or 10,001 is refused at a grant and at a renewal;
 - the pause notice posts once per window, and again after a renewal pauses;
 - a restore whose replaced file has the trust paused revokes it;
-- at the terminal (item 2a): a wrong or stale confirm code, other days or another count, empty or over-long words, an
-  unknown contact, a live trust and an admin who isn't one; and no password is read.
+- at the terminal (item 2a): a wrong or stale confirm code (a new day, a rename, a grant or revocation since),
+  other days or another count, empty, over-long or unprintable words, words that don't name the contact and the
+  count, a code or a live key in any form of the words, an unknown contact, a live trust and an admin who isn't one;
+  the documented make line, through a shell, keeps the words file's content as written and runs nothing in it; and
+  no password is read.
 
 Revoking holds every contact made under the trust (and withdraws their outbox rows), holding the owner holds its ships,
 a new trust re-pairs a held ship only with an assertion issued after the revocation, and a restore can't bring a revoked
