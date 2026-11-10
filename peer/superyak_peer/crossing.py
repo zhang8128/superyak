@@ -464,6 +464,8 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.connection.settimeout(10)
         raw = self.rfile.readline(LOCAL_REQUEST_MAX + 2)
+        if not raw:  # connected and closed, asking nothing, as `superyak-runtime status`'s probe does: no request
+            return
         if not raw.endswith(b'\n') or len(raw) > LOCAL_REQUEST_MAX + 1:
             reply = _no('BAD_REQUEST')
         else:

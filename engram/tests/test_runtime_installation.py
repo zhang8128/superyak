@@ -1073,14 +1073,15 @@ def test_status_says_when_a_remote_receivers_crossing_socket_is_down(tmp_path):
     _, launcher, memory_home, config, _ = _healthy_status_tree(tmp_path)
     settings, _ = _receiver_files(memory_home)
     short = tempfile.mkdtemp(prefix="c", dir="/tmp")  # a Unix socket's path has a short limit, and tmp_path can pass it
-    settings.write_text(ONLY_REMOTE.replace('"crossing.sock"', f'"{short}/c.sock"'))
-    status = json.loads(_run_launcher(launcher, config, "status").stdout)
-    assert status["receiver"]["crossing"]["connected"] is False
-    assert "crossing socket is unavailable" in status["errors"]
-    assert status["ok"] is False
-    assert status["receiver"]["remote_publishers"] == [{"peer": "c" * 12, "ship": "d" * 32, "context": "memory/technical"}]
     server = sockets.socket(sockets.AF_UNIX, sockets.SOCK_STREAM)
-    try:
+    try:  # from mkdtemp on, so a failing assert leaves no directory behind
+        settings.write_text(ONLY_REMOTE.replace('"crossing.sock"', f'"{short}/c.sock"'))
+        status = json.loads(_run_launcher(launcher, config, "status").stdout)
+        assert status["receiver"]["crossing"]["connected"] is False
+        assert "crossing socket is unavailable" in status["errors"]
+        assert status["ok"] is False
+        assert status["receiver"]["remote_publishers"] == [
+            {"peer": "c" * 12, "ship": "d" * 32, "context": "memory/technical"}]
         server.bind(f"{short}/c.sock")
         server.listen(1)
         status = json.loads(_run_launcher(launcher, config, "status").stdout)
