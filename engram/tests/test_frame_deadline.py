@@ -169,29 +169,57 @@ def test_nothing_left_raises_without_connecting(socket_dir, left):
     assert recorder.accepted == 0
 
 
-def test_two_concurrent_embeds_keep_their_own_deadlines(socket_dir):
+class TimeoutSpy(socket.socket):
+    """A socket that records each timeout it is given, by the thread that gives it."""
+    seen: dict = {}
+
+    def settimeout(self, value):
+        TimeoutSpy.seen.setdefault(threading.current_thread().name, []).append(value)
+        super().settimeout(value)
+
+
+def test_two_concurrent_embeds_keep_their_own_socket_timeouts(socket_dir, monkeypatch):
+    """Both threads compute their wait before either arms a socket (a barrier just before _call), so a wait kept on
+    the shared provider would be read back by the wrong thread. Each socket must get its own thread's wait."""
     recorder = Recorder(socket_dir / "e.sock")
     provider = RemoteEmbedProvider(str(socket_dir / "e.sock"))
     provider.embed(["warm"])  # the model check, once
+    real_call, barrier = provider._call, threading.Barrier(2)
+
+    def held(request, *args, **kwargs):
+        if request.get("op") == "embed":
+            barrier.wait(5)
+        return real_call(request, *args, **kwargs)
+
+    monkeypatch.setattr(provider, "_call", held)
+    TimeoutSpy.seen = {}
+    monkeypatch.setattr(socket, "socket", TimeoutSpy)
     try:
-        threads = [threading.Thread(target=provider.embed, args=([f"slow {ms}"],), kwargs={"remaining_ms": ms})
-                   for ms in (3_000, 60_000)]
+        threads = [threading.Thread(target=provider.embed, args=([f"slow {ms}"],), kwargs={"remaining_ms": ms},
+                                    name=f"t{ms}") for ms in (3_000, 60_000)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join(10)
     finally:
+        monkeypatch.undo()
         recorder.close()
     sent = {r["texts"][0]: r["remaining_ms"] for r in recorder.embeds() if r["texts"][0].startswith("slow")}
     assert 2_900 < sent["slow 3000"] <= 3_000 and 59_900 < sent["slow 60000"] <= 60_000
+    connect, wait = TimeoutSpy.seen["t3000"]
+    assert connect <= 3.0 and 2.9 < wait <= 3.0  # the 3 s asker's socket never waits the other's 60 s
+    connect, wait = TimeoutSpy.seen["t60000"]
+    assert connect == RemoteEmbedProvider.CONNECT_TIMEOUT and 59.9 < wait <= 60.0
     assert provider._response_timeout == RemoteEmbedProvider.RESPONSE_TIMEOUT  # nothing was written to the instance
 
 
 def test_a_timeout_is_an_expiry_only_when_the_askers_time_set_it(socket_dir):
     recorder = Recorder(socket_dir / "e.sock", answer=False)  # never answers
     try:
+        started = time.monotonic()
         with pytest.raises(EmbedderExpired):
-            RemoteEmbedProvider(str(socket_dir / "e.sock"), response_timeout=5).embed(["x"], remaining_ms=200)
+            RemoteEmbedProvider(str(socket_dir / "e.sock"), response_timeout=30).embed(["x"], remaining_ms=200)
+        assert time.monotonic() - started < 2  # the socket stopped waiting with the asker, not at its own 30 s
         with pytest.raises(EmbedderUnavailableError) as own:
             RemoteEmbedProvider(str(socket_dir / "e.sock"), response_timeout=0.2).embed(["x"], remaining_ms=5_000)
         assert not isinstance(own.value, EmbedderExpired)  # the publisher's own timeout: today's plain failure
@@ -201,11 +229,42 @@ def test_a_timeout_is_an_expiry_only_when_the_askers_time_set_it(socket_dir):
 
 # Sections 4 and 6: the publisher, end to end.
 
+class Side:
+    """Stands in for the ledger side, which holds a _frames slot until it closes; `wait` is how long building its
+    recall set takes."""
+
+    def __init__(self, closed, wait=0.0):
+        self.closed, self.wait = closed, wait
+
+    def recall_set(self):
+        time.sleep(self.wait)
+        return None
+
+    def close(self):
+        self.closed.append(True)
+
+
+def test_time_spent_before_the_embed_comes_off_its_wait(tmp_path, socket_dir, monkeypatch):
+    """What's left is counted from the frame's arrival: 150 ms building the recall set leaves the embed at most
+    remainingMs - 150."""
+    recorder = Recorder(socket_dir / "e.sock")
+    pub = build_publisher(tmp_path)
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(socket_dir / "e.sock")))
+    monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side([], wait=0.15), False))
+    try:
+        daemon.handle_frame(_recall(remainingMs=2_000))
+    finally:
+        recorder.close()
+    [embed] = recorder.embeds()
+    assert embed["remaining_ms"] <= 2_000 - 150
+
+
 def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_path, socket_dir, caplog, monkeypatch):
     """A batch holds the embedder's lane on a gate; a recall with 200 ms left queues behind it. Its deadline passes,
-    so it is answered PUBLISHER_UNAVAILABLE "the asker's deadline passed", logged at info with no traceback; it writes
-    no disclosure and its ledger side closes. When the lane frees, the service drops its query without embedding it,
-    and a live request still runs."""
+    so it is answered PUBLISHER_UNAVAILABLE "the asker's deadline passed" within moments, not at the publisher's own
+    30 s, logged at info with no traceback; it writes no disclosure and its ledger side closes. A live query queues
+    behind it before the lane frees; then the service drops the expired query without embedding it, and the live one
+    runs."""
     provider = UnitProvider(unit_size=1)
     provider.gate = threading.Event()
     path = socket_dir / "e.sock"
@@ -213,24 +272,18 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
     threading.Thread(target=server.serve_forever, daemon=True).start()
     caplog.set_level(logging.INFO)
     pub = build_publisher(tmp_path)
-    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(path)))
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(path), response_timeout=30))
     closed = []
-
-    class Side:  # stands in for the ledger side, which holds a _frames slot until it closes
-        def recall_set(self):
-            return None
-
-        def close(self):
-            closed.append(True)
-
-    monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side(), False))
+    monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side(closed), False))
     try:
         batch = threading.Thread(target=lambda: RemoteEmbedProvider(str(path)).embed(["a", "b"]), daemon=True)
         batch.start()
         assert provider.entered.wait(30)  # the batch's first unit holds the lane
         daemon.embeddings._verified = True  # its model check would wait behind nothing; keep the test about the embed
 
+        started = time.monotonic()
         answer = daemon.handle_frame(_recall(remainingMs=200))
+        assert time.monotonic() - started < 5  # the publisher stopped waiting with its asker
         assert answer["kind"] == "error"
         assert (answer["code"], answer["detail"]) == ("PUBLISHER_UNAVAILABLE", "the asker's deadline passed")
         assert closed == [True]
@@ -239,12 +292,22 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
         expiry = [r for r in caplog.records if r.getMessage().startswith("dropped an expired recall")]
         assert len(expiry) == 1 and expiry[0].levelno == logging.INFO and expiry[0].exc_info is None
 
-        time.sleep(0.1)  # by the service's own clock too
+        time.sleep(0.3)  # past its deadline by the service's own clock too, whatever its arrival stamp
+        live = []
+        follow = threading.Thread(target=lambda: live.append(
+            RemoteEmbedProvider(str(path)).embed(["live query"], prefix="search_query")), daemon=True)
+        follow.start()
+        deadline = time.monotonic() + 30
+        while server.lane.queries_waiting < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.lane.queries_waiting == 2  # the expired query and the live one, both behind the batch
+
         provider.gate.set()
         batch.join(30)
-        assert RemoteEmbedProvider(str(path)).embed(["after"])
+        follow.join(30)
+        assert live  # the live query behind the expired one ran
         embedded = [text for texts, _prefix in provider.calls for text in texts]
-        assert "shared: rivers need bridges" not in embedded and "after" in embedded
+        assert "shared: rivers need bridges" not in embedded and "live query" in embedded
         assert any(r.getMessage().startswith("dropped an expired query request") for r in caplog.records)
     finally:
         provider.gate.set()
