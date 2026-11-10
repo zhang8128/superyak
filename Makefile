@@ -83,7 +83,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-trust-grant station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-trust-grant station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove embedder-keep-loaded federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -128,6 +128,7 @@ help:
 	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
 	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"
 	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"
+	@echo "make embedder-keep-loaded  On the Pi: drop-in so the embedder keeps its model loaded and loads it at start (no restart)"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -610,6 +611,13 @@ station-units-remove:
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
 	systemctl --user daemon-reload
+
+# The Pi is always on and is the station: its embedder keeps the model loaded and loads it at start, so a lighthouse
+# crossing never waits for a reload. Does not restart the service.
+embedder-keep-loaded:
+	d="$(SYSTEMD_USER)/superyak-embedder.service.d" && install -d -m 755 "$$d" && install -m 644 scripts/superyak-embedder-keep-loaded.conf "$$d/keep-loaded.conf"
+	systemctl --user daemon-reload
+	@echo "The embedder will keep its model loaded and load it at start. It is not restarted: the next restart (the next merge sitting, or systemctl --user restart superyak-embedder) loads the model at start."
 
 # The data dir goes in a drop-in, a % doubled for systemd. The alert drop-in goes only where the station's alert unit is
 # installed, since its ExecStopPost writes into the station's database. Nothing is enabled: the deploy says which unit

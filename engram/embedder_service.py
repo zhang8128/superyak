@@ -6,7 +6,10 @@ simultaneous startup maintenance OOM-killed a 19 GB machine (2026-10-01).
 This service holds the one model and runs one ONNX run at a time, so the
 machine-wide embedding peak stays bounded however many agents connect. The
 model loads on the first request and is dropped after
-ENGRAM_EMBED_IDLE_SECONDS (default 300) without one.
+ENGRAM_EMBED_IDLE_SECONDS (default 300) without one. With 0 (keep the model) the
+service loads it once it is listening, in a background thread, so the first
+request after a restart finds it loaded (the Pi, 2026-11-09: a reload takes 2 s
+and a crossing's asker gives up after about 1 s).
 
 A large request is embedded unit by unit (the provider's own token-budget
 batches), and a waiting query (prefix search_query) takes the lane before a
@@ -25,7 +28,8 @@ Protocol: one request per connection over a Unix socket. Each message is a
 4-byte big-endian length followed by that many bytes of UTF-8 JSON.
 
     {"op": "info"}
-        -> {"ok": true, "model": ..., "dimension": 768}
+        -> {"ok": true, "model": ..., "dimension": 768, "loaded": true}
+           loaded: whether the model is in memory now (absent if the provider can't say)
     {"op": "embed", "texts": [...], "prefix": "search_document", "remaining_ms": 900}
         -> {"ok": true, "model": ..., "dimension": 768, "vectors": [[...], ...]}
         -> {"ok": false, "error": "expired"}  when remaining_ms ran out first
@@ -62,6 +66,7 @@ MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 MAX_TEXTS = 4096
 CHUNK_TEXTS = 16  # texts per lane hold for a provider that names no units of its own
 QUERY_PREFIX = "search_query"
+WARM_TEXT = "warm"
 EXPIRED = {"ok": False, "error": "expired"}
 _HEADER = struct.Struct(">I")
 
@@ -221,10 +226,11 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
     def respond(self, request: dict) -> dict:
         arrived = monotonic()
+        loaded = self._model_loaded()
         info = {"ok": True, "model": self.model_name, "dimension": self.provider.dimension()}
         op = request.get("op")
         if op == "info":
-            return info
+            return info if loaded is None else {**info, "loaded": loaded}
         if op != "embed":
             return {"ok": False, "error": f"unknown op: {op!r}"}
         texts = request.get("texts")
@@ -263,10 +269,40 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
                     vectors = self._embed_units(texts, prefix, units, ticket, deadline)
         except _Expired as expired:
             logger.info("dropped an expired %s request: %d of %d texts embedded, %.0f ms after it arrived "
-                        "with %.0f ms left", "query" if prefix == QUERY_PREFIX else "batch", expired.args[0],
-                        len(texts), (monotonic() - arrived) * 1000, remaining)
+                        "with %.0f ms left; model %s when it arrived",
+                        "query" if prefix == QUERY_PREFIX else "batch", expired.args[0],
+                        len(texts), (monotonic() - arrived) * 1000, remaining,
+                        {True: "loaded", False: "not loaded", None: "of unknown state"}[loaded])
             return dict(EXPIRED)
         return {**info, "vectors": vectors}
+
+    def _model_loaded(self) -> bool | None:
+        is_loaded = getattr(self.provider, "is_loaded", None)
+        return bool(is_loaded()) if callable(is_loaded) else None
+
+    def keeps_model(self) -> bool:
+        """True when the provider never drops its model (idle setting 0)."""
+        return getattr(self.provider, "_idle_seconds", None) == 0
+
+    def warm(self) -> bool:
+        """Load the model with one embed of a fixed short text, through the lane. Never raises."""
+        started = monotonic()
+        try:
+            with self.lane.hold(None):
+                self.provider.embed([WARM_TEXT], prefix=QUERY_PREFIX)
+        except Exception:
+            logger.exception("warming the model failed; it will load on the first request")
+            return False
+        logger.info("model loaded at start in %.1f s", monotonic() - started)
+        return True
+
+    def warm_in_background(self) -> threading.Thread | None:
+        """With the model kept, warm it on a thread so the socket answers at once. Otherwise do nothing."""
+        if not self.keeps_model():
+            return None
+        thread = threading.Thread(target=self.warm, name="embedder-warm", daemon=True)
+        thread.start()
+        return thread
 
     def _embed_units(self, texts: list[str], prefix: str, units: list[list[int]], ticket: int | None,
                      deadline: float | None = None) -> list:
@@ -293,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
 
     server = EmbedderServer(args.socket, NomicEmbedProvider())
     logger.info("serving %s on %s", server.model_name, args.socket)
+    server.warm_in_background()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
