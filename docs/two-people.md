@@ -100,8 +100,9 @@ tailscale serve --tcp 7437 tcp://127.0.0.1:7437
 - **Alex:** **Chats**, **New chat**, a title, tick Sam, **Create chat**. Write something and click **Send
   message**. It says `Waiting for pull` until Sam's home fetches it, within about a minute.
 - **Sam:** Sam's home fetches about once a minute; **Check delivery now** on **Connections** fetches at once. Open the
-  room under **Chats** and reply. An open room shows a new message by itself within a few seconds of it reaching that
-  laptop's home, so Alex, with the room open, sees the reply once Sam's home sends it.
+  room under **Chats** and reply. An open room shows a new message by itself once it reaches that laptop's home: on
+  Alex's laptop within about 5 seconds, and on Sam's, where the room is a received one, within about half a minute. So
+  Alex, with the room open, sees the reply a few seconds after Sam's home sends it.
 
 **9. Alex, then Sam: a document.** A document here is a **layer**: a title, text and attached files. You turn on a saved
 version, called a release, for the people you name. It doesn't go into a room, so tell Sam in the room.
@@ -125,8 +126,10 @@ version, called a release, for the people you name. It doesn't go into a room, s
 ## What hasn't been checked
 
 - **`card` and `pair` weren't run for this page,** because pairing is a person's to do. They, and every button named
-  here, were checked by reading the code, its tests and `--help`. On 2026-11-10 every button, label and number here was
-  checked again against the code on main (124a2343) and the trains waiting to land.
+  here, were checked by reading the code, its tests and `--help`. On 2026-11-10 every button and label was checked
+  again against main's code (124a2343, then 728b0f64), and each number against the code it names. A reader then found
+  step 8's "within a few seconds" true only of Alex's room (a received room is reread every 30 s or more, `app.js:686`),
+  and step 8 now gives each side's.
 - **Run on one machine, with no real message:** `init`, and `make home HOME_ARGS=--sync` beside `federation-listen`,
   with the delivery mode set by hand. `--sync` stands in for `peer/README.md`'s `federate` and runs the same loop.
   `peer/tests/test_federate.py` exchanges a room, a reply and a release on one machine; it was read, not run.
