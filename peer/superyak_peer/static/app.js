@@ -2098,13 +2098,16 @@ function showNewestMessage() {
 // A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest, where
 // the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there before,
 // would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press isn't the
-// press before the next one. A key press (detail 0) never is, nor a press that began on the control it ends on, nor one at
-// another spot or 400 ms after the move: that's someone aiming at what they now see. A press aimed elsewhere that the room
-// draws under just before it lands isn't told from one meant for the new room; the acts that can't be undone are to ask
-// first (board fix:room-acts-ask-first, not done yet). Each click takes the press it began with, and a press that ends in
-// no click (a right or middle button, a long press's menu, a touch a scroll took) leaves none, so a click with no press of
-// its own, as an accessibility tool may send, is measured against none. A press is timed when it happened, not when its
-// handler ran, so one that landed while a long room drew counts as begun before.
+// press before the next one. A press that landed while the room drew is handled only after, on what replaced what it
+// landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on the control
+// it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control (the same room's
+// Send, or the same action on the same thing, though a redraw replaced its node): that's someone aiming at what they now
+// see. A press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room,
+// and nor is a redraw in place moving the next button under a second press; the acts that can't be undone are to ask
+// first (board fix:room-acts-ask-first, not done yet). Each click takes the first finger's or the mouse's primary press
+// it began with, and a press a long press's menu or a scroll ended leaves none. A mouse press held while the room redraws
+// ends in no click and stays, but the clicks that come with no press of their own (a key's, element.click()) have
+// detail 0 and are never measured.
 const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
 let roomMovedAt = -Infinity, pressDown = null, lastPress = null;
 function movingTheRoom(scroll) {
@@ -2112,19 +2115,32 @@ function movingTheRoom(scroll) {
   scroll();
   if (window.scrollY !== before) roomMovedAt = performance.now();
 }
+// What a control is across the redraws that replace its node: the box's Send by its room, a button by its action and
+// what that acts on.
+function controlKey(control) {
+  if (!control) return null;
+  if (control.matches('#message-form button[type="submit"]')) return `send:${control.form?.dataset.room}`;
+  const action = control.dataset?.action;
+  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? ""}` : null;
+}
 function pressTheRoomMoved(event, press, before) {
   if (event.detail === 0 || !press) return false;
   const control = event.target.closest?.(PRESSABLE);
   if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
-  if (press.at < roomMovedAt) return control !== press.control;  // begun on what was here before
-  return press.at - roomMovedAt < MOVED_PRESS_MS && !!before && before.at < roomMovedAt
-    && Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
+  if (press.at < roomMovedAt) return press.seen > roomMovedAt || control !== press.control;  // begun on what was here before
+  if (press.at - roomMovedAt >= MOVED_PRESS_MS || !before || before.at >= roomMovedAt) return false;
+  const key = controlKey(control);
+  if (key && key === controlKey(before.control)) return false;
+  return Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
 }
 document.addEventListener("pointerdown", (event) => {
-  pressDown = event.button !== 0 ? null
-    : { x: event.clientX, y: event.clientY, at: event.timeStamp, control: event.target.closest?.(PRESSABLE) || null };
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it
+  pressDown = event.button !== 0 ? null : {
+    x: event.clientX, y: event.clientY, at: event.timeStamp, seen: performance.now(), control: event.target.closest?.(PRESSABLE) || null,
+  };
 }, true);
-for (const type of ["pointercancel", "contextmenu", "auxclick"]) document.addEventListener(type, () => { pressDown = null; }, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
+document.addEventListener("contextmenu", () => { pressDown = null; }, true);  // a long press's menu: no click comes
 document.addEventListener("click", (event) => {
   const press = pressDown, before = lastPress;
   pressDown = null;
