@@ -38,12 +38,13 @@ class StartError(ValueError):
 
 
 def _shipped(root: Path, path: Path) -> bool:
-    """Whether a path under the static directory is a file the app ships: a regular file whose real path is inside the
-    directory, whose type is one TYPES names (a backup's '.js~' is none), and with no part of its path starting with a
-    dot (an editor's swap file). So the table holds what the app ships and nothing else, and a new kind of file is a
+    """Whether a path under the static directory is a file the app ships: a regular file reached through no link at
+    all (its real path is the path itself, so neither it nor a directory on its way is a symlink; the app ships none),
+    whose type is one TYPES names (a backup's '.js~' is none), and with no part of its path starting with a dot (an
+    editor's swap file). So the table holds what the app ships and nothing else, and a new kind of file is a
     deliberate edit to TYPES."""
     relative = path.relative_to(root)
-    return (path.is_file() and path.resolve().is_relative_to(root) and path.suffix in TYPES
+    return (path.is_file() and path.resolve() == root / relative and path.suffix in TYPES
             and not any(part.startswith('.') for part in relative.parts))
 
 

@@ -99,8 +99,15 @@ def test_only_the_files_the_app_ships_are_in_the_table(tmp_path, static):
     (static / 'app.js~').write_text('backup')
     (static / 'notes.txt').write_text('notes')
     (static / 'module.mjs').write_text('export {}')
+    (static / '.inner-secret').write_text('not for the internet')
+    (static / 'todot.js').symlink_to(static / '.inner-secret')  # a shipped name, pointing at an excluded file
+    (static / 'alias.js').symlink_to(static / 'app.js')  # even to a shipped file: the app ships no link
+    (tmp_path / 'linked').mkdir()
+    (tmp_path / 'linked' / 'secret.js').write_text('not for the internet')
+    (static / 'linkdir').symlink_to(tmp_path / 'linked', target_is_directory=True)
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], static_dir=static)
-    for name in ('leak.js', 'leak.txt', '.app.js.swp', '.hidden.js', 'app.js~', 'notes.txt', 'module.mjs'):
+    for name in ('leak.js', 'leak.txt', '.app.js.swp', '.hidden.js', 'app.js~', 'notes.txt', 'module.mjs',
+                 'todot.js', 'alias.js', 'linkdir/secret.js', '.inner-secret'):
         assert name not in app.state.assets
         for client in (('127.0.0.1', 50000), ('203.0.113.5', 1)):
             status, _, body = call(app, f'/assets/{name}'.encode(), client=client)
