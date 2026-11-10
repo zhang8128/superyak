@@ -73,8 +73,9 @@ Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied
   in the publisher's log waiting past its asker.
 - T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
   C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
-  oracle. Next, phase 2's two Musts: global generator names in the digest, and generation-tagged ids. Measure: phase 1's
-  gate (the same answers on every corpus, benchmarks within 20%), then phase 2's fitted exponents.
+  oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
+  from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
+  1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
 - T4 (goal 4): the mark's true words (train-1113) and the two-laptop guide. Measure: someone new to Superyak walks the
   guide with Andy, from install to a first message. Voice: GitHub issues as the queue (#3), once Andy has tried
   replies read back.
