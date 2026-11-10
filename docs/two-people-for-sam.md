@@ -7,11 +7,12 @@ Please tell him what was unclear, or where you stopped: that's what this first w
 
 Superyak gives each of you a "home": a small program on your own laptop that keeps your chats and documents in files
 there, not on a company's server. Your home and Andy's talk to each other over Tailscale (below), encrypted, sometimes
-relayed through Tailscale's servers. When you're done you'll have a chat
-room with him, with one message from you in it.
+relayed through Tailscale's servers. By step 8 you'll have a chat room with him, with one message from you in it; step
+9, a shared document, comes after.
 
 It isn't end-to-end encrypted: what you write sits in plain files on both laptops. Please keep patient data and anything
-you'd mind leaving on Andy's laptop out of it.
+you'd mind leaving on Andy's laptop out of it. A room with an AI agent in it says so above its messages, and that
+agent's AI company reads what's written there; the walk's room has only you two.
 
 ## What it takes
 
@@ -32,9 +33,12 @@ that trust each other, without opening anything on your home network.
 - **Make a personal Tailscale account**, not a university or work one. Accepting a share needs you to be the admin of your
   own Tailscale network, and a managed account usually won't let you.
 - **Andy sends you an invite link** that shares one machine: his laptop. Accepting it lets your laptop reach that one
-  laptop; a shared machine "cannot start connections" to yours (Tailscale's sharing page). Andy does see your Tailscale
-  account's email address and picture, and your laptop's Tailscale address when it connects, and his home keeps your
-  card, with your name.
+  laptop; a shared machine "cannot start connections" to yours (Tailscale's sharing page). What Andy does learn:
+  - your Tailscale account's email address and picture;
+  - the internet address your laptop connects from, which can show roughly where you are, and your laptop's
+    Tailscale address, and possibly its name;
+  - when your home last fetched from his, which shows when yours was running;
+  - your card, with your name, which his home keeps.
 - **Then you test it:** `tailscale ping` with the address he sends you. `pong` means it works, even if it says `via DERP`.
   If you're on a campus network and it fails, tell him: we have no other tested route yet.
 
@@ -49,8 +53,9 @@ a code that travels the way the card did proves nothing.
 
 Stop your home any time with Ctrl-C in its window. To leave for good:
 - Delete the `superyak` folder, which holds your home.
-- uv's cache and the Python it downloaded stay behind, about 280 MB: `uv cache clean` and `uv python uninstall --all`
-  remove them. Uninstall uv and Tailscale too if you like.
+- uv's cache and the Python it downloaded stay behind, about 280 MB. If you didn't use uv before Superyak,
+  `uv cache clean` and `uv python uninstall --all` remove them; if you did, they would also remove your other
+  projects' Pythons and cache, so leave them. Uninstall uv and Tailscale too if you like.
 - Ask Andy to revoke his share (his admin console's Machines page, the laptop's Share option, Revoke invite), or sign out
   of Tailscale on your laptop.
 - What you sent stays in Andy's home, on his laptop, unless he deletes it.

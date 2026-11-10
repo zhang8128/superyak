@@ -38,7 +38,8 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
-Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each tied to an overarching goal:
+Refreshed 2026-11-08, after an outside read found the 11-03 lines stale, and R3 and R6 on 2026-11-10. Each tied to an
+overarching goal:
 - R1 (goal 1): the first blind lessons crossing. The lessons-room adds landed on 11-04 (b12b8452). Adding Tardis's
   account needs Andy's word at Rio Grande's terminal, by CLAUDE.md's lessons-room steps; then Tardis lays its lessons
   and each side runs the task committed by hash. Measure: the receipt and transcript of each blind session, and its
@@ -48,7 +49,7 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   (`log_outcome`), never recalls made for the count. Measure: used recalls per day on each ship, then E1′'s one run once
   a log holds a few hundred, read against its pre-registered outcomes.
 - R3 (goal 1): the n-category store, stage 3 of the plan on issue #2 (spec `2026-11-07-ncat-store.md`), on Tardis's
-  kernel. It has both ships' yes at 2ab883e1, a local branch on the Pi with its spec, and lands with the kernel on Andy's word. Nothing more is built on it
+  kernel. It landed with the kernel in train-1111 (9bf56122): `engram/ncat_store.py`. Nothing more is built on it
   until R2 shows real use. Measure: on the Pi, 10,000 recall rows rebuilt in under 10 s and a 200-road session in
   under 5 ms, under 256 MB (0.9 s, 3.7 ms and 66 MB at 2ab883e1), and the store holding real sessions.
 - R4 (goals 2 and 5): the chats people use. The send fix and room updates (train-1107f, 1c585762) landed with train-1109
@@ -60,10 +61,11 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   something moves, never a reflect that only says nothing did. Measure: read-only runs on mentions a writable session
   already answered, toward none.
 - R6 (goal 4, added 2026-11-10 after the outside read found goal 4 had no line of Rio Grande's): the first real walk
-  of `docs/two-people.md` costs Andy 15 minutes and a new person 30. Rio Grande owns the walk; Tardis keeps the page
-  true at every train (T4). Steps 1 and 2 aren't where a person stops: from a fresh clone with an empty uv cache they
-  took 6 s on Tardis, with 281 MB downloaded (3f905815). The stop is reading and step 3, a personal Tailscale account
-  and the share, so a one-page note for the person playing Sam spends its words there, and on the one thing Andy types.
+  of `docs/two-people.md`, budgeted at 15 minutes of Andy's and 30 of a new person's, not yet timed. Rio Grande owns the
+  walk; Tardis keeps the page true at every train (T4). Steps 1 and 2 aren't where a person stops: from a fresh clone
+  with an empty uv cache they took 6 s on Tardis, with 281 MB downloaded (all hands 3f905815). The stop is reading and
+  step 3, a personal Tailscale account and the share, so a one-page note for the person playing Sam
+  (`docs/two-people-for-sam.md`) spends its words there, and on the codes the two of them read aloud and type.
   Measure: someone who isn't a ship pairs with Andy and sends one message.
 - Parked, not dropped: memory that follows the ship (spec approved; waits on R2), and owner trust's restore follow-ups
   (on the board).
