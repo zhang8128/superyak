@@ -7848,7 +7848,8 @@ def test_remove_and_clear_my_mark_ask_first_in_place(browser_peer, viewport):
             expect(clear).to_be_visible()
             double_click_apart(page, clear)
             page.wait_for_timeout(400)
-            expect(mark_ask).to_have_accessible_description(re.compile("a connected app that reads all of a member's rooms can read this one"))
+            expect(mark_ask).to_have_accessible_description(re.compile(
+                "a member's connected app that reads all their rooms, or was given this one before it was marked, can read it"))
             assert read_room(page, x).get("cloud")
             mark_ask.get_by_role("button", name="Cancel").click()
             expect(mark_ask).to_have_count(0)

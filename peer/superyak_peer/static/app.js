@@ -1486,7 +1486,7 @@ function cloudControl(room, replaced) {
     const ask = roomAskFor(room, "clear");
     const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
       : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
-      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a connected app that reads all of a member's rooms can read this one from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
+      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
         "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
     return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
