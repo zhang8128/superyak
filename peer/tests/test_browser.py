@@ -3045,7 +3045,7 @@ def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
         expect(list_under(control, "It can't:")).to_have_text(limits)
         expect(control).not_to_contain_text("another home, who may be")  # nobody on another home here
         page.get_by_role("button", name="Mark this room").click()
-        expect(page.locator(".notice", has_text="is kept away from ships and connected apps on this home.")).to_be_visible()
+        expect(page.locator(".notice", has_text="To be marked is kept away from ships and connected apps on this home.")).to_be_visible()
         expect(control).to_contain_text("You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.")
         expect(control).to_contain_text("another member's mark would still hold")
         expect(control).not_to_contain_text("earlier rooms")  # this one has none
@@ -3062,9 +3062,9 @@ def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
             other.get_by_role("button", name="Add my mark too").click()
             expect(other.locator(".split-detail").get_by_text("Marked · 2 marks (one yours)", exact=True)).to_be_visible()
             other.get_by_role("button", name="Clear my mark").click()
-            expect(other.locator(".notice", has_text="is cleared. Other members' marks still stand.")).to_be_visible()
+            expect(other.locator(".notice", has_text="Your mark on To be marked is cleared. Other members' marks still stand.")).to_be_visible()
         page.get_by_role("button", name="Clear my mark").click()
-        expect(page.locator(".notice", has_text="is cleared. This room has no marks now.")).to_be_visible()
+        expect(page.locator(".notice", has_text="Your mark on To be marked is cleared. This room has no marks now.")).to_be_visible()
 
 
 def test_adding_my_mark_still_offers_the_earlier_rooms_and_says_so_only_if_marked(browser_peer):
