@@ -4906,6 +4906,177 @@ def test_a_file_uploaded_after_a_refresh_doesnt_hide_a_real_conflict(browser_pee
             assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
 
 
+def the_page_layer(page, field):
+    return page.evaluate(f"state.home.layers.find((item) => item.id === state.selectedLayerId).{field}")
+
+
+@pytest.mark.parametrize("trigger", ["revoke", "refresh"])
+def test_a_first_keystroke_while_a_refresh_is_out_still_meets_the_other_tab(browser_peer, trigger):
+    """No edit yet, and another tab saves. A refresh gives the page the newest draft before it redraws the form, so for one round
+    trip the form shows the old words under the page's new version. Words typed then were begun from the old version, and their
+    Save meets the other tab's (train-1116 reader's S1)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", "public": True})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+            revisions = f"**/api/layers/{layer['id']}/revisions"
+            held = []
+            page.route(revisions, lambda route: held.append(route))  # the refresh's route load: the form isn't redrawn yet
+            if trigger == "revoke":
+                page.get_by_role("button", name="Turn off public link").click()
+            else:
+                page.evaluate("() => { refresh(); }")
+            until(page, lambda: held, "the refresh's route load never started")
+            assert the_page_layer(page, "body") == "The other tab's words"  # the page has the newest draft
+            expect(body).to_have_value("Released words")  # the form doesn't, yet
+            body.press("End")
+            body.press_sequentially(", and mine")
+            for route in held:
+                route.continue_()
+            page.unroute(revisions)
+            expect(body).to_have_value("Released words, and mine")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
+@pytest.mark.parametrize("route", ["public", "person", "space"])
+def test_a_revoke_whose_refresh_fails_doesnt_bring_back_who_was_turned_off(browser_peer, route):
+    """The revoke lands and narrows the draft, and the refresh after it fails. The editor is drawn from the page's copy, which must
+    have narrowed with its version, so the next Save keeps them off (train-1116 reader's S2)."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    space = store.create_space(patient, "Care", "care-circle", [family])
+    audience = {"public": {"public": True}, "person": {"audience_users": [family]}, "space": {"audience_spaces": [space["id"]]}}[route]
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **audience})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            page.route("**/api/home", lambda held: held.abort())
+            page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care|Turn off public link)")).first.click()
+            until(page, lambda: store.get_layer(patient, layer["id"])["version"] == layer["version"] + 1, "the revoke never landed")
+            expect(page.locator(".notice").first).to_contain_text("Connection lost")
+            page.unroute("**/api/home")
+            box = {"public": '[name="public"]', "person": f'[name="audience-user"][value="{family}"]', "space": f'[name="audience-space"][value="{space["id"]}"]'}[route]
+            expect(page.locator(f"#layer-form {box}")).not_to_be_checked()
+            body.fill("Released words, and a typo fixed")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "typo" in store.get_layer(patient, layer["id"])["body"], "the Save didn't go through")
+    saved = store.get_layer(patient, layer["id"])
+    assert saved["public"] is False and saved["audience_users"] == [] and saved["audience_spaces"] == []
+
+
+@pytest.mark.parametrize("route", ["public", "person"])
+def test_words_first_typed_before_the_redraw_after_a_revoke_save_with_no_false_conflict(browser_peer, route):
+    """No edit, and the revoke's refresh hasn't redrawn the form: it was drawn from the version before the revoke. The revoke
+    moved that version too, so words typed now save with no banner, and keep them off (train-1116 re-check's R-N1)."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    audience = {"public": True} if route == "public" else {"audience_users": [family]}
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **audience})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            redraw = []
+            page.route("**/api/home", lambda held: redraw.append(held))
+            page.get_by_role("button", name="Turn off public link" if route == "public" else re.compile("^Stop sharing directly with Sam")).first.click()
+            until(page, lambda: redraw, "the refresh never started")
+            body.press("End")
+            body.press_sequentially(", and mine")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            banner = page.get_by_role("button", name=re.compile("Save my text"))
+            until(page, lambda: banner.count() or "and mine" in store.get_layer(patient, layer["id"])["body"], "nothing happened")
+            assert banner.count() == 0
+            for held in redraw:
+                held.continue_()
+            page.unroute("**/api/home")
+    saved = store.get_layer(patient, layer["id"])
+    assert "and mine" in saved["body"] and saved["public"] is False and saved["audience_users"] == []
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_a_layer_saved_as_the_person_signs_out_says_nothing_to_the_next(browser_peer, next_signs_in):
+    """The Save's answer comes after the person signed out: nothing flashes, and no sign-in-again asks the next person
+    (train-1116 reader's N2)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            held = held_routes(page, re.compile(rf"/api/layers/{layer['id']}$"))
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+            assert not page.evaluate("state.reauth")
+
+
+@pytest.mark.parametrize("how", ["save", "save-my-text"])
+def test_a_save_that_landed_answering_after_the_next_person_is_in_says_nothing(browser_peer, how):
+    """The PUT reaches the station and saves; only its answer waits until the next person has signed in. Nothing of it flashes
+    for them (train-1116 re-check's R-N2: the guards after each PUT)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            if how == "save-my-text":
+                store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+                page.get_by_role("button", name=re.compile("^Save")).first.click()
+                expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            held = []
+
+            def answer_later(route):
+                if route.request.method == "PUT" and not held:
+                    held.append((route, route.fetch()))  # the station has it; only the answer waits
+                else:
+                    route.continue_()
+            page.route(re.compile(rf"/api/layers/{layer['id']}$"), answer_later)
+            page.get_by_role("button", name=re.compile("Save my text" if how == "save-my-text" else "^Save")).first.click()
+            until(page, lambda: held, "the PUT never left")
+            assert "more not saved" in store.get_layer(patient, layer["id"])["body"]  # it landed
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("organizer")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            route, response = held[0]
+            route.fulfill(response=response)
+            page.wait_for_timeout(500)
+            assert page.evaluate("state.flash") is None
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_saving_my_text_as_the_person_signs_out_says_nothing_to_the_next(browser_peer, next_signs_in):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            held = held_routes(page, re.compile(rf"/api/layers/{layer['id']}$"))  # the latest draft's read
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+    assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
 def test_two_saves_in_a_row_arent_a_conflict(browser_peer):
     base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
