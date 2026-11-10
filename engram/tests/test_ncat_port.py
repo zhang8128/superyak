@@ -192,7 +192,8 @@ def _runtime(name):
 
 def test_the_differential_run_is_clean_under_asan_and_ubsan(tmp_path):
     """The same comparison with both kernels built under AddressSanitizer and UndefinedBehaviorSanitizer, in a process of
-    its own with the runtimes preloaded (Python links neither, nor libstdc++)."""
+    its own with the runtimes preloaded (Python links neither, nor libstdc++): the random calls, raw shapes that are mostly
+    not molecules, and failed allocations, so the refusal paths are checked for memory too."""
     asan, stdcxx = _runtime('libasan.so'), _runtime('libstdc++.so')
     if not asan or not stdcxx:
         pytest.skip('no AddressSanitizer runtime here')
@@ -204,6 +205,21 @@ def test_the_differential_run_is_clean_under_asan_and_ubsan(tmp_path):
               f"range(1000, 1008))):\n"
               "    for seed in seeds:\n"
               "        pair = Pair(load(c), load(cpp)); drive(pair, seed, 300); pair.close()\n"
+              f"from tests.test_ncat_port import hooked, raw_shape; import ctypes, pathlib, random\n"
+              f"tmp = pathlib.Path({str(tmp_path)!r}); flags = {flags!r}\n"
+              "hc, hcpp = hooked(tmp, 'c', *flags), hooked(tmp, 'cpp', *flags); rng = random.Random(3)\n"
+              "ctxs = (hc.ncat_new(), hcpp.ncat_new())\n"
+              "for _ in range(3000):\n"
+              "    w, n = raw_shape(rng); buf = (ctypes.c_int32 * len(w))(*w)\n"
+              "    got = [lib.ncat_test_canon(x, buf, len(w), n) for lib, x in zip((hc, hcpp), ctxs)]\n"
+              "    assert got[0] == got[1], (w, got)\n"
+              "for n in range(0, 900, 3):\n"
+              "    for lib in (hc, hcpp): lib.ncat_test_fail(n, n % 2)\n"
+              "    cx = (hc.ncat_new(), hcpp.ncat_new())\n"
+              "    assert bool(cx[0]) == bool(cx[1])\n"
+              "    if cx[0]:\n"
+              "        p = Pair.__new__(Pair); p.libs, p.ctxs, p.calls = (hc, hcpp), cx, 0; drive(p, 5, 40); p.close()\n"
+              "    for lib in (hc, hcpp): lib.ncat_test_fail(-1, 0)\n"
               "print('clean')\n")
     env = {**os.environ, 'LD_PRELOAD': f'{asan}:{stdcxx}', 'ASAN_OPTIONS': 'detect_leaks=0',
            'UBSAN_OPTIONS': 'halt_on_error=1:print_stacktrace=1'}
@@ -220,4 +236,86 @@ def test_both_kernels_keep_the_real_cap_and_codes_by_default():
         assert '#ifndef NCAT_MASK_MAX' in text and '#define NCAT_MASK_MAX ((1u << 30) - 1)' in text
     codes = [re.search(r'enum \{ NCAT_ENOTCOMPOSABLE = -1,.*?\};', text, re.S).group(0) for text in texts]
     assert codes[0] == codes[1]
+
+
+def hooked(tmp_path, kind, *extra):
+    lib = load(build(tmp_path, kind, '-DNCAT_TEST_HOOKS', *extra))
+    lib.ncat_test_fail.argtypes = [ctypes.c_int64, ctypes.c_int32]
+    lib.ncat_test_allocs.restype = ctypes.c_int64
+    lib.ncat_test_canon.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_int32, ctypes.c_int32]
+    lib.ncat_test_canon.restype = ctypes.c_int32
+    return lib
+
+
+@pytest.fixture(scope='module')
+def hooks(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp('hooks')
+    return hooked(tmp, 'c'), hooked(tmp, 'cpp')
+
+
+def raw_shape(rng):
+    """A random graded shape in the words' format, faces drawn from the dimension below: mostly not a molecule, so the
+    traversal's refusals (-8) are met, the paths no shape built through the public calls reaches."""
+    dims = sorted(rng.choice((0, 0, 1, 1, 1, 2, 2, 3)) for _ in range(rng.randint(1, 9)))
+    rng.shuffle(dims)
+    words = []
+    for d in dims:
+        below = [i for i, x in enumerate(dims) if x == d - 1]
+        ins = rng.sample(below, min(len(below), rng.randint(0, 2))) if below else []
+        outs = rng.sample(below, min(len(below), rng.randint(0, 2))) if below else []
+        words += [d, rng.randrange(3), len(ins), len(outs), *ins, *outs]
+    return words, len(dims)
+
+
+def test_the_traversal_refuses_raw_shapes_as_the_c_kernel_does(hooks):
+    c, cpp = hooks
+    rng, codes = random.Random(7), set()
+    ctxs = (c.ncat_new(), cpp.ncat_new())
+    for _ in range(5_000):
+        words, n = raw_shape(rng)
+        buf = (ctypes.c_int32 * len(words))(*words)
+        got = [lib.ncat_test_canon(ctx, buf, len(words), n) for lib, ctx in zip((c, cpp), ctxs)]
+        assert got[0] == got[1], (words, got)
+        if got[0] >= 0:
+            assert [list_words(lib, ctx, got[0]) for lib, ctx in zip((c, cpp), ctxs)] == [list_words(c, ctxs[0], got[0])] * 2
+        codes.add(got[0] if got[0] < 0 else 'ok')
+    for lib, ctx in zip((c, cpp), ctxs):
+        lib.ncat_free(ctx)
+    assert {'ok', -8} <= codes, codes
+
+
+def list_words(lib, ctx, cell):
+    return words(lib, ctx, cell)
+
+
+@pytest.mark.parametrize('permanent', [0, 1])
+def test_a_failed_allocation_is_refused_alike_wherever_it_falls(hooks, permanent):
+    """The same workload with its nth allocation failed, for every n it makes (once, then from that one on): both kernels
+    count allocations in the same order, so each failure lands at the same point, and every answer must still agree."""
+    c, cpp = hooks
+    for lib in (c, cpp):
+        lib.ncat_test_fail(-1, 0)
+    before = c.ncat_test_allocs()
+    pair = Pair(c, cpp)
+    drive(pair, 5, 40)
+    pair.close()
+    total = c.ncat_test_allocs() - before
+    assert total > 100
+    nomem = 0
+    for n in range(total):
+        for lib in (c, cpp):
+            lib.ncat_test_fail(n, permanent)
+        ctxs = (c.ncat_new(), cpp.ncat_new())
+        assert bool(ctxs[0]) == bool(ctxs[1]), n
+        if not ctxs[0]:
+            continue
+        pair = Pair.__new__(Pair)
+        pair.libs, pair.ctxs, pair.calls = (c, cpp), ctxs, 0
+        try:
+            nomem += -6 in drive(pair, 5, 40)
+        finally:
+            pair.close()
+            for lib in (c, cpp):
+                lib.ncat_test_fail(-1, 0)
+    assert nomem > total // 2  # most failures surface as -6 somewhere; the rest land where an answer needs none
 

@@ -44,10 +44,26 @@ namespace {
 
 template <class T> using Buf = std::unique_ptr<T[]>;
 
-/* A buffer of n, uninitialized as malloc's is, or null when it can't be had: never a throw. */
-template <class T> Buf<T> take(size_t n) { return Buf<T>(new (std::nothrow) T[n]); }
+#ifdef NCAT_TEST_HOOKS  /* test builds only (tests/test_ncat_port.py): fail the nth allocation, once or from then on */
+int64_t test_fail_after = -1, test_allocs = 0;
+int test_permanent = 0;
+bool test_fails()
+{
+    test_allocs++;
+    if (test_fail_after < 0) return false;
+    if (test_fail_after == 0) { if (!test_permanent) test_fail_after = -1; return true; }
+    test_fail_after--;
+    return false;
+}
+#else
+inline bool test_fails() { return false; }
+#endif
+
+/* A buffer of n, uninitialized as malloc's is, or null when it can't be had: never a throw. Each is one allocation where
+ * the C kernel made one, in the same order, so a test build can fail the same one in both. */
+template <class T> Buf<T> take(size_t n) { return test_fails() ? nullptr : Buf<T>(new (std::nothrow) T[n]); }
 /* A buffer of n, zeroed as calloc's is. */
-template <class T> Buf<T> zeroed(size_t n) { return Buf<T>(new (std::nothrow) T[n]()); }
+template <class T> Buf<T> zeroed(size_t n) { return test_fails() ? nullptr : Buf<T>(new (std::nothrow) T[n]()); }
 
 struct Cell {
     int32_t formal, shape, n, nwords;
@@ -162,7 +178,7 @@ int32_t intern(Ctx *c, int32_t formal, int32_t shape, int32_t n, Buf<int32_t> wo
     if (c->ncells == c->cap_cells) {
         if (c->cap_cells > INT32_MAX / 2) return NCAT_ETOOBIG;
         int32_t cap = c->cap_cells * 2;
-        Buf<Cell> nc(new (std::nothrow) Cell[(size_t)cap]);
+        Buf<Cell> nc = take<Cell>((size_t)cap);
         if (!nc) return NCAT_ENOMEM;
         std::move(c->cells.get(), c->cells.get() + c->ncells, nc.get());
         c->cells = std::move(nc);
@@ -815,10 +831,10 @@ extern "C" {
 Ctx *ncat_new(void) noexcept
 {
     try {
-        std::unique_ptr<Ctx> c(new (std::nothrow) Ctx());
+        std::unique_ptr<Ctx> c(test_fails() ? nullptr : new (std::nothrow) Ctx());
         if (!c) return nullptr;
         c->cap_cells = 64;
-        c->cells.reset(new (std::nothrow) Cell[64]);
+        c->cells = take<Cell>(64);
         c->table = take<int32_t>(256);
         c->table_mask = 255;
         c->memo = take<MemoSlot>(256);
@@ -880,6 +896,44 @@ int32_t ncat_gen(Ctx *c, int32_t s, int32_t t) noexcept { return guarded([&] { m
 
 #ifdef NCAT_TEST_THROW
 void ncat_test_throw_next(int32_t kind) noexcept { throw_next = kind; }
+#endif
+
+#ifdef NCAT_TEST_HOOKS
+void ncat_test_fail(int64_t after, int32_t permanent) noexcept { test_fail_after = after; test_permanent = permanent; }
+int64_t ncat_test_allocs(void) noexcept { return test_allocs; }
+
+/* A raw shape, possibly malformed, canonicalised as a composite's would be: n elements in the words' format, faces by index. */
+int32_t ncat_test_canon(Ctx *c, const int32_t *w, int32_t nwords, int32_t n) noexcept
+{
+    return guarded([&] {
+        c->work = 0;
+        if (n < 1 || nwords < 4 * n) return (int32_t)NCAT_EARG;
+        Host h;
+        if (host_init(&h, n, nwords - 4 * n) < 0) return (int32_t)NCAT_ENOMEM;
+        int32_t p = 0, top = 0;
+        for (int32_t e = 0; e < n; e++) {
+            int32_t d = p + 4 <= nwords ? w[p] : -1, nin = p + 4 <= nwords ? w[p + 2] : -1, nout = p + 4 <= nwords ? w[p + 3] : -1;
+            if (d < 0 || d > NCAT_MAX_DIM || nin < 0 || nout < 0 || p + 4 + nin + nout > nwords) return (int32_t)NCAT_EARG;
+            h.dim[e] = d; h.label[e] = w[p + 1];
+            if (d > top) top = d;
+            h.in_at[e] = h.pool_len; h.in_n[e] = nin;
+            for (int32_t j = 0; j < nin + nout; j++) {
+                int32_t f = w[p + 4 + j];
+                if (f < 0 || f >= n) return (int32_t)NCAT_EARG;
+                if (j == nin) h.out_at[e] = h.pool_len;
+                h.pool[h.pool_len++] = f;
+            }
+            if (nout == 0) h.out_at[e] = h.pool_len;
+            h.out_n[e] = nout;
+            p += 4 + nin + nout;
+        }
+        h.n = n;
+        Walk wk{c};
+        int32_t id = walk_ready(&wk, &h, top);
+        if (id >= 0) { host_all(&wk); id = canon(&wk, n, top, nullptr); }
+        return id;
+    });
+}
 #endif
 
 }  // extern "C"

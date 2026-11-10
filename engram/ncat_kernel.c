@@ -20,6 +20,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef NCAT_TEST_HOOKS  /* test builds only (tests/test_ncat_port.py): fail the nth allocation, once or from then on */
+static int64_t test_fail_after = -1, test_allocs = 0;
+static int test_permanent = 0;
+static int test_fails(void)
+{
+    test_allocs++;
+    if (test_fail_after < 0) return 0;
+    if (test_fail_after == 0) { if (!test_permanent) test_fail_after = -1; return 1; }
+    test_fail_after--;
+    return 0;
+}
+static void *test_malloc(size_t n) { return test_fails() ? NULL : malloc(n); }
+static void *test_calloc(size_t a, size_t b) { return test_fails() ? NULL : calloc(a, b); }
+static void *test_realloc(void *q, size_t n) { return test_fails() ? NULL : realloc(q, n); }
+#define malloc test_malloc
+#define calloc test_calloc
+#define realloc test_realloc
+#endif
+
 #define NCAT_MAX_DIM 15
 enum { NCAT_ENOTCOMPOSABLE = -1, NCAT_EDEGENERATE = -2, NCAT_ENOTPARALLEL = -3, NCAT_ENOTROUND = -4,
        NCAT_ENOTLOOPFREE = -5, NCAT_ENOMEM = -6, NCAT_EARG = -7, NCAT_EWALK = -8, NCAT_ETOOBIG = -9, NCAT_EBUDGET = -10,
@@ -822,3 +841,41 @@ static int32_t gen_in(Ctx *c, int32_t s, int32_t t)
 int32_t ncat_boundary(Ctx *c, int32_t a, int32_t k, int32_t sign) { c->work = 0; return boundary_in(c, a, k, sign); }
 int32_t ncat_compose(Ctx *c, int32_t a, int32_t b, int32_t k) { c->work = 0; return compose_in(c, a, b, k); }
 int32_t ncat_gen(Ctx *c, int32_t s, int32_t t) { c->work = 0; return gen_in(c, s, t); }
+
+#ifdef NCAT_TEST_HOOKS
+void ncat_test_fail(int64_t after, int32_t permanent) { test_fail_after = after; test_permanent = permanent; }
+int64_t ncat_test_allocs(void) { return test_allocs; }
+
+/* A raw shape, possibly malformed, canonicalised as a composite's would be: n elements in the words' format, faces by index. */
+int32_t ncat_test_canon(Ctx *c, const int32_t *w, int32_t nwords, int32_t n)
+{
+    c->work = 0;
+    if (n < 1 || nwords < 4 * n) return NCAT_EARG;
+    Host h;
+    if (host_init(&h, n, nwords - 4 * n) < 0) return NCAT_ENOMEM;
+    int32_t p = 0, top = 0;
+    for (int32_t e = 0; e < n; e++) {
+        int32_t d = p + 4 <= nwords ? w[p] : -1, nin = p + 4 <= nwords ? w[p + 2] : -1, nout = p + 4 <= nwords ? w[p + 3] : -1;
+        if (d < 0 || d > NCAT_MAX_DIM || nin < 0 || nout < 0 || p + 4 + nin + nout > nwords) { host_free(&h); return NCAT_EARG; }
+        h.dim[e] = d; h.label[e] = w[p + 1];
+        if (d > top) top = d;
+        h.in_at[e] = h.pool_len; h.in_n[e] = nin;
+        for (int32_t j = 0; j < nin + nout; j++) {
+            int32_t f = w[p + 4 + j];
+            if (f < 0 || f >= n) { host_free(&h); return NCAT_EARG; }
+            if (j == nin) { h.out_at[e] = h.pool_len; }
+            h.pool[h.pool_len++] = f;
+        }
+        if (nout == 0) h.out_at[e] = h.pool_len;
+        h.out_n[e] = nout;
+        p += 4 + nin + nout;
+    }
+    h.n = n;
+    Walk wk = { .c = c };
+    int32_t id = walk_ready(&wk, &h, top);
+    if (id >= 0) { host_all(&wk); id = canon(&wk, n, top, NULL); }
+    host_free(&h);
+    return id;
+}
+#endif
+
