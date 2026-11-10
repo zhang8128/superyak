@@ -29,7 +29,10 @@ behind (the Pi, 2026-11-10: 47 abandoned lessons embeds held it at 390% CPU).
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
 
 Protocol: one request per connection over a Unix socket. Each message is a
-4-byte big-endian length followed by that many bytes of UTF-8 JSON.
+4-byte big-endian length followed by that many bytes of UTF-8 JSON. A client
+sends its request, reads the answer, then closes. It never half-closes
+(shutdown(SHUT_WR), Go's CloseWrite, nc -N): the service reads a closed end
+as an asker that has gone, and drops an embed.
 
     {"op": "info"}
         -> {"ok": true, "model": ..., "dimension": 768, "loaded": true}
@@ -37,6 +40,7 @@ Protocol: one request per connection over a Unix socket. Each message is a
     {"op": "embed", "texts": [...], "prefix": "search_document", "remaining_ms": 900}
         -> {"ok": true, "model": ..., "dimension": 768, "vectors": [[...], ...]}
         -> {"ok": false, "error": "expired"}  when remaining_ms ran out first
+        -> {"ok": false, "error": "gone"}  when its asker had closed its end before a unit's turn
     remaining_ms is optional: a finite, non-negative number of milliseconds.
     any failure
         -> {"ok": false, "error": "..."}
@@ -74,7 +78,8 @@ CHUNK_TEXTS = 16  # texts per lane hold for a provider that names no units of it
 QUERY_PREFIX = "search_query"
 WARM_TEXT = "warm"
 EXPIRED = {"ok": False, "error": "expired"}
-GONE = {"ok": False, "error": "gone"}  # nobody reads it: sending it fails, and the handler says so
+# To an asker that closed its end: only a client that half-closed, which the protocol forbids, reads it.
+GONE = {"ok": False, "error": "gone"}
 _HEADER = struct.Struct(">I")
 
 
@@ -93,8 +98,10 @@ def asker_gone(sock) -> bool:
     sends more or half-closes. So after the read the socket stays quiet until
     its asker closes it, and then it polls readable and a peek gives no bytes.
     Bytes waiting are a client breaking the protocol, not a gone one: its
-    request runs. The poll comes first, so the peek never waits, even on a
-    socket with a timeout."""
+    request runs. A half-close reads as gone, which is why the protocol forbids
+    it (on Linux it polls POLLIN with POLLRDHUP, but the Mac may give POLLHUP).
+    The poll comes first, so the peek never waits, even on a socket with a
+    timeout. Only a connection error reads as gone; any other error doesn't."""
     try:
         poller = select.poll()
         poller.register(sock, select.POLLIN)
@@ -103,8 +110,10 @@ def asker_gone(sock) -> bool:
         return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
     except BlockingIOError:
         return False
-    except OSError:  # reset by its asker
+    except ConnectionError:  # reset by its asker
         return True
+    except OSError:
+        return False
 
 
 def recv_message(sock) -> dict:
@@ -242,6 +251,9 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
     """Connections are accepted concurrently; inference runs one unit at a time."""
 
     daemon_threads = True
+    # socketserver's listen backlog is 5. A client that sets a timeout before it connects fails at once when the backlog
+    # is full, so a burst of hooks read as "unavailable" (the Pi, 2026-11-10: 2 of 47 connects failed with EAGAIN).
+    request_queue_size = 128
 
     def __init__(self, socket_path: Path, provider) -> None:
         self.provider = provider
@@ -286,6 +298,8 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         deadline = None if remaining is None else arrived + remaining / 1000
         if not texts:
             return {**info, "vectors": []}
+        if gone is not None and gone():  # before the units, which tokenize every text outside the lane
+            return self._gone_answer(prefix, 0, len(texts), arrived)
         units_of = getattr(self.provider, "embed_units", None)
         if callable(units_of):
             units = [list(unit) for unit in units_of(texts, prefix=prefix)]  # iterators would be spent by the check
@@ -308,11 +322,13 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
                         {True: "loaded", False: "not loaded", None: "of unknown state"}[loaded])
             return dict(EXPIRED)
         except _Gone as left:
-            logger.info("dropped a %s request whose asker had gone: %d of %d texts embedded, %.0f ms after it arrived",
-                        "query" if prefix == QUERY_PREFIX else "batch", left.args[0], len(texts),
-                        (monotonic() - arrived) * 1000)
-            return dict(GONE)
+            return self._gone_answer(prefix, left.args[0], len(texts), arrived)
         return {**info, "vectors": vectors}
+
+    def _gone_answer(self, prefix: str, done: int, total: int, arrived: float) -> dict:
+        logger.info("dropped a %s request whose asker had gone: %d of %d texts embedded, %.0f ms after it arrived",
+                    "query" if prefix == QUERY_PREFIX else "batch", done, total, (monotonic() - arrived) * 1000)
+        return dict(GONE)
 
     def _model_loaded(self) -> bool | None:
         is_loaded = getattr(self.provider, "is_loaded", None)

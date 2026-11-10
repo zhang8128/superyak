@@ -172,3 +172,82 @@ def test_respond_with_no_gone_check_runs_as_before():
     server.provider, server.model_name, server.lane = UnitProvider(), UnitProvider.MODEL_NAME, embedder_service._Lane()
     answer = server.respond({"op": "embed", "texts": ["a"]})
     assert answer["ok"] is True and answer["vectors"] == [_vector("a")]
+
+
+class _RecvFails:
+    """A socket whose poll reads readable (bytes are waiting) but whose peek raises: an error that isn't a lost asker."""
+
+    def __init__(self, sock, error):
+        self._sock, self._error = sock, error
+
+    def fileno(self):
+        return self._sock.fileno()
+
+    def recv(self, *args):
+        raise self._error
+
+
+def test_asker_gone_reads_only_a_connection_error_as_gone():
+    ours, theirs = socket.socketpair()
+    try:
+        theirs.sendall(b"x")  # readable, so the peek runs
+        assert asker_gone(_RecvFails(ours, TimeoutError("timed out"))) is False
+        assert asker_gone(_RecvFails(ours, OSError(22, "Invalid argument"))) is False
+        assert asker_gone(_RecvFails(ours, ConnectionResetError(104, "reset"))) is True
+    finally:
+        ours.close()
+        theirs.close()
+
+
+def test_a_half_close_reads_as_gone_which_is_why_the_protocol_forbids_it():
+    ours, theirs = socket.socketpair()
+    try:
+        theirs.shutdown(socket.SHUT_WR)
+        assert asker_gone(ours) is True
+        assert "never half-closes" in embedder_service.__doc__ and '"error": "gone"' in embedder_service.__doc__
+    finally:
+        ours.close()
+        theirs.close()
+
+
+class _CountsUnits(UnitProvider):
+    def __init__(self):
+        super().__init__(unit_size=1)
+        self.unit_calls = 0
+
+    def embed_units(self, texts, *, prefix):
+        self.unit_calls += 1
+        return super().embed_units(texts, prefix=prefix)
+
+
+def test_a_request_whose_asker_has_gone_before_its_units_tokenizes_nothing(caplog):
+    caplog.set_level(logging.INFO, logger="engram.embedder")
+    server = EmbedderServer.__new__(EmbedderServer)
+    server.provider, server.model_name, server.lane = _CountsUnits(), UnitProvider.MODEL_NAME, embedder_service._Lane()
+    answer = server.respond({"op": "embed", "texts": ["a", "b", "c"]}, gone=lambda: True)
+    assert answer == {"ok": False, "error": "gone"}
+    assert server.provider.unit_calls == 0 and server.provider.calls == []
+    assert "batch request whose asker had gone: 0 of 3" in _dropped(caplog)[0]
+
+
+def test_a_burst_of_askers_all_get_in_before_the_server_accepts_one(socket_dir):
+    provider = UnitProvider(unit_size=1)
+    path = socket_dir / "e.sock"
+    server = EmbedderServer(path, provider)  # listening, but nothing accepts yet: a burst outruns the accept loop
+    clients, serving = [], False
+    try:
+        for _ in range(47):
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5)  # as RemoteEmbedProvider and lessons.py do, so a full backlog fails at once
+            clients.append(client)
+            client.connect(str(path))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        serving = True
+        send_message(clients[-1], {"op": "info"})
+        assert recv_message(clients[-1])["ok"] is True
+    finally:
+        for client in clients:
+            client.close()
+        if serving:  # shutdown() waits for a serve_forever that never started
+            server.shutdown()
+        server.server_close()
