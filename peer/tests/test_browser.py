@@ -6634,7 +6634,8 @@ def _click(page, selector):
 
 def _press(page, selector, at):
     """A press at `at` (x, y, or the "center" of what the selector finds) and its click there, in one step of the page;
-    returns how long after the page last moved the press began, in ms."""
+    returns how long after the page last moved the press began, in ms. Both go to what the selector finds, wherever it
+    is on the page: `at` is only the numbers the guard compares, not where a finger would hit."""
     return page.evaluate("""([selector, at]) => { const node = document.querySelector(selector), box = node.getBoundingClientRect();
         const [x, y] = at === "center" ? [box.x + box.width / 2, box.y + box.height / 2] : at;
         const down = new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, clientX: x, clientY: y, button: 0 });

@@ -2095,20 +2095,20 @@ function showNewestMessage() {
   if (place) movingTheRoom(() => window.scrollTo(0, window.scrollY + Math.min(place.end, place.start)));
 }
 
-// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest, where
-// the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there before,
-// would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press isn't the
-// press before the next one. A press that landed while the room drew is handled only after, on what replaced what it
-// landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on the control
-// it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on the same
-// drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its node): that's
-// someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it lands isn't told from one meant for the new room,
-// and nor is a redraw in place moving the next button under a second press; the acts that can't be undone are to ask
-// first (board fix:room-acts-ask-first, not done yet). Each click takes the first finger's or the mouse's primary press
-// it began with, and a press a long press's menu or a scroll ended leaves none. Each kind of pointer has its own first
-// one, so a palm's touch cancelled during a pen's press clears the pen's: that only ever lets a click through. A mouse press held while the room redraws
-// ends in no click and stays, but the clicks that come with no press of their own (a key's, element.click()) have
-// detail 0 and are never measured.
+// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest,
+// where the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there
+// before, would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press
+// isn't the press before the next one. A press that landed while the room drew is handled only after, on what replaced
+// what it landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on
+// the control it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on
+// the same drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its
+// node): that's someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it
+// lands isn't told from one meant for the new room, and nor is a redraw in place moving the next button under a second
+// press; the acts that can't be undone are to ask first (board fix:room-acts-ask-first, not done yet). Each click takes
+// the first finger's or the mouse's primary press it began with, and a press a long press's menu or a scroll ended
+// leaves none. Each kind of pointer has its own first one, so a palm's touch cancelled during a pen's press clears the
+// pen's: that only ever lets a click through. A mouse press held while the room redraws ends in no click and stays, but
+// the clicks that come with no press of their own (a key's, element.click()) have detail 0 and are never measured.
 const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
 let roomMovedAt = -Infinity, roomDrawnAt = -Infinity, pressDown = null, lastPress = null;
 function movingTheRoom(scroll) {
