@@ -1,7 +1,7 @@
 # A recall frame says how long its asker waits
 
 Tardis, 2026-11-10, revision 2, after a fresh Pi reviewer's verdict on revision 1 (c92aa5ec): approve with five
-shoulds and four nits, all taken here. This is the second half of the embedder split agreed with Rio Grande on
+shoulds and four nits, all taken here. Its re-check approved revision 2 (443bb3c4); its two new nits are folded in. This is the second half of the embedder split agreed with Rio Grande on
 2026-11-09. The first half is on main: the shared embedder drops a request whose caller gave up (`remaining_ms`,
 train-1110, 25533151). Its client half, which sends its own response timeout, is `tardis/embed-remaining-ms` and
 rides train-1112. This spec carries an asker's deadline down to the publisher's embed. Code is cited at main 298472cf.
@@ -79,10 +79,13 @@ before it encodes it.
   its model in process and has no queue to wait in, so `retrieve` doesn't pass the keyword to it.
 - **The expiry has its own exception:** `EmbedderExpired`, a subclass of `EmbedderUnavailableError`. The client raises
   it in three cases: when it has nothing left before connecting, when the service answers `expired`, and when its own
-  socket times out on a call bounded by an asker's deadline. A caller that catches `EmbedderUnavailableError` today
-  still catches it.
+  socket times out on a call whose minimum came from the asker. When the publisher's own timeout was the smaller, a
+  socket timeout is today's plain unavailable failure, not an expiry. A caller that catches `EmbedderUnavailableError`
+  today still catches it.
 - **How an expired recall is answered:**
-  - The daemon catches `EmbedderExpired` by type, around `_rank_recall`, before the generic `except Exception`.
+  - The daemon catches `EmbedderExpired` by type in `handle_frame`, beside `FrameError` and `_LedgerBusyFrame` and
+    before the generic `except Exception`, so the frame aborts. Catching it inside `_recall` and carrying on would
+    call `record_disclosure` and return an allow with no candidates, which this spec forbids.
   - It logs one info line naming the expiry and its numbers (what was left at arrival, and the time taken), with no
     traceback.
   - It answers `PUBLISHER_UNAVAILABLE`, the code an embedder failure gets today, with the detail text "the asker's
