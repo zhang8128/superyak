@@ -4,6 +4,9 @@ Tardis, 2026-11-10, a draft for a fresh reviewer. It settles the two Musts in Ta
 (`defiant/ncat-cpp-plan` d12b2609, read in afbb0744) before phase 2 builds on them. Phase 1, the C++20 port behind the
 same interface, is `tardis/ncat-cpp`. Nothing here changes phase 1's calls or answers.
 
+**When it's built:** only once the store holds real sessions from both ships, a few hundred used recalls (Tardis's T3,
+after Rio Grande's doubt in 10acd21c). This is written now so the reviewer can settle it before anything depends on it.
+
 ## 1. Why
 
 Phase 2 makes two changes that the kernel's identities don't survive as they are:
