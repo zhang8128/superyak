@@ -482,7 +482,7 @@ def test_words_cannot_write_a_sentence_that_reads_as_the_stations(paired):
     """The words come last, and each '"' in them is posted as "'", so they can't close the quote and add a sentence of
     the station's own after it (the review's N1, P4)."""
     station, _, owner, _ = paired
-    words = f'yes {short_of(owner)}, 1 ship". Owner trust 000000 was revoked in the browser at once. Words: "ok'
+    words = f'yes {short_of(owner)}, 1 ship". Owner trust 000000 was revoked in the browser right away. Words: "ok'
     confirm(paired, first(paired)['confirm'], words=words)
     [notice] = terminal_notices(station)
     assert notice['text'].count('"') == 2 and notice['text'].endswith(f"words: \"{words.replace(chr(34), chr(39))}\"")
@@ -810,7 +810,7 @@ def test_a_no_beside_a_yes_still_refuses(paired, words):
     refused(400, 'hold a no', confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
 
 
-@pytest.mark.parametrize('words', ['{short}, 1 ship', '{short} for 1 ship, 90 days', 'maybe {short}, 1 ship'])
+@pytest.mark.parametrize('words', ['{short}, 1 ship', '{short} for 1 ship, 90 days', 'hmm, {short}, 1 ship'])
 def test_words_without_a_yes_never_grant(paired, words):
     """The re-check 4's S7, the sounder half: the words must hold a yes, from a short list, so an endless list of nos
     isn't what stands between a misread answer and a trust. Mutation: the yes requirement removed."""
@@ -828,3 +828,131 @@ def test_a_yes_word_or_a_yes_idiom_grants(paired, words):
     """The re-check 4's N15: a yes idiom that carries a no-word ("no problem", "why not") is a yes."""
     owner = paired[2]
     assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']
+
+
+# The words follow-ups (the re-check 3's N13 and N14, 4's and 5's S8 and N17): what the yes-word rule and the number
+# reader still let through.
+
+S8_NOS = [  # the re-check 5's S8, each with the contact's short id and the count
+    'I didnt say yes to {short}, 1 ship', 'I wouldnt approve {short} 1 ship yet', 'I havent approved {short}, 1 ship',
+    'shouldnt grant {short} 1 ship', 'yes, it isnt {short}, 1 ship', 'ok, it wasnt {short} 1 ship',
+    'yes, they arent ready, {short} 1 ship', 'yes, they werent, {short} 1 ship', 'yes, it doesnt matter, {short} 1 ship',
+    'ok, it hasnt, {short} 1 ship', 'ok, it hadnt, {short} 1 ship', 'yes, couldnt, {short} 1 ship',
+    'yes, you mustnt, {short} 1 ship', 'yes, you neednt, {short} 1 ship',
+    'ok, hang on, {short} 1 ship', 'ok, hold up on {short}, 1 ship', 'yes... nevermind, {short} 1 ship',
+    'yes, never mind, {short} 1 ship', 'yes, nvm, {short} 1 ship', 'ok scratch that, {short} 1 ship',
+    'sure, but let me think about {short}, 1 ship', 'yes if Serenity agrees, {short} 1 ship',
+    'ok but tomorrow, {short} 1 ship', 'yes, after I check, {short} 1 ship', 'yes unless Tardis objects, {short} 1 ship',
+    'yes, until I check, {short} 1 ship', 'yes, once Serenity is up, {short} 1 ship', 'maybe, yes, {short} 1 ship',
+    'yes, hardly, {short} 1 ship', 'yea or nay, {short} 1 ship', "I'd rather you didn't approve {short} 1 ship",
+    'absolutely not, {short} 1 ship', 'yes, on second thought no, {short} 1 ship', 'no way, yes {short} 1 ship',
+    'yes, {short}, 1 ship, until 2099-01-01',              # an end date other than the line's is a deferral
+]
+
+
+@pytest.mark.parametrize('words', S8_NOS)
+def test_a_listed_yes_word_inside_a_no_still_refuses(paired, words):
+    """The re-check 5's S8: the contractions written without an apostrophe (each named), the retractions, conditions
+    and deferrals are nos, whatever yes-word sits beside them. Mutation: the round-5 additions to NOT_A_YES dropped."""
+    station, _, owner, _ = paired
+    filled = words.format(short=short_of(owner))
+    error = refused(400, 'hold a no', confirm, paired, first(paired)['confirm'], words=filled)
+    assert filled not in error.message and rows(station) == []
+
+
+@pytest.mark.parametrize('words', [
+    'ok to grant {short}, 1 ship?', 'should I approve {short}, 1 ship?', 'yes? {short} 1 ship', 'grant {short}, 1 ship？',
+    'yes {short}, 1 ship ¿de acuerdo', 'approve {short} 1 ship?? sure',
+])
+def test_a_question_never_grants(paired, words):
+    """Any question mark but "why not?"'s refuses (the re-check 5's S8), the fullwidth one included through NFKC."""
+    station, _, owner, _ = paired
+    refused(400, 'ask a question', confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
+    assert rows(station) == []
+
+
+@pytest.mark.parametrize('words', [
+    'yes, grant {short}, count 1 ship',                       # Tardis's test
+    'why not? {short}, 1 ship', 'Why not?! {short}, 1 ship',
+    'yes, {short}, 1 ship, until 2027-04-15',                  # "until" with the line's own end date echoes the line
+    'yes, I want {short} granted, count 1 ship, agent of mine',  # "want", "grant", "count" and "agent" end in nt
+])
+def test_a_plain_yes_still_grants_beside_the_new_nos(paired, words):
+    owner = paired[2]
+    assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']
+
+
+@pytest.mark.parametrize('words', [
+    'fine, {short} 1 ship', 'alright, {short} 1 ship', 'all right {short} 1 ship', 'sounds good, {short} 1 ship',
+    'absolutely, {short} 1 ship', 'of course, {short} 1 ship', 'please do {short} 1 ship', 'go for it, {short} 1 ship',
+    'allow {short}, 1 ship', 'accept {short} 1 ship', 'yea {short} 1 ship', 'lgtm {short} 1 ship', 'o.k. {short} 1 ship',
+    'O.K {short} 1 ship', '\U0001f44c {short} 1 ship', '\U0001f44c\U0001f3fd {short} 1 ship', '✔ {short} 1 ship',
+    '✔️ {short} 1 ship',
+])
+def test_more_yes_words_grant(paired, words):
+    """The re-check 5's N17: the natural yeses that lacked a listed yes-word."""
+    owner = paired[2]
+    assert confirm(paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))['granted']
+
+
+@pytest.mark.parametrize('words', [
+    'fine, but not yet, {short} 1 ship', 'absolutely not {short} 1 ship', 'go for it later, {short} 1 ship',
+    'sounds good, wait, {short} 1 ship', 'of course not, {short} 1 ship', 'please do not grant {short} 1 ship',
+    'lgtm, hold off, {short} 1 ship', '\U0001f44c but tomorrow, {short} 1 ship', 'alright, maybe, {short} 1 ship',
+    '✔️ if Tardis agrees, {short} 1 ship', 'allow it once, {short} 1 ship', 'o.k., nvm, {short} 1 ship',
+])
+def test_a_no_beside_a_new_yes_word_still_refuses(paired, words):
+    owner = paired[2]
+    refused(400, 'hold a no', confirm, paired, first(paired)['confirm'], words=words.format(short=short_of(owner)))
+
+
+@pytest.mark.parametrize('words, expect', [
+    ('yes {short}, one or two ships', 2), ('yes {short}, one to two ships', 2), ('yes {short}, 1 or two ships', 2),
+    ('yes {short}, between 1 and 2 ships', 2), ('yes {short}, 1 and 2 ships', 2), ('yes {short}, 1 through 2 ships', 2),
+    ('yes {short}, 1 thru 2 ships', 2), ('yes {short}, 1 ~ 2 ships', 2), ('yes {short}, 1~2 ships', 2),
+    ('yes {short}, ~2 ships', 2), ('yes {short}, one through two ships', 2), ('yes {short}, one ~ two ships', 2),
+    ('yes {short}, -one ship', 1), ('yes {short}, .5 ships', 5), ('yes {short}, 1 ship, 90 and 91 days', 1),
+])
+def test_ranges_in_number_words_or_joined_by_and_through_or_tilde_refuse(paired, words, expect):
+    """The re-check 3's N13: a range written with number words, or joined by "and", "through" or "~", refuses, the sign
+    and range checks running before number-word matches too; and N14: ".5 ships" is a fraction. Mutation: the range
+    check skipped for number words."""
+    station, _, owner, _ = paired
+    filled = words.format(short=short_of(owner))
+    refused(400, SHAPE, confirm, paired, first(paired, expect=expect)['confirm'], words=filled, expect=expect)
+    assert rows(station) == []
+
+
+@pytest.mark.parametrize('words, expect, word', [
+    ('yes {short}, 1 ship now and 10 more ships later', 1, None),   # "later" is a no anyway
+    ('yes {short}, 1 ship, and 10 more ships', 1, COUNT_DIFFER),
+    ('yes {short}, 1 ship, and ten more ships', 1, COUNT_DIFFER),
+    ('yes {short}, 1 ship for 30 calendar days', 1, DAYS_DIFFER),
+    ('yes {short}, 2 tardis machines', 1, COUNT_DIFFER),
+])
+def test_a_number_with_a_word_before_its_noun_is_that_nouns(paired, words, expect, word):
+    """The re-check 3's N14: "10 more ships", "ten more ships" and "30 calendar days" are read as the noun's number, so
+    they are checked against the grant. Mutation: no word allowed between a number and its noun."""
+    station, _, owner, _ = paired
+    filled = words.format(short=short_of(owner))
+    refused(400, word or 'hold a no', confirm, paired, first(paired, expect=expect)['confirm'], words=filled,
+            expect=expect)
+    assert rows(station) == []
+
+
+@pytest.mark.parametrize('words, expect', [
+    ('yes {short}, 1 more ship', 1), ('yes {short}, one more ship', 1), ('yes {short}, 2 tardis machines', 2),
+    ('yes {short}, 1 ship for 90 calendar days', 1),
+])
+def test_a_number_with_a_word_before_its_noun_grants_when_it_is_the_grants(paired, words, expect):
+    owner = paired[2]
+    filled = words.format(short=short_of(owner))
+    assert confirm(paired, first(paired, expect=expect)['confirm'], words=filled, expect=expect)['granted']
+
+
+def test_the_null_notehead_is_invisible_too(paired):
+    """The re-check 3's N14: U+1D159 MUSICAL SYMBOL NULL NOTEHEAD, printable and drawn as nothing, joins INVISIBLE."""
+    station, _, owner, card = paired
+    words = f"{yes_for(owner)} {split(pairing_code(card), chr(0x1D159))}"
+    refused(400, 'control, format or invisible', confirm, paired, first(paired)['confirm'], words=words)
+    assert rows(station) == []
