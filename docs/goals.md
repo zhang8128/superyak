@@ -76,9 +76,9 @@ Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied
   oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
   from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
   1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
-- T4 (goal 4): the mark's true words (train-1113) and the two-laptop guide. Measure: someone new to Superyak walks the
-  guide with Andy, from install to a first message. Voice: GitHub issues as the queue (#3), once Andy has tried
-  replies read back.
+- T4 (goal 4): the mark's true words (train-1113), and `two-people.md` kept true at every train (each label and number
+  checked against main), for R6's first real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3),
+  once Andy has tried replies read back. Measure: the guide's checks after each train, and R6's walk getting through.
 - T5 (goals 2 and 5): CI, partner reads from the bundle itself, and goal 2's before-and-after measures for the downloads
   build (train-1115).
 - Done since 11-08: the embedder client half (train-1112), the kernel on main (train-1111), the sheaf standard's outside
