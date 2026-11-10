@@ -87,6 +87,34 @@ def test_only_an_exact_key_is_served(app, raw):
     assert status == 404 and cache_controls(headers) == [b'no-store']
 
 
+def test_only_the_files_the_app_ships_are_in_the_table(tmp_path, static):
+    """A link to a file outside the directory, an editor's leftovers and a type TYPES doesn't name are never read or
+    served; the files the app ships are unchanged."""
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('not for the internet')
+    (static / 'leak.js').symlink_to(outside)
+    (static / 'leak.txt').symlink_to(outside)
+    (static / '.app.js.swp').write_text('swap')
+    (static / '.hidden.js').write_text('hidden()')
+    (static / 'app.js~').write_text('backup')
+    (static / 'notes.txt').write_text('notes')
+    (static / 'module.mjs').write_text('export {}')
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], static_dir=static)
+    for name in ('leak.js', 'leak.txt', '.app.js.swp', '.hidden.js', 'app.js~', 'notes.txt', 'module.mjs'):
+        assert name not in app.state.assets
+        for client in (('127.0.0.1', 50000), ('203.0.113.5', 1)):
+            status, _, body = call(app, f'/assets/{name}'.encode(), client=client)
+            assert status == 404 and b'not for the internet' not in body, (name, client)
+    assert sorted(app.state.assets) == sorted(path.name for path in STATIC_DIR.iterdir() if path.is_file())
+
+
+def test_the_table_is_read_only_and_its_gzip_the_same_at_every_start(app, static):
+    with pytest.raises(TypeError):
+        app.state.assets['x.js'] = None
+    assert all(entry.gzipped[4:8] == b'\0\0\0\0' for entry in app.state.assets.values() if entry.gzipped)  # mtime 0
+    assert issubclass(StartError, ValueError)  # serve's one-line refusal, as for every other start check
+
+
 def test_a_request_with_no_raw_path_is_a_404(app):
     from superyak_peer.static_assets import AssetApp
     sent = []
@@ -160,7 +188,7 @@ def test_a_post_to_a_current_hash_is_not_cached(app):
     assert status == 405 and cache_controls(headers) == [b'no-store']
 
 
-def _behind_the_boundary(static, status, headers):
+def _behind_the_boundary(static, status, headers, method='GET'):
     """The cache-control BrowserBoundary gives an inner app's answer at app.js's current-hash URL."""
     assets = table_for(static)
 
@@ -176,8 +204,9 @@ def _behind_the_boundary(static, status, headers):
     async def receive():
         return {'type': 'http.request', 'body': b'', 'more_body': False}
 
-    scope = {'type': 'http', 'method': 'GET', 'scheme': 'http', 'path': '/assets/app.js', 'raw_path': b'/assets/app.js',
-             'query_string': b'v=' + assets['app.js'].hash.encode(), 'headers': [(b'host', b'testserver')]}
+    scope = {'type': 'http', 'method': method, 'scheme': 'http', 'path': '/assets/app.js', 'raw_path': b'/assets/app.js',
+             'query_string': b'v=' + assets['app.js'].hash.encode(),
+             'headers': [(b'host', b'testserver'), (b'origin', b'http://testserver')]}
     asyncio.run(BrowserBoundary(inner, router=None, allowed_origins=['http://testserver'], assets=assets)(
         scope, receive, send))
     return [v for k, v in sent[0]['headers'] if k == b'cache-control']
@@ -189,6 +218,9 @@ def test_only_a_200_or_304_without_a_cookie_is_cached_at_a_current_hash(static):
     for status in (404, 405, 500, 503, 206):
         assert _behind_the_boundary(static, status, []) == [b'no-store'], status
     assert _behind_the_boundary(static, 200, [(b'set-cookie', b'a=b')]) == [b'no-store']
+    assert _behind_the_boundary(static, 200, [], method='HEAD') == [IMMUTABLE]
+    for method in ('POST', 'PUT', 'DELETE'):  # whatever answers it, a write is never cached
+        assert _behind_the_boundary(static, 200, [], method=method) == [b'no-store'], method
 
 
 def test_the_table_is_built_once_per_directory(static, tmp_path):

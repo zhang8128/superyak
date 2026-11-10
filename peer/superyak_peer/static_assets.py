@@ -10,6 +10,7 @@ import functools
 import gzip
 import hashlib
 import re
+import types
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,17 +32,29 @@ class Entry:
     gzipped: bytes | None  # `.js` and `.css` only
 
 
-class StartError(RuntimeError):
-    """The static directory can't be served as it stands: start doesn't finish."""
+class StartError(ValueError):
+    """The static directory can't be served as it stands: start doesn't finish. A ValueError, so `serve` ends with its
+    one-line refusal, as for every other start check."""
+
+
+def _shipped(root: Path, path: Path) -> bool:
+    """Whether a path under the static directory is a file the app ships: a regular file whose real path is inside the
+    directory, whose type is one TYPES names (a backup's '.js~' is none), and with no part of its path starting with a
+    dot (an editor's swap file). So the table holds what the app ships and nothing else, and a new kind of file is a
+    deliberate edit to TYPES."""
+    relative = path.relative_to(root)
+    return (path.is_file() and path.resolve().is_relative_to(root) and path.suffix in TYPES
+            and not any(part.startswith('.') for part in relative.parts))
 
 
 @functools.lru_cache(maxsize=None)
-def _table(directory: str) -> dict:
-    """Every file under `directory`, keyed by its exact path relative to it ('app.js'), with the two pages rewritten.
-    Built once per directory per process: a build costs about 15 ms on the Pi, and the suites call create_app thousands
-    of times."""
+def _table(directory: str) -> types.MappingProxyType:
+    """Every file the app ships under `directory` (_shipped), keyed by its exact path relative to it ('app.js'), with
+    the two pages rewritten; read-only, so nothing changes after start. Built once per directory per process: a build
+    costs about 15 ms on the Pi, and the suites call create_app thousands of times."""
     root = Path(directory)
-    raw = {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob('*')) if path.is_file()}
+    raw = {path.relative_to(root).as_posix(): path.read_bytes()
+           for path in sorted(root.rglob('*')) if _shipped(root, path)}
     table = {}
     for name, body in raw.items():
         if name not in PAGES:
@@ -49,7 +62,7 @@ def _table(directory: str) -> dict:
     for name in PAGES:
         if name in raw:
             table[name] = _entry(name, _rewritten(name, raw[name].decode('utf-8'), table).encode('utf-8'))
-    return table
+    return types.MappingProxyType(table)
 
 
 def _entry(name, body):
@@ -70,7 +83,7 @@ def _rewritten(page, text, table):
     return REFERENCE.sub(versioned, text)
 
 
-def table_for(directory: Path) -> dict:
+def table_for(directory: Path) -> types.MappingProxyType:
     return _table(str(Path(directory).resolve()))
 
 
