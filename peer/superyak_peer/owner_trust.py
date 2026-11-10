@@ -1,26 +1,38 @@
 """Owner trust (docs/superpowers/specs/2026-11-02-machine-trust-design.md, "The change" item 2): the admin's password lets
 one remote person, a contact whose code was typed, vouch for their ships on their own peer. This module holds the
 append-only `owner_trust` table and its companions, granting and renewing, and the two rules the pairing and
-`connections()` share: `code_current` and `live_trust`."""
+`connections()` share: `code_current` and `live_trust`. Revision 6: the admin's yes at the Pi's terminal grants too,
+with no password (`station-trust-grant`), and the grant row keeps the line they said yes to and their words."""
 from datetime import datetime, timezone
+import hashlib
 import json
+import re
 import unicodedata
 
-from .common import Problem, uid
-from .identity import pairing_code
-from .ships import safe_line, ship_label_line
+from .common import Problem, encode, uid
+from .identity import pairing_code, typed_code
+from .ships import safe_line, ship_label_line, short_id
 
 TRUST_DAYS = 90
 EXPECT_MAX = 10_000
+WORDS_MAX = 500  # spec revision 6: the admin's yes at the terminal, as typed, kept with the grant
 TRUST_CAP = 200  # spec "The change" item 4: contacts per owner trust per UTC day, from trust_confirmations
 DIGEST_DAYS = 7  # the ended UTC days the digest lists, so Odo catches up after a week away (spec item 5)
 # A day's digest waits this long after midnight (UTC): pair_trusted dates a pairing when its transaction starts, so one
 # begun just before midnight can commit just after it, and a digest posted at once would be a pairing short for good.
 DIGEST_SETTLE = 300
+# Spec revision 6: a grant made at the terminal keeps the grant line the admin said yes to and the words they typed;
+# a browser grant, whose proof is the password, and every renewal and revocation keep neither. The table checks the
+# pair, as it checks `expect`. db.py adds them to an older store in this order, which places each just as the CREATE
+# below does, so an old store and a new one hold the same schema text.
+TERMINAL_COLUMNS = (('line', 'TEXT'),
+                    ('words', "TEXT CHECK(CASE WHEN words IS NULL THEN line IS NULL ELSE event='grant' AND line IS NOT NULL "
+                              f'AND length(words) BETWEEN 1 AND {WORDS_MAX} END)'))
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
-  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER,
+  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER, '''
+    + ', '.join(f'{name} {ddl}' for name, ddl in TERMINAL_COLUMNS) + ''',
   CHECK(event='revoke' OR (expect IS NOT NULL AND expect BETWEEN 1 AND 10000)))''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_update BEFORE UPDATE ON owner_trust
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
@@ -65,6 +77,18 @@ PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make
               "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
 PAUSE_WAITING = ' {k} of its ships wait for the lessons room until you renew.'
 PAUSE_WAITING_ONE = ' 1 of its ships waits for the lessons room until you renew.'
+# Spec revision 6: the Ops notice of a grant made at the terminal, and the terminal's refusals (none echoes the words).
+TERMINAL_TEXT = ("Owner trust {short} was granted at the Pi's terminal on {who}'s yes, with no password: {line}; up to {n} "
+                 "ship{s} expected. {who}'s words: \"{words}\". make station-trust-list shows it; if {who} didn't say yes "
+                 'to it, revoke it in the browser.')
+WORDS_SHAPE = f"words are the admin's yes as typed at the terminal: not empty, at most {WORDS_MAX} characters"
+WORDS_CODE_SHAPED = ("The words hold a run with a pairing code's shape (32 hex), so they aren't taken or shown; give the "
+                     'yes without it')
+WORDS_KEY = "The words hold a live ship key, so they aren't taken or shown"
+WORDS_FIRST = ("Words come with the second run, with CONFIRM: they are the admin's yes to the line the first run shows, "
+               'so run it first without them')
+TERMINAL_CHANGED = ('The contact, its grant line, the days or the expected count changed since they were shown, or that '
+                    'is not the code shown; run it again without CONFIRM')
 # A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
@@ -195,6 +219,41 @@ def _expect(expect):
     if type(expect) is not int or not 1 <= expect <= EXPECT_MAX:
         raise Problem(400, EXPECT_SHAPE)
     return expect
+
+
+def _words(words):
+    """The admin's yes at the terminal (spec revision 6), kept as typed: text that isn't empty once stripped, of at most
+    WORDS_MAX characters. The Ops notice posts it, so a run shaped like a pairing code, its spaces and hyphens taken
+    out, is refused unread: a ship never puts a code in a room."""
+    if not isinstance(words, str) or not words.strip() or len(words) > WORDS_MAX:
+        raise Problem(400, WORDS_SHAPE)
+    if re.search(r'[0-9a-f]{32}', re.sub(r'[\s-]', '', words.lower()), re.ASCII):  # typed_code's reading, anywhere in them
+        raise Problem(400, WORDS_CODE_SHAPED)
+    return words
+
+
+def contact_prefix(value):
+    """A remote contact's short id as an operator typed it, for station-lessons-add and station-trust-grant alike:
+    short_id's form (at least 4 characters, lower-cased). A value shaped like a pairing code is refused unread."""
+    from .lessons import ADD_CODE_SHAPED
+    prefix = short_id(value)
+    if typed_code(prefix) is not None:
+        raise Problem(400, ADD_CODE_SHAPED)
+    return prefix
+
+
+def named_contact(db, prefix):
+    """The one remote contact a short id (contact_prefix) names: the start of its id, with or without remote_, or of
+    its participant id, which the listings show in parentheses. No refusal echoes what was typed."""
+    from .lessons import ADD_AMBIGUOUS, ADD_NOT_REMOTE
+    matches = [r['id'] for r in db.execute('SELECT id, user_id FROM remote_contacts ORDER BY id')
+               if r['id'].startswith(prefix) or r['id'].removeprefix('remote_').startswith(prefix)
+               or r['user_id'].lower().startswith(prefix)]
+    if len(matches) > 1:
+        raise Problem(400, ADD_AMBIGUOUS)
+    if not matches:
+        raise Problem(404, ADD_NOT_REMOTE)
+    return matches[0]
 
 
 def trust_window(db, grant_id):
@@ -389,6 +448,22 @@ def trust_pauses(db, waiting=None):
     return notices
 
 
+def trust_terminal_notices(db):
+    """Spec revision 6, what makes a grant with no password seen: one Ops notice for each owner trust granted at the
+    Pi's terminal, with its short id, the grant line the admin said yes to and their words, as the grant row keeps
+    them, so a later rename of the owner never changes it. Its id names the grant, so Odo posts it once, at its next
+    cycle; it lists for as long as the row stands, as lessons_notices' do. Every value through plain_name, then
+    safe_line, so no '@' or control character reaches the room. A pure read."""
+    notices = []
+    for row in db.execute('SELECT g.grant_id, g.expect, g.line, g.words, u.name FROM owner_trust g LEFT JOIN users u '
+                          "ON u.id=g.by_id WHERE g.event='grant' AND g.words IS NOT NULL ORDER BY g.seq").fetchall():
+        who = safe_line(plain_name(row['name'] or 'the admin'), 40)
+        notices.append({'id': f'trust-terminal-{row["grant_id"][:12]}', 'text': TERMINAL_TEXT.format(
+            short=row['grant_id'][:6], who=who, line=safe_line(plain_name(row['line']), 400), n=row['expect'],
+            s='' if row['expect'] == 1 else 's', words=safe_line(plain_name(row['words']), WORDS_MAX))})
+    return notices
+
+
 def _signed_name(assertion):
     """The ship's name in a stored assertion (canonical JSON), or None when the row holds none."""
     try:
@@ -402,9 +477,12 @@ def trust_list(db, now):
     """`station-trust-list` (spec item 5: the digest's full ids): every owner trust in grant order, with its owner by
     label, its `until`, its state ('live', 'paused', 'expired' or 'revoked', with the revocation's time, reason and
     person), its current window, and each ship it paired: the label, the signed name, the full participant id, the
-    acting ship, when, whether it's held and its window. Names are raw here; the CLI makes each line safe."""
+    acting ship, when, whether it's held and its window. `at_terminal` is the granting admin's username for a grant made
+    on their yes at the Pi's terminal (spec revision 6), else None. Names are raw here; the CLI makes each line safe."""
     trusts = []
-    for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():
+    for grant in db.execute("SELECT g.grant_id, g.peer_id, g.owner_user_id, CASE WHEN g.words IS NULL THEN NULL ELSE "
+                            "COALESCE(u.username, 'an admin no longer here') END AS at_terminal FROM owner_trust g "
+                            "LEFT JOIN users u ON u.id=g.by_id WHERE g.event='grant' ORDER BY g.seq").fetchall():
         grant_id = grant['grant_id']
         known = trust_state(db, grant_id, now)
         until, revoke, state = known['until'], known['revoke'], known['state']
@@ -424,7 +502,7 @@ def trust_list(db, now):
                        'owner': plain_name(owner_label(db, grant['peer_id'], grant['owner_user_id'])), 'until': until, 'state': state,
                        'revoked_at': revoke['at'] if revoke else None, 'reason': revoke['reason'] if revoke else None,
                        'revoked_by': revoke['username'] if revoke else None, 'window_seq': window_seq, 'expect': expect,
-                       'paired': paired, 'ships': ships})
+                       'paired': paired, 'ships': ships, 'at_terminal': grant['at_terminal']})
     return trusts
 
 
@@ -461,19 +539,87 @@ class OwnerTrust:
                 if contact is not None:  # an unknown one is refused below, as before
                     _as_shown(_text(contact['label'], contact['peer_id'], self.clock() + days * 86400), shown)
         self._trust_password(actor, password, source, public, device)
-        with self.transaction() as db:
-            self._admin(db, actor)
-            now = self.clock()
-            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
-            owner_eligible(db, contact)
-            if live_trust(db, contact['peer_id'], contact['user_id'], now):
-                raise Problem(409, 'That owner is already trusted; renew it')
-            grant_id, until = uid(), now + days * 86400
-            text = _text(contact['label'], contact['peer_id'], until)
-            _as_shown(text, shown)  # again: the day may have turned while the password was checked
-            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
-                       "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
+        with self.transaction() as db:  # _as_shown again: the day may have turned while the password was checked
+            return self._grant_in(db, actor, contact_id, days, expect, shown)
+
+    def _grant_in(self, db, actor, contact_id, days, expect, shown, words=None):
+        """A grant's own checks and its 'grant' row, in the caller's writing transaction, for the browser and the terminal
+        alike: the admin; an owner contact owner_eligible takes; no live trust for that owner (peer, participant id); and
+        the line this grant stores, by this station's clock, as `shown` (_as_shown). `words`, the admin's yes at the
+        terminal, is kept with the line (TERMINAL_COLUMNS); a browser grant keeps neither."""
+        self._admin(db, actor)
+        now = self.clock()
+        contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+        owner_eligible(db, contact)
+        if live_trust(db, contact['peer_id'], contact['user_id'], now):
+            raise Problem(409, 'That owner is already trusted; renew it')
+        grant_id, until = uid(), now + days * 86400
+        text = _text(contact['label'], contact['peer_id'], until)
+        _as_shown(text, shown)
+        db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect,line,words) '
+                   "VALUES (?,'grant',?,?,?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor,
+                                                         now, expect, None if words is None else text, words))
         return {'grant_id': grant_id, 'until': until, 'text': text}
+
+    def grant_owner_trust_at_terminal(self, actor, contact_id, *, days, expect, shown, words):
+        """Spec revision 6: the admin's act on their yes at the Pi's terminal, with no password. The browser's grant
+        (_grant_in: the same checks, the same 'grant' row and the same line), except that `shown`, the grant line the
+        terminal showed before the yes, is required, and `words`, the yes as typed (_words), is kept with that line for
+        the Ops notice (trust_terminal_notices). Words holding a live ship key are refused, since the notice would post
+        it. No password is asked for, read or taken. station_trust_grant is its one caller outside the tests."""
+        _days(days)
+        _expect(expect)
+        if not isinstance(shown, str) or not shown:
+            raise Problem(400, 'shown is the grant line the terminal showed before the yes')
+        _words(words)
+        with self.transaction() as db:
+            if self._live_ship_key_in(db, words):
+                raise Problem(400, WORDS_KEY)
+            return self._grant_in(db, actor, contact_id, days, expect, shown, words)
+
+    def owner_trust_at_terminal(self, username, contact, *, days, expect):
+        """`station-trust-grant`'s first run (spec revision 6): the owner contact named by its short id (contact_prefix,
+        named_contact), the grant line a grant for `days` days would store if made now (grant_line, as the browser's
+        preview reads it), and a confirm code: 8 hex of a SHA-256 over the admin, the contact, its label, peer and
+        participant, the line, the days and the count, as station-lessons-room builds its own. Any change to one of
+        them, a new UTC day in the line included, changes the code. It refuses what the grant would (an admin by
+        username, an owner owner_eligible takes, no live trust) and grants nothing."""
+        _days(days)
+        _expect(expect)
+        prefix = contact_prefix(contact)
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            self._admin(db, actor)
+            found = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (named_contact(db, prefix),)).fetchone()
+            owner_eligible(db, found)
+            now = self.clock()
+            if live_trust(db, found['peer_id'], found['user_id'], now):
+                raise Problem(409, 'That owner is already trusted; renew it in the browser')
+            line = grant_line(found['label'], found['peer_id'], now + days * 86400)
+        code = hashlib.sha256(encode({'act': 'owner-trust-grant', 'actor': actor, 'contact': found['id'],
+                                      'label': found['label'], 'peer': found['peer_id'], 'owner': found['user_id'],
+                                      'line': line['text'], 'days': days, 'expect': expect}).encode()).hexdigest()[:8]
+        return {'actor': actor, 'admin': username, 'contact_id': found['id'],
+                'contact_short': found['id'].removeprefix('remote_')[:8], 'user_short': found['user_id'][:8],
+                'label': found['label'], 'peer_id': found['peer_id'], 'line': line, 'days': days, 'expect': expect,
+                'confirm': code, 'granted': False}
+
+    def station_trust_grant(self, username, contact, *, days, expect, confirm=None, words=None):
+        """`make station-trust-grant` (spec revision 6). Without `confirm`, the first run: owner_trust_at_terminal's
+        view, and nothing granted; words then are refused, since they are the yes to the line this run shows. With
+        `confirm` equal to the code the view has now, so the contact, its line, the days and the count read as the
+        first run showed them, the grant: grant_owner_trust_at_terminal with that line as `shown`, re-checked in the
+        grant's own transaction, and the words. Returns the view, with the grant's id, until and text once granted."""
+        view = self.owner_trust_at_terminal(username, contact, days=days, expect=expect)
+        if confirm is None:
+            if words is not None:
+                raise Problem(400, WORDS_FIRST)
+            return view
+        if not isinstance(confirm, str) or confirm.strip().lower() != view['confirm']:
+            raise Problem(409, TERMINAL_CHANGED)
+        done = self.grant_owner_trust_at_terminal(view['actor'], view['contact_id'], days=days, expect=expect,
+                                                  shown=view['line']['text'], words=words)
+        return {**view, **done, 'granted': True}
 
     def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None,
                           shown=None):

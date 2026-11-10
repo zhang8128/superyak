@@ -199,8 +199,21 @@ make station-pair-trusted CARD=ship-files/my-ship.card.json ASSERTION=ship-files
 uv run --locked python -m superyak_peer station-trust-list --data-dir /private/path/home
 ```
 
-A ship never grants, renews or revokes a trust: those are the admin's acts, with the admin's own password, in the
-browser. A ship only pairs within one that exists.
+The admin may also grant a trust by their yes at the station's own terminal, with no password. `station-trust-grant`
+runs twice: the first run shows the contact, the exact line the browser would show, the days, the expected count and a
+confirm code, and grants nothing; once the admin says yes there, the second run, with the code and their words, grants.
+The grant keeps the line and the words, and Odo posts a notice in Ops naming the grant, so none goes unseen. Renewing
+stays in the browser:
+
+```sh
+uv run --locked python -m superyak_peer station-trust-grant --data-dir /private/path/home --contact 1a2b3c4d \
+  --days 90 --expect 1 --as admin
+make station-trust-grant CONTACT=1a2b3c4d DAYS=90 EXPECT=1 CONFIRM=<the code it showed> WORDS="<the admin's words>"
+```
+
+A ship never grants, renews or revokes a trust on its own: granting and renewing are the admin's acts, in the browser
+with the admin's own password or, for a grant, on the admin's yes said at the station's terminal, and revoking is the
+admin's act in the browser. A ship only pairs within one that exists.
 
 ### A peer that never listens (federation pull)
 

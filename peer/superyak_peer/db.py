@@ -26,7 +26,7 @@ from .breakouts import Breakouts, BREAKOUT_SCHEMA
 from .signatures import Signatures, SIGNATURE_SCHEMA
 from .grants import Grants, GRANT_SCHEMA
 from .moderators import Moderators, MODERATE_SCHEMA
-from .owner_trust import OwnerTrust, OWNER_TRUST_SCHEMA
+from .owner_trust import OwnerTrust, OWNER_TRUST_SCHEMA, TERMINAL_COLUMNS
 from .members import Members
 from .lessons import Lessons, LESSON_SCHEMA
 from .imprints import Imprints, IMPRINT_SCHEMA
@@ -138,6 +138,11 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             # own lessons (spec 2026-11-09): a re-asked failure's query row is marked, and every measure leaves it out
             if 'reask' not in {row['name'] for row in db.execute('PRAGMA table_info(lesson_queries)')}:
                 db.execute('ALTER TABLE lesson_queries ADD COLUMN reask INTEGER NOT NULL DEFAULT 0')
+            # owner trust at the terminal (machine trust spec, revision 6): the line the admin said yes to and their words
+            trust_columns = {row['name'] for row in db.execute('PRAGMA table_info(owner_trust)')}
+            for name, ddl in TERMINAL_COLUMNS:
+                if name not in trust_columns:
+                    db.execute(f'ALTER TABLE owner_trust ADD COLUMN {name} {ddl}')
             if 'last_error' not in {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}:  # federation pull (spec §7)
                 db.execute('ALTER TABLE outbox ADD COLUMN last_error TEXT')
             # federation pull (spec §7, check 3 MF2): pairings made before the upgrade, and stores restored from older copies,
