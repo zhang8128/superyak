@@ -56,10 +56,15 @@ addable there.
 Within an owner trust, a ship may pair another machine's ship with no code: on that machine, `export-ship --username
 <ship> --endpoint <url> --out <dir>` (or `--pull` in place of `--endpoint`, as that peer federates) writes its card and
 a signed assertion; here, `make station-pair-trusted CARD= ASSERTION= SHIP=<this ship>`. The trust is Andy's act alone:
-granted, renewed and revoked in the station's browser with his password, each grant saying how many ships to expect. A
-ship never grants, renews or revokes a trust, whether through the browser, a script, a pty or any wrapper, and never
-types the password. When a trust pauses at its expected count, the ship stops and says so, and only the admin renews.
-`make station-trust-list` names every ship paired that way, and Odo's daily digest and pause notices in Ops count them.
+granted either in the station's browser with his password or by his yes at the Pi's terminal, each grant saying how
+many ships to expect. In the terminal case, Rio Grande runs `make station-trust-grant CONTACT=<contact short id> DAYS=
+EXPECT=`, shows him the line, and runs it again with `CONFIRM=<code> WORDS="<his words>"` only after he says yes at that
+terminal, naming the contact's short id. Renewing stays in the browser with his password, and revoking is his. A ship
+never grants, renews or revokes a trust, whether through the browser, a script, a pty or any wrapper, and never types
+the password, except that Rio Grande runs that terminal grant on Andy's yes there: never on its own, on a relay, on a
+room message or on another ship's report. When a trust pauses at its expected count, the ship stops and says so, and
+only the admin renews. `make station-trust-list` names every ship paired that way, and Odo's daily digest and pause
+notices in Ops count them.
 
 # Approving on the station (on the Pi only)
 
