@@ -5550,9 +5550,14 @@ def test_a_new_account_on_the_page_forgets_the_release_history(browser_peer):
     released(browser_peer, first)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
             page.get_by_role("link", name="My sharing layers").click()
             page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
             expect(editor_history(page)).to_contain_text("Release 1")
+            # The click's address change runs its own read after this; the first layer is Alpha too, so the history above can be
+            # the list's. Changing the account before that read starts lets the address pick Alpha again (2 runs in 10).
+            reads_settled(page)
             page.evaluate("bindEditorIdentity({ peer_id: 'elsewhere', id: 'someone-else' })")
             assert page.evaluate("[state.revisions.length, state.revisionsOf, state.selectedLayerId]") == [0, None, None]
 
