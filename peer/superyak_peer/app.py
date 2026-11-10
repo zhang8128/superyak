@@ -16,8 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match, Mount
 from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, Response
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
@@ -25,6 +24,7 @@ from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
+from .static_assets import IMMUTABLE, AssetApp, StartError, immutable, table_for
 
 MAX_REQUEST = 6 * 1024 * 1024
 MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
@@ -43,6 +43,9 @@ SECURITY_HEADERS = [
     (b'content-security-policy', b"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
     (b'referrer-policy', b'no-referrer'),
 ]
+# What a person downloads, spec 2: an asset at its current hash is cached for a year, so its answer carries these
+# with that cache-control in place of no-store; every other answer carries SECURITY_HEADERS.
+SECURITY_UNCACHED = [header for header in SECURITY_HEADERS if header[0] != b'cache-control']
 # Public route spec 2: what a public request reaches with no valid session or ship key, named by the template of the
 # route object the router dispatches it to, never by path prefix: the app shell and its assets, health, the login,
 # an invitation link and the layers their owners published. A route added later starts closed.
@@ -112,10 +115,17 @@ def route_body_max(router, scope):
     return ROUTE_BODY_MAX.get(getattr(dispatched(router, scope), 'path', None))
 
 
+def secured(response):
+    """A refusal made before the app runs, with the headers every answer carries (what a person downloads, spec 3)."""
+    response.raw_headers.extend(SECURITY_HEADERS)
+    return response
+
+
 class BrowserBoundary:
-    """Bound input before JSON parsing; check origins for browser writes."""
-    def __init__(self, app, *, router, allowed_origins=()):
-        self.app, self.router, self.allowed_origins = app, router, set(allowed_origins)
+    """Bound input before JSON parsing; check origins for browser writes. Every answer leaves with the security
+    headers, its own refusals included; `assets`, the start-time table, decides which answers may be cached."""
+    def __init__(self, app, *, router, allowed_origins=(), assets=None):
+        self.app, self.router, self.allowed_origins, self.assets = app, router, set(allowed_origins), assets
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
@@ -123,7 +133,7 @@ class BrowserBoundary:
         headers = {k.decode('latin-1').lower(): v.decode('latin-1') for k, v in scope['headers']}
         request_origin = scope['scheme'] + '://' + headers.get('host', '')
         if self.allowed_origins and request_origin not in self.allowed_origins:
-            return await JSONResponse({'error': 'Unrecognized host'}, 403)(scope, receive, send)
+            return await secured(JSONResponse({'error': 'Unrecognized host'}, 403))(scope, receive, send)
         origin = headers.get('origin')
         method = scope['method']
         # Federation endpoints use separate cryptographic auth; their router must
@@ -132,7 +142,7 @@ class BrowserBoundary:
                          and scope['path'] not in OAUTH_WRITES)
         if browser_write:
             if not origin or origin != request_origin:
-                return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
+                return await secured(JSONResponse({'error': 'Same-origin request required'}, 403))(scope, receive, send)
         route_max, looked = None, False
         body = bytearray()
         while method not in BODYLESS_METHODS:
@@ -145,7 +155,7 @@ class BrowserBoundary:
             if route_max is not None and len(body) > route_max:
                 break
             if len(body) > MAX_REQUEST:
-                return await JSONResponse({'error': 'Request too large'}, 413)(scope, receive, send)
+                return await secured(JSONResponse({'error': 'Request too large'}, 413))(scope, receive, send)
             if not message.get('more_body', False):
                 break
         sent = False
@@ -157,7 +167,12 @@ class BrowserBoundary:
             return await receive()
         async def secure_send(message):
             if message['type'] == 'http.response.start':
-                message.setdefault('headers', []).extend(SECURITY_HEADERS)
+                headers = message.setdefault('headers', [])
+                cookie = any(name.lower() == b'set-cookie' for name, _ in headers)  # never on a cached answer
+                if self.assets is not None and not cookie and immutable(self.assets, scope, message['status']):
+                    headers.extend([*SECURITY_UNCACHED, (b'cache-control', IMMUTABLE)])
+                else:
+                    headers.extend(SECURITY_HEADERS)
             await send(message)
         await self.app(scope, bounded_receive, secure_send)
 
@@ -310,8 +325,13 @@ def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
 def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None,
-               public_origin: str | None = None, connector_callback: str | None = None):
+               public_origin: str | None = None, connector_callback: str | None = None, static_dir: Path = STATIC_DIR):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
+    # What a person downloads, spec 1: every static file read once, here, and nothing from disk after. Tests pass a copy
+    # of the directory, so none writes under the package the live peer serves.
+    assets = table_for(static_dir)
+    if 'index.html' not in assets:
+        raise StartError(f'{static_dir} holds no index.html')
     if public_origin is not None:  # the connector's issuer: one canonical https origin among the allowed ones (D13)
         canonical = PUBLIC_ORIGIN.fullmatch(public_origin)
         if not canonical or canonical['port'] == '443' or int(canonical['port'] or 443) > 65535 \
@@ -354,8 +374,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         from .connector import DEFAULT_CALLBACK
         from .connector_routes import install as install_connector
         install_connector(app, public_origin, connector_callback or DEFAULT_CALLBACK)
-    app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
-    app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins)
+    app.state.assets = assets
+    app.mount('/assets', AssetApp(assets), name='assets')  # exact keys from the table: no path is normalized
+    app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
     app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
@@ -367,16 +388,18 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return JSONResponse({'error': 'Invalid request'}, status_code=400)
 
     @app.exception_handler(Exception)
-    async def unexpected(request, exc):
-        return JSONResponse({'error': 'Request could not be completed'}, status_code=500)
+    async def unexpected(request, exc):  # runs outside BrowserBoundary, so it adds the headers itself (spec 3)
+        return secured(JSONResponse({'error': 'Request could not be completed'}, status_code=500))
+
+    page = assets['index.html']  # rewritten at start: each asset it names carries that file's hash
 
     @app.get('/', include_in_schema=False)
     def browser_home():
-        return FileResponse(STATIC_DIR / 'index.html')
+        return Response(page.body, media_type=page.content_type)
 
     @app.get('/public/', include_in_schema=False)
     def browser_public():
-        return FileResponse(STATIC_DIR / 'index.html')
+        return Response(page.body, media_type=page.content_type)
 
     @app.get('/api/health')
     def health():
