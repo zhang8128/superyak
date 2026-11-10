@@ -4,6 +4,7 @@ is its client half (the Pi, 2026-11-09: a short text took 74 s behind abandoned 
 
 from __future__ import annotations
 
+import logging
 import shutil
 import socket
 import tempfile
@@ -60,20 +61,41 @@ def test_the_embed_request_says_how_long_the_client_waits(socket_dir, timeout, s
     assert embed["remaining_ms"] == pytest.approx(sent)
 
 
-def test_a_client_that_gave_up_costs_the_lane_nothing(socket_dir):
-    """A batch holds the lane; a client with a short timeout queues behind it and gives up. When the lane frees, the
-    service drops that request without embedding it, and the next request runs."""
+def _wait_for(condition, seconds=30):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert condition()
+
+
+@pytest.mark.parametrize("timeout", [1e306, float("inf"), float("nan"), -1.0])
+def test_a_timeout_with_no_finite_wait_sends_no_deadline(socket_dir, timeout):
+    """1e306 s is finite, but in milliseconds it isn't, and the service refuses a deadline that isn't finite. The field
+    is left out rather than sent (main's socket refuses such a timeout itself; the request is what's tested here)."""
+    request = {}
+    provider = RemoteEmbedProvider(str(socket_dir / "unused.sock"), response_timeout=timeout)
+    provider._verified = True
+    provider._call = lambda sent: request.update(sent) or {**MODEL, "vectors": [[0.0] * MODEL["dimension"]]}
+    provider.embed(["x"])
+    assert request["op"] == "embed" and "remaining_ms" not in request
+
+
+def test_a_client_that_gave_up_costs_the_lane_nothing(socket_dir, caplog):
+    """A batch holds the lane; a client with a short timeout queues behind it and gives up, and a live request queues
+    behind that. When the lane frees, the service drops the abandoned request without embedding it, and says so, while
+    the live one still waits; then the live one runs."""
     provider = UnitProvider(unit_size=1)
     provider.gate = threading.Event()
     path = socket_dir / "e.sock"
     server = EmbedderServer(path, provider)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    caplog.set_level(logging.INFO, logger="engram.embedder")
     try:
         first = []
         batch = threading.Thread(target=lambda: first.append(RemoteEmbedProvider(str(path)).embed(["a", "b"])),
                                  daemon=True)
         batch.start()
-        assert provider.entered.wait(5)  # the batch's first unit holds the lane
+        assert provider.entered.wait(30)  # the batch's first unit holds the lane
 
         with pytest.raises(EmbedderUnavailableError, match="timed out"):
             RemoteEmbedProvider(str(path), response_timeout=0.2).embed(["abandoned"])
@@ -82,14 +104,18 @@ def test_a_client_that_gave_up_costs_the_lane_nothing(socket_dir):
         follow = threading.Thread(target=lambda: after.append(RemoteEmbedProvider(str(path)).embed(["after"])),
                                   daemon=True)
         follow.start()
+        _wait_for(lambda: server.lane.batches_waiting == 2)  # both queue behind the batch before the lane frees
 
         provider.gate.set()
-        batch.join(10)
-        follow.join(10)
+        batch.join(30)
+        follow.join(30)
         assert first and after  # both live requests were answered
         embedded = [text for texts, _prefix in provider.calls for text in texts]
         assert "abandoned" not in embedded
         assert "after" in embedded
+        drops = [message for message in (r.getMessage() for r in caplog.records)
+                 if message.startswith("dropped an expired batch request")]
+        assert len(drops) == 1 and drops[0].startswith("dropped an expired batch request: 0 of 1 texts embedded")
     finally:
         provider.gate.set()
         server.shutdown()

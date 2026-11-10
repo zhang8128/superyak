@@ -307,12 +307,16 @@ class RemoteEmbedProvider:
             self._check_model(self._call({"op": "info"}))
             self._verified = True
         request = {"op": "embed", "texts": list(texts), "prefix": prefix}
-        if math.isfinite(self._response_timeout) and self._response_timeout >= 0:
+        remaining_ms = self._response_timeout * 1000
+        if math.isfinite(remaining_ms) and remaining_ms >= 0:
             # This client hangs up once its response timeout passes, so it says so: the service then drops the request
             # if it hasn't reached the lane by then, instead of embedding for nobody (embedder_service.py's
-            # remaining_ms; the Pi, 2026-11-09: a short text took 74 s behind abandoned requests). An older service
-            # ignores the field.
-            request["remaining_ms"] = self._response_timeout * 1000
+            # remaining_ms; the Pi, 2026-11-09: a short text took 74 s behind abandoned requests). It is the whole
+            # timeout, which the socket arms after connecting and so counts from the send; the service counts from
+            # arrival, a little later, so it can only keep an abandoned request a moment too long, never drop one this
+            # client still waits for. The value is tested after the multiplication, so nothing the service refuses as
+            # not finite reaches the wire. An older service ignores the field.
+            request["remaining_ms"] = remaining_ms
         response = self._call(request)
         self._check_model(response)
         vectors = response.get("vectors")
