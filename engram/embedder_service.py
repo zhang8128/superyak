@@ -22,6 +22,10 @@ service stamps its arrival on its own monotonic clock and, each time one of its
 units gets the lane, drops it if that time has run out, so a caller that gave
 up no longer holds the lane (the Pi, 2026-11-09: a short text took 74 s behind
 abandoned requests). A request that names no deadline runs to the end, as before.
+A request whose asker has closed its connection is dropped the same way, at
+its next unit's turn, whatever its deadline says: no answer can reach it, and a
+client that sends no remaining_ms, or a hook its harness killed, leaves no work
+behind (the Pi, 2026-11-10: 47 abandoned lessons embeds held it at 390% CPU).
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
 
 Protocol: one request per connection over a Unix socket. Each message is a
@@ -53,6 +57,8 @@ import json
 import logging
 import math
 import os
+import select
+import socket
 import socketserver
 import struct
 import threading
@@ -68,11 +74,37 @@ CHUNK_TEXTS = 16  # texts per lane hold for a provider that names no units of it
 QUERY_PREFIX = "search_query"
 WARM_TEXT = "warm"
 EXPIRED = {"ok": False, "error": "expired"}
+GONE = {"ok": False, "error": "gone"}  # nobody reads it: sending it fails, and the handler says so
 _HEADER = struct.Struct(">I")
 
 
 class _Expired(Exception):
     """A request's remaining_ms ran out before one of its units got the lane."""
+
+
+class _Gone(Exception):
+    """A request's asker closed its connection before one of its units got the lane."""
+
+
+def asker_gone(sock) -> bool:
+    """True once the asker has closed its end of the connection.
+
+    A connection carries one request, read whole before any work, and no client
+    sends more or half-closes. So after the read the socket stays quiet until
+    its asker closes it, and then it polls readable and a peek gives no bytes.
+    Bytes waiting are a client breaking the protocol, not a gone one: its
+    request runs. The poll comes first, so the peek never waits, even on a
+    socket with a timeout."""
+    try:
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        if not poller.poll(0):
+            return False
+        return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:  # reset by its asker
+        return True
 
 
 def recv_message(sock) -> dict:
@@ -107,7 +139,7 @@ class _Handler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         try:
             request = recv_message(self.request)
-            response = self.server.respond(request)
+            response = self.server.respond(request, gone=lambda: asker_gone(self.request))
         except Exception as e:  # malformed request: answer, never crash the service
             response = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         try:
@@ -224,7 +256,8 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         finally:
             os.umask(old_umask)
 
-    def respond(self, request: dict) -> dict:
+    def respond(self, request: dict, gone=None) -> dict:
+        """`gone`, when given, says whether the asker has closed its connection; it's asked at each unit's turn."""
         arrived = monotonic()
         loaded = self._model_loaded()
         info = {"ok": True, "model": self.model_name, "dimension": self.provider.dimension()}
@@ -263,10 +296,10 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
             return {"ok": False, "error": "the provider's units don't cover each text exactly once"}
         try:
             if prefix == QUERY_PREFIX:
-                vectors = self._embed_units(texts, prefix, units, None, deadline)
+                vectors = self._embed_units(texts, prefix, units, None, deadline, gone)
             else:
                 with self.lane.batch_request() as ticket:
-                    vectors = self._embed_units(texts, prefix, units, ticket, deadline)
+                    vectors = self._embed_units(texts, prefix, units, ticket, deadline, gone)
         except _Expired as expired:
             logger.info("dropped an expired %s request: %d of %d texts embedded, %.0f ms after it arrived "
                         "with %.0f ms left; model %s when it arrived",
@@ -274,6 +307,11 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
                         len(texts), (monotonic() - arrived) * 1000, remaining,
                         {True: "loaded", False: "not loaded", None: "of unknown state"}[loaded])
             return dict(EXPIRED)
+        except _Gone as left:
+            logger.info("dropped a %s request whose asker had gone: %d of %d texts embedded, %.0f ms after it arrived",
+                        "query" if prefix == QUERY_PREFIX else "batch", left.args[0], len(texts),
+                        (monotonic() - arrived) * 1000)
+            return dict(GONE)
         return {**info, "vectors": vectors}
 
     def _model_loaded(self) -> bool | None:
@@ -305,13 +343,15 @@ class EmbedderServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
         return thread
 
     def _embed_units(self, texts: list[str], prefix: str, units: list[list[int]], ticket: int | None,
-                     deadline: float | None = None) -> list:
+                     deadline: float | None = None, gone=None) -> list:
         vectors: list = [None] * len(texts)
         done = 0
         for unit in units:
             with self.lane.hold(ticket):
                 if deadline is not None and monotonic() >= deadline:  # checked at its turn, so it runs nothing
                     raise _Expired(done)
+                if gone is not None and gone():  # at its turn too: no answer can reach a closed connection
+                    raise _Gone(done)
                 part = self.provider.embed([texts[i] for i in unit], prefix=prefix)
             for index, vector in zip(unit, part, strict=True):
                 vectors[index] = vector
