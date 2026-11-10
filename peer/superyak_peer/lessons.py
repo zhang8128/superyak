@@ -1181,12 +1181,8 @@ class Lessons:
         remote_) or of its participant id, which the listing and this command show in parentheses; no refusal echoes
         what was typed, and a value shaped like a pairing code is refused unread. Returns {label, user_short, peer12,
         old_room, new_room, lessons_carried}, the label and user id as stored (describe_lessons_add shows them plain)."""
-        from .identity import typed_code
-        from .owner_trust import LABELLED_CONTACT
-        from .ships import short_id
-        prefix = short_id(contact_prefix)
-        if typed_code(prefix) is not None:
-            raise Problem(400, ADD_CODE_SHAPED)
+        from .owner_trust import LABELLED_CONTACT, contact_prefix as typed_prefix, named_contact
+        prefix = typed_prefix(contact_prefix)  # the short-id form station-trust-grant takes too
         with self.transaction() as db:
             chain = self._lessons_chain(db)
             if not chain or ':' in chain[-1]:
@@ -1197,14 +1193,7 @@ class Lessons:
                               "lessons_room.id=1 AND users.kind='ship' AND users.owner_id=?", (owner_id,)).fetchone()
             if ship is None:  # a record at the origin always names the owner's ship; anything else is no record to act on
                 raise Problem(409, ADD_NO_ROOM)
-            matches = [r['id'] for r in db.execute('SELECT id, user_id FROM remote_contacts ORDER BY id')
-                       if r['id'].startswith(prefix) or r['id'].removeprefix('remote_').startswith(prefix)
-                       or r['user_id'].lower().startswith(prefix)]
-            if len(matches) > 1:
-                raise Problem(400, ADD_AMBIGUOUS)
-            if not matches:
-                raise Problem(404, ADD_NOT_REMOTE)
-            contact_id = matches[0]
+            contact_id = named_contact(db, prefix)
             room = self._room(db, owner_id, current)
             refused = addable_now(self, db, room, contact_id, self.clock())
             if refused is not None:

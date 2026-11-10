@@ -83,7 +83,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-trust-grant station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove embedder-keep-loaded federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -99,6 +99,7 @@ help:
 	@echo "make station-rooms     On the Pi: list the rooms you own (APPROVER=andy) by short id, and which are bridged"
 	@echo "make station-pair-trusted  On the Pi: pair another machine's ship with no code, within an owner trust: CARD= ASSERTION= SHIP=<this ship>"
 	@echo "make station-trust-list  On the Pi: list each owner trust and the ships it paired, with full participant ids"
+	@echo "make station-trust-grant CONTACT=… DAYS=… EXPECT=…  On the Pi: show an owner trust's grant line, days, count and a confirm code; after Andy's yes at this terminal, CONFIRM=… WORDS_FILE=<his words, as typed> grants it, with no password"
 	@echo "make station-bridge ID=… On the Pi: bridge a room to Stanley's aDNA lattice (adds Wormhole); make station-unbridge ID=… stops"
 	@echo "make station-add-ship ID=… SHIP=…  On the Pi: add one of your own ships to a room you own (APPROVER=andy)"
 	@echo "make station-open-room TITLE=… SHIPS='a b'  On the Pi: open a new room you own with your own ships (APPROVER=andy)"
@@ -127,6 +128,7 @@ help:
 	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
 	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"
 	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"
+	@echo "make embedder-keep-loaded  On the Pi: drop-in so the embedder keeps its model loaded and loads it at start (no restart)"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -419,6 +421,26 @@ station-rooms:
 station-trust-list:
 	uv run --locked --project peer python -m superyak_peer station-trust-list --data-dir "$(STATION_DATA)"
 
+# Owner trust at the terminal (machine trust spec, revision 6). Andy's words never pass through a shell or make: Rio
+# Grande writes them, exactly as he typed them, to a file with its file tool, and WORDS_FILE names that file. Make
+# neither expands nor exports CONTACT, DAYS, EXPECT, CONFIRM, WORDS_FILE or the old WORDS: unexport keeps each out of
+# every recipe's environment (GNU Make exports, and so expands, every command-line variable unless told not to), and
+# $(value ...) hands each one, unexpanded, to its own TG_ variable, which reaches the recipe through the environment,
+# never as shell text. No other recipe reads these names from its environment. A set WORDS is refused, pointing to
+# WORDS_FILE, and a CONTACT shaped like a pairing code is refused before the command runs, unshown.
+unexport CONTACT DAYS EXPECT CONFIRM WORDS_FILE WORDS
+station-trust-grant: export TG_CONTACT = $(value CONTACT)
+station-trust-grant: export TG_DAYS = $(value DAYS)
+station-trust-grant: export TG_EXPECT = $(value EXPECT)
+station-trust-grant: export TG_CONFIRM = $(value CONFIRM)
+station-trust-grant: export TG_WORDS_FILE = $(value WORDS_FILE)
+station-trust-grant: export TG_WORDS_GIVEN = $(if $(value WORDS),yes)
+station-trust-grant:
+	@test -z "$$TG_WORDS_GIVEN" || { echo 'WORDS= is not taken here (make and a shell would read his words first): write Andy'"'"'s words to a file with the file tool, exactly as typed, and pass WORDS_FILE=<that file>'; exit 2; }
+	@test -n "$$TG_CONTACT" && test -n "$$TG_DAYS" && test -n "$$TG_EXPECT" || { echo 'Usage: make station-trust-grant CONTACT=<contact short id> DAYS=90 EXPECT=1 [CONFIRM=<code> WORDS_FILE=<file holding Andy'"'"'s words as typed>] [APPROVER=andy]'; exit 2; }
+	@c=$$(printf '%s' "$$TG_CONTACT" | tr -d '[:space:]-'); case "$$c" in *[!0-9a-fA-F]*) ;; *) test "$${#c}" -ne 32 || { echo "CONTACT takes a contact's short id; this one has a pairing code's shape (32 hex), so it isn't taken (not shown, in case it was a code)"; exit 2; };; esac
+	uv run --locked --project peer python -m superyak_peer station-trust-grant --data-dir "$(STATION_DATA)" --contact "$$TG_CONTACT" --days "$$TG_DAYS" --expect "$$TG_EXPECT" --as "$(APPROVER)"$${TG_CONFIRM:+ --confirm "$$TG_CONFIRM"}$${TG_WORDS_FILE:+ --words-file="$$TG_WORDS_FILE"}
+
 # CARD, ASSERTION and SHIP reach the recipe through the environment, never as shell text: a `$(...)` or a backtick in
 # a path stays a string.
 station-pair-trusted: export PT_CARD = $(CARD)
@@ -589,6 +611,13 @@ station-units-remove:
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
 	systemctl --user daemon-reload
+
+# The Pi is always on and is the station: its embedder keeps the model loaded and loads it at start, so a lighthouse
+# crossing never waits for a reload. Does not restart the service.
+embedder-keep-loaded:
+	d="$(SYSTEMD_USER)/superyak-embedder.service.d" && install -d -m 755 "$$d" && install -m 644 scripts/superyak-embedder-keep-loaded.conf "$$d/keep-loaded.conf"
+	systemctl --user daemon-reload
+	@echo "The embedder will keep its model loaded and load it at start. It is not restarted: the next restart (the next merge sitting, or systemctl --user restart superyak-embedder) loads the model at start."
 
 # The data dir goes in a drop-in, a % doubled for systemd. The alert drop-in goes only where the station's alert unit is
 # installed, since its ExecStopPost writes into the station's database. Nothing is enabled: the deploy says which unit

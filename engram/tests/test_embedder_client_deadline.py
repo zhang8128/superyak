@@ -75,7 +75,8 @@ def test_a_timeout_with_no_finite_wait_sends_no_deadline(socket_dir, timeout):
     request = {}
     provider = RemoteEmbedProvider(str(socket_dir / "unused.sock"), response_timeout=timeout)
     provider._verified = True
-    provider._call = lambda sent: request.update(sent) or {**MODEL, "vectors": [[0.0] * MODEL["dimension"]]}
+    provider._call = lambda sent, *_args, **_kwargs: (request.update(sent)
+                                                       or {**MODEL, "vectors": [[0.0] * MODEL["dimension"]]})
     provider.embed(["x"])
     assert request["op"] == "embed" and "remaining_ms" not in request
 

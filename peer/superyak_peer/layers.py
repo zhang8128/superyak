@@ -144,7 +144,8 @@ class Layers:
             return self._layer_json(self._owned_layer(db, actor, key))
 
     def revoke_layer_routes(self, actor, key, data):
-        """Narrow active grants without publishing or modifying the private draft."""
+        """Narrow active grants without publishing anything new. The draft narrows with them, because it's what the next version
+        is made from: a person who turned off a public link or removed someone hasn't asked for that to come back by itself."""
         if set(data) - {'revision', 'public', 'user_ids', 'space_ids'}:
             raise Problem(400, 'Unknown revocation field')
         users, spaces = ids(data.get('user_ids', [])), ids(data.get('space_ids', []))
@@ -162,12 +163,24 @@ class Layers:
             snapshot['resolved_space_users'] = {s: members for s, members in snapshot['resolved_space_users'].items() if s not in spaces}
             if data.get('public'):
                 snapshot['public'] = False
+            draft = json.loads(row['draft'])
+            before = {'audience_users': draft.get('audience_users', []), 'audience_spaces': draft.get('audience_spaces', []), 'public': draft.get('public', False)}
+            after = {'audience_users': [u for u in before['audience_users'] if u not in users],
+                     'audience_spaces': [s for s in before['audience_spaces'] if s not in spaces],
+                     'public': before['public'] and not data.get('public')}
+            draft_version, layer_version = active['draft_version'], row['version']
+            if after != before:
+                layer_version = row['version'] + 1
+                db.execute('UPDATE layers SET draft=?,version=? WHERE id=?', (encode({**draft, **after}), layer_version, key))
+                if draft_version == row['version']:  # the release still matches the draft: it isn't an unpublished change
+                    draft_version = layer_version
             revision = row['resource_version'] + 1
-            db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, active['draft_version'], encode(snapshot), self.clock()))
+            db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, draft_version, encode(snapshot), self.clock()))
             self._sign_revision(db, key, revision)  # G2: the narrowing's new revision, with its narrower audience
             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
             self.emit(db, 'layer.restricted', key, revision, {'owner_id': actor, 'previous_revision': row['active_revision']})
-            return self._active_layer(db, key, actor)
+            # So an editor that was current stays current, with no false conflict. One that wasn't still hits its real conflict.
+            return {**self._active_layer(db, key, actor), 'layer_version': layer_version, 'layer_version_before': row['version']}
 
     def _access_routes(self, db, row, snapshot, actor):
         routes = []

@@ -235,7 +235,9 @@ def test_the_old_promises_are_gone_from_every_screen():
                     r"(?i)\b(nobody|no one)( else)? can\b", r"(?i)\bprivate (place|workspace|first|work)\b",
                     r"(?i)\bstays? private\b", r"(?i)\bimported content stays\b", r"(?i)\bimporting is private\b",
                     r"(?i)\bimport(ed)? privately\b", r"(?i)\bsaved? (them )?privately\b", r"(?i)\bkeep it private\b",
-                    r"(?i)\bonly your account\b"):
+                    r"(?i)\bonly your account\b", r"(?i)\bnever to a cloud model\b", r"(?i)\baway from claude\b",
+                    r"(?i)\bfrom cloud models?\b", r"(?i)\bkeeps their copy\b", r"(?i)\bmarks? (is|are) their own\b",
+                    r"(?i)\bno ships or connected apps\b"):
         assert not re.search(promise, words), promise
 
 
@@ -1038,7 +1040,7 @@ def test_a_mark_goes_to_the_room_on_screen_while_another_opens(browser_peer):
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, y = two_rooms_with_x_open(page, store, owner)
             held = y_opening(page, y)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.cloud)", arg=x["id"])
             assert not read_room(page, y).get("cloud")
             release(held)
@@ -1374,13 +1376,13 @@ def test_a_mark_answered_after_the_next_room_opens_names_its_room(browser_peer):
             x, y = two_rooms_with_x_open(page, store, owner)
             held = y_opening(page, y)
             mark = held_routes(page, f"**/api/chats/{x['id']}/cloud")
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, mark)
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
             reads_settled(page, held=1)
             release(mark)
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")  # never read as being about Y
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")  # never read as being about Y
             reads_settled(page)
             assert read_room(page, x).get("cloud") and not read_room(page, y).get("cloud")
 
@@ -1420,8 +1422,8 @@ def test_after_a_room_fails_to_open_nothing_opens_it_by_itself(browser_peer):
             expect(page.locator(".notice.error")).to_contain_text("Room Y didn't open.")
             expect(page.locator(".words-kept")).to_contain_text("Room Y didn't open.")  # at the box too, for a reader far below the flash
             page.unroute(pattern)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")
             reads_settled(page)
             expect(page.get_by_role("heading", name="Room X")).to_be_visible()
 
@@ -1912,7 +1914,7 @@ def test_answers_for_a_room_left_name_it(browser_peer):
             page.get_by_role("button", name="Room Y").click()
             wait_for_hold(page, held)
             posts = held_routes(page, f"**/api/chats/{x['id']}/cloud")
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, posts)
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
@@ -2347,8 +2349,8 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             two_rooms_with_x_open(page, store, owner)
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
-            expect(page.locator(".notice")).to_have_text("Room X is kept away from cloud models.")
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            expect(page.locator(".notice")).to_have_text("Room X is kept away from ships and connected apps on this home.")
             page.evaluate("state.transitionNote = 'Sam no longer has access'; announcer.textContent = 'Your words are kept in Room X.'")
             page.evaluate("bindEditorIdentity({ ...state.me, id: 'the-next-account' })")
             for field in ("flash", "transitionNote"):
@@ -2357,7 +2359,7 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
 
 
 @pytest.mark.parametrize("press, route, confirm", [
-    ("Keep this room away from cloud models", "cloud", None),
+    ("^Mark this room$", "cloud", None),
     ("^Remove .* from this room", "participants/**", confirm_remove),
 ])
 def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, route, confirm):
@@ -2476,7 +2478,7 @@ def test_a_mark_made_as_the_person_signs_out_names_no_room_to_the_next(browser_p
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             x, _y = two_rooms_with_x_open(page, store, owner)
             held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))  # refresh's read, after the mark
-            page.get_by_role("button", name=re.compile("Keep this room away from cloud models")).click()
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             wait_for_hold(page, held)
             signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
 
@@ -3036,6 +3038,84 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
                 expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
 
 
+def list_under(control, heading):
+    """The list right under a heading, so changing a word of either fails: "It can:" over these items is the promise itself."""
+    return control.locator(f'xpath=.//p[normalize-space()="{heading}"]/following-sibling::ul[1]/li')
+
+
+def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
+    """A person relies on the mark at the moment they set it, so it says there what it keeps out, what one mark does to
+    everyone, and what it can't do. The sign-in page's line isn't on screen then. A member someone else has marked for is
+    told it already holds, and why they might add theirs. A cold walker stopped at the second sentence of a paragraph,
+    so it starts with what a person most wants to know, and the rest is lists."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    limits = ["stop whoever runs this home, or an AI agent they run on its computer, reading or changing it",
+              "take back what a ship or app has already read",
+              "stop a member copying the words or giving them to an AI"]
+    room = store.create_room(users["patient"]["id"], "To be marked", [users["family"]["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        control = page.locator(".cloud-control")
+        expect(control).to_contain_text("Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.")
+        expect(list_under(control, "One member's mark holds for the whole room:")).to_have_text([
+            "No ship can join, and any ship here has to be removed first.", "No member's connected app can read it.",
+            "Nobody new from another home can join.",
+            "Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays."])
+        expect(list_under(control, "It can't:")).to_have_text(limits)
+        expect(control).not_to_contain_text("another home, who may be")  # nobody on another home here
+        page.get_by_role("button", name="Mark this room").click()
+        expect(page.locator(".notice", has_text="To be marked is kept away from ships and connected apps on this home.")).to_be_visible()
+        expect(control).to_contain_text("You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.")
+        expect(control).to_contain_text("another member's mark would still hold")
+        expect(control).not_to_contain_text("earlier rooms")  # this one has none
+        expect(list_under(control, "It can't:")).to_have_text(limits)
+        expect(page.locator(".split-detail").get_by_text("Marked · 1 mark (yours)", exact=True)).to_be_visible()
+        with signed_in_browser(playwright, browser_peer, "family") as (other, _):
+            other.goto(f"{base}/#chats/{room['id']}")
+            theirs = other.locator(".cloud-control")
+            expect(theirs).to_contain_text("A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it.")
+            expect(theirs).to_contain_text("Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.")
+            expect(theirs).to_contain_text("Add your own and it still holds if they clear theirs.")
+            expect(list_under(theirs, "It can't:")).to_have_text(limits)
+            expect(other.locator(".split-detail").get_by_text("Marked · 1 mark", exact=True)).to_be_visible()
+            other.get_by_role("button", name="Add my mark too").click()
+            expect(other.locator(".split-detail").get_by_text("Marked · 2 marks (one yours)", exact=True)).to_be_visible()
+            other.get_by_role("button", name="Clear my mark").click()
+            confirm_clear(other)
+            expect(other.locator(".notice", has_text="Your mark on To be marked is cleared. Other members' marks still stand.")).to_be_visible()
+        page.get_by_role("button", name="Clear my mark").click()
+        confirm_clear(page)
+        expect(page.locator(".notice", has_text="Your mark on To be marked is cleared. This room has no marks now.")).to_be_visible()
+
+
+def test_adding_my_mark_still_offers_the_earlier_rooms_and_says_so_only_if_marked(browser_peer):
+    """Another member's mark on the continuing room leaves the choice about the earlier one this person is in. Ticked, the
+    control says those marks stay. Unticked, it says nothing of them, because there are none."""
+    base, store = browser_peer["base_url"], browser_peer["app"].state.store
+    patient, family, doctor = (browser_peer["users"][name]["id"] for name in ("patient", "family", "doctor"))
+    first = store.create_room(patient, "Kept close", [family])["id"]
+    second = store.add_participants(patient, first, [doctor])["id"]
+    store.mark_room(doctor, second)
+    stays = "Your marks on its earlier rooms stay."
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "family") as (page, _):
+        page.goto(f"{base}/#chats/{second}")
+        box = page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")
+        expect(box).to_be_checked()
+        box.uncheck()
+        page.get_by_role("button", name="Add my mark too").click()
+        expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
+        expect(page.locator(".cloud-control")).not_to_contain_text(stays)  # she unticked it, and has none there
+        with store.transaction() as db:
+            assert db.execute("SELECT count(*) FROM room_cloud WHERE room_id=? AND member_id=?", (first, family)).fetchone()[0] == 0
+        page.get_by_role("button", name="Clear my mark").click()
+        confirm_clear(page)
+        page.get_by_role("button", name="Add my mark too").click()
+        expect(page.locator(".cloud-control")).to_contain_text(stays)
+        with store.transaction() as db:
+            assert db.execute("SELECT count(*) FROM room_cloud WHERE room_id=? AND member_id=?", (first, family)).fetchone()[0] == 1
+
+
 def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
     """Never to a cloud model (connector plan, Task 2): a member marks a continuing room and, by default, the earlier
     room they're in; every member sees the badge with its count, and only the marker sees "(yours)"."""
@@ -3060,14 +3140,14 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
                 family.goto(browser_peer["base_url"] + f"/#chats/{second}")
                 expect(family.get_by_role("heading", name="Kept close")).to_be_visible()
                 expect(family.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")).to_be_checked()
-                family.get_by_role("button", name="Keep this room away from cloud models").click()
-                expect(family.locator(".split-detail").get_by_text("Never to a cloud model · 1 (yours)")).to_be_visible()
-                expect(family.locator(".split-list").get_by_text("Never to a cloud model · 1 (yours)")).to_have_count(2)
+                family.get_by_role("button", name="Mark this room").click()
+                expect(family.locator(".split-detail").get_by_text("Marked · 1 mark (yours)")).to_be_visible()
+                expect(family.locator(".split-list").get_by_text("Marked · 1 mark (yours)")).to_have_count(2)
                 expect(family.get_by_role("button", name="Clear my mark")).to_be_visible()
-                expect(family.get_by_text("Clearing takes your mark off this room only; your marks on earlier rooms stay.")).to_be_visible()
+                expect(family.get_by_text("Clearing takes your mark off this room only, and another member's mark would still hold. Your marks on its earlier rooms stay.")).to_be_visible()
 
             page.reload()
-            expect(page.locator(".split-detail").get_by_text("Never to a cloud model · 1", exact=True)).to_be_visible()
+            expect(page.locator(".split-detail").get_by_text("Marked · 1 mark", exact=True)).to_be_visible()
         with store.transaction() as db:
             marked = {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
         assert marked == {first, second}
@@ -3076,7 +3156,7 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
 def test_the_mark_controls_say_what_they_do(browser_peer):
     """Rio Grande's section 2 of room-cloud-ui (M1, S2, N1, N2): unticking the earlier rooms marks this room alone;
     "Clear my mark" clears it; the owner's add dialog says the new room keeps the mark; a room with a member on another
-    home says the mark holds on this home; a received or replaced room offers no mark; the badge shows a number only."""
+    home says what still goes there; a received or replaced room offers no mark; the badge shows a number only."""
     store = browser_peer["app"].state.store
     patient, family, doctor = (browser_peer["users"][name]["id"] for name in ("patient", "family", "doctor"))
     first = store.create_room(patient, "Kept close", [family])["id"]
@@ -3094,7 +3174,7 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
         with signed_in_browser(playwright, browser_peer, "family") as (page, _):
             page.goto(base + f"/#chats/{second}")
             page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too").uncheck()
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Mark this room").click()
             expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
             assert marked() == {second}  # unticked: this room alone
 
@@ -3104,14 +3184,14 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
                 expect(owner.get_by_text("The new room keeps the mark: no ship, and no one on another home, can join it.")).to_be_visible()
                 owner.goto(base + f"/#chats/{across}")
                 expect(owner.get_by_role("heading", name="Across homes")).to_be_visible()
-                expect(owner.get_by_text("This mark holds on this home. Members' homes get it once federation carries it.")).to_be_visible()
+                expect(owner.locator(".cloud-control")).to_contain_text("stop what's said here still going to a member already on another home, who may be a person or a ship, under that home's rules. Their home isn't told about the mark.")
                 assert owner.evaluate("cloudControl({id: 'x', origin: 'a-peer', member_ids: []}, false)") == ""
-                assert "Keep this room away" not in owner.evaluate("cloudControl({id: 'x', member_ids: []}, true)")
+                assert "Mark this room" not in owner.evaluate("cloudControl({id: 'x', member_ids: []}, true)")
                 assert "<b>" not in owner.evaluate("cloudBadge({cloud: {count: '<b>1</b>', mine: false}})")
 
             page.get_by_role("button", name="Clear my mark").click()
             confirm_clear(page)
-            expect(page.get_by_role("button", name="Keep this room away from cloud models")).to_be_visible()
+            expect(page.get_by_role("button", name="Mark this room")).to_be_visible()
             assert marked() == set()
 
 
@@ -3690,7 +3770,7 @@ def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(bro
     across = store.create_room(patient, "Across homes", [family, "remote_willa"])["id"]
     local = store.create_room(patient, "At home", [family])["id"]
     one = ("Willa <b>Away</b>: this room's title and messages are copied to their home; its brief and board stay here. "
-           "That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or "
+           "That home keeps its own copy under its own rules, and this home can't always tell whether the member is a person or "
            "a ship that sends text to Claude.")
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
         page.goto(f"{base}/#chats/{across}")
@@ -3706,7 +3786,7 @@ def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(bro
         two = page.evaluate("shipBanner({member_ids: ['remote_willa', 'remote_omar'], members: []})")
         assert "Some members of this room aren't on this home." in two and "Willa &lt;b&gt;Away&lt;/b&gt;, " in two
         assert ("this room's title and messages are copied to each one's home; its brief and board stay here. Each home "
-                "keeps its own copy under its own rules, and this home can't tell whether a member there is a person or "
+                "keeps its own copy under its own rules, and this home can't always tell whether a member there is a person or "
                 "a ship that sends text to Claude.") in two
         assert "other homes" not in two  # both may be on one home
         received = page.evaluate("shipBanner({origin: 'a-peer', member_ids: ['remote_willa'], members: []})")
@@ -4667,6 +4747,14 @@ def hold_revisions(page, layer_id):
     return held
 
 
+def wait_for_held(page, held, count=1):
+    for _ in range(100):
+        if len(held) >= count:
+            return
+        page.wait_for_timeout(50)
+    raise AssertionError(f"{len(held)} held of {count}")
+
+
 def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_layer(browser_peer):
     """Break caught: while a layer's revisions load the old editor is still on screen but the selection is already the
     new layer, so the old form's text was filed as the new layer's unsaved edit."""
@@ -4681,7 +4769,7 @@ def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_l
             page.wait_for_url(lambda url: second["id"] in url)
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")  # the old editor, still on screen
             page.get_by_label("Layer title").fill("Alpha typed")
-            assert held
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             title = page.get_by_label("Layer title")
@@ -4707,7 +4795,7 @@ def test_save_clicked_while_another_layer_opens_sends_nothing_to_the_new_layer(b
             page.wait_for_url(lambda url: second["id"] in url)
             page.get_by_label("Layer title").fill("Alpha typed")
             page.get_by_role("button", name="Save private draft").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
@@ -4732,13 +4820,420 @@ def test_new_layer_has_the_same_window_closed(browser_peer):
             page.wait_for_url(lambda url: "#layers/" in url and first["id"] not in url)
             page.get_by_label("Layer title").fill("Alpha typed")
             page.get_by_role("button", name="Save private draft").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Untitled")
             expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
             page.wait_for_timeout(300)
     assert puts == [], puts
+
+
+def until(page, ready, what):
+    """Polls here, in Python. A page.wait_for_function whose body returns a fetch's promise doesn't wait: a promise is truthy."""
+    for _ in range(100):
+        if ready():
+            return
+        page.wait_for_timeout(50)
+    raise AssertionError(what)
+
+
+def a_layer_open_with_unsaved_words(page, base, store, patient, **fields):
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **fields})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    page.goto(f"{base}/#layers/{layer['id']}")
+    page.reload()
+    body = page.locator("#layer-body")
+    expect(body).to_have_value("Released words")
+    body.fill("Released words, and more not saved yet")
+    return layer, body
+
+
+def test_turning_off_a_public_link_with_unsaved_words_keeps_the_words_and_the_link_off(browser_peer):
+    """The draft narrows with a revoke, so its version moves under an open editor. Their words must survive, and saving them
+    must not put the public link back."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, public=True)
+            page.get_by_role("button", name="Turn off public link").click()
+            expect(page.get_by_role("button", name="Turn off public link")).to_have_count(0)
+            expect(body).to_have_value("Released words, and more not saved yet")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the words were never saved")
+            assert store.get_layer(patient, layer["id"])["public"] is False  # saving what was on screen didn't turn it back on
+
+
+@pytest.mark.parametrize("route", ["person", "space", "public"])
+def test_saving_before_the_page_redraws_doesnt_bring_back_who_was_just_removed(browser_peer, route):
+    """The page hasn't redrawn, so a Save reads the boxes on screen, and the version the revoke's answer gave. It saves, with no
+    false conflict, and without who was just removed."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    space = store.create_space(patient, "Care", "care-circle", [family])
+    audience = {"person": {"audience_users": [family]}, "space": {"audience_spaces": [space["id"]]}, "public": {"public": True}}[route]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
+            redraw = []
+            page.route("**/api/home", lambda held: redraw.append(held))  # the refresh after the revoke: the page stays as it is
+            page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care|Turn off public link)")).first.click()
+            until(page, lambda: redraw, "the refresh never started")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the Save was refused")
+            for held in redraw:
+                held.continue_()
+            page.unroute("**/api/home")
+    saved = store.get_layer(patient, layer["id"])
+    assert saved["audience_users"] == [] and saved["audience_spaces"] == [] and saved["public"] is False
+
+
+@pytest.mark.parametrize("off", ["person", "public"])
+def test_a_second_tab_saving_its_text_doesnt_undo_a_revoke_made_in_the_first(browser_peer, off):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    audience = {"audience_users": [family]} if off == "person" else {"public": True}
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
+            revoke = {"user_ids": [family]} if off == "person" else {"public": True}
+            store.revoke_layer_routes(patient, layer["id"], {"revision": 1, **revoke})  # the first tab
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text was never saved")
+            expect(page.locator(".notice").first).to_contain_text("Who can see it stays as the latest draft has it")
+    saved = store.get_layer(patient, layer["id"])
+    assert saved["audience_users"] == [] and saved["public"] is False
+
+
+def test_a_refresh_doesnt_hide_a_real_conflict_with_another_tab(browser_peer):
+    """Any refresh gives the page the newest draft. The words on screen were begun from an older one, so their Save still meets
+    the other tab's, and doesn't overwrite it."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": store.get_layer(patient, layer["id"])["version"], "body": "The other tab's words"})
+            page.evaluate("refresh()")
+            page.wait_for_load_state("domcontentloaded")
+            until(page, lambda: page.evaluate("state.home.layers.find((item) => item.id === state.selectedLayerId).body") == "The other tab's words", "the refresh never landed")
+            expect(body).to_have_value("Released words, and more not saved yet")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+            page.get_by_role("button", name=re.compile("Save my text")).click()  # their choice, and then it's theirs
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text never saved")
+
+
+def test_a_file_uploaded_after_a_refresh_doesnt_hide_a_real_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": store.get_layer(patient, layer["id"])["version"], "body": "The other tab's words"})
+            page.evaluate("refresh()")
+            until(page, lambda: page.evaluate("state.home.layers.find((item) => item.id === state.selectedLayerId).body") == "The other tab's words", "the refresh never landed")
+            page.locator("#file-upload").set_input_files({"name": "care-note.txt", "mimeType": "text/plain", "buffer": b"A note."})
+            expect(page.get_by_text("care-note.txt uploaded")).to_be_visible()
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
+def the_page_layer(page, field):
+    return page.evaluate(f"state.home.layers.find((item) => item.id === state.selectedLayerId).{field}")
+
+
+@pytest.mark.parametrize("trigger", ["revoke", "refresh"])
+def test_a_first_keystroke_while_a_refresh_is_out_still_meets_the_other_tab(browser_peer, trigger):
+    """No edit yet, and another tab saves. A refresh gives the page the newest draft before it redraws the form, so for one round
+    trip the form shows the old words under the page's new version. Words typed then were begun from the old version, and their
+    Save meets the other tab's (train-1116 reader's S1)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", "public": True})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+            revisions = f"**/api/layers/{layer['id']}/revisions"
+            held = []
+            page.route(revisions, lambda route: held.append(route))  # the refresh's route load: the form isn't redrawn yet
+            if trigger == "revoke":
+                page.get_by_role("button", name="Turn off public link").click()
+            else:
+                page.evaluate("() => { refresh(); }")
+            until(page, lambda: held, "the refresh's route load never started")
+            assert the_page_layer(page, "body") == "The other tab's words"  # the page has the newest draft
+            expect(body).to_have_value("Released words")  # the form doesn't, yet
+            body.press("End")
+            body.press_sequentially(", and mine")
+            for route in held:
+                route.continue_()
+            page.unroute(revisions)
+            expect(body).to_have_value("Released words, and mine")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
+@pytest.mark.parametrize("route", ["public", "person", "space"])
+def test_a_revoke_whose_refresh_fails_doesnt_bring_back_who_was_turned_off(browser_peer, route):
+    """The revoke lands and narrows the draft, and the refresh after it fails. The editor is drawn from the page's copy, which must
+    have narrowed with its version, so the next Save keeps them off (train-1116 reader's S2)."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    space = store.create_space(patient, "Care", "care-circle", [family])
+    audience = {"public": {"public": True}, "person": {"audience_users": [family]}, "space": {"audience_spaces": [space["id"]]}}[route]
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **audience})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            page.route("**/api/home", lambda held: held.abort())
+            page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care|Turn off public link)")).first.click()
+            until(page, lambda: store.get_layer(patient, layer["id"])["version"] == layer["version"] + 1, "the revoke never landed")
+            expect(page.locator(".notice").first).to_contain_text("Connection lost")
+            page.unroute("**/api/home")
+            box = {"public": '[name="public"]', "person": f'[name="audience-user"][value="{family}"]', "space": f'[name="audience-space"][value="{space["id"]}"]'}[route]
+            expect(page.locator(f"#layer-form {box}")).not_to_be_checked()
+            body.fill("Released words, and a typo fixed")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "typo" in store.get_layer(patient, layer["id"])["body"], "the Save didn't go through")
+    saved = store.get_layer(patient, layer["id"])
+    assert saved["public"] is False and saved["audience_users"] == [] and saved["audience_spaces"] == []
+
+
+@pytest.mark.parametrize("route", ["public", "person"])
+def test_words_first_typed_before_the_redraw_after_a_revoke_save_with_no_false_conflict(browser_peer, route):
+    """No edit, and the revoke's refresh hasn't redrawn the form: it was drawn from the version before the revoke. The revoke
+    moved that version too, so words typed now save with no banner, and keep them off (train-1116 re-check's R-N1)."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    audience = {"public": True} if route == "public" else {"audience_users": [family]}
+    layer = store.create_layer(patient, {"title": "A note", "body": "Released words", **audience})
+    store.activate_layer(patient, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#layers/{layer['id']}")
+            page.reload()
+            body = page.locator("#layer-body")
+            expect(body).to_have_value("Released words")
+            redraw = []
+            page.route("**/api/home", lambda held: redraw.append(held))
+            page.get_by_role("button", name="Turn off public link" if route == "public" else re.compile("^Stop sharing directly with Sam")).first.click()
+            until(page, lambda: redraw, "the refresh never started")
+            body.press("End")
+            body.press_sequentially(", and mine")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            banner = page.get_by_role("button", name=re.compile("Save my text"))
+            until(page, lambda: banner.count() or "and mine" in store.get_layer(patient, layer["id"])["body"], "nothing happened")
+            assert banner.count() == 0
+            for held in redraw:
+                held.continue_()
+            page.unroute("**/api/home")
+    saved = store.get_layer(patient, layer["id"])
+    assert "and mine" in saved["body"] and saved["public"] is False and saved["audience_users"] == []
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_a_layer_saved_as_the_person_signs_out_says_nothing_to_the_next(browser_peer, next_signs_in):
+    """The Save's answer comes after the person signed out: nothing flashes, and no sign-in-again asks the next person
+    (train-1116 reader's N2)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            held = held_routes(page, re.compile(rf"/api/layers/{layer['id']}$"))
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+            assert not page.evaluate("state.reauth")
+
+
+@pytest.mark.parametrize("how", ["save", "save-my-text"])
+def test_a_save_that_landed_answering_after_the_next_person_is_in_says_nothing(browser_peer, how):
+    """The PUT reaches the station and saves; only its answer waits until the next person has signed in. Nothing of it flashes
+    for them (train-1116 re-check's R-N2: the guards after each PUT)."""
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            if how == "save-my-text":
+                store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+                page.get_by_role("button", name=re.compile("^Save")).first.click()
+                expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            held = []
+
+            def answer_later(route):
+                if route.request.method == "PUT" and not held:
+                    held.append((route, route.fetch()))  # the station has it; only the answer waits
+                else:
+                    route.continue_()
+            page.route(re.compile(rf"/api/layers/{layer['id']}$"), answer_later)
+            page.get_by_role("button", name=re.compile("Save my text" if how == "save-my-text" else "^Save")).first.click()
+            until(page, lambda: held, "the PUT never left")
+            assert "more not saved" in store.get_layer(patient, layer["id"])["body"]  # it landed
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("organizer")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            route, response = held[0]
+            route.fulfill(response=response)
+            page.wait_for_timeout(500)
+            assert page.evaluate("state.flash") is None
+
+
+@pytest.mark.parametrize("next_signs_in", [False, True])
+def test_saving_my_text_as_the_person_signs_out_says_nothing_to_the_next(browser_peer, next_signs_in):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            store.save_layer(patient, layer["id"], {"version": layer["version"], "body": "The other tab's words"})
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            held = held_routes(page, re.compile(rf"/api/layers/{layer['id']}$"))  # the latest draft's read
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            wait_for_hold(page, held)
+            signed_out_as_a_read_answers(page, browser_peer, held, next_signs_in=next_signs_in)
+    assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"
+
+
+def test_two_saves_in_a_row_arent_a_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the first save")
+            expect(page.locator(".notice").first).to_have_text("Private draft saved")
+            body.fill("And a second go")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: store.get_layer(patient, layer["id"])["body"] == "And a second go", "the second save")
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_have_count(0)
+
+
+def test_words_typed_while_a_save_is_out_save_after_it_with_no_false_conflict(browser_peer):
+    base, store, patient = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient)
+            puts = []
+            page.route(f"**/api/layers/{layer['id']}", lambda route: puts.append(route) if route.request.method == "PUT" and not puts else route.continue_())
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: puts, "the save never left")
+            body.press("End")
+            body.press_sequentially(", still typing")
+            puts[0].continue_()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the first save")
+            page.wait_for_timeout(200)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "still typing" in store.get_layer(patient, layer["id"])["body"], "the later words never saved")
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_have_count(0)
+
+
+@pytest.mark.parametrize("narrows", [True, False])
+def test_a_revoke_doesnt_hide_a_real_conflict_with_another_tab(browser_peer, narrows):
+    """Another tab saved first. Whether or not the revoke changes the draft, this tab's Save has to meet that, not overwrite it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            fresh = store.get_layer(patient, layer["id"])
+            other_tab = {"version": fresh["version"], "body": "The other tab's words"}
+            if not narrows:
+                other_tab["audience_users"] = []  # the release still names them, and this draft no longer does
+            store.save_layer(patient, layer["id"], other_tab)
+            redraw = []
+            page.route("**/api/home", lambda held: redraw.append(held))  # before the redraw: after it, any refresh picks up the newest version (boarded)
+            page.get_by_role("button", name=re.compile("^Stop sharing directly with Sam")).click()
+            until(page, lambda: redraw, "the refresh never started")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            expect(page.get_by_role("button", name=re.compile("Save my text"))).to_be_visible()
+            assert store.get_layer(patient, layer["id"])["body"] == "The other tab's words"  # not overwritten
+            for held in redraw:
+                held.continue_()
+            page.unroute("**/api/home")
+
+
+def test_words_typed_while_a_second_tabs_text_saves_dont_bring_back_who_was_turned_off(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            store.revoke_layer_routes(patient, layer["id"], {"revision": 1, "user_ids": [family]})  # the first tab
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            puts = []
+            page.route(f"**/api/layers/{layer['id']}", lambda route: puts.append(route) if route.request.method == "PUT" and not puts else route.continue_())
+            page.get_by_role("button", name=re.compile("Save my text")).click()
+            until(page, lambda: puts, "the save never left")
+            body.press("End")
+            body.press_sequentially(", still typing")
+            puts[0].continue_()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the text never saved")
+            page.unroute(f"**/api/layers/{layer['id']}")
+            page.wait_for_timeout(200)
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "still typing" in store.get_layer(patient, layer["id"])["body"], "the later words never saved")
+    assert store.get_layer(patient, layer["id"])["audience_users"] == []
+
+
+def test_a_revoke_answered_after_opening_another_layer_leaves_its_boxes_alone(browser_peer):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            other = store.create_layer(patient, {"title": "Beta", "body": "B", "audience_users": [family]})
+            layer, _body = a_layer_open_with_unsaved_words(page, base, store, patient, audience_users=[family])
+            held = []
+            page.route(f"**/api/layers/{layer['id']}/revoke", lambda route: held.append(route))
+            page.get_by_role("button", name=re.compile("^Stop sharing directly with Sam")).click()
+            until(page, lambda: held, "the revoke never started")
+            page.get_by_role("button", name="Beta").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta")
+            redraw = []
+            page.route("**/api/home", lambda route: redraw.append(route))
+            held[0].continue_()
+            until(page, lambda: redraw, "the revoke never answered")
+            box = page.locator(f'#layer-form [name="audience-user"][value="{family}"]')
+            expect(box).to_be_checked()  # it's Beta's, and Beta's sharing hasn't changed
+            for route in redraw:
+                route.continue_()
+            page.unroute("**/api/home")
+    assert family in store.get_layer(patient, other["id"])["audience_users"]
+
+
+@pytest.mark.parametrize("route", ["person", "space"])
+def test_removing_someone_with_unsaved_words_keeps_the_words_and_them_out(browser_peer, route):
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    space = store.create_space(patient, "Care", "care-circle", [family])
+    audience = {"audience_users": [family]} if route == "person" else {"audience_spaces": [space["id"]]}
+    gone = lambda layer: not (store.get_layer(patient, layer["id"])["audience_users"] or store.get_layer(patient, layer["id"])["audience_spaces"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            layer, body = a_layer_open_with_unsaved_words(page, base, store, patient, **audience)
+            page.get_by_role("button", name=re.compile("^(Stop sharing directly with Sam|Turn off Care)")).click()
+            until(page, lambda: gone(layer), "the revoke never landed")
+            page.wait_for_function("() => !document.querySelector('[data-action=\"revoke-route\"]')")
+            expect(body).to_have_value("Released words, and more not saved yet")
+            page.get_by_role("button", name=re.compile("^Save")).first.click()
+            until(page, lambda: "more not saved" in store.get_layer(patient, layer["id"])["body"], "the words were never saved")
+    assert gone(layer)
 
 
 def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_layer_public(browser_peer):
@@ -4757,13 +5252,386 @@ def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_l
             page.get_by_role("button", name="Beta layer").click()
             page.wait_for_url(lambda url: second["id"] in url)
             page.get_by_role("button", name="Turn off public link").click()
-            page.wait_for_timeout(300)
+            wait_for_held(page, held)
             for route in held:
                 route.continue_()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
             page.wait_for_timeout(300)
     assert store.active_layer(second["id"], public=True)["body"] == "B."
     assert store.active_layer(first["id"], public=True)["body"] == "A."
+
+
+def released(browser_peer, layer):
+    browser_peer["app"].state.store.activate_layer(browser_peer["users"]["patient"]["id"], layer["id"], layer["version"])
+
+
+def editor_history(page):
+    return page.locator("section.editor .history")
+
+
+def test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers(browser_peer):
+    """Break caught: a failed revisions fetch left the last layer's releases, words and all, under this layer's title."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    thrown = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: thrown.append(str(error)))
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.reload()  # a layer reached by its address, not a click, shows its own history too
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.route(f"**/api/layers/{second['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}'))
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            expect(editor_history(page)).not_to_contain_text("Release 1")
+            expect(editor_history(page)).not_to_contain_text("Alpha body.")
+            expect(editor_history(page)).not_to_contain_text("No releases yet")  # we don't know that
+            expect(editor_history(page)).to_contain_text("isn't loaded")
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+            assert thrown == []
+            page.reload()  # nothing held at all: the first read fails, with no click to speak for it
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            expect(editor_history(page)).to_contain_text("isn't loaded")
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+            page.unroute(f"**/api/layers/{second['id']}/revisions")
+            page.get_by_role("button", name="Beta layer").click()  # the same layer again reads it again
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)  # the announcer keeps its last words
+
+
+def test_opening_the_layer_already_open_says_when_its_history_cant_be_read(browser_peer):
+    """The same layer again changes no address, so no route load runs: only the click can say the read failed."""
+    first, _ = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_role("button", name="Alpha layer")).to_be_visible()
+            with page.expect_response(lambda response: response.url.endswith(f"/{first['id']}/revisions")):
+                page.get_by_role("button", name="Alpha layer").click()  # that read must be done, or it's the one that fails below
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(100)
+            page.route(f"**/api/layers/{first['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}'))
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.locator('[role="status"]').first).to_contain_text("Not just now")
+
+
+def test_a_late_history_answer_doesnt_land_on_the_layer_now_open(browser_peer):
+    """Break caught: Beta's slow answer replaced Alpha's history after the person had gone back to Alpha, with no error."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, second)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            answers = []
+            page.on("response", lambda response: answers.append(response) if second["id"] in response.url else None)
+            for route in held:
+                route.continue_()
+            for _ in range(100):
+                if len(answers) >= len(held):
+                    break
+                page.wait_for_timeout(50)
+            assert len(answers) >= len(held)
+            page.wait_for_timeout(300)  # a render, if the answer brought one
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            expect(editor_history(page)).not_to_contain_text("Release 1")
+
+
+def test_an_older_history_answer_for_the_same_layer_doesnt_replace_a_newer_one(browser_peer):
+    """Break caught (the reader's F1): A, then B, then A again, and the first A answer, arriving last, put back the older
+    history, with the right layer's words and no error."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            answered = []  # answered by the server now, delivered to the page later
+
+            def hold_the_first_answer(route):
+                if answered:
+                    route.continue_()
+                else:
+                    answered.append((route, route.fetch()))
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first_answer)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            wait_for_held(page, answered)
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            saved = store.save_layer(owner, first["id"], {"version": first["version"], "body": "Alpha body, later."})
+            store.activate_layer(owner, first["id"], saved["version"])  # a second tab would do this
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 2")
+            for route, response in answered:
+                route.fulfill(response=response)
+            page.wait_for_timeout(300)
+            expect(editor_history(page)).to_contain_text("Release 2")
+
+
+def test_an_older_failure_for_the_same_layer_says_nothing(browser_peer):
+    """The same A, B, A: the first A read fails last, and the right history is on screen, so no error goes above it."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            held = []
+
+            def hold_the_first(route):
+                if held:
+                    route.continue_()
+                else:
+                    held.append(route)
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            held[0].fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+            expect(editor_history(page)).to_contain_text("Release 1")
+
+
+def test_a_late_answer_for_the_open_layer_doesnt_wipe_what_the_page_said(browser_peer):
+    """The reader's case: a click's read still on its way when the page says something new, like a save. An older answer
+    has nothing to add, so it neither clears that nor renders."""
+    first, _ = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(200)
+            held = []
+
+            def hold_the_first(route):
+                if held:
+                    route.continue_()
+                else:
+                    held.append(route)
+            page.route(f"**/api/layers/{first['id']}/revisions", hold_the_first)
+            page.get_by_role("button", name="Alpha layer").click()  # at its address: this click reads, and is held
+            wait_for_held(page, held)
+            answered = []
+            page.on("response", lambda response: answered.append(response) if response.url.endswith("/revisions") else None)
+            page.get_by_role("button", name="Alpha layer").click()  # the newer read, taken
+            for _ in range(100):
+                if answered:
+                    break
+                page.wait_for_timeout(50)
+            assert answered
+            page.get_by_label("Layer title").fill("Alpha, edited")
+            page.get_by_role("button", name="Save private draft").click()
+            said = page.locator('[role="status"]', has_text="Private draft saved").first
+            expect(said).to_be_visible()
+            held[0].continue_()
+            page.wait_for_timeout(400)
+            expect(said).to_be_visible()
+
+
+@pytest.mark.parametrize("answer", ["good", "bad"])
+def test_a_read_held_across_a_sign_in_does_nothing(browser_peer, answer):
+    """One account's read, answered after someone else has signed in on this page, who has no layer open."""
+    first, second = two_layers(browser_peer)
+    released(browser_peer, second)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []  # answered now, as the account that asked; let through, it would be answered as whoever is signed in by then
+            page.route(f"**/api/layers/{second['id']}/revisions", lambda route: held.append((route, route.fetch())))
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            assert held[0][1].status == 200 and "Beta body." in held[0][1].text()
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("family")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_role("heading", name="My sharing layers")).to_be_visible()
+            for route, response in held:
+                if answer == "good":
+                    route.fulfill(response=response)
+                else:
+                    route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+            assert page.evaluate("[state.revisions.length, state.revisionsOf]") == [0, None]
+
+
+@pytest.mark.parametrize("answer", ["good", "bad"])
+def test_a_read_landing_after_the_session_ended_does_nothing(browser_peer, answer):
+    """The reader's N1: a session that ends shows the sign-in page with no sign-out, so nothing has been forgotten yet. A
+    good answer mustn't be taken, and a bad one mustn't be waiting for whoever signs in next."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []
+            page.route(f"**/api/layers/{second['id']}/revisions", lambda route: held.append((route, route.fetch())))
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.evaluate("showLogin('Your session ended.')")
+            for route, response in held:
+                if answer == "good":
+                    route.fulfill(response=response)
+                else:
+                    route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            assert page.evaluate("state.revisionsOf") != second["id"]
+            assert page.evaluate("state.flash") is None
+
+
+def test_one_click_reads_a_layers_history_once(browser_peer):
+    """Break caught (the reader's F3): the click and the hash change each read it, each answer rendered, and one failing
+    put an error above a good history. The same layer again, with no hash change, still reads."""
+    first, second = two_layers(browser_peer)
+    reads = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            page.wait_for_timeout(200)
+            page.on("request", lambda request: reads.append(request.url) if request.url.endswith("/revisions") else None)
+            page.get_by_role("button", name="Beta layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+            assert len(reads) == 1 and second["id"] in reads[0]
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_timeout(300)
+            assert len(reads) == 2
+
+
+def test_a_late_failure_after_going_home_says_nothing(browser_peer):
+    """The reader's F4: leaving the page is leaving the layer, though the selection stays."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("link", name="Home", exact=True).click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            for route in held:
+                route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.locator('[role="status"]').get_by_text("Not just now")).to_have_count(0)
+
+
+def test_signing_out_forgets_the_release_history(browser_peer):
+    """The reader's F2: one account's release words stayed in page memory after sign-out, for the next account."""
+    first, _ = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(editor_history(page)).to_contain_text("Release 1")
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            assert page.evaluate("[state.revisions.length, state.revisionsOf, state.selectedLayerId]") == [0, None, None]
+
+
+def test_a_new_account_on_the_page_forgets_the_release_history(browser_peer):
+    """The other way an account changes with no sign-out: a session that ended, and someone else signing in."""
+    first, _ = two_layers(browser_peer)
+    released(browser_peer, first)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            watch_reads(page)
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            expect(editor_history(page)).to_contain_text("Release 1")
+            # The click's address change runs its own read after this; the first layer is Alpha too, so the history above can be
+            # the list's. Changing the account before that read starts lets the address pick Alpha again (2 runs in 10).
+            reads_settled(page)
+            page.evaluate("bindEditorIdentity({ peer_id: 'elsewhere', id: 'someone-else' })")
+            assert page.evaluate("[state.revisions.length, state.revisionsOf, state.selectedLayerId]") == [0, None, None]
+
+
+def test_a_late_failure_for_a_layer_the_person_left_says_nothing(browser_peer):
+    """Break caught: a failed answer for the layer left behind raised its error over the one now open."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.get_by_role("button", name="Alpha layer").click()
+            page.wait_for_url(lambda url: first["id"] in url)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+            for route in held:
+                route.fulfill(status=500, content_type="application/json", body='{"error": "Not just now"}')
+            page.wait_for_timeout(400)
+            expect(page.get_by_text("Not just now")).to_have_count(0)
+            expect(editor_history(page)).to_contain_text("No releases yet")
+
+
+def test_a_late_answer_doesnt_clear_what_the_open_layer_said(browser_peer):
+    """The open layer's own failure stays on screen when a late answer for the layer left behind comes in."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            wait_for_held(page, held)
+            page.route(f"**/api/layers/{first['id']}/revisions",
+                       lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "Alpha not just now"}'))
+            page.get_by_role("button", name="Alpha layer").click()
+            alpha_failed = page.locator('[role="status"]').first
+            expect(alpha_failed).to_contain_text("Alpha not just now")
+            for route in held:
+                route.continue_()
+            page.wait_for_timeout(400)
+            expect(alpha_failed).to_contain_text("Alpha not just now")
+            expect(editor_history(page)).to_contain_text("No releases yet")  # what's held is this layer's own, so it stays
 
 
 def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_peer):
@@ -6974,7 +7842,7 @@ def test_remove_and_clear_my_mark_ask_first_in_place(browser_peer, viewport):
             expect(remove).to_have_count(0)
             assert family not in store.get_room(patient, x["id"])["member_ids"]
             expect(page.get_by_role("button", name="Remove Dr. Morgan from this room")).to_be_focused()  # the next one, not the top
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Mark this room").click()
             clear = page.get_by_role("button", name="Clear my mark")
             mark_ask = page.get_by_role("group", name="Clear your mark on this room?")
             expect(clear).to_be_visible()
@@ -6987,7 +7855,7 @@ def test_remove_and_clear_my_mark_ask_first_in_place(browser_peer, viewport):
             expect(clear).to_be_focused()
             clear.click()
             confirm_clear(page)
-            keep = page.get_by_role("button", name="Keep this room away from cloud models")
+            keep = page.get_by_role("button", name="Mark this room")
             expect(keep).to_be_focused()
             assert not read_room(page, x).get("cloud")
 
@@ -7003,14 +7871,14 @@ def test_an_ask_about_what_is_gone_goes_with_it(browser_peer):
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.goto(f"{base}/#chats/{x['id']}")
             page.reload()
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Mark this room").click()
             page.get_by_role("button", name="Clear my mark").click()
             expect(page.get_by_role("group", name="Clear your mark on this room?")).to_be_visible()
             page.evaluate("id => api(`/api/chats/${id}/cloud`, { method: 'DELETE', json: {} })", x["id"])  # another tab
             page.evaluate("refresh()")
-            expect(page.get_by_role("button", name="Keep this room away from cloud models")).to_be_visible()
+            expect(page.get_by_role("button", name="Mark this room")).to_be_visible()
             assert page.evaluate("state.roomAsk") is None
-            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            page.get_by_role("button", name="Mark this room").click()
             expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
             expect(page.locator(".room-ask")).to_have_count(0)
             page.get_by_role("button", name="Remove Sam Family from this room").click()
@@ -7379,7 +8247,7 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
             plain, marked = page.get_by_label('Care plan'), page.get_by_label('Night notes')
             expect(plain).not_to_be_checked()
             expect(marked).to_be_disabled()
-            expect(page.get_by_text('Kept away from cloud models')).to_be_visible()
+            expect(page.get_by_text('Kept from connected apps')).to_be_visible()
             expect(page.get_by_text('Growing: earlier part of Growing')).to_be_visible()
             expect(page.get_by_text('<img src=x id=planted> notes')).to_be_visible()
             assert page.locator('#planted').count() == 0  # shown as text, never made into an element
@@ -7400,6 +8268,24 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
     assert (query['state'], query['iss']) == ('st-1', CONSENT_ORIGIN)
     with home['store'].transaction() as db:
         assert [row['rooms'] for row in db.execute('SELECT rooms FROM connector_grants')] == ['*']
+
+
+@pytest.mark.parametrize("who, line", [
+    ("jenn@example.org", "Growing: earlier part, not marked. An app with all your rooms can read it."),
+    ("sam@example.org", "Growing: earlier part of Growing"),
+])
+def test_a_marked_rooms_earlier_part_says_if_the_mark_doesnt_cover_it(connector_home, who, line):
+    """A member's mark covers the rooms they were in. Jenn joined only the continuing room, so the earlier part stays open
+    to an all-rooms app, under a row that says it's kept. Sam was in both."""
+    home, landed = connector_home, []
+    with home['store'].transaction() as db:
+        marker = db.execute('SELECT id FROM users WHERE username=?', (who,)).fetchone()[0]
+    home['store'].mark_room(marker, home['rooms']['growing'])
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            sign_in_to_consent(page)
+            expect(page.get_by_text(line, exact=True)).to_be_visible()
 
 
 def test_the_consent_page_says_when_a_request_has_expired_and_offers_no_form(connector_home):
@@ -7472,6 +8358,31 @@ def connected_apps(page):
     page.get_by_role("link", name="Connected apps").click()
     expect(page.get_by_role("heading", name="Connected apps", level=1)).to_be_visible()
     return page.locator(".app-item")
+
+
+@pytest.mark.connector
+def test_a_connection_says_it_cant_read_a_room_marked_since(browser_peer):
+    """The list says what the app reads, so a room a member has marked since says it can't, in place of a badge that reads
+    as being about the app's reading at all. An all-rooms connection says what it leaves out, in the row and in the form."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care, lab = (store.create_room(patient, title, [])["id"] for title in ("Care plan", "Lab notes"))
+    connect_claude(browser_peer, "patient", [care, lab])
+    store.mark_room(patient, lab)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        rooms = connected_apps(page).locator(".app-rooms")
+        expect(rooms.locator("li", has_text="Lab notes")).to_have_text("Lab notes: it can't read this one, because a member has marked it.")
+        expect(rooms.locator("li", has_text="Care plan")).to_have_text("Care plan")
+        page.get_by_role("button", name="Change rooms").click()
+        expect(page.get_by_text("Except rooms a member keeps from ships and apps.")).to_be_visible()
+
+
+@pytest.mark.connector
+def test_an_all_rooms_connection_says_what_it_leaves_out(browser_peer):
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    store.create_room(patient, "Care plan", [])
+    connect_claude(browser_peer, "patient", "*")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        expect(connected_apps(page).locator(".app-rooms")).to_have_text("It reads all your rooms on this home, including new ones, except rooms a member keeps from ships and apps.")
 
 
 @pytest.mark.connector
@@ -7593,7 +8504,7 @@ def test_receipts_show_what_was_read_a_page_at_a_time_and_start_again_when_the_l
         item.get_by_role("button", name="Show what it read").click()
         receipts = item.locator(".receipt")
         expect(receipts).to_have_count(20)
-        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from cloud models\)$"))
+        expect(receipts.first).to_have_text(re.compile(r"^[^·]+ · Read a room · Refused: <i>Care</i> plan \(a member keeps it from ships and apps\)$"))
         expect(receipts.nth(1)).to_have_text(re.compile(r"^[^·]+ · Read a room · Read: <i>Care</i> plan$"))
         assert page.locator("#main-content i").count() == 0
         item.get_by_role("button", name="Show earlier").dblclick()  # one read at a time: the next page once
@@ -7874,7 +8785,7 @@ def test_p5_a_rooms_save_that_meets_a_mark_400(browser_peer):
         item.get_by_label("Lab notes").uncheck()
         store.mark_room(family, care)  # a member marks Care plan while the form is open
         item.get_by_role("button", name="Save rooms").click()
-        expect(page.locator(".notice.error")).to_contain_text("keeps it away from cloud models")
+        expect(page.locator(".notice.error")).to_contain_text("A member has marked that room")
     with store.transaction() as db:
         [(rooms,)] = db.execute("SELECT rooms FROM connector_grants").fetchall()
     assert set(json.loads(rooms)) == {care, lab}

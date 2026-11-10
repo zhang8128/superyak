@@ -23,6 +23,7 @@ const state = {
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
+  revisionsOf: null,
   room: null,
   selectedLayerId: null,
   selectedSharedId: null,
@@ -177,7 +178,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -404,6 +405,7 @@ function editorState(layer, active) {
 }
 
 function revisionHistory() {
+  if (state.revisionsOf !== state.selectedLayerId) return `<p class="meta">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
   return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
@@ -461,7 +463,7 @@ function layerEditor(layer) {
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
-    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
+    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}" data-version="${escapeHtml(String(layer.version))}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
@@ -1450,8 +1452,12 @@ function dockingDialog() {
 }
 
 function cloudBadge(room) {
-  // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
-  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+  // A room's mark: only a marked room carries `cloud`, its count and whether one of the marks is this person's. It promises
+  // nothing here: what a mark does and can't do takes more than a badge, and it's said at the control.
+  if (!room.cloud) return "";
+  const count = Number(room.cloud.count) || 0;  // a number only, whoever sent it
+  const yours = !room.cloud.mine ? "" : count === 1 ? " (yours)" : " (one yours)";
+  return `<span class="badge cloud-badge">Marked · ${count} mark${count === 1 ? "" : "s"}${yours}</span>`;
 }
 
 function earlierRoomsWithMe(room) {
@@ -1471,21 +1477,24 @@ function earlierRoomsWithMe(room) {
 
 function cloudControl(room, replaced) {
   if (room.origin) return "";  // a received room's mark is its home's to keep
-  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
-  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
-    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
+  // This home can't always tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  const away = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? "<li>stop what's said here still going to a member already on another home, who may be a person or a ship, under that home's rules. Their home isn't told about the mark.</li>" : "";
+  const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading or changing it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
   if (room.cloud?.mine) {
+    const yoursEarlier = earlierRoomsWithMe(room).some((item) => item.cloud?.mine) ? " Your marks on its earlier rooms stay." : "";
     const ask = roomAskFor(room, "clear");
     const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
       : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
       : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a connected app that reads all of a member's rooms can read this one from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
         "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
-    return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}${clear}</div>`;
+    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1499,13 +1508,14 @@ async function markRoom(room, earlier) {
     return;
   }
   if (identityKey(state.me) !== who) return;  // not the next person's news
-  await refresh(`${room.title} is kept away from cloud models.`);  // by name: another room may have opened while this was sent
+  await refresh(`${room.title} is kept away from ships and connected apps on this home.`);  // by name: another room may have opened while this was sent
 }
 
 async function clearMark(room) {
   const who = identityKey(state.me);
+  let answer;
   try {
-    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
+    answer = await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
     if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, error.message), true);
@@ -1513,7 +1523,8 @@ async function clearMark(room) {
     return;
   }
   if (identityKey(state.me) !== who) return;
-  await refresh(`Your mark on ${room.title} is cleared. Other members' marks still stand.`);
+  await refresh(answer?.cloud?.count ? `Your mark on ${room.title} is cleared. Other members' marks still stand.`
+    : `Your mark on ${room.title} is cleared. This room has no marks now.`);
 }
 
 function shipBanner(room) {
@@ -1528,8 +1539,8 @@ function shipBanner(room) {
   const homes = room.origin
     ? `<strong>This room's home is another home.</strong><p>What you write here is copied there and to each member's home, under their rules. This home can't see whether ships there send it to Claude.</p>`
     : away.length === 1
-      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or a ship that sends text to Claude.</p>`
-      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
+      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't always tell whether the member is a person or a ship that sends text to Claude.</p>`
+      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't always tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
   return claude || bridge || homes ? `<div class="notice ship-banner">${claude}${bridge}${homes}</div>` : "";
 }
 
@@ -1738,7 +1749,7 @@ const APP_ENDED = new Map([
   ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["unknown", "Why it ended wasn't recorded."]]);  // a NULL reason, from before 9a recorded one (9a's N1)
-const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
+const APP_REFUSED = new Map([["marked", "a member keeps it from ships and apps"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
 const RECEIPT_PAGE = 20;
 
 function appName(host) {
@@ -1855,7 +1866,7 @@ function appRoomsForm(app) {
   const id = escapeHtml(app.id), chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room)), name = escapeHtml(appName(app.app));
   const choices = appRoomChoices(app).map((room) => `<label class="choice"><input type="checkbox" name="app-room" value="${escapeHtml(room.id)}"${chosen.has(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
     || `<p class="meta">You have no room it can read.</p>`;
-  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
+  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from ships and apps.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
 }
 
 async function saveAppRooms(form) {
@@ -1871,13 +1882,13 @@ function appRoomsList(app, live) {
   const name = escapeHtml(appName(app.app));
   if (app.damaged) return `<div class="app-rooms"><p class="meta">Its room list is damaged, so it can't read any room. Revoke it, then connect again.</p></div>`;
   const verb = live ? "It reads" : "It could read";  // an ended connection reads nothing
-  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from cloud models.</p></div>`;
+  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from ships and apps.</p></div>`;
   if (!app.rooms.length) return "";  // a connection a restore removed: only its receipts are left
   const ids = new Set(app.rooms.map((room) => room.room));
   const rows = app.rooms.map((room) => {
     const next = room.continues_in, offer = live && next && !ids.has(next.room)
       ? `<p class="app-offer">${escapeHtml(room.title)} continues in a new room. Let ${name} read it? <button class="button secondary" type="button" data-action="app-room-add" data-id="${escapeHtml(app.id)}" data-room="${escapeHtml(next.room)}" aria-label="Let ${name} read the new ${escapeHtml(next.title)}">Yes, add it</button></p>` : "";
-    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">Never to a cloud model</span>' : ""}${offer}</li>`;
+    return `<li>${escapeHtml(room.title)}${room.cloud ? ": it can't read this one, because a member has marked it." : ""}${offer}</li>`;
   }).join("");
   return `<div class="app-rooms"><p class="meta">${verb} these rooms:</p><ul>${rows}</ul></div>`;
 }
@@ -2022,10 +2033,9 @@ async function loadRoute() {
   if (route === "layers") {
     state.selectedLayerId = id || state.selectedLayerId || state.home.layers[0]?.id || null;
     if (state.selectedLayerId && state.home.layers.some((item) => item.id === state.selectedLayerId)) {
-      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);
+      await loadRevisions(state.selectedLayerId);
     } else {
       state.selectedLayerId = null;
-      state.revisions = [];
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
@@ -2263,9 +2273,18 @@ function rememberLayerForm(form = document.querySelector("#layer-form")) {
     dirty: true,
     conflict: previous?.conflict || false,
     generation: (previous?.generation || 0) + 1,
+    // The version these words were begun from: the one the form was drawn from, not the page's. A refresh gives the page the
+    // newest draft before it redraws the form, and if the save went by that, it would overwrite another tab's words with no
+    // conflict.
+    baseVersion: previous?.baseVersion ?? drawnVersion(form, layer),
   };
   state.layerEdits[layer.id] = edit;
   return edit;
+}
+
+function drawnVersion(form, layer) {
+  const drawn = Number(form.dataset.version);
+  return Number.isInteger(drawn) && drawn > 0 ? drawn : layer.version;
 }
 
 function updateLayer(layer) {
@@ -2279,18 +2298,21 @@ async function saveLayer(form) {
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
   const status = form.querySelector("#layer-status");
+  const who = identityKey(state.me);
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
-    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: layer.version, ...values } });
+    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: submitted.baseVersion, ...values } });
+    if (identityKey(state.me) !== who) return;  // answered after the person changed: not the next person's news
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     const newerEdits = current && current.generation !== submitted.generation;
     if (!newerEdits) delete state.layerEdits[layer.id];
-    else current.conflict = false;
+    else { current.conflict = false; current.baseVersion = saved.version; }
     setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     if (error.status === 401) {
       const current = state.layerEdits[layer.id] || submitted;
       current.conflict = false;
@@ -2358,6 +2380,7 @@ async function uploadFile(input) {
       dirty: true,
       conflict: current?.conflict || false,
       generation: (current?.generation || 0) + 1,
+      baseVersion: current?.baseVersion ?? savedLayer.version,
     };
     if (state.selectedLayerId === layerId) {
       render();
@@ -2369,11 +2392,45 @@ async function uploadFile(input) {
   }
 }
 
+// One layer's release history. A read counts only while the person is still on that layer's page, and only if no newer
+// read has already been taken: an answer that comes late, good or bad, changes nothing here. revisionHistory shows only
+// what's held for the layer on screen.
+let revisionsRead = 0, revisionsTaken = 0;
+async function loadRevisions(id) {
+  const read = ++revisionsRead;
+  const current = () => state.me && routeParts().route === "layers" && state.selectedLayerId === id;
+  try {
+    const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
+    if (!current() || read < revisionsTaken) return false;
+    revisionsTaken = read;
+    state.revisions = revisions;
+    state.revisionsOf = id;
+    return true;
+  } catch (error) {
+    if (current() && read === revisionsRead) throw error;
+    return false;
+  }
+}
+
+function forgetRevisions() {
+  state.revisions = [];
+  state.revisionsOf = null;
+  state.selectedLayerId = null;
+}
+
 async function openLayer(id) {
   state.selectedLayerId = id;
-  location.hash = `layers/${pathPart(id)}`;
-  state.revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
-  state.flash = null;
+  const address = `layers/${pathPart(id)}`;
+  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read
+    location.hash = address;
+    return;
+  }
+  try {
+    if (!await loadRevisions(id)) return;  // a newer read renders itself
+    state.flash = null;
+  } catch (error) {
+    setFlash(error.message, true);
+  }
   render();
 }
 
@@ -2382,20 +2439,32 @@ async function resolveConflict() {
   const layer = selectedLayer();
   const initial = rememberLayerForm();
   if (!layer || !initial) return;
+  const who = identityKey(state.me);
   try {
     const latest = await api(`/api/layers/${pathPart(layer.id)}`);
+    if (identityKey(state.me) !== who) return;
     const submitted = state.layerEdits[layer.id];
+    // "My text": who can see it stays as the latest draft has it, or this tab's old boxes put back someone just turned off.
+    const { audience_users: users, audience_spaces: spaces, public: isPublic, ...text } = submitted.values;
     const saved = await api(`/api/layers/${pathPart(layer.id)}`, {
       method: "PUT",
-      json: { version: latest.version, ...submitted.values },
+      json: { version: latest.version, ...text },
     });
+    if (identityKey(state.me) !== who) return;
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
-    else if (current) current.conflict = false;
-    setFlash("Private draft saved");
+    else if (current) {
+      current.conflict = false;
+      current.baseVersion = saved.version;
+      Object.assign(current.values, { audience_users: saved.audience_users, audience_spaces: saved.audience_spaces, public: saved.public });
+    }
+    const same = (a = [], b = []) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    const moved = !same(users, saved.audience_users) || !same(spaces, saved.audience_spaces) || Boolean(isPublic) !== Boolean(saved.public);
+    setFlash(moved ? "Your text is saved. Who can see it stays as the latest draft has it, so check that before you turn on a version." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(`${error.message} Your text is still here.`, true);
     render();
   }
@@ -2415,11 +2484,45 @@ async function activateLayer() {
   }
 }
 
+// A revoke narrows the draft on the station too. Unsaved words in the editor stay, and what was just turned off stays off in
+// them, or the next save would turn it back on.
+function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
+  // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
+  // The page's copy moves as the station's did: its version and what was narrowed, together. If only the version moved and the
+  // refresh after this failed, the editor would be drawn from that copy with the old boxes ticked, under a version the station
+  // takes, and the next Save would put back what was just turned off.
+  const moved = answer.layer_version !== answer.layer_version_before;
+  const layer = state.home?.layers?.find((item) => item.id === layerId);
+  if (layer && moved && layer.version === answer.layer_version_before) {
+    layer.version = answer.layer_version;
+    if (off) layer.public = false;
+    layer.audience_users = (layer.audience_users || []).filter((id) => !users.includes(id));
+    layer.audience_spaces = (layer.audience_spaces || []).filter((id) => !spaces.includes(id));
+  }
+  const edit = state.layerEdits[layerId];
+  if (edit?.baseVersion === answer.layer_version_before) edit.baseVersion = answer.layer_version;
+  // The form on screen first: a Save before the page's next draw reads these boxes.
+  const form = document.querySelector("#layer-form");
+  if (form?.dataset.layerId === layerId) {
+    if (moved && form.dataset.version === String(answer.layer_version_before)) form.dataset.version = String(answer.layer_version);
+    if (off && form.elements.public) form.elements.public.checked = false;
+    for (const [name, ids] of [["audience-user", users], ["audience-ship", users], ["audience-space", spaces]]) {
+      for (const id of ids) { const box = form.querySelector(`[name="${name}"][value="${CSS.escape(id)}"]`); if (box) box.checked = false; }
+    }
+  }
+  const values = state.layerEdits[layerId]?.values;
+  if (!values) return;
+  if (off) values.public = false;
+  values.audience_users = (values.audience_users || []).filter((id) => !users.includes(id));
+  values.audience_spaces = (values.audience_spaces || []).filter((id) => !spaces.includes(id));
+}
+
 async function publicOff() {
   const layer = selectedLayer();
   const active = state.activeLayers[layer.id];
   try {
     const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
+    narrowEdit(layer.id, { off: true }, narrowed);
     const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
     await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
@@ -2440,6 +2543,7 @@ async function revokeRoute(kind, id) {
         space_ids: kind === "space" ? [id] : [],
       },
     });
+    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] }, narrowed);
     const remainingNames = [
       ...(narrowed.audience_users || []).map(contactName),
       ...(narrowed.audience_spaces || []).map(spaceName),
@@ -2789,6 +2893,7 @@ async function logout() {
     state.assistance = {};
     state.sources = [];
     Research.reset(); Dashboard.reset();
+    forgetRevisions();
     state.editorIdentity = null;
     state.selectedChatId = null; state.room = null; state.board = null; state.composerNote = null; state.unsentIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;

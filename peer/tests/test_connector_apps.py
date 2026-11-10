@@ -361,7 +361,7 @@ def test_a_marked_room_is_never_offered_and_says_so(connected):
     assert rooms[connected.rooms[0]]['continues_in'] is None and rooms[connected.rooms[0]]['cloud'] is False
     assert rooms[connected.rooms[1]]['cloud'] is True
     refused = sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [later]})
-    assert refused.status_code == 400 and 'cloud' in refused.json()['error'].lower()
+    assert refused.status_code == 400 and 'has marked' in refused.json()['error']
 
 
 def test_a_left_room_shows_no_title(connected):
@@ -476,7 +476,7 @@ def test_a_kept_earlier_room_marked_later_is_refused_in_its_words(connected):
     marked = connected.store.mark_room(connected.person['id'], later, earlier=True)['marked']
     assert connected.rooms[0] in marked
     again = sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [connected.rooms[0]]})
-    assert again.status_code == 400 and 'cloud' in again.json()['error']
+    assert again.status_code == 400 and 'has marked' in again.json()['error']
     assert read(connected).json()['result']['isError'] is True
 
 
