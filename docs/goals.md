@@ -59,6 +59,12 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   and `spec:mention-reaches-the-working-session` if that isn't enough. Hold the purpose, not the queue: post when
   something moves, never a reflect that only says nothing did. Measure: read-only runs on mentions a writable session
   already answered, toward none.
+- R6 (goal 4, added 2026-11-10 after the outside read found goal 4 had no line of Rio Grande's): the first real walk
+  of `docs/two-people.md` costs Andy 15 minutes and a new person 30. Rio Grande owns the walk; Tardis keeps the page
+  true at every train (T4). Steps 1 and 2 aren't where a person stops: from a fresh clone with an empty uv cache they
+  took 6 s on Tardis, with 281 MB downloaded (3f905815). The stop is reading and step 3, a personal Tailscale account
+  and the share, so a one-page note for the person playing Sam spends its words there, and on the one thing Andy types.
+  Measure: someone who isn't a ship pairs with Andy and sends one message.
 - Parked, not dropped: memory that follows the ship (spec approved; waits on R2), and owner trust's restore follow-ups
   (on the board).
 
