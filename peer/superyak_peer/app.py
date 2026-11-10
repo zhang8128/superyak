@@ -393,13 +393,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     page = assets['index.html']  # rewritten at start: each asset it names carries that file's hash
 
-    @app.get('/', include_in_schema=False)
-    def browser_home():
+    def page_answer(request):
+        """The page, or for HEAD its headers alone, with the Content-Length a GET would have."""
+        if request.method == 'HEAD':
+            return Response(media_type=page.content_type, headers={'content-length': str(len(page.body))})
         return Response(page.body, media_type=page.content_type)
 
-    @app.get('/public/', include_in_schema=False)
-    def browser_public():
-        return Response(page.body, media_type=page.content_type)
+    @app.api_route('/', methods=['GET', 'HEAD'], include_in_schema=False)  # PUBLIC_ROUTES lists both
+    def browser_home(request: Request):
+        return page_answer(request)
+
+    @app.api_route('/public/', methods=['GET', 'HEAD'], include_in_schema=False)
+    def browser_public(request: Request):
+        return page_answer(request)
 
     @app.get('/api/health')
     def health():

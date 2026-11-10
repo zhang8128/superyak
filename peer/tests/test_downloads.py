@@ -330,3 +330,21 @@ def test_a_public_request_gets_the_same_assets_and_headers(app):
     status, headers, _ = call(app, b'/api/me', client=('203.0.113.5', 1))
     assert status == 401 and cache_controls(headers) == [b'no-store']
     assert call(app, b'/assets/nothing.js', client=('203.0.113.5', 1))[0] == 404
+
+
+def test_a_page_answers_head_as_its_route_list_says(app):
+    """PUBLIC_ROUTES lists HEAD for / and /public/; both answer it with the page's headers and no body."""
+    for raw in (b'/', b'/public/'):
+        status, headers, body = call(app, raw, method='HEAD')
+        assert (status, body) == (200, b''), raw
+        assert header(headers, b'content-type') == b'text/html; charset=utf-8'
+        assert header(headers, b'content-length') == str(len(current(app, 'index.html').body)).encode()
+        assert cache_controls(headers) == [b'no-store']
+
+
+def test_the_table_is_found_through_a_linked_parent(tmp_path, static):
+    """table_for resolves the directory first, so a checkout reached through a linked directory still serves every
+    file; the links refused are those below it."""
+    (tmp_path / 'via').symlink_to(tmp_path, target_is_directory=True)
+    assert sorted(table_for(tmp_path / 'via' / 'static')) == sorted(path.name for path in static.iterdir())
+
