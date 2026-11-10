@@ -121,7 +121,8 @@ def measure(browser, url, runs, timeout_ms, warm):
 
 
 def line(name, rows, failed, warmup_failed, stopped):
-    notes = (' (warm-up failed)' if warmup_failed else '') + (f' (stopped after {FAILS_IN_A_ROW} in a row)' if stopped else '')
+    notes = ((' (warm-up failed)' if warmup_failed else '')
+             + (f' (stopped after {FAILS_IN_A_ROW} in a row)' if stopped else ''))
     fcp = sorted(r['fcp'] for r in rows if r['fcp'] is not None)
     if not fcp:
         return f'{name:10} n=0 failed {failed}{notes}'
@@ -130,26 +131,31 @@ def line(name, rows, failed, warmup_failed, stopped):
              else 'sign-in form not seen; ')
     over = sum(1 for v in fcp if v > 600)
     form_over = sum(1 for v in form if v > 600)
-    return (f'{name:10} n={len(rows)} first paint p50 {statistics.median(fcp):.0f} p95 {p95(fcp):.0f} max {fcp[-1]:.0f} ms; '
+    return (f'{name:10} n={len(rows)} first paint p50 {statistics.median(fcp):.0f} p95 {p95(fcp):.0f} '
+            f'max {fcp[-1]:.0f} ms; '
             f'{shown}first byte p50 {statistics.median(r["ttfb"] for r in rows):.0f}; '
             f'load p50 {statistics.median(r["load"] for r in rows):.0f}; '
             f'over 600 ms: paint {over} of {len(fcp)}, form {form_over} of {len(form)}; failed {failed}{notes}; '
-            f'{statistics.median(r["bytes"] for r in rows) / 1024:.1f} KB (median) in {rows[0]["resources"] + 1} requests; '
+            f'{statistics.median(r["bytes"] for r in rows) / 1024:.1f} KB (median) '
+            f'in {rows[0]["resources"] + 1} requests; '
             f'page "{rows[0]["title"]}"')
 
 
 def slowest(name, rows, n):
-    """Each of the n slowest loads by the form's time, as the moments each part ended (ms from the navigation's start)."""
+    """Each of the n slowest loads by the form's time, as the moments each part ended, in ms from the navigation's
+    start."""
     ranked = sorted((r for r in rows if r['form'] is not None), key=lambda r: r['form'], reverse=True)[:n]
     return [f'  {name} slow: form {r["form"]:.0f} = connected {r["connect"]:.0f}, first byte {r["ttfb"]:.0f}, '
-            f'page {r["html"]:.0f}, files {r["files"]:.0f}, paint {r["fcp"] or 0:.0f}, api {r["api"]:.0f}' for r in ranked]
+            f'page {r["html"]:.0f}, files {r["files"]:.0f}, paint {r["fcp"] or 0:.0f}, api {r["api"]:.0f}'
+            for r in ranked]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--url', default=DEFAULT_URL)
     parser.add_argument('--runs', type=int, default=50)
-    parser.add_argument('--warm', action='store_true', help='measure loads that reuse one cache, after one that fills it')
+    parser.add_argument('--warm', action='store_true',
+                        help='measure loads that reuse one cache, after one that fills it')
     parser.add_argument('--tail', type=int, default=0, metavar='N', help="print each path's N slowest loads, split up")
     parser.add_argument('--pin', type=pinned, action='append', default=[], metavar='NAME=ADDRESS')
     parser.add_argument('--timeout', type=int, default=30, help='seconds for one load')
@@ -170,7 +176,8 @@ def main(argv=None):
             browser = playwright.chromium.launch(args=[f'--host-resolver-rules={rule}'] if rule else [])
             try:
                 build = browser.version
-                rows, failed, warmup_failed, stopped = measure(browser, args.url, args.runs, args.timeout * 1000, args.warm)
+                rows, failed, warmup_failed, stopped = measure(browser, args.url, args.runs, args.timeout * 1000,
+                                                               args.warm)
             finally:
                 browser.close()
             results[name] = [line(name, rows, failed, warmup_failed, stopped)] + slowest(name, rows, args.tail)
@@ -179,7 +186,8 @@ def main(argv=None):
     stamp = '%Y-%m-%dT%H:%M:%SZ'
     print(f'{args.url}, {args.runs} {"warm" if args.warm else "cold"} loads per path, '
           f'{started.strftime(stamp)} to {ended.strftime(stamp)}')
-    print(f'{platform.platform()} on {platform.machine()}; Playwright {version("playwright")}, headless Chromium {build}; '
+    print(f'{platform.platform()} on {platform.machine()}; Playwright {version("playwright")}, '
+          f'headless Chromium {build}; '
           f'flags: {" ".join(argv if argv is not None else sys.argv[1:]) or "(none)"}')
     for text in results.values():
         print('\n'.join(text))

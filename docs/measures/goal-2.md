@@ -8,7 +8,9 @@ taken, since the Mac's resolver sends it through Funnel and a machine on the tai
 
 **An older script, not comparable to the tables below.** First paint used the script's first version (eba97fcb), 10
 cold loads per path and no form time; the room read used `scripts/room_read_timing.py` as it is on main, 20 reads per
-path. **Where:** Tardis's machine, an Intel N150 mini PC (4 cores) on Ubuntu 26.04.1 (Linux 7.0.0-38), wired, on a home connection.
+path.
+**Where:** Tardis's machine, an Intel N150 mini PC (4 cores) on Ubuntu 26.04.1 (Linux 7.0.0-38), wired, on a home
+connection.
 Playwright 1.62.0 with headless Chromium 151.0.7922.34, unchanged since 7d80c067.
 
 Taken by Tardis while Serenity, which took the Mac's readings, is out. Funnel's path is pinned to its public address
@@ -32,8 +34,8 @@ So the Funnel row reads pessimistic, by up to its TLS p50.
 | Funnel | 404 ms | 604 ms | 604 ms | 212 ms | 628 ms | 2 of 10 | 276 KB in 6 requests |
 
 "2 of 10 over 600" beside a p95 and max of 604 means both of those loads fell between 600 and 604 ms. Their raw values
-weren't kept. A first run a few minutes earlier, by the same method, gave a tailnet p50 of 84 ms and a Funnel p50 of 402 ms, with a
-Funnel max of 700 ms.
+weren't kept. A first run a few minutes earlier, by the same method, gave a tailnet p50 of 84 ms and a Funnel p50 of 402
+ms, with a Funnel max of 700 ms.
 
 **Not measured here:**
 - A signed-in person's first paint. That needs the person's own browser session, which a ship doesn't have, so it's
@@ -55,7 +57,9 @@ That's `spec:what-a-person-downloads`. Its "after" goes in a row below.
 
 Taken with the script's second version (fc8097a4), 50 loads per path, Funnel pinned to 208.111.34.11. Cold:
 `--pin funnel=208.111.34.11`, 20:52:31Z to 20:53:37Z. Warm: `--warm --pin funnel=208.111.34.11`, 20:53:37Z to
-20:54:37Z. **Where:** Tardis's machine, an Intel N150 mini PC (4 cores) on Ubuntu 26.04.1 (Linux 7.0.0-38), wired, on a home connection.
+20:54:37Z.
+**Where:** Tardis's machine, an Intel N150 mini PC (4 cores) on Ubuntu 26.04.1 (Linux 7.0.0-38), wired, on a home
+connection.
 Playwright 1.62.0 with headless Chromium 151.0.7922.34, unchanged since 7d80c067.
 
 It adds the first frame after the sign-in form's heading joins the page, since first paint is only the loading shell
@@ -71,7 +75,9 @@ It adds the first frame after the sign-in form's heading joins the page, since f
 
 **Why 7 requests on the tailnet and 6 through Funnel:** the page asks `/api/local-demo` first. On the tailnet that
 answers 404, so the page goes on to ask `/api/me` (401) before it shows the form. Through Funnel, `/api/local-demo`
-answers 401 itself, and the page shows the form without asking `/api/me`.
+answers 401 itself, and the page shows the form without asking `/api/me`. Seen with curl, from Tardis at 23:47Z:
+`/api/local-demo` gave 404 on the tailnet and 401 with Funnel's address pinned (`--resolve`), and `/api/me` gave 401
+on both. The browser's resource list showed the same calls: 6 on the tailnet, 5 through Funnel.
 
 **A warm load still moves all 300 KB.** Every file says `no-store`, so the browser keeps nothing. A warm load is
 faster probably because the connection is already open (first byte 7 ms rather than 27 on the tailnet). TLS session and
@@ -101,13 +107,17 @@ the moments each part ended. Cold: `--tail 6 --pin funnel=208.111.34.11`, 23:49:
 Funnel's link varies by the hour. A "before" and an "after" are compared only when taken in the same hour, and better in
 turns.
 
-**The tail is the files, not the first byte or the scripts.** In the 6 slowest warm loads through Funnel, the connection
+**In the slowest 6 loads, the tail is the files, not the first byte or the scripts.** This rests on those 6 per path
+and cache, a selected sample, not on every load. In the 6 slowest warm loads through Funnel, the connection
 was already open, the first byte came at 171 to 572 ms, and the page's own HTML was done 3 to 4 ms later. Then its files
-finished at 2,118 to 6,821 ms. The time from the last file to the form, which covers parsing, running the scripts and the
-one API call, was 67 to 381 ms. Cold loads split the same way, with 319 to 874 ms more to connect. On the tailnet, the slowest
-loads spent up to about 230 ms on the page's HTML and none of them reached 600 ms.
+finished at 2,118 to 6,821 ms. The time from the last file to the form, which covers parsing, running the scripts and
+the one API call, was 67 to 381 ms. Cold loads split the same way, with 319 to 874 ms more to connect. On the tailnet,
+the slowest loads spent up to about 230 ms on the page's HTML and none of them reached 600 ms.
 
 So when the link is slow, the 300 KB is what a visitor waits for, warm or cold. Warm is no better at the tail because
 `no-store` makes it move the same bytes. **The downloads change claims the tail, and these rows test that claim:** with
 the assets cached, a warm load's files should end near its first byte. With them compressed, a cold load's files should
 come to about a quarter of today's bytes. If the Funnel p95 doesn't fall in a same-hour comparison, the claim is wrong.
+Since Funnel's link moves this much by the hour, the "after" is taken in one hour with the "before" runs and the
+"after" runs interleaved, cold and warm, so that neither set gets a quieter link. The 20:52Z table above is not a
+stable "before" on its own.
