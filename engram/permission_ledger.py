@@ -779,15 +779,26 @@ _DEFERRED: list = []             # (key, collected) of releases its collector ra
 _UNHELD: list = []               # (key, fd) of connections collected unclosed: closed at the next hold or release
 
 
+def _close_all(fds) -> None:
+    """Close each descriptor, all of them even if one fails: a failed close of a read-only local file is not the
+    caller's error, and the others mustn't stay open for good."""
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def _close_unheld() -> None:
-    """In a section: close the descriptors a collected connection left, unless its file is held again."""
-    for key, fd in _UNHELD:
+    """In a section: close the descriptors a collected connection left, unless its file is held again. Each entry
+    leaves the list before its descriptor closes, so none is closed twice."""
+    while _UNHELD:
+        key, fd = _UNHELD.pop()
         held = _HELD.get(key)
         if held is None:
-            os.close(fd)
+            _close_all((fd,))
         else:
             held.spares.append(fd)
-    _UNHELD.clear()
 
 
 def _enter() -> bool:
@@ -801,8 +812,8 @@ def _enter() -> bool:
 
 
 def _leave() -> list:
-    """End a section: count the releases its collector deferred, and return the descriptors they leave to close. One
-    that arrives after the last look here waits for the next section's end, its file's descriptors open until then."""
+    """End a section: count the releases its collector deferred, and return the descriptors they leave to close.
+    Nothing between the loop's last look and the reset can start a collection, so no release is left behind."""
     global _HELD_BUSY
     try:
         fds: list = []
@@ -835,7 +846,8 @@ def _hold(path: Path) -> tuple[int, int]:
     read uses (`O_RDONLY | O_CLOEXEC`, so hooks and subprocesses don't inherit it), `fstat` it and keep it under the
     (dev, inode) it really has. Returns that (dev, inode)."""
     with _HELD_LOCK:
-        outer = _enter()
+        if not _enter():  # no finalizer or signal handler opens a ledger; one that did would hold mid-section
+            raise RuntimeError("a ledger connection was opened inside the held table's own section")
         try:
             _close_unheld()
             st = os.stat(path)
@@ -855,29 +867,26 @@ def _hold(path: Path) -> tuple[int, int]:
                 held.spares.append(fd)
             return real
         finally:
-            if outer:
-                for fd in _leave():
-                    os.close(fd)
+            _close_all(_leave())
 
 
 def _release(key: tuple[int, int], collected: bool = False) -> None:
     """One connection on that file closed. At the last, its descriptors close: no connection of this process is left
-    there, so no SQLite lock of this process can be dropped. A connection collected unclosed is still closing, so its
-    descriptors wait for the next hold or release. A release the collector runs inside a section of this thread's is
-    counted when that section ends."""
+    there, so no SQLite lock of this process can be dropped. They close inside the lock, so a new hold of the same
+    file can't open its own descriptor and take a SQLite lock that this close would then drop. A connection collected
+    unclosed is still closing, so its descriptors wait for the next hold or release. A release the collector runs
+    inside a section of this thread's is counted when that section ends."""
     with _HELD_LOCK:
         if not _enter():
             _DEFERRED.append((key, collected))
             return
-        fds: tuple = ()
         try:
             fds = _count_release(key, collected)
             if fds:
                 _close_unheld()
+                _close_all(fds)
         finally:
-            fds = (*fds, *_leave())
-    for fd in fds:
-        os.close(fd)
+            _close_all(_leave())
 
 
 class _Conn(sqlite3.Connection):
@@ -887,10 +896,10 @@ class _Conn(sqlite3.Connection):
 
     def close(self) -> None:
         super().close()             # one that raises (another thread's close) leaves the connection open, and counted
-        if self._done is not None:
-            self._done.detach()
+        done, self._done = self._done, None  # before the release, so a retried close never counts it twice
+        if done is not None:
+            done.detach()
             _release(self._key)
-            self._done = None
 
 
 def _append_busy_ms(size: int) -> int:
