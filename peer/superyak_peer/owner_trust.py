@@ -1,26 +1,38 @@
 """Owner trust (docs/superpowers/specs/2026-11-02-machine-trust-design.md, "The change" item 2): the admin's password lets
 one remote person, a contact whose code was typed, vouch for their ships on their own peer. This module holds the
 append-only `owner_trust` table and its companions, granting and renewing, and the two rules the pairing and
-`connections()` share: `code_current` and `live_trust`."""
+`connections()` share: `code_current` and `live_trust`. Revision 6: the admin's yes at the Pi's terminal grants too,
+with no password (`station-trust-grant`), and the grant row keeps the line they said yes to and their words."""
 from datetime import datetime, timezone
+import hashlib
 import json
+import re
 import unicodedata
 
-from .common import Problem, uid
-from .identity import pairing_code
-from .ships import safe_line, ship_label_line
+from .common import Problem, encode, uid
+from .identity import pairing_code, typed_code
+from .ships import safe_line, ship_label_line, short_id
 
 TRUST_DAYS = 90
 EXPECT_MAX = 10_000
+WORDS_MAX = 500  # spec revision 6: the admin's yes at the terminal, as typed, kept with the grant
 TRUST_CAP = 200  # spec "The change" item 4: contacts per owner trust per UTC day, from trust_confirmations
 DIGEST_DAYS = 7  # the ended UTC days the digest lists, so Odo catches up after a week away (spec item 5)
 # A day's digest waits this long after midnight (UTC): pair_trusted dates a pairing when its transaction starts, so one
 # begun just before midnight can commit just after it, and a digest posted at once would be a pairing short for good.
 DIGEST_SETTLE = 300
+# Spec revision 6: a grant made at the terminal keeps the grant line the admin said yes to and the words they typed;
+# a browser grant, whose proof is the password, and every renewal and revocation keep neither. The table checks the
+# pair, as it checks `expect`. db.py adds them to an older store in this order, which places each just as the CREATE
+# below does, so an old store and a new one hold the same schema text.
+TERMINAL_COLUMNS = (('line', 'TEXT'),
+                    ('words', "TEXT CHECK(CASE WHEN words IS NULL THEN line IS NULL ELSE event='grant' AND line IS NOT NULL "
+                              f'AND length(words) BETWEEN 1 AND {WORDS_MAX} END)'))
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
-  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER,
+  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER, '''
+    + ', '.join(f'{name} {ddl}' for name, ddl in TERMINAL_COLUMNS) + ''',
   CHECK(event='revoke' OR (expect IS NOT NULL AND expect BETWEEN 1 AND 10000)))''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_update BEFORE UPDATE ON owner_trust
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
@@ -65,6 +77,72 @@ PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make
               "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
 PAUSE_WAITING = ' {k} of its ships wait for the lessons room until you renew.'
 PAUSE_WAITING_ONE = ' 1 of its ships waits for the lessons room until you renew.'
+# Spec revision 6: the Ops notice of a grant made at the terminal, and the terminal's refusals (none echoes the words).
+# The words come last, each '"' in them posted as "'", so they can't write a sentence that reads as the station's own.
+TERMINAL_TEXT = ("Owner trust {short} was granted at the Pi's terminal on {who}'s yes, with no password: {line}; up to {n} "
+                 "ship{s} expected. make station-trust-list shows it; if {who} didn't say yes to it, revoke it in the "
+                 "browser. {who}'s words: \"{words}\"")
+WORDS_SHAPE = f"words are the admin's yes as typed at the terminal: not empty, at most {WORDS_MAX} characters"
+WORDS_UNPRINTABLE = ("The words hold a control, format or invisible character (a Hangul filler, a braille blank, and a "
+                     "variation selector after a letter, a digit, '-' or '_', count), or another that Ops would not "
+                     'show as written, so they are not taken: only printable characters and spaces are')
+WORDS_CODE_SHAPED = ("The words hold a run with a pairing code's shape (32 hex), so they aren't taken or shown; give the "
+                     'yes without it')
+WORDS_IDS_RUN_TOGETHER = ("The words hold 32 or more hex characters in a row once spaces and hyphens are taken out, a "
+                          "pairing code's shape, though not a code the station knows: ids that run together, or a whole "
+                          "peer id. So they aren't taken; put commas between the ids, and name the contact by its short id")
+WORDS_KEY = "The words hold a live ship key, so they aren't taken or shown"
+WORDS_NO_CONTACT = ("The words don't name the contact by its short id ({short}, as the first run shows it), so they aren't "
+                    'taken: the yes names it')
+WORDS_NO_COUNT = ("The words don't name the expected count ({n}), as \"{n} ship{s}\" or as their only number apart from the "
+                  'days, so they aren\'t taken: the yes names it')
+WORDS_NUMBER_SHAPE = ('The words give a signed number, a range or a fraction next to days, ships, pairings or machines, so '
+                      "they aren't taken: the yes gives each as one whole number")
+WORDS_DAYS_IN_DIGITS = ("The words give the days in words, so they aren't taken: write the number of days in digits "
+                        '({days} days)')
+WORDS_COUNT_IN_DIGITS = ("The words give the count in words past ten, so they aren't taken: write it in digits "
+                         '({n} ship{s})')
+WORDS_DAYS_DIFFER = ("A number of days in the words isn't DAYS ({days}), so they aren't taken: the yes names the grant it "
+                     'approves')
+WORDS_COUNT_DIFFER = ("A number of ships, pairings or machines in the words isn't the expected count ({n}), so they aren't "
+                      'taken: the yes names the grant it approves')
+WORDS_NOT_A_YES = ("The words hold a no (no, not, never, nah, a word ending in n't, cannot, deny, decline, refuse, reject, "
+                   "revoke, veto, stop, wait, hold off, skip, pause, cancel or later), so nothing is granted: ask him "
+                   "again, and take only a yes that names the contact and the count")
+WORDS_NO_YES = ("The words don't say yes (yes, yeah, yep, ok, sure, approve, grant, go ahead, do it, confirm, agreed, "
+                "no problem, why not), so nothing is granted: ask him again")
+# Tardis's read of 26e4545f: words naming the contact and the count still granted when they said no ("deny <id>, 1
+# ship", "no, not <id>"); the reader's S7 (re-check 4) found whole families of nos a word list misses ("I won't
+# approve", "hold off", "nein"). So the words must hold a yes, from a short list, and hold no no. A few yes idioms that
+# carry a no-word ("no problem", "why not") count as a yes and are taken out before the no is looked for. A refusal
+# costs Andy one re-ask, while a misread no would grant a trust: "no more than 1 ship" refuses, on purpose.
+APOSTROPHES = str.maketrans({'\u2019': "'", '\u2018': "'", '\u02bc': "'", '\u00b4': "'", '`': "'", '\u2032': "'"})
+YES_IDIOMS = re.compile(r"\b(?:no\s+problem|no\s+worries|not\s+a\s+problem|why\s+not|(?:i\s+)?don'?t\s+mind)\b")
+YES_WORDS = re.compile(r"\b(?:yes|yeah|yep|yup|ok|okay|sure|approve|approved|grant|granted|go\s+ahead|do\s+it|confirm|"
+                       r"confirmed|agree|agreed)\b|\U0001f44d|\u2705")
+NOT_A_YES = re.compile(r"\b(?:no|not|nope|nah|nein|non|never|cannot|\w+n't|dont|cant|wont|deny|denying|denied|decline|"
+                       r"declining|declined|refuse|refusing|refused|reject|rejecting|rejected|revoke|revoking|veto|stop|"
+                       r"stopping|wait|waiting|hold\s+off|hold\s+on|skip|pause|abort|halt|cancel|cancelling|canceling|"
+                       r"cancelled|canceled|later|do\s+not)\b")
+
+
+def _says_yes(folded):
+    """Spec revision 6, item 2a (Tardis's read, the re-check 4's S7): the words hold a yes and no no. Read on the NFKC,
+    case-folded words with every apostrophe form as "'"; a yes idiom counts as a yes and leaves the no-search."""
+    text = folded.replace(' \u0301', "'").translate(APOSTROPHES)  # NFKC folds U+00B4 to a space and a combining acute
+    rest = YES_IDIOMS.sub(' ', text)
+    if NOT_A_YES.search(rest):
+        raise Problem(400, WORDS_NOT_A_YES)
+    if not (YES_IDIOMS.search(text) or YES_WORDS.search(text)):
+        raise Problem(400, WORDS_NO_YES)
+
+
+WORDS_TRUSTS_CHANGED = ("That owner's trusts changed since the first run (a grant, a renewal or a revocation), so nothing "
+                        'is granted; run it again without CONFIRM')
+WORDS_FIRST = ("Words come with the second run, with CONFIRM: they are the admin's yes to the line the first run shows, "
+               'so run it first without them')
+TERMINAL_CHANGED = ("The contact, its grant line, the days, the expected count or that owner's trusts changed since they "
+                    'were shown, or that is not the code shown; run it again without CONFIRM')
 # A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
@@ -195,6 +273,195 @@ def _expect(expect):
     if type(expect) is not int or not 1 <= expect <= EXPECT_MAX:
         raise Problem(400, EXPECT_SHAPE)
     return expect
+
+
+def posted_words(words):
+    """The words as the Ops notice posts them (trust_terminal_notices): through plain_name and safe_line, cut only at the
+    length safe_line's '@' to '(at)' can reach, so no part of WORDS_MAX characters is lost, with each '"' made "'"."""
+    return safe_line(plain_name(words), 4 * WORDS_MAX).replace('"', "'")
+
+
+def word_forms(words):
+    """Every form of the words a check reads (spec revision 6, the review's S2): as typed, as posted, and the NFKC form
+    of each, in which fullwidth or other compatibility letters read as the ASCII a person would type; each with its
+    variation selectors taken out (SELECTORS), so a selector the words may hold can't hide a run of hex or a key."""
+    posted = posted_words(words)
+    forms = (words, posted, *(unicodedata.normalize('NFKC', form) for form in (words, posted)))
+    return tuple(SELECTOR.sub('', form) for form in forms)
+
+
+# Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties), the Hangul fillers among them, less the variation
+# selectors (SELECTORS, below), and U+2800 BRAILLE PATTERN BLANK, which is drawn blank but isn't default-ignorable (the
+# re-check 2's N12): each is drawn as nothing, so a code or a key split by one reads whole in Ops. Most are format
+# characters, which the printable rule refuses anyway; the combining grapheme joiner, the Mongolian selectors, the
+# fillers and the braille blank are printable to Python, so they are named here (the re-check's N7). Look-alike letters
+# (a Cyrillic a, U+0430, for a Latin a) are taken, as a room post takes them: parity with every message, since room
+# posts refuse no pairing code at all.
+INVISIBLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+             (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFEFF, 0xFEFF),
+             (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE00FF),
+             (0xE01F0, 0xE0FFF))
+# The variation selectors. One splits a code or a key only where it follows an ASCII letter, a digit, '-' or '_', so it
+# is refused only there; elsewhere it is an emoji's (a heart, a check mark) and taken (the re-check 2's N11). The checks
+# read every form with them taken out (word_forms).
+SELECTORS = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+SELECTOR = re.compile('[\ufe00-\ufe0f\U000e0100-\U000e01ef]')
+
+
+def _within(ranges, c):
+    return any(low <= ord(c) <= high for low, high in ranges)
+
+
+def _shown_as_written(c, before=''):
+    """A character the notice shows as typed, after `before` (the character before it, or ''): a space of any kind
+    (Unicode Zs, the no-break space that macOS's Option-Space types included), which safe_line posts as a plain space;
+    a variation selector that follows no ASCII letter, digit, '-' or '_'; or any other printable character that isn't
+    invisible (INVISIBLE)."""
+    if unicodedata.category(c) == 'Zs':
+        return True
+    if _within(SELECTORS, c):
+        return not re.fullmatch(r'[A-Za-z0-9_-]', before)
+    return c.isprintable() and not _within(INVISIBLE, c)
+
+
+def _words(words):
+    """The admin's yes at the terminal (spec revision 6), kept as typed: text that isn't empty once stripped, of at most
+    WORDS_MAX characters, every character one the notice shows as written (_shown_as_written: no control, format or
+    invisible character for plain_name or safe_line to drop, space out or hide a split behind). The code and key checks
+    run in the grant's transaction (_refuse_codes)."""
+    if not isinstance(words, str) or not words.strip() or len(words) > WORDS_MAX:
+        raise Problem(400, WORDS_SHAPE)
+    if not all(_shown_as_written(c, words[i - 1] if i else '') for i, c in enumerate(words)):
+        raise Problem(400, WORDS_UNPRINTABLE)
+    return words
+
+
+# A pairing code as a person would copy it: 32 hex alone, or show_code's eight groups of four between spaces or hyphens
+CODE_FORM = re.compile(r'(?<![0-9a-f])(?:[0-9a-f]{32}|[0-9a-f]{4}(?:[\s-]+[0-9a-f]{4}){7})(?![0-9a-f])', re.ASCII)
+
+
+def _refuse_codes(db, words):
+    """The Ops notice posts the words, and a ship never puts a pairing code in a room, so 32 hex in a row in any of their
+    forms (word_forms), once spaces and hyphens are taken out as typed_code reads a code, is refused unread. The refusal
+    says which: a code (one the station holds as typed for a contact, or written as a code is shown), or ids run
+    together (the re-check's N10), with what to do. Either way nothing is taken."""
+    forms = [form.lower() for form in word_forms(words)]
+    joined = [re.sub(r'[\s-]', '', form) for form in forms]
+    if not any(re.search(r'[0-9a-f]{32}', form, re.ASCII) for form in joined):
+        return
+    known = [row[0] for row in db.execute('SELECT code FROM pairing_confirmations') if row[0]]
+    if any(CODE_FORM.search(form) for form in forms) or any(code in form for code in known for form in joined):
+        raise Problem(400, WORDS_CODE_SHAPED)
+    raise Problem(400, WORDS_IDS_RUN_TOGETHER)
+
+
+COUNT_NOUNS = {'ship', 'ships', 'pairing', 'pairings', 'machine', 'machines'}
+NOUN = r'(days?|ships?|pairings?|machines?)(?![a-z])'
+# A number next to a noun the grant has a number for: "90 days", "a 90-day trust", "1 ship", "1,000 machines". The number
+# takes in any '.', ',' or '/' with a digit after it, so "1.5 ships" or "1/2 ships" is read whole and refused, while a
+# period or comma before a space or the end is punctuation ("count 1. ship it") (the re-check 2's N11).
+NUMBERED = re.compile(r'(?<![0-9a-z])([0-9](?:[0-9]|[.,/](?=[0-9]))*)(?:\s*-\s*|\s*)' + NOUN)
+WHOLE = re.compile(r'[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+')
+BARE = re.compile(r'(?<![0-9a-z.,/+-])([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?![0-9a-z])(?![.,/][0-9])')
+# What comes just before a number that makes it a range or a fraction: a whole number that stands alone (never the end
+# of an id or another word, the re-check 2's S6), then a dash, a slash, "to" or "or"; and what makes it signed: a minus
+# or a plus that follows no letter or digit ("-1 ships", where "x-1" is a hyphenated word).
+RANGE_BEFORE = re.compile(r'(?<![0-9a-z])([0-9][0-9,]*)(?:\s*[-\u2013\u2014/\u2044\u2215]\s*|\s+(?:to|or)\s+)$')
+SIGN_BEFORE = re.compile(r'(?:^|[^0-9a-z])[-+\u2212]$')
+# Number words: one to ten before a counted noun are read as the number (the re-check 2's N11); any other, and any
+# before day or days, are refused with a request for digits, so a count or days written in words is never unchecked.
+ONE_TO_TEN = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+              'ten': 10}
+NUMBER_WORDS = sorted([*ONE_TO_TEN, 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+                       'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty',
+                       'ninety', 'hundred', 'thousand'], key=len, reverse=True)
+WORD_NUMBER = '(?:' + '|'.join(NUMBER_WORDS) + ')'
+WORDED = re.compile(r'(?<![0-9a-z-])(' + WORD_NUMBER + r'(?:(?:\s*-\s*|\s+)(?:and\s+)?' + WORD_NUMBER + r')*)'
+                    r'(?:\s*-\s*|\s+)' + NOUN)
+
+
+def _names_the_grant(words, contact, days, expect):
+    """Spec revision 6, item 2a: the yes names the contact and the count, and its numbers mean what the grant does, so the
+    stored words can be checked against the grant they approved. Read in the NFKC form, case folded.
+    - The contact: a run of 8 or more ASCII letters and digits that starts its id (without remote_) or its participant
+      id, as the first run shows them.
+    - Every number next to day or days is DAYS, and every one next to ship(s), pairing(s) or machine(s) is the count;
+      each a whole number, thousands commas allowed, never signed ("-1 ships"), a range ("1-2 ships", "1 to 2 ships")
+      or a fraction ("1/2 ships", "1.5 ships") (the re-check's S5). A dash after an id is punctuation ("yes 64cd8098 -
+      1 ship"), and so is a period before a space ("count 1. ship it"). The words one to ten before a counted noun are
+      that number ("one ship"); days, and a count past ten, are refused unless written in digits.
+    - The count appears so, or, when no such noun has a number, as the words' only bare number (the days' numbers, and
+      an id naming the contact, apart).
+    - The words are a yes (`_says_yes`): a yes-word, and no no-word, checked before the naming and number checks.
+    The refusals name what is missing or wrong, never the words."""
+    folded = unicodedata.normalize('NFKC', words).lower()
+    _says_yes(folded)
+    ids = (contact['id'].removeprefix('remote_').lower(), contact['user_id'].lower())
+    naming = {token for token in re.findall(r'[0-9a-z]+', folded)
+              if len(token) >= 8 and any(i.startswith(token) for i in ids)}
+    if not naming:
+        raise Problem(400, WORDS_NO_CONTACT.format(short=contact['id'].removeprefix('remote_')[:8]))
+    counted, taken = [], []
+    for match in NUMBERED.finditer(folded):
+        number, noun, before = match.group(1), match.group(2), folded[:match.start()]
+        ranged = RANGE_BEFORE.search(before)
+        if (not WHOLE.fullmatch(number) or SIGN_BEFORE.search(before)
+                or (ranged and ranged.group(1) not in naming)):
+            raise Problem(400, WORDS_NUMBER_SHAPE)
+        value = int(number.replace(',', ''))
+        if noun in COUNT_NOUNS:
+            if value != expect:
+                raise Problem(400, WORDS_COUNT_DIFFER.format(n=expect))
+            counted.append(value)
+        elif value != days:
+            raise Problem(400, WORDS_DAYS_DIFFER.format(days=days))
+        taken.append(match.span(1))
+    for match in WORDED.finditer(folded):
+        phrase, noun = match.group(1), match.group(2)
+        if noun not in COUNT_NOUNS:
+            raise Problem(400, WORDS_DAYS_IN_DIGITS.format(days=days))
+        if phrase not in ONE_TO_TEN:
+            raise Problem(400, WORDS_COUNT_IN_DIGITS.format(n=expect, s='' if expect == 1 else 's'))
+        if ONE_TO_TEN[phrase] != expect:
+            raise Problem(400, WORDS_COUNT_DIFFER.format(n=expect))
+        counted.append(ONE_TO_TEN[phrase])
+    if counted:
+        return
+    bare = [int(m.group(1).replace(',', '')) for m in BARE.finditer(folded)
+            if m.span(1) not in taken and m.group(1) not in naming]
+    if bare != [expect]:
+        raise Problem(400, WORDS_NO_COUNT.format(n=expect, s='' if expect == 1 else 's'))
+
+
+def latest_trust_row(db, peer_id, owner_user_id):
+    """The seq of the latest owner_trust row (a grant, a renewal or a revocation) of this owner (peer, participant id),
+    or None: what the terminal's confirm code binds, and its grant checks again (spec revision 6)."""
+    return db.execute('SELECT MAX(seq) FROM owner_trust WHERE peer_id=? AND owner_user_id=?',
+                      (peer_id, owner_user_id)).fetchone()[0]
+
+
+def contact_prefix(value):
+    """A remote contact's short id as an operator typed it, for station-lessons-add and station-trust-grant alike:
+    short_id's form (at least 4 characters, lower-cased). A value shaped like a pairing code is refused unread."""
+    from .lessons import ADD_CODE_SHAPED
+    prefix = short_id(value)
+    if typed_code(prefix) is not None:
+        raise Problem(400, ADD_CODE_SHAPED)
+    return prefix
+
+
+def named_contact(db, prefix):
+    """The one remote contact a short id (contact_prefix) names: the start of its id, with or without remote_, or of
+    its participant id, which the listings show in parentheses. No refusal echoes what was typed."""
+    from .lessons import ADD_AMBIGUOUS, ADD_NOT_REMOTE
+    matches = [r['id'] for r in db.execute('SELECT id, user_id FROM remote_contacts ORDER BY id')
+               if r['id'].startswith(prefix) or r['id'].removeprefix('remote_').startswith(prefix)
+               or r['user_id'].lower().startswith(prefix)]
+    if len(matches) > 1:
+        raise Problem(400, ADD_AMBIGUOUS)
+    if not matches:
+        raise Problem(404, ADD_NOT_REMOTE)
+    return matches[0]
 
 
 def trust_window(db, grant_id):
@@ -389,6 +656,23 @@ def trust_pauses(db, waiting=None):
     return notices
 
 
+def trust_terminal_notices(db):
+    """Spec revision 6, what makes a grant with no password seen: one Ops notice for each owner trust granted at the
+    Pi's terminal, with its short id, the grant line the admin said yes to and their words, as the grant row keeps
+    them, so a later rename of the owner never changes it. Its id names the grant, so Odo posts it once, at its next
+    cycle; it lists for as long as the row stands, as lessons_notices' do. Every value through plain_name, then
+    safe_line, so no '@' or control character reaches the room; the words come last, whole, as posted_words gives them
+    (the grant checked that form and its NFKC form for a code and a live key). A pure read."""
+    notices = []
+    for row in db.execute('SELECT g.grant_id, g.expect, g.line, g.words, u.name FROM owner_trust g LEFT JOIN users u '
+                          "ON u.id=g.by_id WHERE g.event='grant' AND g.words IS NOT NULL ORDER BY g.seq").fetchall():
+        who = safe_line(plain_name(row['name'] or 'the admin'), 40)
+        notices.append({'id': f'trust-terminal-{row["grant_id"][:12]}', 'text': TERMINAL_TEXT.format(
+            short=row['grant_id'][:6], who=who, line=safe_line(plain_name(row['line']), 400), n=row['expect'],
+            s='' if row['expect'] == 1 else 's', words=posted_words(row['words']))})
+    return notices
+
+
 def _signed_name(assertion):
     """The ship's name in a stored assertion (canonical JSON), or None when the row holds none."""
     try:
@@ -402,9 +686,12 @@ def trust_list(db, now):
     """`station-trust-list` (spec item 5: the digest's full ids): every owner trust in grant order, with its owner by
     label, its `until`, its state ('live', 'paused', 'expired' or 'revoked', with the revocation's time, reason and
     person), its current window, and each ship it paired: the label, the signed name, the full participant id, the
-    acting ship, when, whether it's held and its window. Names are raw here; the CLI makes each line safe."""
+    acting ship, when, whether it's held and its window. `at_terminal` is the granting admin's username for a grant made
+    on their yes at the Pi's terminal (spec revision 6), else None. Names are raw here; the CLI makes each line safe."""
     trusts = []
-    for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():
+    for grant in db.execute("SELECT g.grant_id, g.peer_id, g.owner_user_id, CASE WHEN g.words IS NULL THEN NULL ELSE "
+                            "COALESCE(u.username, 'an admin no longer here') END AS at_terminal FROM owner_trust g "
+                            "LEFT JOIN users u ON u.id=g.by_id WHERE g.event='grant' ORDER BY g.seq").fetchall():
         grant_id = grant['grant_id']
         known = trust_state(db, grant_id, now)
         until, revoke, state = known['until'], known['revoke'], known['state']
@@ -424,7 +711,7 @@ def trust_list(db, now):
                        'owner': plain_name(owner_label(db, grant['peer_id'], grant['owner_user_id'])), 'until': until, 'state': state,
                        'revoked_at': revoke['at'] if revoke else None, 'reason': revoke['reason'] if revoke else None,
                        'revoked_by': revoke['username'] if revoke else None, 'window_seq': window_seq, 'expect': expect,
-                       'paired': paired, 'ships': ships})
+                       'paired': paired, 'ships': ships, 'at_terminal': grant['at_terminal']})
     return trusts
 
 
@@ -461,19 +748,105 @@ class OwnerTrust:
                 if contact is not None:  # an unknown one is refused below, as before
                     _as_shown(_text(contact['label'], contact['peer_id'], self.clock() + days * 86400), shown)
         self._trust_password(actor, password, source, public, device)
-        with self.transaction() as db:
-            self._admin(db, actor)
-            now = self.clock()
-            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
-            owner_eligible(db, contact)
-            if live_trust(db, contact['peer_id'], contact['user_id'], now):
-                raise Problem(409, 'That owner is already trusted; renew it')
-            grant_id, until = uid(), now + days * 86400
-            text = _text(contact['label'], contact['peer_id'], until)
-            _as_shown(text, shown)  # again: the day may have turned while the password was checked
-            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
-                       "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
+        with self.transaction() as db:  # _as_shown again: the day may have turned while the password was checked
+            return self._grant_in(db, actor, contact_id, days, expect, shown)
+
+    def _grant_in(self, db, actor, contact_id, days, expect, shown, words=None, latest=None):
+        """A grant's own checks and its 'grant' row, in the caller's writing transaction, for the browser and the terminal
+        alike: the admin; an owner contact owner_eligible takes; no live trust for that owner (peer, participant id); and
+        the line this grant stores, by this station's clock, as `shown` (_as_shown). At the terminal (`words` given) the
+        owner's latest owner_trust row is still `latest`, the one the first run's code was bound to (the re-check's
+        N9), and `words`, the admin's yes, names this contact and the count, its numbers as the grant's
+        (_names_the_grant); they are kept with the line (TERMINAL_COLUMNS). A browser grant keeps neither. This is the
+        terminal path's only admin check: keep it here."""
+        self._admin(db, actor)
+        now = self.clock()
+        contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+        owner_eligible(db, contact)
+        if live_trust(db, contact['peer_id'], contact['user_id'], now):
+            raise Problem(409, 'That owner is already trusted; renew it')
+        if words is not None and latest_trust_row(db, contact['peer_id'], contact['user_id']) != latest:
+            raise Problem(409, WORDS_TRUSTS_CHANGED)
+        grant_id, until = uid(), now + days * 86400
+        text = _text(contact['label'], contact['peer_id'], until)
+        _as_shown(text, shown)
+        if words is not None:
+            _names_the_grant(words, contact, days, expect)
+        db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect,line,words) '
+                   "VALUES (?,'grant',?,?,?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor,
+                                                         now, expect, None if words is None else text, words))
         return {'grant_id': grant_id, 'until': until, 'text': text}
+
+    def grant_owner_trust_at_terminal(self, actor, contact_id, *, days, expect, shown, words, latest):
+        """Spec revision 6: the admin's act on their yes at the Pi's terminal, with no password. The browser's grant
+        (_grant_in: the same checks, the same 'grant' row and the same line), except that `shown`, the grant line the
+        terminal showed before the yes, is required, and `words`, the yes as typed (_words), which names the contact and
+        the count (_names_the_grant), is kept with that line for the Ops notice (trust_terminal_notices). `latest` is the
+        owner's latest owner_trust seq the first run read (None for none), compared again in this transaction. Words
+        holding a pairing code's shape (_refuse_codes) or a live ship key in any of their forms (word_forms) are
+        refused, since the notice would post them. No password is asked for, read or taken. station_trust_grant is its
+        one caller outside the tests."""
+        _days(days)
+        _expect(expect)
+        if not isinstance(shown, str) or not shown:
+            raise Problem(400, 'shown is the grant line the terminal showed before the yes')
+        if latest is not None and type(latest) is not int:
+            raise Problem(400, "latest is the owner's latest owner_trust seq the first run read, or None")
+        _words(words)
+        with self.transaction() as db:
+            _refuse_codes(db, words)
+            if any(self._live_ship_key_in(db, form) for form in word_forms(words)):
+                raise Problem(400, WORDS_KEY)
+            return self._grant_in(db, actor, contact_id, days, expect, shown, words, latest)
+
+    def owner_trust_at_terminal(self, username, contact, *, days, expect):
+        """`station-trust-grant`'s first run (spec revision 6): the owner contact named by its short id (contact_prefix,
+        named_contact), the grant line a grant for `days` days would store if made now (grant_line, as the browser's
+        preview reads it), and a confirm code: 8 hex of a SHA-256 over the admin, the contact, its label, peer and
+        participant, the line, the days, the count and the latest owner_trust row of that owner (peer, participant id),
+        as station-lessons-room builds its own. Any change to one of them, a new UTC day in the line included, changes
+        the code, so a code shown before any grant, renewal or revocation of that owner is stale, and one code grants at
+        most once. It refuses what the grant would (an admin by username, an owner owner_eligible takes, no live
+        trust) and grants nothing."""
+        _days(days)
+        _expect(expect)
+        prefix = contact_prefix(contact)
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            self._admin(db, actor)
+            found = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (named_contact(db, prefix),)).fetchone()
+            owner_eligible(db, found)
+            now = self.clock()
+            if live_trust(db, found['peer_id'], found['user_id'], now):
+                raise Problem(409, 'That owner is already trusted; renew it in the browser')
+            line = grant_line(found['label'], found['peer_id'], now + days * 86400)
+            latest = latest_trust_row(db, found['peer_id'], found['user_id'])
+        code = hashlib.sha256(encode({'act': 'owner-trust-grant', 'actor': actor, 'contact': found['id'],
+                                      'label': found['label'], 'peer': found['peer_id'], 'owner': found['user_id'],
+                                      'line': line['text'], 'days': days, 'expect': expect,
+                                      'latest': latest}).encode()).hexdigest()[:8]
+        return {'actor': actor, 'admin': username, 'contact_id': found['id'],
+                'contact_short': found['id'].removeprefix('remote_')[:8], 'user_short': found['user_id'][:8],
+                'label': found['label'], 'peer_id': found['peer_id'], 'line': line, 'days': days, 'expect': expect,
+                'latest': latest, 'confirm': code, 'granted': False}
+
+    def station_trust_grant(self, username, contact, *, days, expect, confirm=None, words=None):
+        """`make station-trust-grant` (spec revision 6). Without `confirm`, the first run: owner_trust_at_terminal's
+        view, and nothing granted; words then are refused, since they are the yes to the line this run shows. With
+        `confirm` equal to the code the view has now, so the contact, its line, the days, the count and that owner's
+        trusts read as the first run showed them, the grant: grant_owner_trust_at_terminal with that line as `shown`,
+        re-checked in the grant's own transaction, and the words. Returns the view, with the grant's id, until and text
+        once granted."""
+        view = self.owner_trust_at_terminal(username, contact, days=days, expect=expect)
+        if confirm is None:
+            if words is not None:
+                raise Problem(400, WORDS_FIRST)
+            return view
+        if not isinstance(confirm, str) or confirm.strip().lower() != view['confirm']:
+            raise Problem(409, TERMINAL_CHANGED)
+        done = self.grant_owner_trust_at_terminal(view['actor'], view['contact_id'], days=days, expect=expect,
+                                                  shown=view['line']['text'], words=words, latest=view['latest'])
+        return {**view, **done, 'granted': True}
 
     def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None,
                           shown=None):

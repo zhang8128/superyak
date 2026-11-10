@@ -8,7 +8,8 @@ REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / '.superyak' / 'checklists'
 STATION_ACTS = ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate',
                 'imprint-admit', 'imprint-delete', 'imprint-use',   # the final review's I1
-                'journal')   # store-wal-mode Tasks 1-3 review's S3
+                'journal',   # store-wal-mode Tasks 1-3 review's S3
+                'trust-grant')   # the terminal grant's reader, S4
 IMPRINT_ACTS = ('imprint-admit', 'imprint-delete', 'imprint-use', 'approve')
 TABLE = {
     'why-we-build': 'start; every 3h', 'each-hour': 'every 1h', 'reflect': 'every 3h',
@@ -23,7 +24,7 @@ TABLE = {
     'imprint-act': '; '.join(f'command make station-{t}' for t in IMPRINT_ACTS),
 }
 
-VERSIONS = {'imprint-act': 2, 'before-push': 3, 'live-station-act': 3, 'each-hour': 3, 'merging-to-main': 3}   # F1: its content changed after it was on main
+VERSIONS = {'imprint-act': 2, 'before-push': 3, 'live-station-act': 4, 'each-hour': 3, 'merging-to-main': 3}   # F1: its content changed after it was on main
 
 
 def seed(list_id):

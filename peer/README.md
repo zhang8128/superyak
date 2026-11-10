@@ -199,8 +199,28 @@ make station-pair-trusted CARD=ship-files/my-ship.card.json ASSERTION=ship-files
 uv run --locked python -m superyak_peer station-trust-list --data-dir /private/path/home
 ```
 
-A ship never grants, renews or revokes a trust: those are the admin's acts, with the admin's own password, in the
-browser. A ship only pairs within one that exists.
+The admin may also grant a trust by their yes at the station's own terminal, with no password. `station-trust-grant`
+runs twice. The first run shows the contact, its peer id, the exact line the browser would show, the days and the
+expected count (both the admin's own numbers) and a confirm code, and grants nothing. Once the admin says yes there,
+naming the contact's short id and the count, their words go into a file exactly as typed, never through a shell, and
+the second run, with the code and that file, grants. It refuses words that don't name the contact and the count,
+words whose numbers of days or of ships differ from the days and the count, and words the notice couldn't post as
+written (an unprintable or invisible character, or a pairing code's or a live ship key's shape in any form). The grant keeps the line and the words, and Odo posts a notice in Ops at its next cycle naming each grant
+made this way, with the line and the words. Renewing stays in the browser:
+
+```sh
+uv run --locked python -m superyak_peer station-trust-grant --data-dir /private/path/home --contact 1a2b3c4d \
+  --days 90 --expect 1 --as admin
+uv run --locked python -m superyak_peer station-trust-grant --data-dir /private/path/home --contact 1a2b3c4d \
+  --days 90 --expect 1 --as admin --confirm <the code it showed> --words-file <the file of the admin's words>
+make station-trust-grant CONTACT=1a2b3c4d DAYS=90 EXPECT=1 APPROVER=admin
+make station-trust-grant CONTACT=1a2b3c4d DAYS=90 EXPECT=1 APPROVER=admin CONFIRM=<the code it showed> \
+  WORDS_FILE=<the file of the admin's words>
+```
+
+A ship never grants, renews or revokes a trust on its own: granting and renewing are the admin's acts, in the browser
+with the admin's own password or, for a grant, on the admin's yes said at the station's terminal, and revoking is the
+admin's act in the browser. A ship only pairs within one that exists.
 
 ### A peer that never listens (federation pull)
 

@@ -202,6 +202,7 @@ only-include = [
     "tests/test_owner_trust.py",
     "tests/test_owner_trust_browser.py",
     "tests/test_owner_trust_restore.py",
+    "tests/test_owner_trust_terminal.py",
     "tests/test_packaging.py",
     "tests/test_presence.py",
     "tests/test_public_body_cap.py",

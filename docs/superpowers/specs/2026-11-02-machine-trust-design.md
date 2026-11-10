@@ -1,7 +1,7 @@
 # Owner trust: a confirmed person's ships pair without a code each
 
-Rio Grande, 2026-11-02. Revision 5: the expected count (item 4a), from Tardis's review during the build, after its fresh review (R1 to R6). Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
-Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3). Revision 5 (item 4a) approved by a fresh Pi reviewer after one re-check (697b7ad9), with its three nits folded in after.
+Rio Grande, 2026-11-02. Revision 6, 2026-11-09: the grant on Andy's yes at the Pi's terminal (item 2a), his decision at Rio Grande's terminal. Revision 5: the expected count (item 4a), from Tardis's review during the build, after its fresh review (R1 to R6). Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
+Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3). Revision 5 (item 4a) approved by a fresh Pi reviewer after one re-check (697b7ad9), with its three nits folded in after. Revision 6 (item 2a) is Andy's decision of 2026-11-09, made at Rio Grande's terminal.
 
 ## Why
 
@@ -36,13 +36,67 @@ person whose own account a person confirmed with a code.
    isn't a ship, or a ship whose owner isn't that peer's local person. A copied card can't carry a forged assertion
    without that peer's private key.
 2. **Owner trust, a person's act once per person contact:**
-   - It's granted in the station's browser by the admin, with their password, like the imprint confirm. Only for a
-     remote person contact whose code was typed (`pairing_confirmations` holds a typed code, not a trust mark).
+   - It's granted in the station's browser by the admin, with their password, like the imprint confirm, or, since
+     revision 6, on the admin's yes at the Pi's terminal (item 2a). Only for a remote person contact whose code was
+     typed (`pairing_confirmations` holds a typed code, not a trust mark).
    - The grant reads: "ships owned by <name> on <peer 12> may be paired by this station's ships, until <date>". It
      lasts at most 90 days and can be renewed.
    - It's kept in an append-only `owner_trust` table: grant, renewal, revocation, each with who and when, and nothing
      is updated or deleted in it. The owner is the pair (that contact's peer, its participant id), never an id alone.
-   - A ship never grants or renews it, never runs it under a pty or a wrapper, and never types its password.
+   - A ship never grants or renews it, never runs it under a pty or a wrapper, and never types its password. At the
+     terminal (item 2a) Rio Grande runs the command, but the grant is still Andy's act: his yes, said there.
+2a. **The grant at the Pi's terminal (revision 6):**
+   - **Why:** on 2026-11-09, at Rio Grande's terminal on the Pi, Andy decided that his yes at the Pi's terminal is
+     enough to grant an owner trust, as it already approves a docking (`make station-approve`) or names a room
+     moderator (`make station-moderate`): "this should not be something on me. We've had problems where I grant
+     approval and then you ask again and again."
+   - **Two runs.** `make station-trust-grant CONTACT=<contact short id> DAYS= EXPECT=` names the owner contact by the
+     short id `station-lessons-add` takes (the start of its id, or of its participant id). DAYS and EXPECT are Andy's
+     numbers: Rio Grande runs them only as he says them, since the line names neither the count nor the days, and the
+     count is the bound item 4a makes his. The first run prints the contact's label and full peer id, the exact grant
+     line the browser shows (`grant_line`, by the station's clock), the days and the expected count, each plainly,
+     and an 8-hex confirm code bound to all of them and to that owner's latest `owner_trust` row, as
+     `station-lessons-room` builds its own; it grants nothing, and refuses what a grant would (no admin, an owner that
+     isn't eligible, a live trust). Rio Grande shows Andy that whole output: the contact, its peer id, the line, the
+     days and the count. Only after he says yes at that terminal, naming the contact's short id and the count, it
+     writes his words exactly as he typed them to a file with its file tool, never through a shell, and runs it again
+     with `CONFIRM=<code> WORDS_FILE=<that file>`. The command reads the file as UTF-8: a regular file of at most 2,000
+     bytes, with one trailing newline taken off; make never expands or exports any of the values. A code that doesn't
+     match the view as it reads now (another day in the line, a renamed owner, other days or another count, or any
+     grant, renewal or revocation of that owner since, so one code grants at most once) refuses, as do missing words,
+     words that hold no yes-word (yes, yeah, yep, ok, sure, approve, grant, go ahead, do it, confirm, agreed, or a
+     yes idiom such as "no problem" or "why not") and words that hold a no (no, not, never, nah, a word ending in
+     n't, cannot, deny, decline, refuse, reject, revoke, veto, stop, wait, hold off, skip, pause, cancel or later),
+     checked before the naming and number checks, so "no more than 1 ship" refuses too (Tardis's read of
+     26e4545f; the re-check 4's S7: a short list of yeses, not an endless list of nos),
+     words that don't name the contact's short id (8 or more characters of its id or of its participant's, as the
+     first run shows them) and the count, words whose numbers don't match the grant (a number next to day or days must
+     be DAYS, one next to ship(s), pairing(s) or machine(s) must be EXPECT, each one whole number, never a range such as
+     "1-2 ships", a fraction such as "1/2 ships" or a sign such as "-1 ships", though a dash after an id and a period
+     that ends a sentence are punctuation; the count may be a word from one to ten ("one ship"), and days, or a count
+     past ten, in words are refused with a request for digits; with no such noun, the count must be the words' only
+     bare number), an unknown contact and a live trust, and nothing is granted. The grant's own transaction
+     checks the owner's latest `owner_trust` row again, so an act on that owner between the two transactions refuses
+     too. A refusal names what is missing or wrong, never the words. The command never asks for, reads or takes a password.
+   - **What is recorded:** the same `owner_trust` 'grant' row the browser writes, by the same checks, plus two columns
+     only a terminal grant fills: `line`, the grant line he said yes to, and `words`, his yes as typed (1 to 500
+     characters). The notice posts the words, so they are refused when any character in them isn't shown as written:
+     a control or format character, or an invisible one (Unicode's default-ignorable characters, the Hangul fillers
+     among them, and the braille blank; a variation selector only after an ASCII letter, a digit, '-' or '_', where it
+     could split a code or a key, so an emoji's selector is taken); every Unicode space counts as a plain one. They are refused, too,
+     when the words as typed, as posted, or the NFKC form of either holds a live ship key or 32 hex in a row once
+     spaces and hyphens are taken out; the refusal says whether that is a pairing code or ids run together, to be
+     given with commas between them. Look-alike letters are taken, as a room post takes them. At Odo's next cycle a one-off Ops notice
+     says that an owner trust was granted at the Pi's terminal on his yes, with no password, with the grant's short
+     id, the line, the count and, last, his words whole, each `"` in them posted as `'`; `make station-trust-list`
+     marks the trust as granted at the terminal.
+   - **What doesn't change:** the browser grant, with its password; renewal, in the browser only; revocation, which
+     needs no password; the expected count (item 4a), which the terminal requires as the browser does; and the cap of
+     200 a day (item 4).
+   - **The threat:** a ship could run the command without Andy's yes, the same exposure `station-approve` has. The
+     guard is the procedural rule in CLAUDE.md: his yes at that terminal, naming the contact's short id and the count,
+     never a relay, a room message or another ship's report. The Ops notice makes every grant visible, and he revokes
+     one he didn't say yes to.
 3. **Pairing within it, a ship's act:** `pair-trusted --card <file> --assertion <file> --as <ship>`, with no
    terminal and no code. It refuses, and writes nothing, unless all of these hold:
    - the assertion verifies under the paired card's signing key, hasn't expired, and names that peer;
@@ -129,15 +183,17 @@ person whose own account a person confirmed with a code.
 - A person's account always takes its own typed code. So does the first pairing of every machine, and every
   stranger's machine.
 - The pairing law in CLAUDE.md: a ship never types, relays, repeats or computes a code. Its new lines: a ship may run
-  `pair-trusted` within an owner trust, and never grants or renews one.
+  `pair-trusted` within an owner trust, and never grants or renews one, except that Rio Grande runs
+  `station-trust-grant` on Andy's yes at the Pi's terminal (item 2a).
 - Pairing grants no content, and no room by itself, except that a typed code for an account on a peer listed for the
   lessons room makes it addable there by Rio Grande (lessons-room adds spec). Otherwise the lessons room takes members
   from Andy, or under a moderate grant he gives.
 
 ## What it costs Andy, plainly (S9)
 
-- Per person contact, in each direction, the typed code (as today): two codes per machine. Plus one browser
-  confirmation with his password on the importing station, every 90 days at most, or at each pause. A revoke at restore holds the trust's legitimate ships too; they come back
+- Per person contact, in each direction, the typed code (as today): two codes per machine. Plus one grant on the
+  importing station, in the browser with his password or by his yes at the Pi's terminal (item 2a), and a browser
+  renewal every 90 days at most, or at each pause. A revoke at restore holds the trust's legitimate ships too; they come back
   with a new grant and fresh assertions (S8). The same grant on Tardis's peer,
   for the station's ships, is Andy's act there too, as Tardis's peer's admin.
 - Per ship, nothing, up to the count he expects (item 4a) and 200 a day per owner trust: a host with 1,000 of his ships is one
@@ -175,7 +231,12 @@ Each refusal writes nothing:
 - a trust at its expected count: the nth pairing succeeds and the (n+1)th is refused, writing nothing; a renewal pairs
   again, up to its own count; a count of 0 or 10,001 is refused at a grant and at a renewal;
 - the pause notice posts once per window, and again after a renewal pauses;
-- a restore whose replaced file has the trust paused revokes it.
+- a restore whose replaced file has the trust paused revokes it;
+- at the terminal (item 2a): a wrong or stale confirm code (a new day, a rename, a grant or revocation since),
+  other days or another count, empty, over-long or unprintable words, words that don't name the contact and the
+  count, a code or a live key in any form of the words, an unknown contact, a live trust and an admin who isn't one;
+  the documented make line, through a shell, keeps the words file's content as written and runs nothing in it; and
+  no password is read.
 
 Revoking holds every contact made under the trust (and withdraws their outbox rows), holding the owner holds its ships,
 a new trust re-pairs a held ship only with an assertion issued after the revocation, and a restore can't bring a revoked
