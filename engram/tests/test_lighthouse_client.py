@@ -113,12 +113,15 @@ def test_socket_roundtrip_and_fragmented_reply(client_module):
     reply = trace()
 
     def script(connection):
-        assert receive_request(connection) == sent
+        received = receive_request(connection)
+        left = received.pop("remainingMs")  # how long the client still waits (spec 2026-11-10), its own 2 s at most
+        assert received == sent and type(left) is int and 0 < left <= 2000
         for byte in encode(reply):
             connection.sendall(bytes([byte]))
 
     with scripted_peer(script) as path:
         assert client_module.LighthouseClient(path).call(sent) == reply
+    assert "remainingMs" not in sent  # the caller's frame is never changed
 
 
 def test_absent_socket_has_stable_diagnostic(client_module, tmp_path):
