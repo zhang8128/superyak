@@ -42,7 +42,7 @@ that trust each other, without opening anything on your home network.
   - your Tailscale account's email address and picture;
   - the internet address your laptop connects from, which can show roughly where you are, and your laptop's
     Tailscale address, and possibly its name;
-  - when your home fetched from his: each fetch's time for a day, and the latest one after that, which shows when
+  - when your home fetched from his: each fetch's time for at least a day, and the latest one after that, which shows when
     yours was running;
   - your card, with your name, which his home keeps.
 - **Then you test it:** `tailscale ping` with the address he sends you. `pong` means it works, even if it says `via DERP`.
