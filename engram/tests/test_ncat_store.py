@@ -417,10 +417,16 @@ def test_the_budgets_on_this_machine(tmp_path):
         "for _ in range(5):  # each a fresh store and kernel; the best of five, so a busy machine doesn't decide it\n"
         "    with ncat_store.open_store(sys.argv[2]) as store:\n"
         "        started = time.perf_counter(); store.session('long'); rebuilt = min(rebuilt, time.perf_counter() - started)\n"
-        "try:  # VmHWM is this process's own peak; ru_maxrss carries the parent's across exec (the suite's 1.9 GB)\n"
-        "    peak = int(next(l for l in open('/proc/self/status') if l.startswith('VmHWM:')).split()[1]) / 1024\n"
-        "except OSError:  # no /proc (macOS): ru_maxrss, in bytes there\n"
-        "    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024\n"
+        # The unit by platform, as tests/pi_budget_probe.py's peak_kb (not imported: it would raise the child's
+        # baseline). Linux: VmHWM, this process's own peak (ru_maxrss carries the parent's across exec), plus VmSwap
+        # at the end as a proxy for what reclaim pushed out; a Linux without them raises. macOS: ru_maxrss in bytes.
+        # Elsewhere: ru_maxrss in kB.
+        "if sys.platform.startswith('linux'):\n"
+        "    status = {l.split(':')[0]: int(l.split()[1]) for l in open('/proc/self/status') if l.startswith(('VmHWM:', 'VmSwap:'))}\n"
+        "    peak = (status['VmHWM'] + status['VmSwap']) / 1024\n"
+        "else:\n"
+        "    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "    peak = rss / 1024 / 1024 if sys.platform == 'darwin' else rss / 1024\n"
         "print(json.dumps([took, rebuilt, peak]))\n")
     done = subprocess.run([sys.executable, "-c", measure, str(engram), str(tmp_path / "ncat.db")], capture_output=True,
                           text=True, env={**os.environ, "PYTHONPATH": str(ENGRAM)}, cwd=ENGRAM, timeout=120)
