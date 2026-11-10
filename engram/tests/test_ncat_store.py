@@ -407,7 +407,8 @@ def test_the_budgets_on_this_machine(tmp_path):
                      json.dumps([rng.choice(memories)]), json.dumps({"session_id": "long"}), "used: x"))
     db.executemany("INSERT INTO memory_log VALUES (?,?,?,?,?,?,?)", rows)
     db.commit(); db.close()
-    # In a process of its own, so the peak is the store's and not the test runner's (1.9 GB inside the whole suite).
+    # In a process of its own, so the peak is the store's and not the test runner's (1.9 GB inside the whole suite),
+    # read as VmHWM: a child's ru_maxrss on Linux starts at its parent's peak (train-1111's suite read 1,976 MB).
     measure = (
         "import json, resource, sys, time\n"
         "import ncat_store\n"
@@ -416,7 +417,11 @@ def test_the_budgets_on_this_machine(tmp_path):
         "for _ in range(5):  # each a fresh store and kernel; the best of five, so a busy machine doesn't decide it\n"
         "    with ncat_store.open_store(sys.argv[2]) as store:\n"
         "        started = time.perf_counter(); store.session('long'); rebuilt = min(rebuilt, time.perf_counter() - started)\n"
-        "print(json.dumps([took, rebuilt, resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024]))\n")
+        "try:  # VmHWM is this process's own peak; ru_maxrss carries the parent's across exec (the suite's 1.9 GB)\n"
+        "    peak = int(next(l for l in open('/proc/self/status') if l.startswith('VmHWM:')).split()[1]) / 1024\n"
+        "except OSError:  # no /proc (macOS): ru_maxrss, in bytes there\n"
+        "    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024\n"
+        "print(json.dumps([took, rebuilt, peak]))\n")
     done = subprocess.run([sys.executable, "-c", measure, str(engram), str(tmp_path / "ncat.db")], capture_output=True,
                           text=True, env={**os.environ, "PYTHONPATH": str(ENGRAM)}, cwd=ENGRAM, timeout=120)
     assert done.returncode == 0, done.stderr
