@@ -123,7 +123,7 @@ def _compose(parts, k):
 
 
 def _kernel_digest():
-    return hashlib.sha256(Path(__file__).with_name("ncat_kernel.c").read_bytes()).hexdigest()[:16]
+    return hashlib.sha256(Path(__file__).with_name("ncat_kernel.cpp").read_bytes()).hexdigest()[:16]
 
 
 def _write(path, engram, sessions, report):

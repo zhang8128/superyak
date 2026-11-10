@@ -44,7 +44,9 @@ typedef struct {
 
 typedef struct { int32_t a, b, k, val; } MemoSlot;
 
+#ifndef NCAT_MASK_MAX  /* a test build may set it small, to reach the cap; ncat_kernel.cpp is the kernel, this its oracle */
 #define NCAT_MASK_MAX ((1u << 30) - 1)  /* the largest table or memo mask: one more doubling would still fit 32 bits */
+#endif
 enum { U_MS, U_SEEN, U_FACE, U_OUT, U_DOWNST, U_INFRONT, U_DONE, U_COUNT };
 enum { I_S, I_SEQ, I_F, I_L, I_DOWN, I_STACKLESS, I_COUNT };
 

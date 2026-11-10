@@ -1,6 +1,7 @@
 """The loop-free fragment of the free strict n-category on a regular polygraph: identities, composition along every lower
-dimension, and equality you can trust where it answers. The kernel is C (`ncat_kernel.c`), because equality is decided by
-canonicalising a shape at every composition. That file's head says what a cell is and what's refused. No storage, and nothing
+dimension, and equality you can trust where it answers. The kernel is C++20 (`ncat_kernel.cpp`, ported from the C kernel,
+`ncat_kernel.c`, which stays as its oracle), because equality is decided by canonicalising a shape at every composition.
+That file's head says what a cell is and what's refused. No storage, and nothing
 steers recall: it's the structure alone.
 
 Safe to share between threads: every call into the kernel holds its category's lock, and lets the GIL go, so a long composition
@@ -16,13 +17,13 @@ import sys
 import threading
 from pathlib import Path
 
-SOURCE = Path(__file__).with_name('ncat_kernel.c')
+SOURCE = Path(__file__).with_name('ncat_kernel.cpp')
 if not SOURCE.exists():  # an installed wheel keeps it with the other shared files
-    SOURCE = Path(sys.prefix) / 'share' / 'engram' / 'ncat_kernel.c'
+    SOURCE = Path(sys.prefix) / 'share' / 'engram' / 'ncat_kernel.cpp'
 MAX_DIM = 15
-FLAGS = ('-std=c11', '-O2', '-fPIC', '-shared', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=2', '-Wall')
+FLAGS = ('-std=c++20', '-O2', '-fPIC', '-shared', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=2', '-Wall')
 LINUX_FLAGS = ('-Wl,-z,relro', '-Wl,-z,now', '-Wl,-z,noexecstack')
-COMPILERS = ('/usr/bin/cc', '/usr/bin/gcc', '/usr/bin/clang')  # never one found on PATH
+COMPILERS = ('/usr/bin/c++', '/usr/bin/g++', '/usr/bin/clang++')  # never one found on PATH
 # The compiler runs with this environment alone, so its assembler and linker come from the system's own directories
 # and no CPATH, COMPILER_PATH, GCC_EXEC_PREFIX or LIBRARY_PATH of the caller's reaches it.
 BUILD_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
@@ -50,7 +51,7 @@ def _built():
     source = SOURCE.read_bytes()
     compiler = next((c for c in COMPILERS if os.access(c, os.X_OK)), None)
     if compiler is None:
-        raise RuntimeError('ncat needs a C compiler at /usr/bin/cc, /usr/bin/gcc or /usr/bin/clang')
+        raise RuntimeError('ncat needs a C++ compiler at /usr/bin/c++, /usr/bin/g++ or /usr/bin/clang++')
     flags = FLAGS + (LINUX_FLAGS if sys.platform.startswith('linux') else ())
     machine = f'{sys.platform} {platform.machine()}'  # a home shared across architectures keeps one library each
     tag = hashlib.blake2b(source + compiler.encode() + ' '.join(flags).encode() + machine.encode(), digest_size=12).hexdigest()

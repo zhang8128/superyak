@@ -1,5 +1,6 @@
 """Breaks the kernel one way at a time and runs the kernel's tests against each. Every mutant here should be caught, except those
-marked equivalent, each with the reason it can't change an answer. Run from engram/: python experiments/ncat/mutants.py"""
+marked equivalent, each with the reason it can't change an answer. Run from engram/: python experiments/ncat/mutants.py
+[--kernel cpp|c]. The kernel is the C++ port (ncat_kernel.cpp) by default; --kernel c breaks the C oracle the same ways."""
 import os
 import subprocess
 import sys
@@ -7,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 ENGRAM = Path(__file__).resolve().parents[2]
-SOURCE = (ENGRAM / 'ncat_kernel.c').read_text()
+KERNELS = {'cpp': ('ncat_kernel.cpp', ['/usr/bin/c++', '-std=c++20']), 'c': ('ncat_kernel.c', ['/usr/bin/cc', '-std=c11'])}
 EQUIVALENT = {
     'faces not sorted': 'face lists keep their atom\'s canonical order through every copy, so sorting changes nothing',
     'formal ignored at interning': 'the hash already holds the formal dimension, so two cells that differ there never meet',
@@ -49,19 +50,43 @@ MUTANTS = [
     ("the context's own arrays aren't budgeted", 'return c->bytes_held + fixed_bytes(c) + more > c->bytes_budget;', 'return c->bytes_held + more > c->bytes_budget;'),
     ("words don't check a negative cap", 'cap < 0 || ', ''),
 ]
+# Where the port's text differs from the C kernel's, the same break written in the port's words.
+IN_CPP = {
+    'faces not sorted': ('std::sort(words.get() + at, words.get() + p);\n        at = p;', 'at = p;'),
+    'formal ignored at interning': ('o.formal == formal && ', ''),
+    'loop check skips generators': ('''            int lf = loop_free(c, &h);
+            if (lf < 0) id = lf;
+            else if (!lf) id = NCAT_ENOTLOOPFREE;
+            else {
+                Walk w{c};
+                id = walk_ready(&w, &h, d);''', '''            int lf = 1;
+            if (lf < 0) id = lf;
+            else if (!lf) id = NCAT_ENOTLOOPFREE;
+            else {
+                Walk w{c};
+                id = walk_ready(&w, &h, d);'''),
+    'the work limit is ignored': ('c->work_limit = steps; return (int32_t)0;', 'return (int32_t)0;'),
+}
 TESTS = ('catalan or beads or sheets or refused or composing or loops or parallel or same_however or units or globular or torsion '
          'or tangled or determined or exchanges or budget or checks_its_own or separate_blocks or dimension_2 or counts_everything or work')
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    kernel = argv[argv.index('--kernel') + 1] if '--kernel' in argv else 'cpp'
+    filename, compiler = KERNELS[kernel]
+    source = (ENGRAM / filename).read_text()
     work = Path(tempfile.mkdtemp(prefix='ncat-mutants-', dir=os.environ.get('TMPDIR')))
     work.chmod(0o700)
     survivors = []
     for name, before, after in MUTANTS:
-        assert SOURCE.count(before) == 1, name
-        (work / 'm.c').write_text(SOURCE.replace(before, after))
+        if kernel == 'cpp' and name in IN_CPP:
+            before, after = IN_CPP[name]
+        assert source.count(before) == 1, name
+        mutant = work / f'm{Path(filename).suffix}'
+        mutant.write_text(source.replace(before, after))
         library = work / f'm{len(survivors)}-{abs(hash(name))}.so'
-        subprocess.run(['/usr/bin/cc', '-std=c11', '-O1', '-shared', '-fPIC', str(work / 'm.c'), '-o', str(library)], check=True)
+        subprocess.run([*compiler, '-O1', '-shared', '-fPIC', str(mutant), '-o', str(library)], check=True)
         library.chmod(0o700)
         try:
             run = subprocess.run([sys.executable, '-m', 'pytest', 'tests/test_ncat.py', '-q', '-x', '-p', 'no:cacheprovider', '-k', TESTS],
