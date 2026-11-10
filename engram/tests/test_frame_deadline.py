@@ -240,6 +240,9 @@ class Side:
         time.sleep(self.wait)
         return None
 
+    def receipt_recall(self, candidates, placed):
+        return True
+
     def close(self):
         self.closed.append(True)
 
@@ -252,9 +255,10 @@ def test_time_spent_before_the_embed_comes_off_its_wait(tmp_path, socket_dir, mo
     daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(socket_dir / "e.sock")))
     monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side([], wait=0.15), False))
     try:
-        daemon.handle_frame(_recall(remainingMs=2_000))
+        answer = daemon.handle_frame(_recall(remainingMs=2_000))
     finally:
         recorder.close()
+    assert answer["kind"] == "recall_result"  # served whole, not an internal failure after the embed
     [embed] = recorder.embeds()
     assert embed["remaining_ms"] <= 2_000 - 150
 
@@ -283,7 +287,7 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
 
         started = time.monotonic()
         answer = daemon.handle_frame(_recall(remainingMs=200))
-        assert time.monotonic() - started < 5  # the publisher stopped waiting with its asker
+        assert time.monotonic() - started < 2  # it stopped waiting with its asker, long before the gate's 5 s
         assert answer["kind"] == "error"
         assert (answer["code"], answer["detail"]) == ("PUBLISHER_UNAVAILABLE", "the asker's deadline passed")
         assert closed == [True]
