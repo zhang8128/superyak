@@ -541,12 +541,18 @@ def test_breadth_counts_file_values_and_shows_the_authors_own_matches_on_request
     said = lessons.describe_breadth(lesson, commands).splitlines()
     assert said[1] == 'command 1: matches 7 of 200 (3.5%). Broad: it would be spent at the first of them, where the ' \
                       'lesson may not apply. A narrower value (two tokens, or a flag) holds where it does.'
-    assert said[2] == 'file 1: in 2 of 200 (1.0%), which it matches only after one of them fails or at a session start.'
+    assert said[2] == ("file 1: in 2 of 200 (1.0%), which it matches only after one of them fails (or by a failure's "
+                       "error or the cwd, not counted here).")
     assert said[-1] == lessons.TRIGGER_GUIDANCE and len(said) == 4  # nothing shown unless asked
     shown = lessons.describe_breadth(lesson, commands, show=True).splitlines()
     assert shown[2:7] == ['    > pytest tests/ --basetemp=/dev/shm/x/bt'] * 5  # the first five of its seven
     assert shown[8:10] == ['    > ' + ('grep -n "foo" static/app.js ' + 'y' * 200)[:120]] * 2  # one line, cut to 120
     assert shown[-1] == lessons.TRIGGER_GUIDANCE and len(shown) == 11
+    # The reader's round on febc22f2: a broad file value, one past the hook's 300-character cut, and a file-only lesson.
+    broad = lessons.describe_breadth(lessons.parse_post(lesson_body(command=(), file=('static/app.js',))),
+                                     ['cat static/app.js'] * 3 + ['x' * 300 + ' static/app.js'] * 5 + ['ls'] * 92).splitlines()
+    assert broad[1].startswith('file 1: in 3 of 100 (3.0%), which it matches only after one of them fails') and 'Broad:' in broad[1]
+    assert len(broad) == 3 and broad[-1] == lessons.TRIGGER_GUIDANCE  # a file-only lesson gets its file line, not "no value"
 
 
 def test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_the_doors_checks(lessons_station, tmp_path):
@@ -587,7 +593,6 @@ def test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_th
         assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0
 
 
-
 def test_lessons_check_show_prints_the_matched_commands_only_when_asked(lessons_station, tmp_path):
     """`make lessons-check ... COMMANDS=<file> SHOW=1`: the author's matched commands, on their own screen."""
     import json
@@ -601,6 +606,8 @@ def test_lessons_check_show_prints_the_matched_commands_only_when_asked(lessons_
     assert '    > grep -r --include=*.py x .' not in plain.stdout
     assert '    > grep -r --include=*.py x .' in shown.stdout.splitlines()
     assert lessons.TRIGGER_GUIDANCE in shown.stdout.splitlines()
+    alone = run_lessons('check', '--data-dir', store.data_dir, '--ship', 'tardis', '--show', stdin=lesson_body())
+    assert alone.returncode == 1 and '--show shows the commands --commands reads' in alone.stderr and alone.stdout == ''
 
 # Task 9: the add gate and the backfill
 def test_no_new_local_member_and_no_bridge(lessons_station):

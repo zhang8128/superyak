@@ -772,7 +772,8 @@ SHOW_MATCHES, SHOW_CHARS = 5, 120
 def describe_breadth(lesson, commands, show=False):
     """`lessons check --commands`: how many of the author's commands each `command` value matches as the hook matches
     before a command (`holding`, each cut to its 300 characters), and each `file` value is found in, which it matches only
-    after a failure or at a session start. Values are named by position and never echoed. A count is a bound on holds,
+    after one of them fails (words(); a failure's error or the cwd can match it too, and aren't counted here). Values are
+    named by position and never echoed. A count is a bound on holds,
     not a count of them: the hook holds a command's head once a session, three times at most, and a shown lesson no more.
     Above BREADTH_WARN it says the value is broad. With `show`, each value's first SHOW_MATCHES matched commands follow
     it, each cut to SHOW_CHARS on one line: the author's own commands, on their own screen, never posted (Tardis)."""
@@ -801,9 +802,13 @@ def describe_breadth(lesson, commands, show=False):
                          + (broad if len(found) / total > BREADTH_WARN else ''))
             shown(found)
     for number, value in enumerate(lesson.file, 1):
+        if value in HELD_TOOLS:  # words() never matches one as a file
+            lines.append(f'file {number}: a held tool\'s name, which never matches as a file.')
+            continue
         found = [command for command in cut if value in command]
         lines.append(f'file {number}: in {len(found):,} of {total:,} ({len(found) / total:.1%}), which it matches only '
-                     'after one of them fails or at a session start.' + (broad if len(found) / total > BREADTH_WARN else ''))
+                     'after one of them fails (or by a failure\'s error or the cwd, not counted here).'
+                     + (broad if len(found) / total > BREADTH_WARN else ''))
         shown(found)
     lines.append(TRIGGER_GUIDANCE)
     return '\n'.join(lines)
@@ -2246,6 +2251,8 @@ def _room(store, args):
       ('--show', {'action': 'store_true', 'help': "with --commands: under each value, the first 5 of your own commands it "
                                                   "matches, on this screen only"}))
 def _check(store, args):
+    if args.show and not args.commands:
+        raise Problem(400, '--show shows the commands --commands reads: give both')
     commands = read_commands(args.commands) if args.commands else None  # a bad file is refused before anything is said
     with store.transaction() as db:
         actor = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.ship,)).fetchone()
