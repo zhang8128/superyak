@@ -446,7 +446,7 @@ async function createSpace(form) {
     await api("/api/spaces", { method: "POST", json: { name: form.elements.name.value, kind: form.elements.kind.value, member_ids: [...form.querySelectorAll('[name="space-member"]:checked')].map((input) => input.value) } });
     state.spaceDialog = false;
     await refresh("Space created. Choose it in a saved layer and preview before sharing.");
-  } catch (error) { state.spaceError = error.message; render(); sayAgainInDialog(); }
+  } catch (error) { state.spaceError = error.message; render(); sayAgainInDialog("space-title"); }
 }
 
 function withdrawDialog() {
@@ -2306,12 +2306,15 @@ function drawDialogs() {  // after app.innerHTML: the dialogs now open
 }
 // A refusal that repeats draws the same alert, so the kept dialog's alert line doesn't change and nobody hears it again.
 // #announcer can't say it either: while a modal is open the browser takes everything outside it out of the accessibility
-// tree (the reader's re-check on f3868733). So after a render that kept the dialogs, their alert line says its words
-// again, emptied and given them back in the next frame, as a newly drawn alert would. A dialog drawn anew says them by
-// itself, so this does nothing then, and nothing on a page with no dialog.
-function sayAgainInDialog() {
+// tree (the reader's re-check on f3868733). So after a render that kept the dialogs, the alert line of the dialog the
+// error is for (named by its aria-labelledby) says its words again, emptied and given them back in the next frame, as a
+// newly drawn alert would. A dialog drawn anew says them by itself, so this does nothing then, and nothing on a page with
+// no dialog or under another dialog. Every dialog that draws an error line calls it after its error's render
+// (test_every_dialog_that_draws_an_error_says_a_repeat_again).
+function sayAgainInDialog(...purposes) {
   if (!dialogsKept) return;
-  const line = [...dialogRoot.querySelectorAll('dialog[open] [role="alert"], dialog[open] .notice.error[role="status"]')].pop();
+  const open = [...dialogRoot.querySelectorAll("dialog[open]")].filter((dialog) => purposes.includes(dialog.getAttribute("aria-labelledby")));
+  const line = open.flatMap((dialog) => [...dialog.querySelectorAll('[role="alert"], .notice.error[role="status"]')]).pop();
   if (!line?.textContent) return;
   const words = line.textContent;
   line.textContent = "";
@@ -2886,6 +2889,7 @@ async function createChat(form) {
       state.chatError = error.message;
       announce(state.chatError);
       render();
+      sayAgainInDialog("chat-dialog-title");  // the same refusal again keeps the dialog (the re-check on 19cf5683)
       return;
     }
     if (error.status === 409 && stillThisRoom) {
@@ -2899,6 +2903,7 @@ async function createChat(form) {
       }
       announce(state.chatError);
       render();
+      sayAgainInDialog("chat-dialog-title");
       document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
       return;
     }
@@ -3131,6 +3136,7 @@ async function logout() {
     state.profileDialog = !!state.home;  // the failed page has no dialog: the flash below says it
     if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
+    sayAgainInDialog("account-title");  // a second failed sign-out draws the same alert
   }
 }
 
@@ -3286,7 +3292,7 @@ document.addEventListener("submit", async (event) => {
       state.reauthError = error.message;
       if (form.elements.password) form.elements.password.value = "";  // a repeat of the same refusal keeps the dialog: the wrong try goes
       render();
-      sayAgainInDialog();  // a repeat of the same refusal keeps the dialog, and its alert says it again
+      sayAgainInDialog("reauth-title");  // a repeat of the same refusal keeps the dialog, and its alert says it again
       reopenForTyping(document.querySelector("#reauth-password"), acts);  // the next keys are a new try, unless the person moved on
     }
     return;

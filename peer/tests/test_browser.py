@@ -825,6 +825,24 @@ def test_a_box_another_modal_covers_is_not_made_the_owner(browser_peer):
         assert page.evaluate("() => typedBox === null || typedBox === document.activeElement")
 
 
+def test_a_second_failed_sign_out_is_said_again_inside_the_account_dialog(browser_peer):
+    """A second failed sign-out draws the same alert, so the account dialog is kept, and its alert line says the words
+    again: #announcer is out of a screen reader's reach behind the modal (the re-checks on f3868733 and 19cf5683)."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, context):
+        open_account_dialog(page)
+        context.set_offline(True)
+        page.get_by_role('button', name='Sign out', exact=True).click()
+        alert = page.locator('#dialogs dialog').get_by_role('alert')
+        expect(alert).to_contain_text('Sign-out could not be completed')
+        said = alert.inner_text()
+        page.evaluate("""() => { const line = document.querySelector('#dialogs dialog [role="alert"]'); window.said = [];
+          new MutationObserver(() => window.said.push(line.textContent)).observe(line, { childList: true, characterData: true, subtree: true }); }""")
+        page.get_by_role('button', name='Retry sign out').click()
+        page.wait_for_function("() => window.said.length >= 2")
+        assert page.evaluate("() => window.said") == ['', said]
+        context.set_offline(False)
+
+
 def test_signing_out_takes_every_open_dialog_down(browser_peer):
     """Dialogs live beside #app now, so a page drawn outside render() clears them: signing out from the account dialog
     leaves none open over the sign-in page."""

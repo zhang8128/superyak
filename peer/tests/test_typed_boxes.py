@@ -170,3 +170,27 @@ def test_every_dialog_names_what_it_is_for():
     tags = [tag for script in sorted(STATIC.rglob('*.js')) for tag in re.findall(r'<dialog\b[^>]*>', script.read_text())]
     assert len(tags) >= 14
     assert [tag for tag in tags if not re.search(r'aria-labelledby="[\w-]+"', tag)] == []
+
+
+# Dialogs whose error line is written in place by code (error.textContent = ...) on every refusal, a new text node each
+# time, as before the dialog root: a repeat is said without a re-render, so they needn't call sayAgainInDialog.
+SAID_IN_PLACE = {'imprint-title': '#imprint-error, written by the Allow handler',
+                 'imprint-ask-title': '#imprint-error, written by the withdraw and shorten handlers'}
+
+
+def test_every_dialog_that_draws_an_error_says_a_repeat_again():
+    """A kept dialog's alert doesn't change when the same refusal comes twice, and #announcer is out of reach behind a
+    modal, so each dialog that draws an error line calls sayAgainInDialog with its own aria-labelledby after the error's
+    render (the reader's re-checks on f3868733 and 19cf5683 each found one more dialog that didn't)."""
+    scripts = {script.name: script.read_text() for script in sorted(STATIC.rglob('*.js'))}
+    drawing = set()
+    for text in scripts.values():
+        for found in re.finditer(r'<dialog aria-labelledby="([\w-]+)"', text):
+            body = text[found.end():text.find('</dialog>', found.end())]
+            if re.search(r'role=\\?"(alert|status)\\?"', body) or 'errorMarkup()' in body:
+                drawing.add(found.group(1))
+    assert {'reauth-title', 'chat-dialog-title', 'member-preview-title', 'new-source-title'} <= drawing  # the finder works
+    called = {label for text in scripts.values() for args in re.findall(r'sayAgainInDialog\(([^)]*)\)', text)
+              for label in re.findall(r'"([\w-]+)"', args)}
+    assert sorted(drawing - called - set(SAID_IN_PLACE)) == []
+    assert sorted(set(SAID_IN_PLACE) - drawing) == []  # an exemption names a dialog that still draws one
