@@ -553,6 +553,9 @@ def test_breadth_counts_file_values_and_shows_the_authors_own_matches_on_request
                                      ['cat static/app.js'] * 3 + ['x' * 300 + ' static/app.js'] * 5 + ['ls'] * 92).splitlines()
     assert broad[1].startswith('file 1: in 3 of 100 (3.0%), which it matches only after one of them fails') and 'Broad:' in broad[1]
     assert len(broad) == 3 and broad[-1] == lessons.TRIGGER_GUIDANCE  # a file-only lesson gets its file line, not "no value"
+    held = lessons.describe_breadth(lessons.parse_post(lesson_body(command=(), file=('mcp__station__station_post',))),
+                                    ['mcp__station__station_post'] * 5).splitlines()
+    assert held[1] == "file 1: a held tool's name, which never matches as a file."  # as words() treats it (the re-check's note)
 
 
 def test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_the_doors_checks(lessons_station, tmp_path):
