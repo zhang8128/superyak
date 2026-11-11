@@ -29,7 +29,12 @@ jobs:
       # they fail here as in any fresh worktree. They're the imprint path end to end, so they run, not skip.
       - run: make setup-engram
       - run: uv run --locked --project peer playwright install --with-deps chromium
-      - run: make check-peer
+      # The suite's temp in RAM: on Tardis at 8eff27e0 it took 3 h 13 min with its temp on disk, and reached 82% in about 29 min
+      # with it on tmpfs, so there it waits on disk syncs. Its temp peaks near 3.5 GB; df shows /dev/shm's room.
+      - run: mkdir -p "$TMPDIR" && df -h /dev/shm && make check-peer
+        env:
+          TMPDIR: /dev/shm/peer-tmp
+          PYTEST_ADDOPTS: --basetemp=/dev/shm/pytest-peer
 
   atlas:
     name: Atlas workbench tests and offline demo
