@@ -7844,6 +7844,22 @@ def test_a_consent_sign_in_answered_by_something_else_says_the_connection_was_lo
     assert landed == []
 
 
+def test_a_consent_decision_answered_with_a_redirect_that_isnt_a_string_goes_nowhere(connector_home):
+    """Tardis's nit on 2f594196: the decision follows a redirect only if it's a string, as the view's own shape is
+    checked. The server only sends a string; an answer with any other redirect reads as a lost connection."""
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            sign_in_to_consent(page)
+            page.route(lambda url: url.startswith(CONSENT_ORIGIN + '/authorize/decision'),
+                       lambda route: route.fulfill(status=200, content_type='application/json', body='{"redirect": {"href": "https://claude.ai/x"}}'))
+            page.get_by_role('button', name='Deny').click()
+            expect(page.get_by_text('The connection to your home was lost. Try again.')).to_be_visible()
+            expect(page.get_by_role('button', name='Deny')).to_be_enabled()
+    assert landed == []
+
+
 def test_deny_on_the_consent_page_sends_access_denied(connector_home):
     from urllib.parse import parse_qs, urlsplit
     home, landed = connector_home, []

@@ -134,7 +134,7 @@ function consent(view) {
     status.textContent = yes ? "Allowing..." : "Denying...";
     const body = { pending: view.pending, csrf: view.csrf, allow: yes };
     const answer = await post("/authorize/decision", yes ? { ...body, rooms: chosen(), days: Number.parseInt(days.value, 10) } : body);
-    if (answer.ok && answer.data.redirect) return location.assign(answer.data.redirect);
+    if (answer.ok && typeof answer.data.redirect === "string" && answer.data.redirect) return location.assign(answer.data.redirect);  // only the shape checked (Tardis, 7d182323)
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
     status.textContent = LOST;
