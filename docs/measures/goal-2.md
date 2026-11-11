@@ -121,3 +121,67 @@ come to about a quarter of today's bytes. If the Funnel p95 doesn't fall in a sa
 Since Funnel's link moves this much by the hour, the "after" is taken in one hour with the "before" runs and the
 "after" runs interleaved, cold and warm, so that neither set gets a quieter link. The 20:52Z table above is not a
 stable "before" on its own.
+
+## Train 1115's before and after, 2026-11-10, from Tardis
+
+The downloads change (`tardis/downloads` 0793a1d1, train-1115 8b310ac2) lets a browser keep each script and stylesheet
+at its current hash for a year, and compresses them. These rows test the claim above: a warm load's files end near its
+first byte, and a cold load moves about a quarter of the bytes.
+
+**How:** `uv run --project peer python scripts/first_paint_rounds.py run --label before --rounds 4 --runs 10 --pin
+funnel=208.111.34.11 --out docs/measures/data/goal-2-train-1115.jsonl`, with `--label before2` and `--label after` for
+the other two sets. Each round runs cold then warm on both paths, 10 loads each, so every set is 160 loads. Every load is kept in
+[`data/goal-2-train-1115.jsonl`](data/goal-2-train-1115.jsonl) (sha256 `cf7aedb1fc863545…`), and `summary` reads it back.
+The machine, connection, Playwright 1.62.0 and Chromium 151.0.7922.34 are as above. No load failed in any set.
+- **before:** main 728b0f64, 19:21:52Z to 19:23:33Z.
+- **before2:** main 728b0f64, 20:47:10Z to 20:48:44Z, between the Pi's suite and the sitting, with nothing heavy on the Pi.
+- **after:** main 8b310ac2, 21:18:44Z to 21:20:08Z, once the sitting's checks passed.
+
+A restart lies between a before and an after, so the two can't be interleaved. before2 and the after are 33 minutes
+apart, end to end.
+
+**Sign-in form,** p50 / p95 / max, and loads over 600 ms of 40:
+
+| Path | Cache | before | before2 | after |
+|---|---|---|---|---|
+| Funnel | cold | 453 / 978 / 1,386 ms, 11 | 363 / 858 / 867 ms, 5 | 266 / 354 / 1,104 ms, 1 |
+| Funnel | warm | 270 / 652 / 746 ms, 3 | 244 / 315 / 450 ms, 0 | 124 / 155 / 190 ms, 0 |
+| Tailnet | cold | 119 / 141 / 211 ms, 0 | 121 / 135 / 147 ms, 0 | 103 / 116 / 161 ms, 0 |
+| Tailnet | warm | 78 / 92 / 99 ms, 0 | 81 / 92 / 259 ms, 0 | 70 / 79 / 290 ms, 0 |
+
+**First paint,** p50 / p95, and loads over 600 ms of 40:
+
+| Path | Cache | before | before2 | after |
+|---|---|---|---|---|
+| Funnel | cold | 310 / 728 ms, 4 | 264 / 604 ms, 3 | 220 / 292 ms, 1 |
+| Funnel | warm | 148 / 340 ms, 0 | 140 / 192 ms, 0 | 80 / 96 ms, 0 |
+| Tailnet | cold | 92 / 128 ms, 0 | 96 / 112 ms, 0 | 72 / 84 ms, 0 |
+| Tailnet | warm | 48 / 64 ms, 0 | 48 / 64 ms, 0 | 40 / 44 ms, 0 |
+
+**Bytes and files,** through Funnel. "Files after the first byte" is when the page's last file finished, less its first
+byte, p50 / p95:
+
+| Cache | bytes, before → after | files after the first byte, before2 → after |
+|---|---|---|
+| cold | 315,269 → 88,011 (28%) | 161 / 434 → 79 / 110 ms |
+| warm | 315,269 → 2,907 | 155 / 214 → 27 / 29 ms |
+
+**What it shows:**
+- **The claim holds.** A cold load moves 28% of the bytes, and a warm one 0.9%: the page, which stays `no-store`, and its one API call.
+  A warm load's files end 27 ms after its first byte, where they took 155.
+- **Goal 2's first paint is under 600 ms at p95 on every path,** where Funnel cold was 604 to 728 ms before. The
+  sign-in form, which is what a visitor waits for, crossed 600 ms in 1 of 160 loads, against 14 and 5 of 160 in the two before sets.
+- **Funnel moves by the hour, even with the same code.** before and before2 ran on the same main 85 minutes apart, and
+  Funnel cold's form p50 moved from 453 to 363 ms. So the after is read against before2, the nearer one, and a Funnel
+  change smaller than about 100 ms at p50 isn't read as a result. The tailnet sets agree within 4 ms at p50.
+- **One slow cold load remains:** form 1,104 ms, at 21:19:11Z. It connected in 236 ms and had its first byte at 321,
+  then its files took until 1,050. So the tail is still the files when the link is slow, now on 88 KB. The tailnet's
+  warm maxima (259 and 290 ms) are one load each, in before2 and the after.
+
+**Proxy check, the same hour, through 208.111.34.11, with curl:**
+- `app.js` at its `?v=`, with no `Accept-Encoding`: 246,039 bytes of plain JavaScript, no `content-encoding`, and
+  `vary: Accept-Encoding`. So a cache that keeps one copy per encoding never gives gzip to a client that didn't ask.
+- With `Accept-Encoding: gzip`: 65,237 bytes, gzip at maximum compression. Both bodies hash to `1f5a2f10c0a4f8ab…`,
+  which is the asset's `?v=` and main's `app.js`.
+- A wrong `v` or no `v` answers `no-store`, and HEAD gives GET's headers. No answer sets a cookie, and `/` stays
+  `no-store`.
