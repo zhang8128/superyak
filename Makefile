@@ -525,8 +525,8 @@ lessons-ship:
 	$(LESSONS) ship --data-dir "$(LESSONS_DATA)" --username "$(SHIP)" --owner "$(OWNER)"
 
 lessons-check:
-	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [COMMANDS=<your recent Bash commands, one JSON string per line: says how many each command value holds>] [LESSONS_DATA=…]'; exit 2; }
-	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)"$(if $(COMMANDS), --commands "$(COMMANDS)") < "$(FILE)"
+	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [COMMANDS=<your recent Bash commands, one JSON string per line: says how many each value matches>] [SHOW=1: and which, on this screen only] [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)"$(if $(COMMANDS), --commands "$(COMMANDS)")$(if $(SHOW), --show) < "$(FILE)"
 
 # Own lessons spec: a local count only. It misses own lessons shown at a prompt (the hook writes nothing there) and
 # covers the STATE_DAYS (14) a session record lives.
