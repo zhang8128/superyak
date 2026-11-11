@@ -25,6 +25,7 @@ from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity
+from tests import typed_boxes
 
 
 def open_new_layer(page):
@@ -563,6 +564,26 @@ def test_a_late_redraw_keeps_the_caret_in_the_box_a_person_is_typing_in(browser_
         page.keyboard.type(' words')
         expect(box).to_have_value(f'{start} words')
         expect(box).to_be_focused()
+
+
+def test_the_typed_box_watch_reports_a_box_a_redraw_cant_tell_apart(browser_peer):
+    """conftest.py watches every page a test opens (tests/typed_boxes.py, test:every-typed-box-has-an-owner). Boxes drawn
+    as the list says are let be; a box it doesn't name, a layer's box drawn outside any layer, and a box the drawing
+    names drawn twice on one page are each reported once. The test takes the reports, so its own boxes don't fail it."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        assert typed_boxes.take() == []  # the sign-in page and the home
+        page.evaluate("""() => app.insertAdjacentHTML('beforeend', '<div data-layer-id="x"><textarea id="layer-body"></textarea>'
+          + '</div><dialog><input id="space-name"></dialog><textarea id="peer-card"></textarea><input type="checkbox" id="unlisted-check">')""")
+        assert typed_boxes.take() == []
+        page.evaluate("""() => app.insertAdjacentHTML('beforeend', '<input id="a-box-nobody-listed"><input id="layer-title">'
+          + '<input id="peer-card"><input id="space-name"><textarea>no id, so never given a caret</textarea>')""")
+        found = typed_boxes.take()
+    assert len(found) == 4, found
+    assert any(line.startswith('#a-box-nobody-listed on ') and line.endswith(" isn't listed: say how a redraw tells it apart")
+               for line in found), found
+    assert any(line.startswith('#layer-title on ') and 'without data-layer-id on it or a parent' in line for line in found), found
+    assert any(line.startswith('#peer-card on ') and 'without drawn once on its page' in line for line in found), found
+    assert any(line.startswith('#space-name on ') and 'without inside a dialog' in line for line in found), found
 
 
 def test_a_redraw_puts_no_caret_in_a_box_that_shows_other_words(browser_peer):
