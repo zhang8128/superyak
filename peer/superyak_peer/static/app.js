@@ -462,7 +462,7 @@ function layerEditor(layer) {
   const instructions = layer.kind === "instructions";
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
-  return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
+  return `<section class="card editor" data-layer-id="${escapeHtml(layer.id)}" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
     <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}" data-version="${escapeHtml(String(layer.version))}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
@@ -893,7 +893,7 @@ function roomBrief(room) {
     ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div>${briefAuthor(room, brief, "room-brief-author")}<p class="meta">${escapeHtml(briefMeta(brief))}</p>`
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
-    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    ? `<form id="brief-form" data-room="${escapeHtml(room.id)}"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
     : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
@@ -969,7 +969,7 @@ function roomBoard(room) {
   const open = items.filter((item) => item.state === "open"), closed = items.filter((item) => item.state !== "open");
   const draft = state.boardPost?.roomId === room.id ? state.boardPost : { key: "", title: "", kind: "build" };
   // No maxlength on the title: the station counts code points, a browser UTF-16 units (Review Focus 5).
-  const post = owner && !replaced ? `<form id="board-post-form" class="board-post"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
+  const post = owner && !replaced ? `<form id="board-post-form" class="board-post" data-room="${escapeHtml(room.id)}"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
   const note = replaced ? `<p class="meta board-replaced">This room was replaced by a newer linked room; its board takes no changes.</p>` : "";
   return `<section class="room-board" data-room="${escapeHtml(room.id)}" aria-labelledby="room-board-title">${head}${note}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
 }
@@ -2057,28 +2057,48 @@ function openFailedPage(message) {
   return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
 }
 
-// The box a person is typing in keeps the caret through a redraw, but only the same box: its id, in the same form for the
-// same layer, room or item, showing the same words. Anything else and the caret stays out, so no key lands in words the
-// person didn't see. (fix:care-starter-loses-first-words: on a slow home a new draft's history answered mid-typing, the
-// editor was drawn again, and the keys after that went nowhere.)
-const TYPED_INPUTS = new Set(["text", "search", "email", "url", "tel", "password"]);
+// The box a person is typing in keeps the caret through a redraw, but only that box: the one their last keystroke went to,
+// still focused, drawn again with the same id and tag in the same chain of elements up to the app (each one's tag, id and
+// data: the layer, room or item it's for), showing the same words. A version is left out of the chain, since the person's
+// own save moves it while they type on, and a save from elsewhere fails the words check. A submit ends the typing, so its
+// own draw doesn't hold the caret (on a phone the keyboard closes, as before). Anything else and the caret stays out, so
+// no key lands in words or a place the person didn't see. (fix:care-starter-loses-first-words: on a slow home a new
+// draft's history answered mid-typing, the editor was drawn again, and the keys after that went nowhere.)
+const TYPED_INPUTS = new Set(["text", "search", "url", "tel", "password"]);  // not email: it has no selection to put back
+let typedBox = null;  // the box the last input event came from
+let drawnFor = null;  // what the page on screen was drawn for (drawingFor), set by each render
 
-function formIdentity(form) {
-  return form ? JSON.stringify([form.id, { ...form.dataset }]) : "";
+// A key belongs to the drawing it was aimed at, as a press does (Tardis, all hands d56f792e): the caret goes back only
+// when the page is drawn again for the same route, address, open room and open layer, so a box on a page drawn for
+// something else never takes it, whatever its markup carries.
+function drawingFor() {
+  const { route, id } = routeParts();
+  return JSON.stringify([route, id || null, route === "chats" ? state.room?.id || null : null, route === "layers" ? state.selectedLayerId || null : null]);
+}
+
+function boxChain(node) {
+  const chain = [];
+  for (let at = node; at && at !== app; at = at.parentElement) {
+    const { version, ...data } = at.dataset;
+    chain.push([at.tagName, at.id, data]);
+  }
+  return JSON.stringify(chain);
 }
 
 function typingIn(node) {
   const typed = node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
-  if (!typed || !node.id) return null;
-  return { id: node.id, tag: node.tagName, value: node.value, form: formIdentity(node.form), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
+  if (!typed || !node.id || node !== typedBox) return null;
+  return { id: node.id, tag: node.tagName, value: node.value, chain: boxChain(node), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
 }
 
 function keepTyping(typing) {
+  typedBox = null;
   const again = document.getElementById(typing.id);
-  if (!again || !app.contains(again) || again.tagName !== typing.tag || again.disabled || again.readOnly) return;
-  if (again.value !== typing.value || formIdentity(again.form) !== typing.form) return;
+  if (!again || !app.contains(again) || again.tagName !== typing.tag || again.matches(":disabled") || again.readOnly) return;
+  if (again.value !== typing.value || boxChain(again) !== typing.chain) return;
   again.focus({ preventScroll: true });
   try { again.setSelectionRange(typing.start, typing.end, typing.direction); } catch (_) { /* a type with no selection */ }
+  typedBox = again;
 }
 
 function render() {
@@ -2091,7 +2111,8 @@ function render() {
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
-  const typing = !hadDialog && app.contains(focused) ? typingIn(focused) : null;
+  const drawn = drawingFor();
+  const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
@@ -2115,6 +2136,7 @@ function render() {
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
+  drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
   if (drawing && drawing !== roomDrawn) showNewestMessage();
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
@@ -2934,6 +2956,7 @@ async function bootstrap() {
 
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
+  typedBox = null;  // a submit ends the typing: its own draw gives no caret back (keepTyping)
   const form = event.target;
   if (form.matches('.account-role-form')) {
     const account = state.accounts.find(row => row.id === form.dataset.id);
@@ -3453,6 +3476,7 @@ async function submitTrust(form) {
 }
 
 document.addEventListener("input", (event) => {
+  typedBox = event.target;  // the box a redraw may give the caret back to (keepTyping)
   Research.remember(event.target); Dashboard.input(event.target);
   if (event.target.id === "brief-body" && state.briefEdit) {
     state.briefEdit.body = event.target.value;
