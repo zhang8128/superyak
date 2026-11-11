@@ -2,6 +2,8 @@
 
 const app = document.querySelector("#app");
 const announcer = document.querySelector("#announcer");
+// Open dialogs live here, beside #app, so a redraw of the page can't touch them (drawDialogs below).
+const dialogRoot = document.querySelector("#dialogs") || app.insertAdjacentElement("afterend", Object.assign(document.createElement("div"), { id: "dialogs" }));
 
 const state = {
   me: null,
@@ -283,6 +285,7 @@ function showLogin(message = "") {
   state.home = null;
   state.room = null;  // the next person on this browser starts from the route, and no timer asks about this room for them
   state.roomGone = null;
+  clearDialogs();
   app.innerHTML = `<main class="login-page" id="main-content">
     <div class="login-wrap">
       <section class="login-story">
@@ -1967,7 +1970,7 @@ function profileDialog() {
 
 function reauthDialog() {
   if (!state.reauth || !state.me) return "";
-  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required autofocus></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
 }
 
 async function renderPublic() {
@@ -1985,6 +1988,7 @@ async function renderPublic() {
       content = error.status === 404 ? `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>` : `<article class="public-article"><h1>This page is unavailable</h1><p>This home could not be reached or could not load this page. Try again later; its sharing status is unknown.</p></article>`;
     }
   }
+  clearDialogs();
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
 }
 
@@ -2185,15 +2189,126 @@ function keepTyping(typing) {
   typedBox = again;
 }
 
+// A redraw never rebuilds a dialog the person is in (fix:dialog-redraw-loses-typed-words; Tardis, all hands d9907cf4 and
+// 1b0d489c, keyed on the markup in 751ada42). render() still writes each dialog into the page's markup, and drawDialogs
+// moves them into their own root beside #app. While the dialogs a render draws are, markup for markup, the ones that drew
+// the open dialogs, the open ones stay as they are: the same nodes, so the words, the caret, the selection, a phone's
+// half-built word and an opened <details> all stay, and showModal never runs again. Words aren't in the markup (a password
+// box draws no value, and every other box draws state), so a poll that changes nothing keeps everything. When a dialog's
+// markup changes (an error line, a new contact, another dialog), the dialogs are replaced, and each control the person set
+// in the old one is carried into the new one when it's the same control (its id, or a tick box's name and value) in the
+// same place (its chain inside the dialog) and the draw put the same default there: their words, their ticks, and the
+// caret if it was there. A password box never carries: after a submit it starts empty, and the dialog's alert says why.
+// Words whose box the draw changed under them aren't carried either: the box shows the new words, and a line in the
+// dialog says theirs were replaced and what they were. Focus goes back to the same control in the replaced dialog.
+function dialogControlKey(node) {  // how a control is found again in a dialog drawn anew; none for one that can't be told apart
+  if (node.id) return `#${node.id}`;
+  if (node.name && (node.type === "checkbox" || node.type === "radio")) return `${node.name}=${node.value}`;
+  if (node.dataset?.action) return `[${node.dataset.action}]${node.dataset.id || ""}`;
+  if (node.type === "submit" && node.form) return `submit:${node.form.id}`;
+  return null;
+}
+function controlsIn(dialog) {  // key -> its one control; a key drawn twice tells nothing apart, so neither of them counts
+  const found = new Map();
+  for (const node of dialog.querySelectorAll("input, textarea, select, button, a[href], summary")) {
+    const key = dialogControlKey(node);
+    if (key) found.set(key, found.has(key) ? null : node);
+  }
+  return found;
+}
+function chainIn(node, dialog) {  // like boxChain, up to the dialog: each element's tag, id and data, its version left out
+  const chain = [];
+  for (let at = node; at; at = at === dialog ? null : at.parentElement) {
+    const { version, ...data } = at.dataset;
+    chain.push([at.tagName, at.id, data]);
+  }
+  return JSON.stringify(chain);
+}
+function drawnSettingOf(node) {  // what the draw put in a control
+  if (node.type === "checkbox" || node.type === "radio") return String(node.defaultChecked);
+  if (node.tagName === "SELECT") { const options = [...node.options]; return JSON.stringify([options.map((option) => option.value), Math.max(0, options.findIndex((option) => option.defaultSelected))]); }
+  return node.defaultValue;
+}
+function settingOf(node) {  // what the control holds now
+  if (node.type === "checkbox" || node.type === "radio") return String(node.checked);
+  if (node.tagName === "SELECT") return JSON.stringify([[...node.options].map((option) => option.value), node.selectedIndex]);
+  return node.value;
+}
+function carryInto(dialog, old) {  // the person's settings from `old` into `dialog`, drawn anew for the same purpose
+  const fresh = controlsIn(dialog), dropped = [];
+  for (const [key, was] of controlsIn(old)) {
+    const into = fresh.get(key);
+    if (!was || !into || !("defaultValue" in was || "defaultChecked" in was || was.tagName === "SELECT")) continue;
+    const now = settingOf(was);
+    if (now === drawnSettingOf(was) || was.type === "password" || into.type === "password") continue;  // not the person's, or never carried
+    const same = into.tagName === was.tagName && into.type === was.type && chainIn(into, dialog) === chainIn(was, old);
+    if (same && drawnSettingOf(into) === drawnSettingOf(was) && !into.disabled && !into.readOnly) {
+      if (into.type === "checkbox" || into.type === "radio") into.checked = was.checked;
+      else if (into.tagName === "SELECT") into.selectedIndex = was.selectedIndex;
+      else into.value = was.value;
+    } else if (typedBoxRule(was) && settingOf(into) !== now) dropped.push([into, was.value]);
+  }
+  if (!dropped.length) return;
+  const body = dialog.querySelector(".dialog-body, .dialog-content") || dialog;
+  const note = Object.assign(document.createElement("p"), { className: "notice error dialog-dropped" });
+  note.setAttribute("role", "alert");
+  note.textContent = dropped.map(([box, words]) => `${dialog.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent || "A box"} changed while you typed, so it shows the new words. You had typed: “${words}”.`).join(" ");
+  const heading = body.querySelector("h2");
+  body.insertBefore(note, heading ? heading.nextSibling : body.firstChild);
+}
+function openDialog(dialog) {
+  dialog.showModal();
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const controls = [...dialog.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  });
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
+}
+function drawDialogs() {  // after app.innerHTML: the dialogs now open
+  const drawn = [...app.querySelectorAll("dialog")];
+  for (const dialog of drawn) { dialog.drawnAs = dialog.outerHTML; dialog.remove(); }
+  const open = [...dialogRoot.children];
+  if (drawn.length === open.length && drawn.every((dialog, at) => dialog.drawnAs === open[at].drawnAs)) return open;
+  const focused = document.activeElement, from = open.find((dialog) => dialog.contains(focused));
+  const caret = from && typedBoxRule(focused) ? { value: focused.value, start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
+  const owned = open.some((dialog) => dialog.contains(typedBox)) ? typedBox : null;
+  const purpose = (dialog) => dialog.getAttribute("aria-labelledby");
+  for (const dialog of drawn) {
+    const old = open.find((was) => purpose(was) === purpose(dialog));
+    if (old) carryInto(dialog, old);
+  }
+  for (const dialog of open) dialog.remove();
+  dialogRoot.append(...drawn);
+  for (const dialog of drawn) openDialog(dialog);
+  if (owned) typedBox = null;
+  const into = from && drawn.find((dialog) => purpose(dialog) === purpose(from));
+  const again = into && dialogControlKey(focused) && controlsIn(into).get(dialogControlKey(focused));
+  if (again && !again.disabled && again.getClientRects().length) {
+    again.focus({ preventScroll: true });
+    if (caret && typedBoxRule(again)) {
+      const kept = again.value === caret.value, end = again.value.length;
+      try { again.setSelectionRange(kept ? caret.start : end, kept ? caret.end : end, kept ? caret.direction : "none"); } catch (_) { /* a type with no selection */ }
+      if (kept && owned === focused) typedBox = again;
+    }
+  }
+  return drawn;
+}
+function clearDialogs() {  // a page drawn outside render() (signed out, a public page, a home that didn't open) has none
+  if (dialogRoot.contains(typedBox)) typedBox = null;
+  dialogRoot.replaceChildren();
+}
+
 function render() {
   if (!state.me) return;
-  if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
+  if (!state.home) { if (state.flash?.error) { clearDialogs(); app.innerHTML = openFailedPage(state.flash.message); } return; }
   const route = routeParts().route;
   const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, apps: connectedAppsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
-  const hadDialog = !!app.querySelector("dialog[open]");
+  const hadDialog = !!dialogRoot.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
-  const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   const drawn = drawingFor();
   const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
@@ -2205,20 +2320,8 @@ function render() {
   if (nav && current && nav.scrollWidth > nav.clientWidth) {
     nav.scrollLeft += current.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - current.offsetWidth) / 2;
   }
-  const dialogs = app.querySelectorAll("dialog");
-  for (const dialog of dialogs) {
-    dialog.showModal();
-    dialog.addEventListener("keydown", (event) => {
-      if (event.key !== "Tab") return;
-      const controls = [...dialog.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
-      const first = controls[0], last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    });
-    dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
-  }
+  const dialogs = drawDialogs();
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
-  else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
   drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
@@ -3137,7 +3240,7 @@ document.addEventListener("submit", async (event) => {
     return;
   }
   if (form.id === "reauth-form") {
-    const expectedId = state.me.id;
+    const expectedId = state.me.id, acts = personActs;
     try {
       let signedIn;
       if (isDemoAccount(state.me.username)) {
@@ -3157,7 +3260,8 @@ document.addEventListener("submit", async (event) => {
       render();
     } catch (error) {
       state.reauthError = error.message;
-      render();
+      render();  // the alert changes the dialog, so it's drawn anew, and a password box never carries
+      reopenForTyping(document.querySelector("#reauth-password"), acts);  // the next keys are a new try, unless the person moved on
     }
     return;
   }
@@ -3265,9 +3369,8 @@ document.addEventListener("click", async (event) => {
     render();  // the dialog opens at once, with the help text only if there is a brief
     const room = state.room, items = await openBoardItems(room);
     if (state.chatDialog !== "linked" || state.room?.id !== room.id) return;
-    state.chatBoard = items;  // fill in the slot only, so nothing the owner already ticked is redrawn
-    const slot = document.querySelector("dialog .carry-help-slot");
-    if (slot) slot.innerHTML = carryHelp(room);
+    state.chatBoard = items;
+    render();  // the help fills in; the dialog is drawn anew, and what the owner already ticked or typed is carried
   }
   if (action.startsWith("board-") && event.detail !== 0 && boardClickBlocked()) return;  // a key press (detail 0) is never a double click
   if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); focusForTyping(document.querySelector("#board-outcome")); }

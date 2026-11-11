@@ -11,12 +11,14 @@ test opens: a test that draws a box this list doesn't name, or draws it without 
 test_typed_boxes.py checks that the list names every typed box the static scripts write, so a new box fails CI until
 someone says how it's told apart.
 
-A dialog is different (the first reader on ca211228, finding 1). While a dialog stays drawn, render() focuses the box
-with the same id in the redrawn dialog (the `else if (hadDialog && dialogs.length && focusSelector)` line), with no
-chain check and no words check, and showModal focuses its first control by itself. The redraw also drops the words
-typed there. So a mark means nothing inside a dialog, and a dialog's box is kept from another thing's keys only by the
-dialog being for one thing while it's open: each one says which thing, and names its known gap. The lost words are
-fix:dialog-redraw-loses-typed-words.
+A dialog is different (the first reader on ca211228, finding 1). Dialogs live in their own root, #dialogs, beside
+#app (fix:dialog-redraw-loses-typed-words), and keepTyping never looks there. While a render draws a dialog with the
+markup that drew the open one, the open one is kept as it is, words and caret with it. When its markup changes, it's
+replaced, and drawDialogs carries the person's words and ticks into the control with the same id (or a tick box's name
+and value), the same chain inside the dialog and the same drawn default, and focuses that control again: an id, not a
+mark, finds it there. So a mark means nothing inside a dialog, and a dialog's box is kept from another thing's keys only
+by the dialog being for one thing while it's open: each one says which thing, and names its known gap. The watch reads
+both roots.
 
 The watch also reports a typed box the app's own code focuses, on a signed-in page and outside a dialog, that comes
 away with no owner (Tardis, all hands feecc21d): an action that opens a box to type in names it with focusForTyping.
@@ -103,12 +105,14 @@ WATCH = """(() => {
     try { window.__typedBox(kind, text).catch(() => {}); } catch (_) { /* the page is closing */ }
   };
   const mark = (key) => 'data-' + key.replace(/[A-Z]/g, (letter) => '-' + letter.toLowerCase());
+  const roots = () => ['app', 'dialogs'].map((id) => document.getElementById(id)).filter(Boolean);
   const missing = (box, app, way) => {  // the marks this way needs that the box and its parents don't carry
     const keys = new Set();
-    for (let at = box; at && at !== app; at = at.parentElement) for (const key of Object.keys(at.dataset)) if (key !== 'version') keys.add(key);
+    for (let at = box; at && !roots().includes(at); at = at.parentElement) for (const key of Object.keys(at.dataset)) if (key !== 'version') keys.add(key);
     return way.slice(1).filter((key) => !keys.has(key));
   };
-  const once = (box, app) => app.querySelectorAll('#' + CSS.escape(box.id)).length === 1;
+  // Drawn once across both roots: a dialog's box and a page's box with the same id would share every refocus by id.
+  const once = (box) => roots().reduce((count, root) => count + root.querySelectorAll('#' + CSS.escape(box.id)).length, 0) === 1;
   const holds = (box, app, way) => way[0] === 'dialog' ? !!box.closest('dialog') && once(box, app)
     : way[0] === 'drawing' ? once(box, app) : !box.closest('dialog') && !missing(box, app, way).length;
   const describe = (box, app, way) => way[0] === 'dialog' ? 'drawn once inside a dialog'
@@ -145,7 +149,7 @@ WATCH = """(() => {
     try { typed = TYPED_INPUTS; } catch (_) { return; }  // not the app's page, or app.js hasn't run yet
     if (!app) return;
     const page = (location.hash || '#').split(/[?/]/)[0];  // the route alone: no ids or codes in a failure
-    for (const box of app.querySelectorAll('input, textarea')) {
+    for (const box of roots().flatMap((root) => [...root.querySelectorAll('input, textarea')])) {
       if ((box.tagName === 'INPUT' && !typed.has(box.type)) || !box.id) continue;  // typingIn's own rule: never a caret
       tell('seen', box.id);
       const rule = rules.find(([pattern]) => pattern.test(box.id));
