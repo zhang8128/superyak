@@ -590,6 +590,21 @@ def test_the_typed_box_watch_reports_a_box_a_redraw_cant_tell_apart(browser_peer
     assert any(line.startswith('#layer-body on ') and 'without a mark outside a dialog' in line for line in found), found
 
 
+def test_the_typed_box_watch_reports_a_drawing_that_names_another_thing_than_the_view_drew(browser_peer):
+    """Tardis's condition (all hands 16566adf): after every render(), the open editor is the layer drawingFor() names. Here
+    drawingFor is made to name another layer, as it would if it went back to reading a lagging address, and the next
+    draw is reported once, with no id in the words."""
+    store = browser_peer['app'].state.store
+    layer = store.create_layer(browser_peer['users']['patient']['id'], {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        expect(page.get_by_label('Layer title')).to_have_value('Visit notes')
+        assert typed_boxes.take() == []  # the real drawings name what they draw
+        page.evaluate("""() => { window.drawingFor = () => JSON.stringify(['layers', 'another-layer']); render(); render(); }""")
+        found = typed_boxes.take()
+    assert found == ["the editor drawn on #layers isn't the layer drawingFor() names"], found
+
+
 @pytest.fixture
 def a_page_left_open(browser_peer):
     """A signed-out page whose context closes only in teardown, after conftest.py's check has run (as
@@ -657,8 +672,10 @@ def test_a_redraw_puts_no_caret_in_another_layers_box_with_the_same_words(browse
         expect(box).not_to_be_focused()
 
 
-def test_a_redraw_puts_no_caret_in_a_box_the_person_only_clicked(browser_peer):
-    """Only typing earns the caret back: a box clicked and not typed in loses it on a redraw, as before."""
+def test_a_redraw_keeps_the_caret_where_a_press_put_it_in_a_box_not_yet_typed_in(browser_peer):
+    """A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e): a box the person clicked into and
+    hasn't typed in yet keeps the caret through a redraw, where it was, so the first key isn't lost
+    (fix:unsaved-note-typing-flake)."""
     store = browser_peer['app'].state.store
     actor = browser_peer['users']['patient']['id']
     layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
@@ -667,9 +684,68 @@ def test_a_redraw_puts_no_caret_in_a_box_the_person_only_clicked(browser_peer):
         box = page.get_by_label('What do you want to share?')
         expect(box).to_have_value('First words')
         box.click()
-        page.evaluate('() => render()')
+        page.evaluate("() => document.querySelector('#layer-body').setSelectionRange(5, 5)")  # after "First"
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-body'); render(); }")
+        page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")  # drawn again
+        expect(box).to_be_focused()
+        page.keyboard.type('!')
+        expect(box).to_have_value('First! words')
+
+
+@pytest.mark.parametrize('how', ['the app focuses it', 'a press on its label', 'a press elsewhere after it',
+                                 'a right-button press'])
+def test_a_redraw_puts_no_caret_in_a_box_the_person_didnt_press_or_type_in_last(browser_peer, how):
+    """Only a key or the person's own primary press on the box itself earns the caret back (Tardis's conditions 1 and
+    2, b22aaf6e). A box the app focused, one reached through its label, one pressed before a press somewhere else, and
+    one pressed with another button lose the caret on a redraw, as before."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        if how == 'the app focuses it':
+            page.evaluate("() => document.querySelector('#layer-body').focus()")
+        elif how == 'a press on its label':
+            page.locator('label[for="layer-body"]').click()
+        elif how == 'a press elsewhere after it':
+            box.click()
+            page.locator('#editor-title').click()  # a heading: the press clears the owner, and the box loses focus
+            page.evaluate("() => document.querySelector('#layer-body').focus()")
+        else:
+            box.click(button='right')
+            page.evaluate("() => document.querySelector('#layer-body').focus()")
+        expect(box).to_be_focused()  # the box has the caret before the redraw, every way
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-body'); render(); }")
+        page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")
         expect(box).to_have_value('First words')
         expect(box).not_to_be_focused()
+
+
+def test_a_click_into_a_note_then_a_late_read_keeps_the_first_key(browser_peer):
+    """fix:unsaved-note-typing-flake, made to happen: test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed
+    lost its first key in CI when the layer's history answered after the person's click into the box and before the
+    key, and the redraw dropped the caret. Held here, the history answers between the click and the key."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    store.create_layer(users["patient"]["id"], {"title": "Plain note", "body": "Hello."})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        watch_reads(page)
+        page.get_by_role("link", name="My sharing layers").click()
+        expect(page.get_by_role("button", name="Plain note")).to_be_visible()
+        reads_settled(page)  # the page's own reads are done, so the hold takes the note's history, not theirs
+        hold_next_revisions_read(page)
+        page.get_by_role("button", name="Plain note").click()
+        box = page.locator("section.editor").get_by_label("What do you want to share?")
+        expect(box).to_have_value("Hello.")
+        page.wait_for_function("() => window.__revisionsHeld === true")
+        box.click()
+        page.keyboard.press("ControlOrMeta+Home")
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-body'); window.__releaseRevisions(); }")
+        page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")  # drawn again
+        page.keyboard.type("!")
+        expect(box).to_have_value("!Hello.")
+        expect(box).to_be_focused()
 
 
 def test_a_redraw_for_another_page_gives_the_same_box_no_caret(browser_peer):
@@ -4148,7 +4224,10 @@ def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_pe
             expect(editor.get_by_label("Kind")).to_have_value("note")
             expect(editor.get_by_text("Private draft", exact=True)).to_be_visible()
             expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
-            editor.get_by_label("What do you want to share?").press_sequentially("!")
+            body = editor.get_by_label("What do you want to share?")
+            body.click()  # as a person does: press_sequentially alone only focuses, which earns no caret back
+            page.keyboard.press("ControlOrMeta+Home")
+            page.keyboard.type("!")
             page.get_by_role("button", name="Account and sign out").click()  # typing does not rerender; the dialog does
             page.get_by_role("button", name="Close").click()
             expect(editor.get_by_label("What do you want to share?")).to_have_value("!Hello.")

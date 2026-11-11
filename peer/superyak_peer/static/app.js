@@ -2057,7 +2057,7 @@ function openFailedPage(message) {
   return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
 }
 
-// The box a person is typing in keeps the caret through a redraw, but only that box: the one their last keystroke went to,
+// The box a person is typing in keeps the caret through a redraw, but only that box: the one their last keystroke or press went to,
 // still focused, drawn again with the same id and tag in the same chain of elements up to the app (each one's tag, id and
 // data: the layer, room or item it's for), showing the same words. A version is left out of the chain, since the person's
 // own save moves it while they type on, and a save from elsewhere fails the words check. A submit ends the typing, so its
@@ -2067,15 +2067,21 @@ function openFailedPage(message) {
 // one of several things carries that thing's data on itself or a parent. tests/typed_boxes.py lists every typed box and
 // how it's told apart, and a browser test that draws a box it doesn't list, or without its mark, fails.
 const TYPED_INPUTS = new Set(["text", "search", "url", "tel", "password"]);  // not email: it has no selection to put back
-let typedBox = null;  // the box the last input event came from
+let typedBox = null;  // the box the person last aimed at, by a key (input) or a press (pointerdown)
 let drawnFor = null;  // what the page on screen was drawn for (drawingFor), set by each render
 
 // A key belongs to the drawing it was aimed at, as a press does (Tardis, all hands d56f792e): the caret goes back only
-// when the page is drawn again for the same route, address, open room and open layer, so a box on a page drawn for
-// something else never takes it, whatever its markup carries.
+// when the page is drawn again for the same route and the same thing on it, so a box on a page drawn for something else
+// never takes it, whatever its markup carries. The thing is what the view draws. On chats and layers that's state.room
+// and state.selectedLayerId, and the address only follows them: openLayer sets the layer, then the address, and the
+// hashchange draws again only once the layer's history answers. So the address there would make the same layer's next
+// draw look like another page, and refuse the caret to a person typing in it (all hands 23e34401, 16566adf).
+// Elsewhere the address id is the thing. tests/typed_boxes.py checks after every draw that the open editor and the open
+// room are the thing this names.
 function drawingFor() {
   const { route, id } = routeParts();
-  return JSON.stringify([route, id || null, route === "chats" ? state.room?.id || null : null, route === "layers" ? state.selectedLayerId || null : null]);
+  const thing = route === "chats" ? state.room?.id : route === "layers" ? state.selectedLayerId : id;
+  return JSON.stringify([route, thing || null]);
 }
 
 function boxChain(node) {
@@ -2087,9 +2093,11 @@ function boxChain(node) {
   return JSON.stringify(chain);
 }
 
+function typedBoxRule(node) {  // a box a person types words into, whose caret and selection can be put back
+  return node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
+}
 function typingIn(node) {
-  const typed = node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
-  if (!typed || !node.id || node !== typedBox) return null;
+  if (!typedBoxRule(node) || !node.id || node !== typedBox) return null;
   return { id: node.id, tag: node.tagName, value: node.value, chain: boxChain(node), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
 }
 
@@ -3476,6 +3484,16 @@ async function submitTrust(form) {
     if (state.trust === open) await loadTrustLine();
   }
 }
+
+// A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e). The person's own primary press on a typed
+// box makes it the one a redraw may give the caret back to; their press anywhere else, a label for it included, clears
+// that, so the rule reads "the box the person last aimed at, by key or press". A focus by Tab, autofocus or the app's own
+// .focus() sets nothing. (fix:unsaved-note-typing-flake: a redraw between the click into a box and the first key sent
+// that key, and every key after it, nowhere.)
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isTrusted || event.button !== 0) return;
+  typedBox = typedBoxRule(event.target) ? event.target : null;
+}, true);
 
 document.addEventListener("input", (event) => {
   typedBox = event.target;  // the box a redraw may give the caret back to (keepTyping)

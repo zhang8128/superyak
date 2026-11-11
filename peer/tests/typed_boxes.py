@@ -18,6 +18,9 @@ typed there. So a mark means nothing inside a dialog, and a dialog's box is kept
 dialog being for one thing while it's open: each one says which thing, and names its known gap. The lost words are
 fix:dialog-redraw-loses-typed-words.
 
+The watch also wraps render(): after every draw, the open editor's data-layer-id and the open room's data-room must
+be the thing drawingFor() names, the caret gate's own idea of what's drawn (Tardis, all hands 16566adf).
+
 What the watch can't see (that reader's finding 7): contexts from launch_persistent_context or connect_over_cdp, and the
 async API (test_typed_boxes.py fails if a test uses them); frames, which have no #app; a page with JavaScript off, where
 no app runs either; and a report sent after a test's last flush, which the next test's start drops. A mark passes on
@@ -52,11 +55,11 @@ RULES = {
     'board-title': [('mark', 'room')],
     'grant-reason': [('mark', 'id')],  # the grant's <li data-id>
     'message-body': [('mark', 'room')],
-    'chat-title': [('dialog', "the new or linked chat dialog: one chat not made yet. Known gap: a linked chat's follows "
-                              "state.room, and a back press changes the room under it while it's open (read, not run)")],
+    'chat-title': [('dialog', "the new-chat dialog (only its 'new' kind draws this box): one chat not made yet")],
     'trust-password': [('mark', 'contact')],  # the contact's <li data-contact>
-    'imprint-password': [('dialog', "the imprint dialog: the one request its link's code named. Known gap: a new "
-                                    "#imprint?code= in the address bar replaces the request under it (read, not run)")],
+    'imprint-password': [('dialog', "the imprint dialog: the one request its link's code named. A new #imprint?code= "
+                                    "while it's open changes only the code; the dialog still shows that request, and "
+                                    "Allow is refused with a 404 before the password is read (the re-check's nit 2)")],
     'peer-card': [('drawing', "Connections' one box for pasting a new card")],
     'pair-code': [('mark', 'fingerprint')],
     'display-name': [('dialog', "the account dialog: the signed-in person's own name")],
@@ -108,7 +111,31 @@ WATCH = """(() => {
     : way[0] === 'drawing' ? 'drawn once on its page'
     : box.closest('dialog') ? 'a mark outside a dialog (a dialog\\'s redraw ignores marks)'
     : missing(box, app, way).map(mark).join(' and ') + ' on it or a parent';
+  // Tardis's condition on naming the drawing by what's drawn (all hands 16566adf): after every render(), the editor and
+  // the room on screen are the thing drawingFor() names, so the caret's gate and the view can't drift apart again.
+  const drawingMatches = () => {
+    let drawn;
+    try { drawn = JSON.parse(drawingFor()); } catch (_) { return; }
+    const app = document.getElementById('app');
+    const editor = app && app.querySelector('section.editor[data-layer-id]');
+    if (drawn[0] === 'layers' && editor && editor.dataset.layerId !== drawn[1]) {
+      tell('problem', "the editor drawn on #layers isn't the layer drawingFor() names");
+    }
+    const room = app && app.querySelector('.messages[data-room]');
+    if (drawn[0] === 'chats' && room && room.dataset.room !== drawn[1]) {
+      tell('problem', "the room drawn on #chats isn't the room drawingFor() names");
+    }
+  };
+  const wrapRender = () => {
+    let real;
+    try { real = render; } catch (_) { return; }  // not the app's page, or app.js hasn't run yet
+    if (typeof real !== 'function' || real.__watched) return;
+    const watched = function (...args) { const out = real.apply(this, args); drawingMatches(); return out; };
+    watched.__watched = true;
+    window.render = watched;  // app.js, dashboard.js and research.js all call render() through the global
+  };
   const check = () => {
+    wrapRender();
     const app = document.getElementById('app');
     let typed;
     try { typed = TYPED_INPUTS; } catch (_) { return; }  // not the app's page, or app.js hasn't run yet
