@@ -297,12 +297,16 @@ def _call(socket_path, request, deadline, clock):
         if left <= 0:
             raise TimeoutError('past the deadline')
         return left
-    data = json.dumps(request, separators=(',', ':')).encode('utf-8')
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(remaining())
             sock.connect(str(socket_path))
             sock.settimeout(remaining())
+            if request.get('op') == 'embed':
+                # How long this asker still waits, counted as it sends, so the shared embedder drops the request
+                # once we've left (train 1110's service half). It's finite: settimeout above took it.
+                request = {**request, 'remaining_ms': remaining() * 1000}
+            data = json.dumps(request, separators=(',', ':')).encode('utf-8')
             sock.sendall(struct.pack('>I', len(data)) + data)
             (size,) = struct.unpack('>I', _recv(sock, 4, remaining))
             if size > 16 * 1024 * 1024:

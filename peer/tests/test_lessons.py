@@ -145,6 +145,19 @@ def test_embed_speaks_the_protocol_and_returns_unit_vectors(fake_embedder):
     assert lessons.embedder_model(fake_embedder.path, 105.0, lambda: 100.0) == 'fake-model'
 
 
+def test_embed_tells_the_embedder_how_long_it_waits(fake_embedder):
+    """The shared embedder drops a request whose asker has left (train 1110) only if the request says how long the
+    asker waits. Without it, a lessons hook that gave up at its 150 ms left the embedder a whole embed to finish: on
+    the Pi, 2026-11-10, 47 connections nobody waited on, and a 2,000-character embed queued 22 s behind them."""
+    lessons.embed(fake_embedder.path, ['x'], 'search_query', 105.0, lambda: 100.0)
+    assert fake_embedder.requests[-1]['remaining_ms'] == 5000.0
+    times = iter([100.0, 100.0, 103.5])  # the wait is counted when the request is sent, not when embed was called
+    lessons.embed(fake_embedder.path, ['x'], 'search_query', 105.0, lambda: next(times, 103.5))
+    assert fake_embedder.requests[-1]['remaining_ms'] == 1500.0
+    lessons.embedder_model(fake_embedder.path, 105.0, lambda: 100.0)
+    assert 'remaining_ms' not in fake_embedder.requests[-1]  # info does no work worth dropping
+
+
 def test_embed_is_unavailable_past_its_deadline_without_a_socket_or_with_bad_vectors(fake_embedder):
     with pytest.raises(lessons.EmbedderUnavailable):
         lessons.embed(fake_embedder.path, ['x'], 'search_query', 100.0, lambda: 100.0)
