@@ -446,7 +446,7 @@ async function createSpace(form) {
     await api("/api/spaces", { method: "POST", json: { name: form.elements.name.value, kind: form.elements.kind.value, member_ids: [...form.querySelectorAll('[name="space-member"]:checked')].map((input) => input.value) } });
     state.spaceDialog = false;
     await refresh("Space created. Choose it in a saved layer and preview before sharing.");
-  } catch (error) { state.spaceError = error.message; render(); announce(error.message); }  // a repeat keeps the dialog, unannounced
+  } catch (error) { state.spaceError = error.message; render(); sayAgainInDialog(); }
 }
 
 function withdrawDialog() {
@@ -2273,11 +2273,13 @@ function openDialog(dialog) {
   });
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
 }
+let dialogsKept = false;  // whether the last render kept the open dialogs as they were
 function drawDialogs() {  // after app.innerHTML: the dialogs now open
   const drawn = [...app.querySelectorAll("dialog")];
   for (const dialog of drawn) { dialog.drawnAs = dialog.outerHTML; dialog.remove(); }
   const open = [...dialogRoot.children];
-  if (drawn.length === open.length && drawn.every((dialog, at) => dialog.drawnAs === open[at].drawnAs)) return open;
+  dialogsKept = drawn.length > 0 && drawn.length === open.length && drawn.every((dialog, at) => dialog.drawnAs === open[at].drawnAs);
+  if (dialogsKept) return open;
   const focused = document.activeElement, from = open.find((dialog) => dialog.contains(focused));
   const caret = from && typedBoxRule(focused) ? { value: focused.value, start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
   const owned = open.some((dialog) => dialog.contains(typedBox)) ? typedBox : null;
@@ -2301,6 +2303,19 @@ function drawDialogs() {  // after app.innerHTML: the dialogs now open
     }
   }
   return drawn;
+}
+// A refusal that repeats draws the same alert, so the kept dialog's alert line doesn't change and nobody hears it again.
+// #announcer can't say it either: while a modal is open the browser takes everything outside it out of the accessibility
+// tree (the reader's re-check on f3868733). So after a render that kept the dialogs, their alert line says its words
+// again, emptied and given them back in the next frame, as a newly drawn alert would. A dialog drawn anew says them by
+// itself, so this does nothing then, and nothing on a page with no dialog.
+function sayAgainInDialog() {
+  if (!dialogsKept) return;
+  const line = [...dialogRoot.querySelectorAll('dialog[open] [role="alert"], dialog[open] .notice.error[role="status"]')].pop();
+  if (!line?.textContent) return;
+  const words = line.textContent;
+  line.textContent = "";
+  requestAnimationFrame(() => { line.textContent = words; });
 }
 function clearDialogs() {  // a page drawn outside render() (signed out, a public page, a home that didn't open) has none
   if (dialogRoot.contains(typedBox)) typedBox = null;
@@ -3271,7 +3286,7 @@ document.addEventListener("submit", async (event) => {
       state.reauthError = error.message;
       if (form.elements.password) form.elements.password.value = "";  // a repeat of the same refusal keeps the dialog: the wrong try goes
       render();
-      announce(error.message);  // and the same alert drawn again is news a screen reader wouldn't say
+      sayAgainInDialog();  // a repeat of the same refusal keeps the dialog, and its alert says it again
       reopenForTyping(document.querySelector("#reauth-password"), acts);  // the next keys are a new try, unless the person moved on
     }
     return;

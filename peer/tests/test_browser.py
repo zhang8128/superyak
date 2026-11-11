@@ -747,8 +747,11 @@ def test_a_wrong_password_in_the_sign_in_again_dialog_shows_why_with_an_empty_bo
         expect(page.locator('#reauth-password')).to_be_focused()
         said = alert.inner_text()
         # The reader's finding 1 on 51e8d0b8: a second wrong try draws the same alert, so the dialog is kept, and the
-        # wrong password stayed in the box with the next try typed after it. It goes, and the refusal is said again.
-        page.evaluate("() => { announcer.textContent = ''; }")
+        # wrong password stayed in the box with the next try typed after it. It goes, and the refusal is said again by the
+        # dialog's own alert line, emptied and given its words back: while the modal is open, #announcer is out of the
+        # accessibility tree (the re-check on f3868733), so a word there reaches no screen reader.
+        page.evaluate("""() => { const line = document.querySelector('#dialogs dialog [role="alert"]'); window.said = [];
+          new MutationObserver(() => window.said.push(line.textContent)).observe(line, { childList: true, characterData: true, subtree: true }); }""")
         page.keyboard.type('still not it')
         if submit == 'Enter':
             page.keyboard.press('Enter')
@@ -756,7 +759,9 @@ def test_a_wrong_password_in_the_sign_in_again_dialog_shows_why_with_an_empty_bo
             page.get_by_role('button', name='Sign in again').click()
         expect(page.locator('#reauth-password')).to_have_value('')
         expect(page.locator('#reauth-password')).to_be_focused()
-        expect(page.locator('#announcer')).to_have_text(said)
+        page.wait_for_function("() => window.said.length >= 2")
+        assert page.evaluate("() => window.said") == ['', said]  # the same node, its words said again
+        assert page.evaluate("() => document.querySelector('#dialogs dialog [role=\"alert\"]').isConnected")
         expect(page.get_by_label('Layer title')).to_have_value('Kept while I sign in')
 
 
