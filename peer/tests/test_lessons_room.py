@@ -517,14 +517,36 @@ def test_breadth_says_how_many_of_the_authors_commands_each_command_value_holds(
         'command 2: matches 1 of 100 (1.0%).',
         'command 3: under 6 bytes, so it never holds a command before it runs; it matches only after one fails.',
         'command 4: holds only calls to that tool, never a Bash command.',
+        lessons.TRIGGER_GUIDANCE,
     ]
     just_over = lessons.describe_breadth(lesson, ['pytest -x'] * 3 + ['ls'] * 197).splitlines()[1]  # 1.5%: over the bound
     assert just_over.startswith('command 1: matches 3 of 200 (1.5%). Broad')
     for value in ('pytest', 'test_browser', 'mcp__station'):
         assert value not in said
     assert lessons.describe_breadth(lesson, ['x' * 400 + 'pytest']).splitlines()[1].startswith('command 1: matches 0 of 1')  # cut to 300, as the hook cuts it
-    assert lessons.describe_breadth(lessons.parse_post(lesson_body(command=(), file=('app.js',))), commands) == (
-        'Breadth against 100 commands: this lesson has no command value, so it holds no command.')
+    assert lessons.describe_breadth(lessons.parse_post(lesson_body(command=(), error=('to be focused',))), commands) == (
+        'Breadth against 100 commands: this lesson has no command or file value, so it matches only by its errors, after a '
+        'failure.')
+
+
+def test_breadth_counts_file_values_and_shows_the_authors_own_matches_on_request():
+    """Tardis, all hands 18118e76. A file value is found in command text too, and matches then after a failure or at a
+    session start, so it's counted, and broad above the same 1% (an app.js value was in 3.28% of one ship's commands, so a
+    lesson keyed on it was spent on the first failed grep). With show, each value's first five matched commands follow
+    it on one line each, cut to 120 characters: the author sees whether every match already holds the fix. Every report
+    ends with the guidance on triggering by the symptom or the moment."""
+    lesson = lessons.parse_post(lesson_body(command=('--basetemp',), file=('static/app.js',)))
+    commands = (['pytest tests/ --basetemp=/dev/shm/x/bt'] * 7 + ['grep -n "foo"\n  static/app.js ' + 'y' * 200] * 2
+                + ['git status'] * 191)
+    said = lessons.describe_breadth(lesson, commands).splitlines()
+    assert said[1] == 'command 1: matches 7 of 200 (3.5%). Broad: it would be spent at the first of them, where the ' \
+                      'lesson may not apply. A narrower value (two tokens, or a flag) holds where it does.'
+    assert said[2] == 'file 1: in 2 of 200 (1.0%), which it matches only after one of them fails or at a session start.'
+    assert said[-1] == lessons.TRIGGER_GUIDANCE and len(said) == 4  # nothing shown unless asked
+    shown = lessons.describe_breadth(lesson, commands, show=True).splitlines()
+    assert shown[2:7] == ['    > pytest tests/ --basetemp=/dev/shm/x/bt'] * 5  # the first five of its seven
+    assert shown[8:10] == ['    > ' + ('grep -n "foo" static/app.js ' + 'y' * 200)[:120]] * 2  # one line, cut to 120
+    assert shown[-1] == lessons.TRIGGER_GUIDANCE and len(shown) == 11
 
 
 def test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_the_doors_checks(lessons_station, tmp_path):
@@ -564,6 +586,21 @@ def test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_th
     with store.transaction() as db:
         assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0
 
+
+
+def test_lessons_check_show_prints_the_matched_commands_only_when_asked(lessons_station, tmp_path):
+    """`make lessons-check ... COMMANDS=<file> SHOW=1`: the author's matched commands, on their own screen."""
+    import json
+    store, clock, ids, room = lessons_station
+    commands = tmp_path / 'commands.jsonl'
+    commands.write_text('\n'.join(json.dumps(c) for c in ['grep -r --include=*.py x .', 'ls']) + '\n')
+    plain = run_lessons('check', '--data-dir', store.data_dir, '--ship', 'tardis', '--commands', commands, stdin=lesson_body())
+    shown = run_lessons('check', '--data-dir', store.data_dir, '--ship', 'tardis', '--commands', commands, '--show',
+                        stdin=lesson_body())
+    assert plain.returncode == shown.returncode == 0, (plain.stderr, shown.stderr)
+    assert '    > grep -r --include=*.py x .' not in plain.stdout
+    assert '    > grep -r --include=*.py x .' in shown.stdout.splitlines()
+    assert lessons.TRIGGER_GUIDANCE in shown.stdout.splitlines()
 
 # Task 9: the add gate and the backfill
 def test_no_new_local_member_and_no_bridge(lessons_station):

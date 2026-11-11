@@ -762,16 +762,33 @@ def read_commands(path):
     return commands
 
 
-def describe_breadth(lesson, commands):
+# Tardis's line (all hands 18118e76), under every breadth report: the matcher sees only what's typed, so a lesson about a
+# missing step can't hold on the step.
+TRIGGER_GUIDANCE = ("A value that names the fix matches only where it's already followed; trigger on the symptom or the "
+                    "moment instead.")
+SHOW_MATCHES, SHOW_CHARS = 5, 120
+
+
+def describe_breadth(lesson, commands, show=False):
     """`lessons check --commands`: how many of the author's commands each `command` value matches as the hook matches
-    before a command (`holding`, each cut to its 300 characters), named by position and never echoed. That's a bound on
-    holds, not a count of them: the hook holds a command's head once a session, three times at most, and a shown lesson
-    no more. Above BREADTH_WARN it says the value is broad."""
+    before a command (`holding`, each cut to its 300 characters), and each `file` value is found in, which it matches only
+    after a failure or at a session start. Values are named by position and never echoed. A count is a bound on holds,
+    not a count of them: the hook holds a command's head once a session, three times at most, and a shown lesson no more.
+    Above BREADTH_WARN it says the value is broad. With `show`, each value's first SHOW_MATCHES matched commands follow
+    it, each cut to SHOW_CHARS on one line: the author's own commands, on their own screen, never posted (Tardis)."""
     total = len(commands)
-    if not lesson.command:
-        return f'Breadth against {total:,} commands: this lesson has no command value, so it holds no command.'
+    if not lesson.command and not lesson.file:
+        return (f'Breadth against {total:,} commands: this lesson has no command or file value, so it matches only by its '
+                'errors, after a failure.')
     cut = [command[:CAPS['command']] for command in commands]
     lines = [f'Breadth against {total:,} commands (a lesson is shown once a session, at the first command a value matches):']
+    broad = (' Broad: it would be spent at the first of them, where the lesson may not apply. A narrower value (two tokens, '
+             'or a flag) holds where it does.')
+
+    def shown(found):
+        if show:
+            lines.extend('    > ' + ' '.join(command.split())[:SHOW_CHARS] for command in found[:SHOW_MATCHES])
+
     for number, value in enumerate(lesson.command, 1):
         if value in HELD_TOOLS:
             lines.append(f'command {number}: holds only calls to that tool, never a Bash command.')
@@ -779,12 +796,16 @@ def describe_breadth(lesson, commands):
             lines.append(f'command {number}: under {HOLD_BYTES} bytes, so it never holds a command before it runs; it '
                          'matches only after one fails.')
         else:
-            held = sum(1 for command in cut if holding((value,), command))
-            line = f'command {number}: matches {held:,} of {total:,} ({held / total:.1%}).'
-            if held / total > BREADTH_WARN:
-                line += (' Broad: it would be spent at the first of them, where the lesson may not apply. A narrower value '
-                         '(two tokens, or a flag) holds where it does.')
-            lines.append(line)
+            found = [command for command in cut if holding((value,), command)]
+            lines.append(f'command {number}: matches {len(found):,} of {total:,} ({len(found) / total:.1%}).'
+                         + (broad if len(found) / total > BREADTH_WARN else ''))
+            shown(found)
+    for number, value in enumerate(lesson.file, 1):
+        found = [command for command in cut if value in command]
+        lines.append(f'file {number}: in {len(found):,} of {total:,} ({len(found) / total:.1%}), which it matches only '
+                     'after one of them fails or at a session start.' + (broad if len(found) / total > BREADTH_WARN else ''))
+        shown(found)
+    lines.append(TRIGGER_GUIDANCE)
     return '\n'.join(lines)
 
 
@@ -2221,7 +2242,9 @@ def _room(store, args):
 
 @verb('check', "Every check this peer's door runs, without posting: the post on stdin", ('--ship', {'required': True}),
       ('--commands', {'type': Path, 'help': "the author's own recent Bash commands, one JSON string per line: each "
-                                            "command value's breadth is said first, and nothing of the file is kept"}))
+                                            "command value's breadth is said first, and nothing of the file is kept"}),
+      ('--show', {'action': 'store_true', 'help': "with --commands: under each value, the first 5 of your own commands it "
+                                                  "matches, on this screen only"}))
 def _check(store, args):
     commands = read_commands(args.commands) if args.commands else None  # a bad file is refused before anything is said
     with store.transaction() as db:
@@ -2235,7 +2258,7 @@ def _check(store, args):
         except LessonRefused:
             post = None  # the door's checks below say why
         if isinstance(post, Lesson):  # before the door's checks, so a peer with no lessons room still measures
-            write_out(describe_breadth(post, commands) + '\n')
+            write_out(describe_breadth(post, commands, args.show) + '\n')
     got = store.check_lesson(actor['id'], body)
     return f"ok: a {got['kind']}, lesson {got['short']}"
 
