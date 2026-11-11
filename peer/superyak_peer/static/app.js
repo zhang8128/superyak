@@ -2256,6 +2256,10 @@ document.addEventListener("pointerdown", (event) => {
 }, true);
 document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
 document.addEventListener("contextmenu", () => { pressDown = null; }, true);  // a long press's menu: no click comes
+// This listener must stay before the press owner's click listener (near typedBoxRule's users below): a press it drops
+// stops that one too, so a press aimed at the room drawn before neither sets nor clears the box a redraw may give the
+// caret back to (Tardis, all hands 2349eb48), though it can't stop the focus. test_a_press_the_guard_drops_makes_no_
+// owner_of_the_box_it_focused pins the order.
 document.addEventListener("click", (event) => {
   const press = pressDown, before = lastPress;
   pressDown = null;
@@ -3623,10 +3627,17 @@ async function submitTrust(form) {
 // it (finding 2). A focus by autofocus or the app's own .focus() sets nothing. So the rule reads "the box the person
 // last aimed at, by a key, a completed press or Tab". (fix:unsaved-note-typing-flake: a redraw between the click into a
 // box and the first key sent that key, and every key after it, nowhere.)
+// - A press the guard above drops (one aimed at the room drawn before) never reaches the click listener here, so it
+//   sets and clears nothing; the guard's listener must stay first.
+// - A known gap: a redraw between a mouse press's pointerdown and its click (about a click's length) still finds no
+//   owner, as before this rule, and as the guard drops a press the room drew under (the re-check's nit 2, ecce414f).
+// - pointercancel and contextmenu are belt and braces: a cancelled press has no click, and every real click begins
+//   with a pointerdown that resets the press (Tardis, ee0c07b5).
 let pressing = null;  // the person's own primary press, from pointerdown until its click or its cancel
-let tabbing = false;  // a trusted Tab is down, so the focus it moves is the person's aim
+let tabbing = false;  // a trusted Tab was just pressed, so the focus it moves is the person's aim
 document.addEventListener("pointerdown", (event) => {
-  pressing = event.isTrusted && event.isPrimary && event.button === 0 ? event.target : null;
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it, as the guard
+  pressing = event.isTrusted && event.button === 0 ? event.target : null;
 }, true);
 document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressing = null; }, true);
 document.addEventListener("contextmenu", () => { pressing = null; }, true);
@@ -3637,7 +3648,12 @@ document.addEventListener("click", (event) => {
   if (typedBoxRule(began) && began === document.activeElement) typedBox = began;
   else if (began === event.target) typedBox = null;
 }, true);
-document.addEventListener("keydown", (event) => { tabbing = event.isTrusted && event.key === "Tab"; }, true);
+document.addEventListener("keydown", (event) => {
+  tabbing = event.isTrusted && event.key === "Tab";
+  // The Tab's own focus move happens in this task, so the mark ends with it: a Tab held down doesn't make the app's own
+  // .focus() later on look like the person's aim (the re-check's nit 1).
+  if (tabbing) setTimeout(() => { tabbing = false; }, 0);
+}, true);
 document.addEventListener("keyup", (event) => { if (event.key === "Tab") tabbing = false; }, true);
 document.addEventListener("focusin", (event) => {
   if (tabbing) typedBox = typedBoxRule(event.target) ? event.target : null;
@@ -3673,7 +3689,9 @@ document.addEventListener("input", (event) => {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
   }
-  if (event.target.closest("#layer-form")) rememberLayerForm();
+  // The form the input came from, never whichever one is on screen (Tardis, all hands 98b9000c). It's the same today:
+  // an input from a box a redraw replaced never reaches the document, and a page has one #layer-form. It says what's meant.
+  if (event.target.closest("#layer-form")) rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "message-body") {
     const roomId = event.target.form.dataset.room;  // the room on screen: see sendMessage
     const previous = readChatDraft(roomId);
@@ -3685,7 +3703,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
-  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
+  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "layer-kind" && !editorSwitching()) {
     const edit = currentLayerEdit();
     if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }

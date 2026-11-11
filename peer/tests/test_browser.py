@@ -513,6 +513,7 @@ def test_home_search_and_private_starters_preserve_account_boundaries(browser_pe
     store.create_layer(actor, {'title': 'My zebra questions', 'body': 'Selected private notes'})
     store.create_layer(browser_peer['users']['doctor']['id'], {'title': 'Secret zebra case', 'body': 'Hidden'})
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        watch_reads(page)
         page.get_by_label('Search your home', exact=True).fill('zebra')
         page.get_by_role('button', name='Search', exact=True).click()
         expect(page.get_by_role('link', name='My zebra questions', exact=False)).to_be_visible()
@@ -522,6 +523,10 @@ def test_home_search_and_private_starters_preserve_account_boundaries(browser_pe
         expect(page.get_by_label('Layer title')).to_have_value('Questions for my care team')
         draft = next(x for x in store.list_layers(actor) if x['title'] == 'Questions for my care team')
         assert not draft['active_revision'] and not draft['audience_spaces'] and not draft['public']
+        # fill() focuses the box from code and then inserts the words, so a redraw between the two (the new draft's
+        # history answering) sent them nowhere, 1 run in 18 under load: no person takes that path, so the words go in
+        # once the draft's reads are done (fix:starter-draft-loses-filled-words, all hands fe4797a7).
+        reads_settled(page)
         page.get_by_label('What do you want to share?').fill('Keep these words while I browse')
         page.get_by_role('link', name='Home', exact=True).click()
         page.get_by_role('link', name='Questions for my care team', exact=False).first.click()
@@ -699,6 +704,25 @@ def test_a_redraw_keeps_the_caret_where_a_press_put_it_in_a_box_not_yet_typed_in
         expect(box).to_have_value('First! words')
 
 
+def test_a_press_the_guard_drops_makes_no_owner_of_the_box_it_focused(browser_peer):
+    """One rule for presses, the guard's (Tardis, all hands 2349eb48). A press the room-moved guard drops can't stop its
+    own native focus, so it mustn't make that box the one a redraw gives the caret back to either: the guard's click
+    listener runs first and stops the owner's. Here the guard is made to drop every press, and a press into the note's
+    words then earns no caret through a redraw."""
+    store = browser_peer['app'].state.store
+    layer = store.create_layer(browser_peer['users']['patient']['id'], {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        page.evaluate("() => { window.pressTheRoomMoved = () => true; }")  # every press now lands as the room drew
+        box.click()
+        expect(box).to_be_focused()  # the native focus a dropped click can't stop
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-body'); render(); }")
+        page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")
+        expect(box).not_to_be_focused()
+
+
 @pytest.mark.parametrize('start', ['#editor-title', '#layer-title'])
 def test_a_finger_that_pans_while_a_person_types_takes_no_caret_from_their_box(browser_peer, start):
     """The reader's finding 1 on a2451971: on a phone a pan sends pointerdown and then pointercancel, and a cancelled press
@@ -755,7 +779,7 @@ def test_a_tab_into_a_box_keeps_the_caret_there_through_a_redraw(browser_peer):
 
 
 @pytest.mark.parametrize('how', ['the app focuses it', 'a press on its label', 'a press elsewhere after it',
-                                 'a right-button press', 'a Tab elsewhere after it'])
+                                 'a right-button press', 'a Tab elsewhere after it', 'the app focuses it during a held Tab'])
 def test_a_redraw_puts_no_caret_in_a_box_the_person_didnt_press_or_type_in_last(browser_peer, how):
     """Only a key, Tab, or the person's own completed primary press on the box itself earns the caret back (Tardis's
     conditions, b22aaf6e and 8f81d6f5). A box the app focused, one reached through its label, one pressed before a press
@@ -778,11 +802,18 @@ def test_a_redraw_puts_no_caret_in_a_box_the_person_didnt_press_or_type_in_last(
         elif how == 'a right-button press':
             box.click(button='right')
             page.evaluate("() => document.querySelector('#layer-body').focus()")
-        else:
+        elif how == 'a Tab elsewhere after it':
             box.click()
             page.keyboard.press('Tab')  # the person aims at what's next, and the app puts the focus back
             expect(box).not_to_be_focused()
             page.evaluate("() => document.querySelector('#layer-body').focus()")
+        else:
+            page.evaluate("() => document.querySelector('#layer-body').focus()")
+            page.keyboard.down('Tab')  # held: its own move takes the focus past the box
+            expect(box).not_to_be_focused()
+            page.wait_for_timeout(50)
+            page.evaluate("() => document.querySelector('#layer-body').focus()")  # the app's own, while Tab is down
+            page.keyboard.up('Tab')
         expect(box).to_be_focused()  # the box has the caret before the redraw, every way
         page.evaluate("() => { window.__drawn = document.querySelector('#layer-body'); render(); }")
         page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")
