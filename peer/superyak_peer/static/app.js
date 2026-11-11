@@ -2067,7 +2067,7 @@ function openFailedPage(message) {
 // one of several things carries that thing's data on itself or a parent. tests/typed_boxes.py lists every typed box and
 // how it's told apart, and a browser test that draws a box it doesn't list, or without its mark, fails.
 const TYPED_INPUTS = new Set(["text", "search", "url", "tel", "password"]);  // not email: it has no selection to put back
-let typedBox = null;  // the box the person last aimed at, by a key (input) or a press (pointerdown)
+let typedBox = null;  // the box the person last aimed at: by a key (input), a press that landed, or a Tab
 let drawnFor = null;  // what the page on screen was drawn for (drawingFor), set by each render
 
 // A key belongs to the drawing it was aimed at, as a press does (Tardis, all hands d56f792e): the caret goes back only
@@ -3485,14 +3485,36 @@ async function submitTrust(form) {
   }
 }
 
-// A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e). The person's own primary press on a typed
-// box makes it the one a redraw may give the caret back to; their press anywhere else, a label for it included, clears
-// that, so the rule reads "the box the person last aimed at, by key or press". A focus by Tab, autofocus or the app's own
-// .focus() sets nothing. (fix:unsaved-note-typing-flake: a redraw between the click into a box and the first key sent
-// that key, and every key after it, nowhere.)
+// A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e), but only a press that completes. A finger
+// that pans to scroll sends pointerdown and then pointercancel, and the box being typed in must keep its caret through
+// the next redraw (the reader's CHANGES on a2451971, finding 1; Tardis's fix, 8f81d6f5). So the person's own primary
+// press is held from pointerdown and decides at its click, the moment the press guard decides too:
+// - a press that began on a typed box that now has the focus makes it the one a redraw may give the caret back to (a
+//   drag that selects words and ends just outside the box still began there);
+// - a press that began and ended on anything else, a label for a box included, clears that;
+// - a press a scroll or a long press's menu ended (pointercancel, contextmenu) has no click and changes nothing.
+// A trusted Tab or Shift+Tab is a key, so the box it focuses is the person's aim too, and a Tab to anything else clears
+// it (finding 2). A focus by autofocus or the app's own .focus() sets nothing. So the rule reads "the box the person
+// last aimed at, by a key, a completed press or Tab". (fix:unsaved-note-typing-flake: a redraw between the click into a
+// box and the first key sent that key, and every key after it, nowhere.)
+let pressing = null;  // the person's own primary press, from pointerdown until its click or its cancel
+let tabbing = false;  // a trusted Tab is down, so the focus it moves is the person's aim
 document.addEventListener("pointerdown", (event) => {
-  if (!event.isTrusted || event.button !== 0) return;
-  typedBox = typedBoxRule(event.target) ? event.target : null;
+  pressing = event.isTrusted && event.isPrimary && event.button === 0 ? event.target : null;
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressing = null; }, true);
+document.addEventListener("contextmenu", () => { pressing = null; }, true);
+document.addEventListener("click", (event) => {
+  const began = pressing;
+  pressing = null;
+  if (!event.isTrusted || event.detail === 0 || !began) return;  // a key's click, or element.click(): no press
+  if (typedBoxRule(began) && began === document.activeElement) typedBox = began;
+  else if (began === event.target) typedBox = null;
+}, true);
+document.addEventListener("keydown", (event) => { tabbing = event.isTrusted && event.key === "Tab"; }, true);
+document.addEventListener("keyup", (event) => { if (event.key === "Tab") tabbing = false; }, true);
+document.addEventListener("focusin", (event) => {
+  if (tabbing) typedBox = typedBoxRule(event.target) ? event.target : null;
 }, true);
 
 document.addEventListener("input", (event) => {

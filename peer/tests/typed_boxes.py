@@ -19,7 +19,8 @@ dialog being for one thing while it's open: each one says which thing, and names
 fix:dialog-redraw-loses-typed-words.
 
 The watch also wraps render(): after every draw, the open editor's data-layer-id and the open room's data-room must
-be the thing drawingFor() names, the caret gate's own idea of what's drawn (Tardis, all hands 16566adf).
+be the thing drawingFor() names, the caret gate's own idea of what's drawn (Tardis, all hands 16566adf). It wraps at the
+first change to the page after app.js runs, so a document's first draw can go unchecked (the reader's nit 4 on a2451971).
 
 What the watch can't see (that reader's finding 7): contexts from launch_persistent_context or connect_over_cdp, and the
 async API (test_typed_boxes.py fails if a test uses them); frames, which have no #app; a page with JavaScript off, where
