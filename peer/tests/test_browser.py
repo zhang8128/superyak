@@ -741,10 +741,83 @@ def test_a_wrong_password_in_the_sign_in_again_dialog_shows_why_with_an_empty_bo
             page.keyboard.press('Enter')
         else:
             page.get_by_role('button', name='Sign in again').click()
-        expect(page.locator('#dialogs dialog').get_by_role('alert')).to_be_visible()
+        alert = page.locator('#dialogs dialog').get_by_role('alert')
+        expect(alert).to_be_visible()
         expect(page.locator('#reauth-password')).to_have_value('')
         expect(page.locator('#reauth-password')).to_be_focused()
+        said = alert.inner_text()
+        # The reader's finding 1 on 51e8d0b8: a second wrong try draws the same alert, so the dialog is kept, and the
+        # wrong password stayed in the box with the next try typed after it. It goes, and the refusal is said again.
+        page.evaluate("() => { announcer.textContent = ''; }")
+        page.keyboard.type('still not it')
+        if submit == 'Enter':
+            page.keyboard.press('Enter')
+        else:
+            page.get_by_role('button', name='Sign in again').click()
+        expect(page.locator('#reauth-password')).to_have_value('')
+        expect(page.locator('#reauth-password')).to_be_focused()
+        expect(page.locator('#announcer')).to_have_text(said)
         expect(page.get_by_label('Layer title')).to_have_value('Kept while I sign in')
+
+
+def test_words_typed_while_a_save_is_out_never_go_to_the_sign_in_again_box(browser_peer):
+    """The reader's finding 2 on 51e8d0b8. The sign-in-again dialog opens on the save's answer, after an await. An
+    autofocus put the focus in its password box whatever the person had done since Save, so the end of the words they
+    were still typing landed there, and their Enter sent them as a sign-in. The save's answer opens the box only through
+    reopenForTyping: here the person typed on during the save, so the focus isn't put in the password box, the box stays
+    empty, and no sign-in is sent."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='My sharing layers').click()
+        open_new_layer(page)
+        page.get_by_label('Layer title').fill('Kept while I sign in')
+        with browser_peer['app'].state.store.transaction() as db:
+            db.execute('DELETE FROM sessions')
+        held = held_routes(page, re.compile(r'/api/layers/[^/?]+$'))
+        page.get_by_role('button', name='Save private draft').click()
+        wait_for_hold(page, held)
+        page.get_by_label('Layer title').click()
+        page.keyboard.press('End')
+        page.keyboard.type(' and more words')
+        logins = []
+        page.on('request', lambda request: logins.append(request.url) if '/api/login' in request.url else None)
+        release(held)
+        expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+        expect(page.locator('#reauth-password')).not_to_be_focused()
+        page.keyboard.type('xyz')
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(300)
+        expect(page.locator('#reauth-password')).to_have_value('')
+        assert logins == []
+
+
+def test_a_box_the_new_draw_leaves_out_is_named_with_the_words_it_held(browser_peer):
+    """The reader's finding 4 on 51e8d0b8: a typed box that a dialog drawn anew no longer has took its words with it,
+    unsaid. No dialog draws a typed box only sometimes today, so carryInto is given two drawings of one dialog."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        said = page.evaluate("""() => {
+          const draw = (html) => { const box = document.createElement('div'); box.innerHTML = html; return box.firstElementChild; };
+          const old = draw('<dialog aria-labelledby="t"><div class="dialog-body"><h2 id="t">T</h2><label for="note">Note</label><input id="note"></div></dialog>');
+          const fresh = draw('<dialog aria-labelledby="t"><div class="dialog-body"><h2 id="t">T</h2><p>Changed</p></div></dialog>');
+          old.querySelector('#note').value = 'my words';
+          carryInto(fresh, old);
+          const note = fresh.querySelector('.dialog-dropped');
+          return [note.getAttribute('role'), note.textContent, note.previousElementSibling.tagName];
+        }""")
+    assert said == ['alert', 'Note is no longer in this dialog. You had typed: “my words”.', 'H2']
+
+
+def test_a_box_another_modal_covers_is_not_made_the_owner(browser_peer):
+    """The reader's nit 3 on 51e8d0b8: a replace focused the carried box again and made it the caret's owner even when a
+    later modal dialog held the focus, against focusForTyping's rule that the owner is only where the focus landed."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_account_dialog(page)
+        page.locator('#display-name').click()
+        page.keyboard.type(' Jr')
+        assert page.evaluate("() => typedBox && typedBox.id") == 'display-name'
+        page.evaluate("() => { state.reauth = true; state.reauthError = null; render(); }")
+        expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+        assert page.evaluate("() => document.activeElement.id") != 'display-name'  # the later modal holds the focus
+        assert page.evaluate("() => typedBox === null || typedBox === document.activeElement")
 
 
 def test_signing_out_takes_every_open_dialog_down(browser_peer):

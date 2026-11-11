@@ -446,7 +446,7 @@ async function createSpace(form) {
     await api("/api/spaces", { method: "POST", json: { name: form.elements.name.value, kind: form.elements.kind.value, member_ids: [...form.querySelectorAll('[name="space-member"]:checked')].map((input) => input.value) } });
     state.spaceDialog = false;
     await refresh("Space created. Choose it in a saved layer and preview before sharing.");
-  } catch (error) { state.spaceError = error.message; render(); }
+  } catch (error) { state.spaceError = error.message; render(); announce(error.message); }  // a repeat keeps the dialog, unannounced
 }
 
 function withdrawDialog() {
@@ -1970,7 +1970,7 @@ function profileDialog() {
 
 function reauthDialog() {
   if (!state.reauth || !state.me) return "";
-  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required autofocus></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
 }
 
 async function renderPublic() {
@@ -2236,23 +2236,29 @@ function settingOf(node) {  // what the control holds now
 }
 function carryInto(dialog, old) {  // the person's settings from `old` into `dialog`, drawn anew for the same purpose
   const fresh = controlsIn(dialog), dropped = [];
+  const labelOf = (box) => old.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent || "A box";
   for (const [key, was] of controlsIn(old)) {
-    const into = fresh.get(key);
-    if (!was || !into || !("defaultValue" in was || "defaultChecked" in was || was.tagName === "SELECT")) continue;
-    const now = settingOf(was);
-    if (now === drawnSettingOf(was) || was.type === "password" || into.type === "password") continue;  // not the person's, or never carried
+    if (!was || !("defaultValue" in was || "defaultChecked" in was || was.tagName === "SELECT")) continue;
+    const now = settingOf(was), into = fresh.get(key);
+    if (now === drawnSettingOf(was) || was.type === "password" || into?.type === "password") continue;  // not the person's, or never carried
+    if (!into) {  // the new draw has no such box: their words go, and the dialog says so
+      if (typedBoxRule(was)) dropped.push(`${labelOf(was)} is no longer in this dialog. You had typed: “${was.value}”.`);
+      continue;
+    }
     const same = into.tagName === was.tagName && into.type === was.type && chainIn(into, dialog) === chainIn(was, old);
     if (same && drawnSettingOf(into) === drawnSettingOf(was) && !into.disabled && !into.readOnly) {
       if (into.type === "checkbox" || into.type === "radio") into.checked = was.checked;
       else if (into.tagName === "SELECT") into.selectedIndex = was.selectedIndex;
       else into.value = was.value;
-    } else if (typedBoxRule(was) && settingOf(into) !== now) dropped.push([into, was.value]);
+    } else if (typedBoxRule(was) && settingOf(into) !== now) {
+      dropped.push(`${labelOf(was)} changed while you typed, so it shows the new words. You had typed: “${was.value}”.`);
+    }
   }
   if (!dropped.length) return;
   const body = dialog.querySelector(".dialog-body, .dialog-content") || dialog;
   const note = Object.assign(document.createElement("p"), { className: "notice error dialog-dropped" });
   note.setAttribute("role", "alert");
-  note.textContent = dropped.map(([box, words]) => `${dialog.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent || "A box"} changed while you typed, so it shows the new words. You had typed: “${words}”.`).join(" ");
+  note.textContent = dropped.join(" ");
   const heading = body.querySelector("h2");
   body.insertBefore(note, heading ? heading.nextSibling : body.firstChild);
 }
@@ -2291,7 +2297,7 @@ function drawDialogs() {  // after app.innerHTML: the dialogs now open
     if (caret && typedBoxRule(again)) {
       const kept = again.value === caret.value, end = again.value.length;
       try { again.setSelectionRange(kept ? caret.start : end, kept ? caret.end : end, kept ? caret.direction : "none"); } catch (_) { /* a type with no selection */ }
-      if (kept && owned === focused) typedBox = again;
+      if (kept && owned === focused && document.activeElement === again) typedBox = again;  // a later modal may hold the focus
     }
   }
   return drawn;
@@ -2493,7 +2499,7 @@ async function saveLayer(form) {
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
   const status = form.querySelector("#layer-status");
-  const who = identityKey(state.me);
+  const who = identityKey(state.me), acts = personActs;
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
@@ -2515,6 +2521,9 @@ async function saveLayer(form) {
       state.reauth = true;
       state.reauthError = null;
       render();
+      // The password box, unless the person did anything since Save (the reader's finding 2 on 51e8d0b8): their next
+      // keys are in some other box, and an Enter there mustn't send them as a sign-in.
+      reopenForTyping(document.querySelector("#reauth-password"), acts);
       return;
     }
     if (error.status === 409) {
@@ -3260,7 +3269,9 @@ document.addEventListener("submit", async (event) => {
       render();
     } catch (error) {
       state.reauthError = error.message;
-      render();  // the alert changes the dialog, so it's drawn anew, and a password box never carries
+      if (form.elements.password) form.elements.password.value = "";  // a repeat of the same refusal keeps the dialog: the wrong try goes
+      render();
+      announce(error.message);  // and the same alert drawn again is news a screen reader wouldn't say
       reopenForTyping(document.querySelector("#reauth-password"), acts);  // the next keys are a new try, unless the person moved on
     }
     return;

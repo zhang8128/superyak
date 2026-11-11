@@ -65,7 +65,7 @@ const Research = (() => {
       ui.conflict = error.status === 409;
       ui.error = error.status === 409 ? `This source changed or imports are paused. Your correction and selected input are still here. Load the latest source settings below, then review your correction before retrying. ${error.message}` : error.message;
       if (error.status === 401) { state.reauth = true; state.reauthError = null; }
-    } finally { if (valid()) { ui.busy = false; render(); } }
+    } finally { if (valid()) { ui.busy = false; render(); if (ui.error) announce(ui.error); } }  // a repeated error keeps the dialog as drawn
   }
   async function submit(form) {
     if (form.id === 'source-create-form') {
