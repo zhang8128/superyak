@@ -3988,8 +3988,12 @@ def test_durable_name_corrections_shared_attribution_and_complete_revision(brows
             page.get_by_role("button", name="Account and sign out").click()
             page.get_by_label("Display name").fill("Alex Rivera")
             page.get_by_role("button", name="Save name correction").click()
+            watch_reads(page)
             page.get_by_role("link", name="My sharing layers").click()
             page.locator(f'[data-action="open-layer"][data-id="{layer["id"]}"]').click()
+            # Both clicks read the layer's revisions, and the second read's draw closes a <details> opened before it
+            # lands (held, it fails on 6730222f too). So the summary is opened once those reads are in.
+            reads_settled(page)
             page.get_by_text("Release 1 · draft version 1").click()
             expect(page.locator("details").get_by_text(full_body, exact=True)).to_be_visible()
             expect(page.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()
