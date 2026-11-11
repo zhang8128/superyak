@@ -34,6 +34,7 @@ HELD_TOOLS = frozenset({'AskUserQuestion', 'mcp__station__station_post', 'mcp__s
 # Tardis, all hands 003bb56d: a lesson is shown once a session, so a command value holding on more than this share of its
 # author's own recent commands is spent at the first of them, often where it doesn't apply. `lessons check` warns.
 BREADTH_WARN = 0.01
+COMMANDS_BYTES = 32 * 2**20  # the commands file's bound: one session's 11,021 commands took 7.8 MB
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
 FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
@@ -737,15 +738,24 @@ def words(item, request):
 
 def read_commands(path):
     """`lessons check --commands`: the author's own recent Bash commands, one JSON string per line, since a command can
-    span lines. Refused whole, never echoing a line. The peer keeps none of them."""
+    span lines. A line ends at \\n alone, which JSON always escapes inside a string; U+2028 and its kin may stand raw. Read
+    whole but bounded (COMMANDS_BYTES), and refused whole, naming the line and never echoing it. The peer keeps none of them."""
+    with open(path, 'rb') as file:
+        data = file.read(COMMANDS_BYTES + 1)
+    if len(data) > COMMANDS_BYTES:
+        raise Problem(400, f'The commands file is over {COMMANDS_BYTES // 2**20} MB: keep only the recent commands')
+    lines = data.split(b'\n')
+    if lines[-1] == b'':
+        lines.pop()
     commands = []
-    for number, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+    for number, line in enumerate(lines, 1):
         try:
-            command = json.loads(line)
-        except ValueError:
+            command = json.loads(line.decode('utf-8'))
+        except (ValueError, RecursionError):  # not UTF-8, not JSON, or nested past the parser's depth
             command = None
         if not isinstance(command, str):
-            raise Problem(400, f'Line {number} of the commands file is not a JSON string: it holds one JSON string per line')
+            raise Problem(400, f'Line {number} of the commands file is not a JSON string in UTF-8: it holds one JSON '
+                               'string per line')
         commands.append(command)
     if not commands:
         raise Problem(400, 'The commands file holds no command')
@@ -753,14 +763,15 @@ def read_commands(path):
 
 
 def describe_breadth(lesson, commands):
-    """`lessons check --commands`: how many of the author's commands each `command` value holds, as the hook would hold
-    them (`holding`, each cut to its 300 characters), named by position and never echoed. Above BREADTH_WARN it says the
-    value is broad."""
+    """`lessons check --commands`: how many of the author's commands each `command` value matches as the hook matches
+    before a command (`holding`, each cut to its 300 characters), named by position and never echoed. That's a bound on
+    holds, not a count of them: the hook holds a command's head once a session, three times at most, and a shown lesson
+    no more. Above BREADTH_WARN it says the value is broad."""
     total = len(commands)
     if not lesson.command:
         return f'Breadth against {total:,} commands: this lesson has no command value, so it holds no command.'
     cut = [command[:CAPS['command']] for command in commands]
-    lines = [f'Breadth against {total:,} commands (a lesson is shown once a session, at the first command a value holds):']
+    lines = [f'Breadth against {total:,} commands (a lesson is shown once a session, at the first command a value matches):']
     for number, value in enumerate(lesson.command, 1):
         if value in HELD_TOOLS:
             lines.append(f'command {number}: holds only calls to that tool, never a Bash command.')
@@ -769,7 +780,7 @@ def describe_breadth(lesson, commands):
                          'matches only after one fails.')
         else:
             held = sum(1 for command in cut if holding((value,), command))
-            line = f'command {number}: holds {held:,} of {total:,} ({held / total:.1%}).'
+            line = f'command {number}: matches {held:,} of {total:,} ({held / total:.1%}).'
             if held / total > BREADTH_WARN:
                 line += (' Broad: it would be spent at the first of them, where the lesson may not apply. A narrower value '
                          '(two tokens, or a flag) holds where it does.')
