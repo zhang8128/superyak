@@ -312,6 +312,11 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
         assert live  # the live query behind the expired one ran
         embedded = [text for texts, _prefix in provider.calls for text in texts]
         assert "shared: rivers need bridges" not in embedded and "live query" in embedded
+        # Logged after the expired unit leaves the lane, so the live query can finish first: wait for the line.
+        deadline = time.monotonic() + 30
+        while not any(r.getMessage().startswith("dropped an expired query request") for r in caplog.records) \
+                and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert any(r.getMessage().startswith("dropped an expired query request") for r in caplog.records)
     finally:
         provider.gate.set()
