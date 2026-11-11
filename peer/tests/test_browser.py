@@ -819,6 +819,35 @@ def test_a_redraw_puts_no_caret_in_a_box_the_person_didnt_press_or_type_in_last(
         page.wait_for_function("() => document.querySelector('#layer-body') !== window.__drawn")
         expect(box).to_have_value('First words')
         expect(box).not_to_be_focused()
+        found = typed_boxes.take()  # a code focus here stands in for the app's own, which the watch reports (feecc21d)
+    reported = [] if how == 'a press on its label' else [
+        '#layer-body on #layers was focused by the app with no owner: open it with focusForTyping']
+    assert found == reported, found
+
+
+@pytest.mark.parametrize('action', ['Edit brief', 'Mark done spec:d7'])
+def test_a_box_an_action_opens_to_type_in_keeps_the_caret_through_a_redraw(browser_peer, action):
+    """fix:app-focused-box-has-no-owner (the reader's nit 2 on c982d2a2; Tardis, all hands feecc21d): Edit brief and
+    Mark done put the caret in a box for the person to type in. The box comes away as the one a redraw gives the caret
+    back to, so a redraw before their first key doesn't send it nowhere."""
+    base, store = browser_peer['base_url'], browser_peer['app'].state.store
+    patient = browser_peer['users']['patient']['id']
+    room = store.create_room(patient, 'Room X', [])
+    store.post_item(patient, room['id'], 'spec:d7', 'Draft the spec', 'spec')
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        expect(page.get_by_role('heading', name='Room X')).to_be_visible()
+        settle(page)  # the board's click guard drops a press made just after the room moves
+        page.get_by_role('button', name=action).first.click()
+        box = page.locator('#brief-body' if action == 'Edit brief' else '#board-outcome')
+        expect(box).to_be_focused()
+        selector = '#brief-body' if action == 'Edit brief' else '#board-outcome'
+        page.evaluate(f"() => {{ window.__drawn = document.querySelector('{selector}'); render(); }}")
+        page.wait_for_function(f"() => document.querySelector('{selector}') !== window.__drawn")  # drawn again
+        expect(box).to_be_focused()
+        page.keyboard.type('done')
+        expect(box).to_have_value('done')
 
 
 def test_a_click_into_a_note_then_a_late_read_keeps_the_first_key(browser_peer):

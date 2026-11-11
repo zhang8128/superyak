@@ -18,6 +18,9 @@ typed there. So a mark means nothing inside a dialog, and a dialog's box is kept
 dialog being for one thing while it's open: each one says which thing, and names its known gap. The lost words are
 fix:dialog-redraw-loses-typed-words.
 
+The watch also reports a typed box the app's own code focuses, on a signed-in page and outside a dialog, that comes
+away with no owner (Tardis, all hands feecc21d): an action that opens a box to type in names it with focusForTyping.
+
 The watch also wraps render(): after every draw, the open editor's data-layer-id and the open room's data-room must
 be the thing drawingFor() names, the caret gate's own idea of what's drawn (Tardis, all hands 16566adf). It wraps at the
 first change to the page after app.js runs, so a document's first draw can go unchecked (the reader's nit 4 on a2451971).
@@ -153,6 +156,26 @@ WATCH = """(() => {
     }
   };
   new MutationObserver(check).observe(document, { childList: true, subtree: true });
+  // Tardis's second condition on focusForTyping (all hands feecc21d): a typed box the app's own code focuses, on a
+  // signed-in page and outside a dialog, must come away with an owner, or a redraw before the person's first key sends
+  // it nowhere. keepTyping and focusForTyping give it one; a bare .focus() doesn't. Checked once the focus's own task has
+  // run, since both set the owner just after focusing. Playwright's own actions focus from another world, unseen here.
+  const realFocus = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function (...args) {
+    const out = realFocus.apply(this, args);
+    const box = this;
+    queueMicrotask(() => {
+      let typed, owner, signedIn;
+      try { typed = TYPED_INPUTS; owner = typedBox; signedIn = !!state.me; } catch (_) { return; }
+      const app = document.getElementById('app');
+      if (!signedIn || !app || !app.contains(box) || box.closest('dialog') || !box.id || owner === box) return;
+      if (!(box.tagName === 'TEXTAREA' || (box.tagName === 'INPUT' && typed.has(box.type)))) return;
+      if (document.activeElement !== box) return;
+      const page = (location.hash || '#').split(/[?/]/)[0];
+      tell('problem', `#${box.id} on ${page} was focused by the app with no owner: open it with focusForTyping`);
+    });
+    return out;
+  };
 })();"""
 
 

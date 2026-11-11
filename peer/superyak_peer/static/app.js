@@ -1130,7 +1130,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
-    if (!ok && state.boardDone?.roomId === room.id) document.querySelector("#board-outcome")?.focus();
+    if (!ok && state.boardDone?.roomId === room.id) focusForTyping(document.querySelector("#board-outcome"));
     else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
@@ -1140,7 +1140,7 @@ async function postBoardItem(form) {
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me && state.room?.id === roomId) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) focusForTyping(document.querySelector("#board-key"));  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -2145,6 +2145,18 @@ function typingIn(node) {
   return { id: node.id, tag: node.tagName, value: node.value, chain: boxChain(node), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
 }
 
+// The app's own focus on a box it opens for the person to type in: Edit brief, Mark done, a board post or a refused save
+// starting over, using an earlier brief. Each runs from the person's own act (their press, or their submit's answer
+// across its await), never from a timer, a poll or a render, and it makes the box the one a redraw may give the caret
+// back to, as their press into it would (Tardis, all hands feecc21d; fix:app-focused-box-has-no-owner). A plain .focus()
+// on a typed box sets no owner, so a redraw before the person's first key would send it nowhere; tests/typed_boxes.py's
+// watch reports one on a signed-in page outside a dialog.
+function focusForTyping(box) {
+  if (!box) return;
+  box.focus();
+  if (typedBoxRule(box)) typedBox = box;
+}
+
 function keepTyping(typing) {
   typedBox = null;
   const again = document.getElementById(typing.id);
@@ -2786,7 +2798,7 @@ async function saveBrief(form) {
     }
     announce(message);
     render();
-    document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
+    focusForTyping(document.querySelector("#brief-body"));  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
   if (state.briefEdit === edit) state.briefEdit = null;
@@ -2828,7 +2840,7 @@ function useBriefRevision(room, revision, confirmed = false) {
                       shipAuthor: briefAuthorClass(room, item) === "ship" ? item.author_name : null };
   render();
   const box = document.querySelector("#brief-body");
-  if (box) { box.value = item.body; box.focus(); }
+  if (box) { box.value = item.body; focusForTyping(box); }
 }
 
 async function removeParticipant(id) {
@@ -3240,7 +3252,7 @@ document.addEventListener("click", async (event) => {
     if (slot) slot.innerHTML = carryHelp(room);
   }
   if (action.startsWith("board-") && event.detail !== 0 && boardClickBlocked()) return;  // a key press (detail 0) is never a double click
-  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); document.querySelector("#board-outcome")?.focus(); }
+  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); focusForTyping(document.querySelector("#board-outcome")); }
   if ((action === "board-drop" || action === "board-release") && state.room) {
     state.boardDone = null; state.boardAsk = { roomId: state.room.id, key: target.dataset.key, action: action.slice(6) };
     render();
@@ -3344,7 +3356,7 @@ document.addEventListener("click", async (event) => {
     state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", opened: brief?.body || "", status: "", error: false,
                         shipAuthor: brief && briefAuthorClass(state.room, brief) === "ship" ? brief.author_name : null };
     render();
-    document.querySelector("#brief-body")?.focus();
+    focusForTyping(document.querySelector("#brief-body"));
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "load-earlier") await loadEarlier();
@@ -3358,7 +3370,7 @@ document.addEventListener("click", async (event) => {
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
-  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); document.querySelector("#brief-body")?.focus(); }
+  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); focusForTyping(document.querySelector("#brief-body")); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
