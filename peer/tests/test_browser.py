@@ -850,6 +850,48 @@ def test_a_box_an_action_opens_to_type_in_keeps_the_caret_through_a_redraw(brows
         expect(box).to_have_value('done')
 
 
+@pytest.mark.parametrize('aim', ['typed in the composer', 'pressed into the composer', 'pressed the page'])
+def test_a_board_post_answered_after_the_person_went_elsewhere_takes_neither_focus_nor_caret(browser_peer, aim):
+    """The reader's CHANGES on bd25f63a, finding 1, with Tardis's count of acts (all hands 18404245): a board post's
+    answer reopens the Key box after its await, and the person may have done something meanwhile. If they did anything,
+    typed, pressed a box, or pressed the page itself, which leaves no owner, the Key box takes neither the focus nor the
+    caret."""
+    base, store = browser_peer['base_url'], browser_peer['app'].state.store
+    patient = browser_peer['users']['patient']['id']
+    room = store.create_room(patient, 'Room X', [])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(f"{base}/#chats/{room['id']}")
+        page.reload()
+        panel = page.locator('.room-board')
+        panel.get_by_label('Key').fill('spec:d7')
+        panel.get_by_label('Title').fill('Write the D7 spec')
+        held = []
+        page.route('**/board', lambda route: held.append(route) if route.request.method == 'POST' else route.continue_())
+        settle(page)
+        panel.get_by_role('button', name='Post item').click()
+        page.wait_for_function('() => true')
+        deadline = time.monotonic() + 5
+        while not held:
+            assert time.monotonic() < deadline, 'the post never left'
+            page.wait_for_timeout(20)
+        composer = page.get_by_role('textbox', name='Message')
+        if aim == 'pressed the page':
+            page.get_by_role('heading', name='Room X').click()  # plain text: no box, and no owner either
+        else:
+            composer.click()
+        if aim == 'typed in the composer':
+            page.keyboard.type('Hello')
+        held[0].continue_()
+        expect(panel.locator('.board-item', has_text='spec:d7')).to_be_visible()  # posted, and the panel drawn again
+        page.wait_for_timeout(200)
+        expect(panel.get_by_label('Key')).not_to_be_focused()
+        if aim != 'pressed the page':
+            expect(composer).to_be_focused()
+            page.keyboard.type(' next')
+            expect(composer).to_have_value('Hello next' if aim == 'typed in the composer' else ' next')
+        page.unroute('**/board')
+
+
 def test_a_click_into_a_note_then_a_late_read_keeps_the_first_key(browser_peer):
     """fix:unsaved-note-typing-flake, made to happen: test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed
     lost its first key in CI when the layer's history answered after the person's click into the box and before the

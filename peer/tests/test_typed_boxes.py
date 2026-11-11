@@ -117,3 +117,22 @@ def test_watching_twice_patches_once():
     typed_boxes.watching(Browser, Context)
     assert (Browser.new_context, Browser.new_page, Context.close) == once
     assert once[0].__wrapped__ is not None
+
+
+def test_no_script_focuses_a_listed_box_by_id_except_through_focus_for_typing():
+    """Tardis's nit 2 on bd25f63a (all hands 18404245): the watch sees only the paths tests reach, so this reads every
+    script for a bare .focus() on a typed box named by id (querySelector("#id") or getElementById("id")), outside a
+    dialog's boxes. Each must go through focusForTyping or reopenForTyping, which give it an owner. It can't judge a
+    focus on a variable (keepTyping's own, the dialog trap's), which the watch still covers."""
+    typed = {box for box, ways in typed_boxes.RULES.items() if '${' not in box and any(way[0] != 'dialog' for way in ways)}
+    bare = re.compile(r'(?:querySelector|getElementById)\(\s*([\'"`])#?([A-Za-z][\w-]*)\1\s*\)\??\.focus\(')
+    found = [f'{script.name}:{n} #{match.group(2)}' for script in sorted(STATIC.rglob('*.js'))
+             for n, line in enumerate(script.read_text().splitlines(), 1)
+             for match in bare.finditer(line) if match.group(2) in typed]
+    assert found == [], 'a typed box focused by id with no owner: open it with focusForTyping (or reopenForTyping)'
+
+
+def test_the_focus_reader_finds_a_bare_focus_by_id():
+    bare = re.compile(r'(?:querySelector|getElementById)\(\s*([\'"`])#?([A-Za-z][\w-]*)\1\s*\)\??\.focus\(')
+    line = 'document.querySelector("#board-key")?.focus(); document.getElementById(\'brief-body\').focus();'
+    assert [m.group(2) for m in bare.finditer(line)] == ['board-key', 'brief-body']

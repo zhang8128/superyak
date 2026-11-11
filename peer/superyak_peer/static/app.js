@@ -1106,7 +1106,7 @@ async function makeGrant(form) {
 // what the station holds and the history shows the new line. focusKey: the item to focus afterwards (the panel's
 // heading if it left the open list); undefined leaves focus to the caller.
 async function boardWrite(path, json, message, { saved = () => {}, focusKey } = {}) {
-  const room = state.room;
+  const room = state.room, acts = personActs;
   if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
@@ -1130,7 +1130,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
-    if (!ok && state.boardDone?.roomId === room.id) focusForTyping(document.querySelector("#board-outcome"));
+    if (!ok && state.boardDone?.roomId === room.id) reopenForTyping(document.querySelector("#board-outcome"), acts);
     else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
@@ -1138,9 +1138,10 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
 async function postBoardItem(form) {
   if (state.boardSaving || !state.room || !boardOnScreen(state.room)) return;
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
+  const acts = personActs;
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me && state.room?.id === roomId) focusForTyping(document.querySelector("#board-key"));  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) reopenForTyping(document.querySelector("#board-key"), acts);  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -2147,14 +2148,27 @@ function typingIn(node) {
 
 // The app's own focus on a box it opens for the person to type in: Edit brief, Mark done, a board post or a refused save
 // starting over, using an earlier brief. Each runs from the person's own act (their press, or their submit's answer
-// across its await), never from a timer, a poll or a render, and it makes the box the one a redraw may give the caret
-// back to, as their press into it would (Tardis, all hands feecc21d; fix:app-focused-box-has-no-owner). A plain .focus()
+// across its await, which goes through reopenForTyping below), never from a timer, a poll or a render, and it makes the
+// box the one a redraw may give the caret back to, as their press into it would (Tardis, all hands feecc21d;
+// fix:app-focused-box-has-no-owner). A plain .focus()
 // on a typed box sets no owner, so a redraw before the person's first key would send it nowhere; tests/typed_boxes.py's
 // watch reports one on a signed-in page outside a dialog.
 function focusForTyping(box) {
   if (!box) return;
   box.focus();
   if (typedBoxRule(box)) typedBox = box;
+}
+// A submit's answer comes after an await, and the person may have done anything since: typed in the composer, pressed
+// into it, pressed a button or the page (the reader's CHANGES on bd25f63a, finding 1). So the submit notes how many acts
+// the person had made (personActs), and its answer opens its box again only if that's unchanged: if they did anything at
+// all since, it takes neither the focus nor the caret from where they are (Tardis, all hands 18404245). A pan counts
+// too, which errs toward leaving their focus alone.
+let personActs = 0;  // the person's own trusted primary presses and key presses, counted
+document.addEventListener("pointerdown", (event) => { if (event.isTrusted && event.isPrimary) personActs += 1; }, true);
+document.addEventListener("keydown", (event) => { if (event.isTrusted) personActs += 1; }, true);
+function reopenForTyping(box, actsAtSubmit) {
+  if (personActs !== actsAtSubmit) return;
+  focusForTyping(box);
 }
 
 function keepTyping(typing) {
@@ -2766,7 +2780,7 @@ async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
   // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
   if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
-  const who = identityKey(state.me);
+  const who = identityKey(state.me), acts = personActs;
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
   form.querySelector('button[type="submit"]').disabled = true;
@@ -2798,7 +2812,7 @@ async function saveBrief(form) {
     }
     announce(message);
     render();
-    focusForTyping(document.querySelector("#brief-body"));  // render() drops focus when no dialog is open; the error is about this box
+    reopenForTyping(document.querySelector("#brief-body"), acts);  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
   if (state.briefEdit === edit) state.briefEdit = null;
