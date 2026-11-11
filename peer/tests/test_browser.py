@@ -765,6 +765,44 @@ def test_a_wrong_password_in_the_sign_in_again_dialog_shows_why_with_an_empty_bo
         expect(page.get_by_label('Layer title')).to_have_value('Kept while I sign in')
 
 
+def test_a_password_being_typed_carries_into_a_dialog_drawn_anew(browser_peer):
+    """Tardis, all hands 582f12c5: a password never carried, so a replace while the person typed one (here another dialog
+    opening, which redraws every open dialog) emptied the box under their caret, and the rest of the password went in
+    alone. A password carries while the box is theirs, since their last submit, with its caret."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_reauth_dialog(page)
+        page.locator('#reauth-password').click()
+        page.keyboard.type('half')
+        page.evaluate("() => { document.querySelector('#dialogs [aria-labelledby=\"reauth-title\"]').kept = true; state.spaceDialog = true; render(); }")
+        expect(page.get_by_label('Space name')).to_be_attached()
+        assert not page.evaluate("() => document.querySelector('#dialogs [aria-labelledby=\"reauth-title\"]').kept")  # drawn anew
+        assert caret_in(page) == ['reauth-password', 'half', 4, 4]
+        page.keyboard.type('way')
+        expect(page.locator('#reauth-password')).to_have_value('halfway')
+
+
+def test_a_password_sent_never_carries_into_a_dialog_drawn_anew(browser_peer):
+    """The other half of the rule: a submit ends the typing, so once the password is sent, a replace while its answer is
+    out starts the box empty, and the refusal that follows leaves it empty with the caret in it."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='My sharing layers').click()
+        open_new_layer(page)
+        page.get_by_label('Layer title').fill('Kept while I sign in')
+        with browser_peer['app'].state.store.transaction() as db:
+            db.execute('DELETE FROM sessions')
+        page.get_by_role('button', name='Save private draft').click()
+        expect(page.locator('#reauth-password')).to_be_focused()
+        page.keyboard.type('not the password')
+        held = held_routes(page, '**/api/login')
+        page.keyboard.press('Enter')
+        wait_for_hold(page, held)
+        page.evaluate("() => { state.spaceDialog = true; render(); }")
+        expect(page.locator('#reauth-password')).to_have_value('')
+        release(held)
+        expect(page.locator('#dialogs dialog').get_by_role('alert')).to_be_visible()
+        expect(page.locator('#reauth-password')).to_have_value('')
+
+
 def test_words_typed_while_a_save_is_out_never_go_to_the_sign_in_again_box(browser_peer):
     """The reader's finding 2 on 51e8d0b8. The sign-in-again dialog opens on the save's answer, after an await. An
     autofocus put the focus in its password box whatever the person had done since Save, so the end of the words they

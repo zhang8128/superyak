@@ -2234,15 +2234,19 @@ function settingOf(node) {  // what the control holds now
   if (node.tagName === "SELECT") return JSON.stringify([[...node.options].map((option) => option.value), node.selectedIndex]);
   return node.value;
 }
-function carryInto(dialog, old) {  // the person's settings from `old` into `dialog`, drawn anew for the same purpose
+function carryInto(dialog, old, owned) {  // the person's settings from `old` into `dialog`, drawn anew for the same purpose
   const fresh = controlsIn(dialog), dropped = [];
   const labelOf = (box) => old.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent || "A box";
   for (const [key, was] of controlsIn(old)) {
     if (!was || !("defaultValue" in was || "defaultChecked" in was || was.tagName === "SELECT")) continue;
     const now = settingOf(was), into = fresh.get(key);
-    if (now === drawnSettingOf(was) || was.type === "password" || into?.type === "password") continue;  // not the person's, or never carried
+    if (now === drawnSettingOf(was)) continue;  // not the person's
+    // A password carries only while the person is typing it: the box is theirs since their last submit (a submit ends
+    // the typing). Otherwise a poll that replaces the dialog mid-password empties the box under the caret, and the rest
+    // of the password goes in alone (Tardis, all hands 582f12c5). After a submit it never carries, and is never named.
+    if ((was.type === "password" || into?.type === "password") && was !== owned) continue;
     if (!into) {  // the new draw has no such box: their words go, and the dialog says so
-      if (typedBoxRule(was)) dropped.push(`${labelOf(was)} is no longer in this dialog. You had typed: “${was.value}”.`);
+      if (typedBoxRule(was) && was.type !== "password") dropped.push(`${labelOf(was)} is no longer in this dialog. You had typed: “${was.value}”.`);
       continue;
     }
     const same = into.tagName === was.tagName && into.type === was.type && chainIn(into, dialog) === chainIn(was, old);
@@ -2250,7 +2254,7 @@ function carryInto(dialog, old) {  // the person's settings from `old` into `dia
       if (into.type === "checkbox" || into.type === "radio") into.checked = was.checked;
       else if (into.tagName === "SELECT") into.selectedIndex = was.selectedIndex;
       else into.value = was.value;
-    } else if (typedBoxRule(was) && settingOf(into) !== now) {
+    } else if (typedBoxRule(was) && was.type !== "password" && settingOf(into) !== now) {
       dropped.push(`${labelOf(was)} changed while you typed, so it shows the new words. You had typed: “${was.value}”.`);
     }
   }
@@ -2286,7 +2290,7 @@ function drawDialogs() {  // after app.innerHTML: the dialogs now open
   const purpose = (dialog) => dialog.getAttribute("aria-labelledby");
   for (const dialog of drawn) {
     const old = open.find((was) => purpose(was) === purpose(dialog));
-    if (old) carryInto(dialog, old);
+    if (old) carryInto(dialog, old, owned);
   }
   for (const dialog of open) dialog.remove();
   dialogRoot.append(...drawn);
