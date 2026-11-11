@@ -568,22 +568,51 @@ def test_a_late_redraw_keeps_the_caret_in_the_box_a_person_is_typing_in(browser_
 
 def test_the_typed_box_watch_reports_a_box_a_redraw_cant_tell_apart(browser_peer):
     """conftest.py watches every page a test opens (tests/typed_boxes.py, test:every-typed-box-has-an-owner). Boxes drawn
-    as the list says are let be; a box it doesn't name, a layer's box drawn outside any layer, and a box the drawing
-    names drawn twice on one page are each reported once. The test takes the reports, so its own boxes don't fail it."""
+    as the list says are let be; a box it doesn't name, a layer's box drawn outside any layer, a box the drawing names
+    drawn twice on one page, a dialog's box drawn twice, and a marked box inside a dialog (whose redraw ignores marks)
+    are each reported once. The test takes the reports, so its own boxes don't fail it."""
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
         assert typed_boxes.take() == []  # the sign-in page and the home
         page.evaluate("""() => app.insertAdjacentHTML('beforeend', '<div data-layer-id="x"><textarea id="layer-body"></textarea>'
           + '</div><dialog><input id="space-name"></dialog><textarea id="peer-card"></textarea><input type="checkbox" id="unlisted-check">')""")
         assert typed_boxes.take() == []
         page.evaluate("""() => app.insertAdjacentHTML('beforeend', '<input id="a-box-nobody-listed"><input id="layer-title">'
-          + '<input id="peer-card"><input id="space-name"><textarea>no id, so never given a caret</textarea>')""")
+          + '<input id="peer-card"><dialog><input id="space-name"></dialog><textarea>no id, so never given a caret</textarea>'
+          + '<dialog data-layer-id="x"><input id="layer-title-in-a-dialog"><textarea id="layer-body"></textarea></dialog>')""")
         found = typed_boxes.take()
-    assert len(found) == 4, found
+    assert len(found) == 6, found
     assert any(line.startswith('#a-box-nobody-listed on ') and line.endswith(" isn't listed: say how a redraw tells it apart")
                for line in found), found
+    assert any(line.startswith('#layer-title-in-a-dialog on ') and "isn't listed" in line for line in found), found
     assert any(line.startswith('#layer-title on ') and 'without data-layer-id on it or a parent' in line for line in found), found
     assert any(line.startswith('#peer-card on ') and 'without drawn once on its page' in line for line in found), found
-    assert any(line.startswith('#space-name on ') and 'without inside a dialog' in line for line in found), found
+    assert any(line.startswith('#space-name on ') and 'without drawn once inside a dialog' in line for line in found), found
+    assert any(line.startswith('#layer-body on ') and 'without a mark outside a dialog' in line for line in found), found
+
+
+@pytest.fixture
+def a_page_left_open(browser_peer):
+    """A signed-out page whose context closes only in teardown, after conftest.py's check has run (as
+    test_imprint_browser's pages do)."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(browser_peer['base_url'] + '/')
+        expect(page.get_by_role('heading', name='Sign in to this home')).to_be_visible()
+        yield page
+        context.close()
+        browser.close()
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="the watch must fail a test that drew an unlisted box after its last playwright call")
+def test_a_box_drawn_after_the_last_playwright_call_still_fails_its_test(a_page_left_open):
+    """The first reader's finding 2 on ca211228: no test failed when the flush or conftest.py's check was broken. Here the
+    box is drawn by a timer and the test then sleeps with no playwright call, so only the check's own flush brings its
+    report in. This must fail as an xfail; if the wiring or the flush breaks, it passes, and strict makes that a failure."""
+    a_page_left_open.evaluate("() => setTimeout(() => app.insertAdjacentHTML('beforeend', '<input id=\"drawn-late\">'), 0)")
+    time.sleep(0.5)
 
 
 def test_a_redraw_puts_no_caret_in_a_box_that_shows_other_words(browser_peer):

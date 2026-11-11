@@ -10,6 +10,18 @@ So each typed box is listed here with the ways it may be told apart, and conftes
 test opens: a test that draws a box this list doesn't name, or draws it without what the list says, fails.
 test_typed_boxes.py checks that the list names every typed box the static scripts write, so a new box fails CI until
 someone says how it's told apart.
+
+A dialog is different (the first reader on ca211228, finding 1). While a dialog stays drawn, render() focuses the box
+with the same id in the redrawn dialog (the `else if (hadDialog && dialogs.length && focusSelector)` line), with no
+chain check and no words check, and showModal focuses its first control by itself. The redraw also drops the words
+typed there. So a mark means nothing inside a dialog, and a dialog's box is kept from another thing's keys only by the
+dialog being for one thing while it's open: each one says which thing, and names its known gap. The lost words are
+fix:dialog-redraw-loses-typed-words.
+
+What the watch can't see (that reader's finding 7): contexts from launch_persistent_context or connect_over_cdp, and the
+async API (test_typed_boxes.py fails if a test uses them); frames, which have no #app; a page with JavaScript off, where
+no app runs either; and a report sent after a test's last flush, which the next test's start drops. A mark passes on
+being there: the watch can't tell whether its value names the box's thing (finding 6), so a reviewer checks that.
 """
 import functools
 import json
@@ -17,11 +29,12 @@ import os
 import re
 
 # The ways a box may be told apart. Each box lists one or more, and one of them must hold wherever it's drawn.
-# - ('mark', key, ...): each key (as element.dataset names it) is on the box or a parent inside #app.
-# - ('dialog',): it's drawn inside a <dialog>, and render() gives no caret back while a dialog is open or drawn.
+# - ('mark', key, ...): outside any dialog, each key (as element.dataset names it) is on the box or a parent in #app.
+# - ('dialog', why): inside a <dialog> and drawn once; `why` says the one thing that dialog is for while it's open.
 # - ('drawing', why): what the drawing is for (its route and id, and the room or layer on screen) names what the box is
 #   for, and the page draws the box once.
 SIGN_IN = ('drawing', "the sign-in page: showLogin draws it with nobody signed in, when render() draws nothing")
+REAUTH = ('dialog', "the sign-in-again dialog: the person signed in now")
 RULES = {
     'username': [SIGN_IN],
     'password': [SIGN_IN],
@@ -29,7 +42,7 @@ RULES = {
     'new-username': [SIGN_IN],
     'new-name': [SIGN_IN],
     'new-password': [SIGN_IN],
-    'space-name': [('dialog',)],
+    'space-name': [('dialog', "the new-space dialog: one space not made yet")],
     'layer-title': [('mark', 'layerId')],
     'layer-body': [('mark', 'layerId')],
     'assistant-request': [('mark', 'layerId')],
@@ -39,24 +52,27 @@ RULES = {
     'board-title': [('mark', 'room')],
     'grant-reason': [('mark', 'id')],  # the grant's <li data-id>
     'message-body': [('mark', 'room')],
-    'chat-title': [('dialog',)],
+    'chat-title': [('dialog', "the new or linked chat dialog: one chat not made yet. Known gap: a linked chat's follows "
+                              "state.room, and a back press changes the room under it while it's open (read, not run)")],
     'trust-password': [('mark', 'contact')],  # the contact's <li data-contact>
-    'imprint-password': [('dialog',)],
+    'imprint-password': [('dialog', "the imprint dialog: the one request its link's code named. Known gap: a new "
+                                    "#imprint?code= in the address bar replaces the request under it (read, not run)")],
     'peer-card': [('drawing', "Connections' one box for pasting a new card")],
     'pair-code': [('mark', 'fingerprint')],
-    'display-name': [('dialog',)],
-    'reauth-username': [('dialog',)],
-    'reauth-password': [('dialog',)],
+    'display-name': [('dialog', "the account dialog: the signed-in person's own name")],
+    'reauth-username': [REAUTH],
+    'reauth-password': [REAUTH],
     # research.js draws these twice: in a source's settings form, and in the new-source dialog.
-    '${prefix}-name': [('mark', 'sourceId'), ('dialog',)],
-    '${prefix}-description': [('mark', 'sourceId'), ('dialog',)],
-    'home-search': [('drawing', "the home and search pages' own box: the route is the drawing")],
+    '${prefix}-name': [('mark', 'sourceId'), ('dialog', "the new-source dialog: one source not made yet")],
+    '${prefix}-description': [('mark', 'sourceId'), ('dialog', "the new-source dialog: one source not made yet")],
+    'home-search': [('drawing', "the header's search box, drawn once on every signed-in page: its subject is the query")],
     'space-rename': [('drawing', "a space's page: its route's id names the space")],
 }
 
 PROBLEMS = []  # what the watched pages reported since the running test began
 SEEN = set()   # every typed box id drawn in this run; TYPED_BOX_SEEN=<file> writes them at the end
 _contexts = []
+_patched = []  # the classes watching() has patched, so a second call (pytester, a nested run) changes nothing
 
 
 def pattern(listed):
@@ -64,6 +80,13 @@ def pattern(listed):
     return '^' + '.+'.join(re.escape(part) for part in re.split(r'\$\{[^}]*\}', listed)) + '$'
 
 
+def ordered():
+    """RULES as the watch reads them: exact ids first, so a template's looser ways never cover an id listed exactly."""
+    return sorted(RULES.items(), key=lambda item: '${' in item[0])
+
+
+# A report names the route and the box's id only, never a value, a code or an id from the data: the words land in a
+# public CI log (Tardis, all hands 393c338c).
 WATCH = """(() => {
   const rules = %s.map(([pattern, listed, ways]) => [new RegExp(pattern), listed, ways]);
   const told = new Set();
@@ -78,10 +101,13 @@ WATCH = """(() => {
     for (let at = box; at && at !== app; at = at.parentElement) for (const key of Object.keys(at.dataset)) if (key !== 'version') keys.add(key);
     return way.slice(1).filter((key) => !keys.has(key));
   };
-  const holds = (box, app, way) => way[0] === 'dialog' ? !!box.closest('dialog')
-    : way[0] === 'drawing' ? app.querySelectorAll('#' + CSS.escape(box.id)).length === 1 : !missing(box, app, way).length;
-  const describe = (box, app, way) => way[0] === 'mark' ? missing(box, app, way).map(mark).join(' and ') + ' on it or a parent'
-    : way[0] === 'dialog' ? 'inside a dialog' : 'drawn once on its page';
+  const once = (box, app) => app.querySelectorAll('#' + CSS.escape(box.id)).length === 1;
+  const holds = (box, app, way) => way[0] === 'dialog' ? !!box.closest('dialog') && once(box, app)
+    : way[0] === 'drawing' ? once(box, app) : !box.closest('dialog') && !missing(box, app, way).length;
+  const describe = (box, app, way) => way[0] === 'dialog' ? 'drawn once inside a dialog'
+    : way[0] === 'drawing' ? 'drawn once on its page'
+    : box.closest('dialog') ? 'a mark outside a dialog (a dialog\\'s redraw ignores marks)'
+    : missing(box, app, way).map(mark).join(' and ') + ' on it or a parent';
   const check = () => {
     const app = document.getElementById('app');
     let typed;
@@ -110,7 +136,7 @@ def watch(context):
         else:
             PROBLEMS.append(text)
     context.expose_binding('__typedBox', heard)
-    rules = [[pattern(listed), listed, [list(way) for way in ways]] for listed, ways in RULES.items()]
+    rules = [[pattern(listed), listed, [list(way) for way in ways]] for listed, ways in ordered()]
     context.add_init_script(script=WATCH % json.dumps(rules))
     _contexts.append(context)
 
@@ -130,7 +156,10 @@ def flush(context):
 
 
 def watching(browser_class, context_class):
-    """Patch playwright so every context a test makes is watched, and flushed as it closes (conftest.py)."""
+    """Patch playwright so every context a test makes is watched, and flushed as it closes (conftest.py). Once only."""
+    if (browser_class, context_class) in _patched:
+        return
+    _patched.append((browser_class, context_class))
     new_context, new_page, close = browser_class.new_context, browser_class.new_page, context_class.close
 
     @functools.wraps(new_context)
