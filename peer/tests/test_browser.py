@@ -526,6 +526,83 @@ def test_home_search_and_private_starters_preserve_account_boundaries(browser_pe
         expect(page.get_by_label('What do you want to share?')).to_have_value('Keep these words while I browse')
 
 
+def hold_next_revisions_read(page):
+    page.evaluate("""() => {
+      const original = window.fetch;
+      window.fetch = async (url, options = {}) => {
+        const response = await original(url, options);
+        if (String(url).endsWith('/revisions') && !window.__revisionsHeld) {
+          window.__revisionsHeld = true;
+          await new Promise(resolve => { window.__releaseRevisions = resolve; });
+        }
+        return response;
+      };
+    }""")
+
+
+@pytest.mark.parametrize('field, start', [
+    ('What do you want to share?', 'Keep these'),
+    ('Layer title', 'My questions'),
+])
+def test_a_late_redraw_keeps_the_caret_in_the_box_a_person_is_typing_in(browser_peer, field, start):
+    """fix:care-starter-loses-first-words. A new draft's editor is drawn at once and drawn again when its history
+    answers. On a slow home, that second draw came while a person typed, the caret left the box, and the keys
+    after it went nowhere."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        hold_next_revisions_read(page)
+        page.get_by_role('button', name='Prepare care questions', exact=True).click()
+        box = page.get_by_label(field, exact=True)
+        expect(page.get_by_label('Layer title')).to_have_value('Questions for my care team')
+        page.wait_for_function('() => window.__revisionsHeld === true')
+        box.click()
+        page.keyboard.press('ControlOrMeta+a')
+        page.keyboard.type(start)
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-form'); }")
+        page.evaluate('() => window.__releaseRevisions()')
+        page.wait_for_function("() => document.querySelector('#layer-form') !== window.__drawn")  # drawn again
+        page.keyboard.type(' words')
+        expect(box).to_have_value(f'{start} words')
+        expect(box).to_be_focused()
+
+
+def test_a_redraw_puts_no_caret_in_a_box_that_shows_other_words(browser_peer):
+    """The caret goes back only to the same box showing the same words. When the draw shows that layer with other
+    words (here, a save from another tab that the page takes), the caret stays out, so no key lands in text the person
+    didn't see."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        box.click()
+        page.evaluate("""() => {
+          const box = document.querySelector('#layer-body');
+          state.home.layers.find(item => item.id === box.form.dataset.layerId).body = 'Words from another tab';
+          render();
+        }""")
+        expect(box).to_have_value('Words from another tab')
+        expect(box).not_to_be_focused()
+
+
+def test_a_redraw_puts_no_caret_in_another_layers_box_with_the_same_words(browser_peer):
+    """The same id and the same words in another layer's editor is still another box: the caret stays out."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    first = store.create_layer(actor, {'title': 'Visit notes', 'body': 'Same words'})
+    second = store.create_layer(actor, {'title': 'Other notes', 'body': 'Same words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + first['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(page.get_by_label('Layer title')).to_have_value('Visit notes')
+        box.click()
+        page.evaluate("id => { state.selectedLayerId = id; render(); }", second['id'])
+        expect(page.get_by_label('Layer title')).to_have_value('Other notes')
+        expect(box).to_have_value('Same words')
+        expect(box).not_to_be_focused()
+
+
 def test_source_library_file_retry_replays_accepted_import(browser_peer):
     service = browser_peer['app'].state.data_sources
     actor = browser_peer['users']['patient']['id']

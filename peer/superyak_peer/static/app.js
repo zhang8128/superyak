@@ -2057,6 +2057,30 @@ function openFailedPage(message) {
   return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
 }
 
+// The box a person is typing in keeps the caret through a redraw, but only the same box: its id, in the same form for the
+// same layer, room or item, showing the same words. Anything else and the caret stays out, so no key lands in words the
+// person didn't see. (fix:care-starter-loses-first-words: on a slow home a new draft's history answered mid-typing, the
+// editor was drawn again, and the keys after that went nowhere.)
+const TYPED_INPUTS = new Set(["text", "search", "email", "url", "tel", "password"]);
+
+function formIdentity(form) {
+  return form ? JSON.stringify([form.id, { ...form.dataset }]) : "";
+}
+
+function typingIn(node) {
+  const typed = node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
+  if (!typed || !node.id) return null;
+  return { id: node.id, tag: node.tagName, value: node.value, form: formIdentity(node.form), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
+}
+
+function keepTyping(typing) {
+  const again = document.getElementById(typing.id);
+  if (!again || !app.contains(again) || again.tagName !== typing.tag || again.disabled || again.readOnly) return;
+  if (again.value !== typing.value || formIdentity(again.form) !== typing.form) return;
+  again.focus({ preventScroll: true });
+  try { again.setSelectionRange(typing.start, typing.end, typing.direction); } catch (_) { /* a type with no selection */ }
+}
+
 function render() {
   if (!state.me) return;
   if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
@@ -2067,6 +2091,7 @@ function render() {
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
+  const typing = !hadDialog && app.contains(focused) ? typingIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
@@ -2089,6 +2114,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
   const drawing = route === "chats" && state.room ? state.room.id : null;
   if (drawing && drawing !== roomDrawn) showNewestMessage();
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
