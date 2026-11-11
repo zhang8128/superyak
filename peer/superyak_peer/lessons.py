@@ -31,6 +31,9 @@ HOLD_BYTES = 6
 # name spends no lesson and `station` can't hold every post. It must equal the hook's own HELD_TOOLS
 # (agent/superyak_agent/lessons_hold.py).
 HELD_TOOLS = frozenset({'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'})
+# Tardis, all hands 003bb56d: a lesson is shown once a session, so a command value holding on more than this share of its
+# author's own recent commands is spent at the first of them, often where it doesn't apply. `lessons check` warns.
+BREADTH_WARN = 0.01
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
 FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
@@ -730,6 +733,48 @@ def words(item, request):
     count += sum(1 for v in item['file'] if v not in HELD_TOOLS
                  and (v in request['command'] or v in request['error'] or v in request['cwd']))
     return count, (held or commands or [None])[0]  # C43: one that can hold, when one matched
+
+
+def read_commands(path):
+    """`lessons check --commands`: the author's own recent Bash commands, one JSON string per line, since a command can
+    span lines. Refused whole, never echoing a line. The peer keeps none of them."""
+    commands = []
+    for number, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+        try:
+            command = json.loads(line)
+        except ValueError:
+            command = None
+        if not isinstance(command, str):
+            raise Problem(400, f'Line {number} of the commands file is not a JSON string: it holds one JSON string per line')
+        commands.append(command)
+    if not commands:
+        raise Problem(400, 'The commands file holds no command')
+    return commands
+
+
+def describe_breadth(lesson, commands):
+    """`lessons check --commands`: how many of the author's commands each `command` value holds, as the hook would hold
+    them (`holding`, each cut to its 300 characters), named by position and never echoed. Above BREADTH_WARN it says the
+    value is broad."""
+    total = len(commands)
+    if not lesson.command:
+        return f'Breadth against {total:,} commands: this lesson has no command value, so it holds no command.'
+    cut = [command[:CAPS['command']] for command in commands]
+    lines = [f'Breadth against {total:,} commands (a lesson is shown once a session, at the first command a value holds):']
+    for number, value in enumerate(lesson.command, 1):
+        if value in HELD_TOOLS:
+            lines.append(f'command {number}: holds only calls to that tool, never a Bash command.')
+        elif len(value.encode('utf-8')) < HOLD_BYTES:
+            lines.append(f'command {number}: under {HOLD_BYTES} bytes, so it never holds a command before it runs; it '
+                         'matches only after one fails.')
+        else:
+            held = sum(1 for command in cut if holding((value,), command))
+            line = f'command {number}: holds {held:,} of {total:,} ({held / total:.1%}).'
+            if held / total > BREADTH_WARN:
+                line += (' Broad: it would be spent at the first of them, where the lesson may not apply. A narrower value '
+                         '(two tokens, or a flag) holds where it does.')
+            lines.append(line)
+    return '\n'.join(lines)
 
 
 def context_text(request):
@@ -2163,13 +2208,24 @@ def _room(store, args):
     return describe_peer_room(store.record_lessons_room(args.id, args.confirm))
 
 
-@verb('check', "Every check this peer's door runs, without posting: the post on stdin", ('--ship', {'required': True}))
+@verb('check', "Every check this peer's door runs, without posting: the post on stdin", ('--ship', {'required': True}),
+      ('--commands', {'type': Path, 'help': "the author's own recent Bash commands, one JSON string per line: each "
+                                            "command value's breadth is said first, and nothing of the file is kept"}))
 def _check(store, args):
+    commands = read_commands(args.commands) if args.commands else None  # a bad file is refused before anything is said
     with store.transaction() as db:
         actor = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.ship,)).fetchone()
     if actor is None:
         raise Problem(404, f'No account named {args.ship} on this peer')
-    got = store.check_lesson(actor['id'], sys.stdin.buffer.read(BODY_BYTES + 1).decode('utf-8'))  # bytes: a \r stays
+    body = sys.stdin.buffer.read(BODY_BYTES + 1).decode('utf-8')  # bytes: a \r stays
+    if commands is not None:
+        try:
+            post = parse_post(body)
+        except LessonRefused:
+            post = None  # the door's checks below say why
+        if isinstance(post, Lesson):  # before the door's checks, so a peer with no lessons room still measures
+            write_out(describe_breadth(post, commands) + '\n')
+    got = store.check_lesson(actor['id'], body)
     return f"ok: a {got['kind']}, lesson {got['short']}"
 
 

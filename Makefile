@@ -117,7 +117,7 @@ help:
 	@echo "make lessons-room ID=… [CONFIRM=…]  On another peer: show, then record, the lessons room by its full id (LESSONS_DATA=this peer)"
 	@echo "make lessons-where      This peer's lessons room, by its full id"
 	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
-	@echo "make lessons-check SHIP=… FILE=…  Run this peer's checks on one lesson or retraction, without posting"
+	@echo "make lessons-check SHIP=… FILE=… [COMMANDS=…]  Run this peer's checks on one lesson or retraction, without posting; COMMANDS says each command value's breadth"
 	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
 	@echo "make lessons-own-shown  Own lessons this machine's hook has shown (misses prompts; the last 14 days)"
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
@@ -525,8 +525,8 @@ lessons-ship:
 	$(LESSONS) ship --data-dir "$(LESSONS_DATA)" --username "$(SHIP)" --owner "$(OWNER)"
 
 lessons-check:
-	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]'; exit 2; }
-	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)" < "$(FILE)"
+	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [COMMANDS=<your recent Bash commands, one JSON string per line: says how many each command value holds>] [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)"$(if $(COMMANDS), --commands "$(COMMANDS)") < "$(FILE)"
 
 # Own lessons spec: a local count only. It misses own lessons shown at a prompt (the hook writes nothing there) and
 # covers the STATE_DAYS (14) a session record lives.
