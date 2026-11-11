@@ -526,6 +526,207 @@ def test_home_search_and_private_starters_preserve_account_boundaries(browser_pe
         expect(page.get_by_label('What do you want to share?')).to_have_value('Keep these words while I browse')
 
 
+def hold_next_revisions_read(page):
+    page.evaluate("""() => {
+      const original = window.fetch;
+      window.fetch = async (url, options = {}) => {
+        const response = await original(url, options);
+        if (String(url).endsWith('/revisions') && !window.__revisionsHeld) {
+          window.__revisionsHeld = true;
+          await new Promise(resolve => { window.__releaseRevisions = resolve; });
+        }
+        return response;
+      };
+    }""")
+
+
+@pytest.mark.parametrize('field, start', [
+    ('What do you want to share?', 'Keep these'),
+    ('Layer title', 'My questions'),
+])
+def test_a_late_redraw_keeps_the_caret_in_the_box_a_person_is_typing_in(browser_peer, field, start):
+    """fix:care-starter-loses-first-words. A new draft's editor is drawn at once and drawn again when its history
+    answers. On a slow home, that second draw came while a person typed, the caret left the box, and the keys
+    after it went nowhere."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        hold_next_revisions_read(page)
+        page.get_by_role('button', name='Prepare care questions', exact=True).click()
+        box = page.get_by_label(field, exact=True)
+        expect(page.get_by_label('Layer title')).to_have_value('Questions for my care team')
+        page.wait_for_function('() => window.__revisionsHeld === true')
+        box.click()
+        page.keyboard.press('ControlOrMeta+a')
+        page.keyboard.type(start)
+        page.evaluate("() => { window.__drawn = document.querySelector('#layer-form'); }")
+        page.evaluate('() => window.__releaseRevisions()')
+        page.wait_for_function("() => document.querySelector('#layer-form') !== window.__drawn")  # drawn again
+        page.keyboard.type(' words')
+        expect(box).to_have_value(f'{start} words')
+        expect(box).to_be_focused()
+
+
+def test_a_redraw_puts_no_caret_in_a_box_that_shows_other_words(browser_peer):
+    """The caret goes back only to a box showing the same words. Here the person typed, and the draw shows the same box,
+    same layer and same version, with other words, so only the words check stops it: no key lands in text the person
+    didn't see."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        box.click()
+        page.keyboard.type('!')
+        page.evaluate("""() => {
+          const box = document.querySelector('#layer-body');
+          state.layerEdits[box.form.dataset.layerId].values.body = 'Other words';
+          render();
+        }""")
+        expect(box).to_have_value('Other words')
+        expect(box).not_to_be_focused()
+
+
+def test_a_redraw_puts_no_caret_in_another_layers_box_with_the_same_words(browser_peer):
+    """The same id and the same words in another layer's editor is still another box: the caret stays out."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    first = store.create_layer(actor, {'title': 'Visit notes', 'body': 'Same words'})
+    second = store.create_layer(actor, {'title': 'Other notes', 'body': 'Same words!'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + first['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(page.get_by_label('Layer title')).to_have_value('Visit notes')
+        box.click()
+        page.keyboard.press('ControlOrMeta+End')
+        page.keyboard.type('!')
+        expect(box).to_have_value('Same words!')
+        page.evaluate("id => { state.selectedLayerId = id; render(); }", second['id'])
+        expect(page.get_by_label('Layer title')).to_have_value('Other notes')
+        expect(box).to_have_value('Same words!')
+        expect(box).not_to_be_focused()
+
+
+def test_a_redraw_puts_no_caret_in_a_box_the_person_only_clicked(browser_peer):
+    """Only typing earns the caret back: a box clicked and not typed in loses it on a redraw, as before."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        box.click()
+        page.evaluate('() => render()')
+        expect(box).to_have_value('First words')
+        expect(box).not_to_be_focused()
+
+
+def test_a_redraw_for_another_page_gives_the_same_box_no_caret(browser_peer):
+    """A key belongs to the drawing it was aimed at (Tardis, all hands d56f792e): the search box drawn again on another
+    page, with the same words, gets no caret, so a form someone adds later without data naming its room or layer is
+    still gated."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        search = page.get_by_label('Search your home', exact=True)
+        search.click()
+        page.keyboard.type('zebra')
+        page.evaluate("() => { location.hash = 'search'; }")
+        expect(page).to_have_title(re.compile('^Search'))
+        expect(search).to_have_value('zebra')
+        expect(search).not_to_be_focused()
+
+
+def test_a_redraw_gives_no_caret_to_a_box_in_another_chain(browser_peer):
+    """The second gate, alone: on the same drawing, a box whose chain of elements carries other data (here the old form
+    is marked as another layer's just before the draw) is another box, and gets no caret."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        box = page.get_by_label('What do you want to share?')
+        expect(box).to_have_value('First words')
+        box.click()
+        page.keyboard.press('ControlOrMeta+End')
+        page.keyboard.type('!')
+        page.evaluate("() => { document.querySelector('#layer-form').dataset.layerId = 'elsewhere'; render(); }")
+        expect(box).to_have_value('First words!')
+        expect(box).not_to_be_focused()
+
+
+def test_a_submit_on_its_own_page_takes_the_caret_out_of_its_box(browser_peer):
+    """A submit ends the typing even when the page stays: Enter in Layer title saves, the save's draw shows the same box
+    with the same words, and the caret stays out, so a phone's keyboard closes as it did (the reader's Should 3 on
+    8b70324b). Typing on after Enter earns it back (the test below)."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        title = page.get_by_label('Layer title')
+        expect(title).to_have_value('Visit notes')
+        title.click()
+        page.keyboard.press('ControlOrMeta+a')
+        page.keyboard.type('My questions')
+        page.keyboard.press('Enter')
+        expect(page.get_by_text('Private draft saved').first).to_be_visible()
+        expect(title).to_have_value('My questions')
+        expect(title).not_to_be_focused()
+
+
+def hold_next_layer_save(page):
+    page.evaluate("""() => {
+      const original = window.fetch;
+      window.fetch = async (url, options = {}) => {
+        if (options.method === 'PUT' && String(url).includes('/api/layers/') && !window.__saveHeld) {
+          window.__saveHeld = true;
+          await new Promise(resolve => { window.__releaseSave = resolve; });
+        }
+        return original(url, options);
+      };
+    }""")
+
+
+def test_typing_on_after_enter_saves_keeps_the_caret_through_the_saves_draw(browser_peer):
+    """Enter in Layer title saves. A person who types on while the save is out keeps the caret when it lands, though the
+    save moved the layer's version (the reader's Should 2 on 8b70324b)."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    layer = store.create_layer(actor, {'title': 'Visit notes', 'body': 'First words'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+        title = page.get_by_label('Layer title')
+        expect(title).to_have_value('Visit notes')
+        hold_next_layer_save(page)
+        title.click()
+        page.keyboard.press('ControlOrMeta+a')
+        page.keyboard.type('My questions')
+        page.keyboard.press('Enter')
+        page.wait_for_function('() => window.__saveHeld === true')
+        page.keyboard.type(' more')
+        page.evaluate('() => window.__releaseSave()')
+        expect(page.get_by_text('Submitted draft saved. Newer edits still need saving.').first).to_be_visible()
+        page.keyboard.type(' words')
+        expect(title).to_have_value('My questions more words')
+        expect(title).to_be_focused()
+        assert store.get_layer(actor, layer['id'])['title'] == 'My questions'
+
+
+def test_a_search_takes_the_caret_out_of_its_box(browser_peer):
+    """A submit ends the typing: the search's own draw gives no caret back, so a phone's keyboard closes over the
+    results as it did (the reader's Should 3 on 8b70324b)."""
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    store.create_layer(actor, {'title': 'My zebra questions', 'body': 'Selected private notes'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        search = page.get_by_label('Search your home', exact=True)
+        search.click()
+        page.keyboard.type('zebra')
+        page.keyboard.press('Enter')
+        expect(page.get_by_role('link', name='My zebra questions', exact=False)).to_be_visible()
+        expect(page.get_by_label('Search your home', exact=True)).not_to_be_focused()
+
+
 def test_source_library_file_retry_replays_accepted_import(browser_peer):
     service = browser_peer['app'].state.data_sources
     actor = browser_peer['users']['patient']['id']
@@ -1607,6 +1808,30 @@ def test_typing_on_as_the_next_room_draws_never_reaches_its_box(browser_peer):
             expect(box).to_have_value("")
             assert page.evaluate("(id) => readChatDraft(id).body", y["id"]) == ""
             assert page.evaluate("(id) => readChatDraft(id).body", x["id"]) == "first half"
+
+
+@pytest.mark.parametrize("typed", ["", "s"])
+def test_a_key_box_clicked_as_the_next_room_draws_never_gives_that_rooms_box_the_caret(browser_peer, typed):
+    """The board twin of the composer's test (the reader's Must on 8b70324b). The person clicks into X's empty Key box,
+    or types and erases, while Y opens; Y's box has the same id and the same empty words, but it is Y's, so it gets no
+    caret and no key reaches Y's board."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = y_opening(page, y)
+            key = page.get_by_label("Key", exact=True)
+            key.click()
+            if typed:
+                page.keyboard.type(typed)
+                page.keyboard.press("Backspace")
+            expect(key).to_have_value("")
+            release(held)
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            reads_settled(page)
+            page.keyboard.type("spec:x")
+            expect(key).to_have_value("")
+            expect(key).not_to_be_focused()
 
 
 def test_a_board_write_answered_after_the_next_room_opens_names_its_room_and_leaves_that_rooms_item_alone(browser_peer):
