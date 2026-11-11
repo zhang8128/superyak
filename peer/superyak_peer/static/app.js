@@ -2156,16 +2156,20 @@ function typingIn(node) {
 function focusForTyping(box) {
   if (!box) return;
   box.focus();
-  if (typedBoxRule(box)) typedBox = box;
+  if (typedBoxRule(box) && document.activeElement === box) typedBox = box;  // only where the focus landed (nit 4)
 }
 // A submit's answer comes after an await, and the person may have done anything since: typed in the composer, pressed
 // into it, pressed a button or the page (the reader's CHANGES on bd25f63a, finding 1). So the submit notes how many acts
 // the person had made (personActs), and its answer opens its box again only if that's unchanged: if they did anything at
-// all since, it takes neither the focus nor the caret from where they are (Tardis, all hands 18404245). A pan counts
-// too, which errs toward leaving their focus alone.
-let personActs = 0;  // the person's own trusted primary presses and key presses, counted
+// all since, it takes neither the focus nor the caret from where they are (Tardis, all hands 18404245). A pan, a modifier
+// key and an auto-repeat count too, which errs toward leaving their focus alone.
+let personActs = 0;  // the person's own trusted presses, keys, words put in and wheel turns, counted
 document.addEventListener("pointerdown", (event) => { if (event.isTrusted && event.isPrimary) personActs += 1; }, true);
 document.addEventListener("keydown", (event) => { if (event.isTrusted) personActs += 1; }, true);
+// Words that arrive with no key (dictation, an assistive tool) and a wheel's scroll are acts too (the re-check's nits 2
+// and 4 on ee71f24f): an answer after them leaves the focus, and the page, where the person put it.
+document.addEventListener("input", (event) => { if (event.isTrusted) personActs += 1; }, true);
+document.addEventListener("wheel", (event) => { if (event.isTrusted) personActs += 1; }, { capture: true, passive: true });
 function reopenForTyping(box, actsAtSubmit) {
   if (personActs !== actsAtSubmit) return;
   focusForTyping(box);

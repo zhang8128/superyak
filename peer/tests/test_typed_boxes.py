@@ -8,6 +8,9 @@ import pytest
 from tests import typed_boxes
 
 STATIC = Path(__file__).resolve().parents[1] / 'superyak_peer' / 'static'
+# Each template id in typed_boxes.RULES, as the ids its script draws (research.js: `creating ? 'new-source' : 'source'`).
+EXPANDED = {'${prefix}-name': ['source-name', 'new-source-name'],
+            '${prefix}-description': ['source-description', 'new-source-description']}
 TESTS = Path(__file__).resolve().parent
 # The input types a browser knows; any other type="..." is drawn as text (and box.type then says "text").
 INPUT_TYPES = {'button', 'checkbox', 'color', 'date', 'datetime-local', 'email', 'file', 'hidden', 'image', 'month',
@@ -122,9 +125,14 @@ def test_watching_twice_patches_once():
 def test_no_script_focuses_a_listed_box_by_id_except_through_focus_for_typing():
     """Tardis's nit 2 on bd25f63a (all hands 18404245): the watch sees only the paths tests reach, so this reads every
     script for a bare .focus() on a typed box named by id (querySelector("#id") or getElementById("id")), outside a
-    dialog's boxes. Each must go through focusForTyping or reopenForTyping, which give it an owner. It can't judge a
-    focus on a variable (keepTyping's own, the dialog trap's), which the watch still covers."""
-    typed = {box for box, ways in typed_boxes.RULES.items() if '${' not in box and any(way[0] != 'dialog' for way in ways)}
+    dialog's boxes. Each must go through focusForTyping or reopenForTyping, which give it an owner. It reads one line
+    at a time for a plain #id selector, so it can't see a focus on a variable (keepTyping's own, the dialog trap's), a
+    compound selector, a call split over lines or an id built at run time; the watch still covers what tests reach
+    (the re-check's nit 3 on ee71f24f). A template id is checked as each id it draws, listed in EXPANDED."""
+    typed = set()
+    for box, ways in typed_boxes.RULES.items():
+        if any(way[0] != 'dialog' for way in ways):
+            typed.update(EXPANDED[box] if '${' in box else [box])
     bare = re.compile(r'(?:querySelector|getElementById)\(\s*([\'"`])#?([A-Za-z][\w-]*)\1\s*\)\??\.focus\(')
     found = [f'{script.name}:{n} #{match.group(2)}' for script in sorted(STATIC.rglob('*.js'))
              for n, line in enumerate(script.read_text().splitlines(), 1)
@@ -136,3 +144,10 @@ def test_the_focus_reader_finds_a_bare_focus_by_id():
     bare = re.compile(r'(?:querySelector|getElementById)\(\s*([\'"`])#?([A-Za-z][\w-]*)\1\s*\)\??\.focus\(')
     line = 'document.querySelector("#board-key")?.focus(); document.getElementById(\'brief-body\').focus();'
     assert [m.group(2) for m in bare.finditer(line)] == ['board-key', 'brief-body']
+
+
+def test_every_template_id_is_expanded_into_the_ids_it_draws():
+    templates = {box for box in typed_boxes.RULES if '${' in box}
+    assert set(EXPANDED) == templates, 'a template id with no expansion: list the ids it draws in EXPANDED'
+    for template, ids in EXPANDED.items():
+        assert ids and all(re.fullmatch(typed_boxes.pattern(template), box) for box in ids), template

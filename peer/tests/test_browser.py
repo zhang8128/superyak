@@ -850,7 +850,8 @@ def test_a_box_an_action_opens_to_type_in_keeps_the_caret_through_a_redraw(brows
         expect(box).to_have_value('done')
 
 
-@pytest.mark.parametrize('aim', ['typed in the composer', 'pressed into the composer', 'pressed the page'])
+@pytest.mark.parametrize('aim', ['typed in the composer', 'pressed into the composer', 'pressed the page',
+                                 'pressed a key, no press'])
 def test_a_board_post_answered_after_the_person_went_elsewhere_takes_neither_focus_nor_caret(browser_peer, aim):
     """The reader's CHANGES on bd25f63a, finding 1, with Tardis's count of acts (all hands 18404245): a board post's
     answer reopens the Key box after its await, and the person may have done something meanwhile. If they did anything,
@@ -877,6 +878,8 @@ def test_a_board_post_answered_after_the_person_went_elsewhere_takes_neither_foc
         composer = page.get_by_role('textbox', name='Message')
         if aim == 'pressed the page':
             page.get_by_role('heading', name='Room X').click()  # plain text: no box, and no owner either
+        elif aim == 'pressed a key, no press':
+            page.keyboard.press('Shift')  # a key alone, from the keyboard: the re-check's finding 1 on ee71f24f
         else:
             composer.click()
         if aim == 'typed in the composer':
@@ -885,7 +888,7 @@ def test_a_board_post_answered_after_the_person_went_elsewhere_takes_neither_foc
         expect(panel.locator('.board-item', has_text='spec:d7')).to_be_visible()  # posted, and the panel drawn again
         page.wait_for_timeout(200)
         expect(panel.get_by_label('Key')).not_to_be_focused()
-        if aim != 'pressed the page':
+        if aim not in ('pressed the page', 'pressed a key, no press'):
             expect(composer).to_be_focused()
             page.keyboard.type(' next')
             expect(composer).to_have_value('Hello next' if aim == 'typed in the composer' else ' next')
