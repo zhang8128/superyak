@@ -1247,6 +1247,18 @@ def watch_reads(page):
     page.on("requestfailed", lambda request: out.discard(request))
 
 
+def confirm_remove(page):
+    """Remove asks first (board fix:room-acts-ask-first): its button opens the ask, and the ask's Yes removes."""
+    page.get_by_role("button", name=re.compile(r"^Yes, remove ")).click()
+    expect(page.locator(".room-ask button")).to_have_count(0)  # a "Removing …" line may hold the place until the answer
+
+
+def confirm_clear(page):
+    """Clear my mark asks first, as Remove does."""
+    page.get_by_role("button", name="Yes, clear my mark").click()
+    expect(page.locator(".room-ask button")).to_have_count(0)
+
+
 def two_rooms_with_x_open(page, store, owner, *members):
     x, y = store.create_room(owner, "Room X", list(members)), store.create_room(owner, "Room Y", list(members))
     watch_reads(page)
@@ -1436,6 +1448,7 @@ def test_a_removal_goes_to_the_room_on_screen_while_another_opens(browser_peer):
             x, y = two_rooms_with_x_open(page, store, owner, family)
             held = y_opening(page, y)
             page.get_by_role("button", name=re.compile("^Remove .* from this room")).first.click()
+            confirm_remove(page)
             page.wait_for_function("([id, who]) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !room.member_ids.includes(who))", arg=[x["id"], family])
             assert family in read_room(page, y)["member_ids"]
             release(held)
@@ -1780,6 +1793,7 @@ def test_clearing_a_mark_goes_to_the_room_on_screen_while_another_opens(browser_
             reads_settled(page)
             held = y_opening(page, y)
             page.get_by_role("button", name="Clear my mark").click()
+            confirm_clear(page)
             expect(page.locator(".notice")).to_contain_text("Your mark on Room X is cleared.")
             reads_settled(page, held=1)
             assert not read_room(page, x).get("cloud") and read_room(page, y).get("cloud")
@@ -1816,6 +1830,7 @@ def test_a_removal_refreshed_after_the_next_room_opens_stays_out_and_says_so(bro
             x, y = two_rooms_with_x_open(page, store, owner, family)
             refresh_held = held_routes(page, re.compile(rf"/api/chats/{x['id']}(\?|$)"))
             page.get_by_role("button", name=re.compile("^Remove .* from this room")).first.click()
+            confirm_remove(page)
             wait_for_hold(page, refresh_held)
             page.get_by_role("button", name="Room Y").click()
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
@@ -1835,6 +1850,7 @@ def test_a_removal_answered_after_the_next_room_opens_says_which_room(browser_pe
             held = y_opening(page, y)
             removal = held_routes(page, f"**/api/chats/{x['id']}/participants/**")
             page.get_by_role("button", name=re.compile("^Remove .* from this room")).first.click()
+            confirm_remove(page)
             wait_for_hold(page, removal)
             release(held)
             expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
@@ -2251,6 +2267,7 @@ def test_a_removal_during_a_same_room_read_stays_removed(browser_peer):
             page.evaluate("void loadRoute().then(() => render())")
             wait_for_hold(page, held)
             remove.click()
+            confirm_remove(page)
             expect(remove).to_have_count(0)
             reads_settled(page, held=1)
             release(held)
@@ -2759,11 +2776,11 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
             assert page.evaluate("announcer.textContent") == ""
 
 
-@pytest.mark.parametrize("press, route", [
-    ("^Mark this room$", "cloud"),
-    ("^Remove .* from this room", "participants/**"),
+@pytest.mark.parametrize("press, route, confirm", [
+    ("^Mark this room$", "cloud", None),
+    ("^Remove .* from this room", "participants/**", confirm_remove),
 ])
-def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, route):
+def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, route, confirm):
     users = browser_peer["users"]
     store, owner = browser_peer["app"].state.store, users["patient"]["id"]
     with sync_playwright() as playwright:
@@ -2771,6 +2788,8 @@ def test_a_late_answer_names_no_room_to_the_next_account(browser_peer, press, ro
             x, _y = two_rooms_with_x_open(page, store, owner, users["family"]["id"])
             answers = held_routes(page, f"**/api/chats/{x['id']}/{route}")
             page.get_by_role("button", name=re.compile(press)).first.click()
+            if confirm:
+                confirm(page)
             wait_for_hold(page, answers)
             page.evaluate("state.me = { ...state.me, id: 'the-next-account' }")
             release(answers)
@@ -3429,6 +3448,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
             expect(page.get_by_role("heading", name="First audience")).to_be_visible()
             expect(page.get_by_text("Removing someone stops access on this peer")).to_be_visible()
             page.get_by_role("button", name="Remove Sam Family from this room").click()
+            confirm_remove(page)
             expect(page.get_by_text("Sam Family no longer has access on this home; remote removal requires acknowledgement")).to_be_visible()
 
             with signed_in_browser(playwright, browser_peer, "family") as (family, _):
@@ -3480,8 +3500,10 @@ def test_the_mark_says_what_it_enforces_and_what_it_cant_stop(browser_peer):
             other.get_by_role("button", name="Add my mark too").click()
             expect(other.locator(".split-detail").get_by_text("Marked · 2 marks (one yours)", exact=True)).to_be_visible()
             other.get_by_role("button", name="Clear my mark").click()
+            confirm_clear(other)
             expect(other.locator(".notice", has_text="Your mark on To be marked is cleared. Other members' marks still stand.")).to_be_visible()
         page.get_by_role("button", name="Clear my mark").click()
+        confirm_clear(page)
         expect(page.locator(".notice", has_text="Your mark on To be marked is cleared. This room has no marks now.")).to_be_visible()
 
 
@@ -3505,6 +3527,7 @@ def test_adding_my_mark_still_offers_the_earlier_rooms_and_says_so_only_if_marke
         with store.transaction() as db:
             assert db.execute("SELECT count(*) FROM room_cloud WHERE room_id=? AND member_id=?", (first, family)).fetchone()[0] == 0
         page.get_by_role("button", name="Clear my mark").click()
+        confirm_clear(page)
         page.get_by_role("button", name="Add my mark too").click()
         expect(page.locator(".cloud-control")).to_contain_text(stays)
         with store.transaction() as db:
@@ -3585,6 +3608,7 @@ def test_the_mark_controls_say_what_they_do(browser_peer):
                 assert "<b>" not in owner.evaluate("cloudBadge({cloud: {count: '<b>1</b>', mine: false}})")
 
             page.get_by_role("button", name="Clear my mark").click()
+            confirm_clear(page)
             expect(page.get_by_role("button", name="Mark this room")).to_be_visible()
             assert marked() == set()
 
@@ -3743,6 +3767,7 @@ def test_accepted_participant_removal_survives_failed_followup_read(browser_peer
             expect(page.get_by_role("heading", name="Removal boundary")).to_be_visible()
             room_id = decode_fragment_id(page.url)
             page.get_by_role("button", name="Remove Sam Family from this room").click()
+            confirm_remove(page)
             expect(page.locator("#main-content").get_by_text("Sam Family no longer has access on this home; remote removal requires acknowledgement. Latest room status is unavailable.")).to_be_visible()
             expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
             with pytest.raises(Problem) as denied:
@@ -3994,6 +4019,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             expect(page.get_by_text('Share chat · Delivered')).to_be_visible()
             page.get_by_label('Message', exact=True).fill('Unsent room text')
             page.get_by_role('button', name='Remove Casey Delivery from this room').click()
+            confirm_remove(page)
             expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's peer to acknowledge withdrawal.", exact=False)).to_be_visible()
             assert remote.list_rooms(recipient)
             page.get_by_role('button', name='Check delivery now').click()
@@ -7856,6 +7882,467 @@ def test_moving_to_another_room_opens_that_room_at_its_newest(browser_peer):
             page.locator(".split-list .item", has_text="Second room").click()  # a real click, from the end of the first
             expect(page.locator(".messages .message p").last).to_have_text("Second room 119")
             assert page.evaluate(NEWEST_ON_SCREEN)
+
+
+KEPT = "Words kept for Room B"
+
+
+def _two_rooms_one_draft(browser_peer, page, *, rooms=2):
+    """Room A and Room B, both long, with words kept in Room B's box, and Room A on screen. With `rooms`, more rooms
+    above them make the list long, as a phone shows it above the room."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    made = {}
+    for title in ["Room B", "Room A", *[f"Room {n:02}" for n in range(rooms - 2)]]:
+        made[title] = store.create_room(patient, title, [users["family"]["id"]])
+        if title in ("Room A", "Room B"):
+            for i in range(30):
+                store.send_message(patient, made[title]["id"], f"{title}-{i}", f"{title} {i}")
+    a, b = made["Room A"], made["Room B"]
+    page.goto(f"{base}/#chats/{b['id']}")
+    page.reload()
+    expect(page.locator(".messages .message p").last).to_have_text("Room B 29")
+    page.get_by_role("textbox", name="Message").fill(KEPT)
+    send = page.get_by_role("button", name="Send message").bounding_box()  # where Room B's Send sits once it's open
+    page.goto(f"{base}/#chats/{a['id']}")
+    page.reload()
+    expect(page.locator(".messages .message p").last).to_have_text("Room A 29")
+    watch_reads(page)  # after the reloads, whose reads a reload drops unfinished
+    return store, patient, a, b, (send["x"] + send["width"] / 2, send["y"] + send["height"] / 2)
+
+
+def _drawn(page, room):
+    _until(page, f"document.querySelector('#message-form')?.dataset.room === {json.dumps(room['id'])}")
+
+
+def _sent(store, patient, room, words, timeout_s=8):
+    """Whether the words reached the room, read from the store: a reread already out can draw the room without them."""
+    deadline = time.monotonic() + timeout_s
+    while words not in [m["body"] for m in store.get_room(patient, room["id"])["messages"]]:
+        assert time.monotonic() < deadline, f"never sent: {words}"
+        time.sleep(0.05)
+
+
+SEND = "#message-form button[type=submit]"
+
+
+def _row(room):
+    return f'.split-list .item[data-id="{room["id"]}"]'
+
+
+def _down(page, selector, at=None, button=0, primary=True):
+    """A press begun on what the selector finds now, at `at` (x, y) or near its corner, with no click yet: the first
+    finger's or the mouse's, unless `primary` is False."""
+    page.evaluate("""([selector, at, button, isPrimary]) => { const node = document.querySelector(selector), box = node.getBoundingClientRect();
+        const [x, y] = at || [box.x + 4, box.y + 4];
+        node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary, clientX: x, clientY: y, button })); }""", [selector, at, button, primary])
+
+
+def _click(page, selector):
+    """A click with a mouse's detail and no pointerdown of its own, on what the selector finds as it fires: a handle
+    taken earlier can be a node the route's redraw has already replaced, whose form no longer submits."""
+    page.evaluate("(selector) => document.querySelector(selector).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))", selector)
+
+
+def _press(page, selector, at):
+    """A press at `at` (x, y, or the "center" of what the selector finds) and its click there, in one step of the page;
+    returns how long after the page last moved the press began, in ms. Both go to what the selector finds, wherever it
+    is on the page: `at` is only the numbers the guard compares, not where a finger would hit."""
+    return page.evaluate("""([selector, at]) => { const node = document.querySelector(selector), box = node.getBoundingClientRect();
+        const [x, y] = at === "center" ? [box.x + box.width / 2, box.y + box.height / 2] : at;
+        const down = new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, clientX: x, clientY: y, button: 0 });
+        node.dispatchEvent(down);
+        node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        return down.timeStamp - roomMovedAt; }""", [selector, at])
+
+
+@pytest.mark.parametrize("by", ["mouse", "touch"])
+def test_a_double_tap_on_a_room_row_doesnt_send_its_kept_words(browser_peer, by):
+    """Tardis's finding (2026-11-07): on a phone, the second of two quick taps on a room's row lands on that room's Send
+    once it has drawn and moved to its newest, which sent the words kept in its box. The second press is dropped, and a
+    third right after it too (the reader's M1: a dropped press had become the press before the next)."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            store, patient, _a, b, (x, y) = _two_rooms_one_draft(browser_peer, page, rooms=12)
+            row = page.locator(".split-list .item", has_text="Room B")
+            row_box = row.bounding_box()
+            page.evaluate(f"scrollTo(0, scrollY + {row_box['y'] + row_box['height'] / 2 - y})")  # Room B's row under the finger
+            assert page.evaluate(f"document.elementFromPoint({x}, {y}).closest('.item')?.textContent.includes('Room B')")
+            if by == "touch":
+                cdp = page.context.new_cdp_session(page)
+                cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
+
+                def tap():
+                    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+                    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            else:
+                def tap():
+                    page.mouse.click(x, y)
+            page.evaluate("window.pressesSinceMove = []; addEventListener('click', (event) => pressesSinceMove.push(event.timeStamp - roomMovedAt), true)")
+            # The route's own redraw after the new address replaces every node, and a mouse press it lands inside ends in no
+            # click (the re-check's Should 1): its reads wait until the taps are done.
+            held, news = [], f"**/api/chats/{b['id']}?since=*"
+            page.route(news, lambda route: held.append(route))
+            tap()
+            _drawn(page, b)
+            tap()
+            tap()
+            page.wait_for_timeout(600)
+            assert page.evaluate(f"document.elementFromPoint({x}, {y}).textContent") == "Send message"  # where the presses landed
+            late = page.evaluate("pressesSinceMove")[1:]
+            assert len(late) == 2 and all(0 <= ms < 400 for ms in late), late  # both inside the window, so both were judged
+            assert page.get_by_role("textbox", name="Message").input_value() == KEPT
+            assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            assert held  # the hold caught the route's read: if that read moved, this test would flake again unseen
+            for route in held:
+                route.continue_()
+            page.unroute(news)
+
+
+def test_a_press_aimed_at_the_new_rooms_send_still_sends(browser_peer):
+    """Only a press at the spot of the one before it is dropped: a press on Send right after the room draws, at another
+    spot, sends, and so does a click with no press of its own, as an accessibility tool sends one."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            page.locator(".split-list .item", has_text="Room B").click()
+            _drawn(page, b)
+            assert _press(page, SEND, "center") < 400  # inside the window, at another spot than the row's
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # the send's own redraw is done
+            page.locator(".split-list .item", has_text="Room A").click()
+            _drawn(page, a)
+            reads_settled(page)  # the route's own redraw after the new address would take the words typed before it
+            page.get_by_role("textbox", name="Message").fill("Sent with no press")
+            page.locator(".split-list .item", has_text="Room B").click()
+            _drawn(page, b)
+            page.locator(".split-list .item", has_text="Room A").click()
+            _drawn(page, a)
+            _click(page, SEND)  # at once, and the row's press is behind it
+            _sent(store, patient, a, "Sent with no press")
+
+
+def test_a_press_begun_before_the_room_drew_doesnt_land_on_it(browser_peer):
+    """A touch browser fires a tap's click where the finger lifts, after the next room drew under it. Emulated in that
+    order: a press begun on Room B's row and ending on its Send sends nothing, and one ending on Remove removes nobody (the
+    reader's S1: only stopping the event keeps a data-action button's press from its handler). One ending on another
+    room's row, outside the room, opens that room. A key press while a press is held, and a press begun and ended on Send
+    with the page moving itself between, each send."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            family = browser_peer["users"]["family"]["id"]
+            _down(page, _row(b))
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            _click(page, SEND)
+            page.wait_for_timeout(600)
+            box = page.get_by_role("textbox", name="Message")
+            assert box.input_value() == KEPT
+            assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            _down(page, _row(a))
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")
+            _click(page, '[data-action="remove-participant"]')
+            page.wait_for_timeout(600)
+            expect(page.locator(".room-ask")).to_have_count(0)  # the press reached nothing: Remove would have asked
+            assert family in store.get_room(patient, b["id"])["member_ids"]
+            _down(page, SEND)
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")
+            _click(page, _row(a))  # the room list isn't the room
+            _drawn(page, a)
+            _down(page, _row(b))
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            reads_settled(page)  # the route's own redraw after the new address would take the focus; the held press stays
+            page.get_by_role("button", name="Send message").focus()
+            page.keyboard.press("Enter")  # its click has detail 0, which no press has
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done: the press and click meet one Send
+            box.fill("Begun and ended on Send")
+            _down(page, SEND)
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")  # an arrival's follow, mid-press
+            assert page.evaluate("performance.now() - roomMovedAt < 400")
+            _click(page, SEND)
+            _sent(store, patient, b, "Begun and ended on Send")
+
+
+def test_a_same_spot_press_counts_only_inside_the_window(browser_peer):
+    """The reader's N1: a press at the spot of one begun before the move is dropped within 400 ms of it and sends after,
+    and an arrival that the open room follows is a move. A second press of the same Send at the spot isn't dropped."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, _a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            page.locator(".split-list .item", has_text="Room B").click()
+            _drawn(page, b)
+            reads_settled(page)  # a refresh still out would bring the arrival in a redraw, which isn't a move
+            spot = [200, 300]
+
+            def a_press_then_the_room_moves():
+                _down(page, "h2", spot)
+                _click(page, "h2")  # not a control, so it's kept as the press before
+                before = page.evaluate("roomMovedAt")
+                _someone_says(browser_peer, b, f"arrival {before}", who="family")
+                _ask_soon(page)
+                _until(page, f"roomMovedAt > {before}")  # the arrival moved the room
+            a_press_then_the_room_moves()
+            assert _press(page, SEND, spot) < 400
+            page.wait_for_timeout(600)
+            assert page.get_by_role("textbox", name="Message").input_value() == KEPT
+            assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            a_press_then_the_room_moves()
+            page.wait_for_timeout(450)
+            assert _press(page, SEND, spot) >= 400
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done
+            page.get_by_role("textbox", name="Message").fill("Send again, after an arrival")  # no press: the one before is Send's
+            before = page.evaluate("roomMovedAt")
+            _someone_says(browser_peer, b, "another arrival", who="family")
+            _ask_soon(page)
+            _until(page, f"roomMovedAt > {before}")
+            assert _press(page, SEND, spot) < 400  # the re-check's Nit 2: the same control pressed again, though a redraw replaced it
+            _sent(store, patient, b, "Send again, after an arrival")
+
+
+@pytest.mark.parametrize("ending", ["right button", "pointercancel", "contextmenu"])
+def test_a_press_that_ends_in_no_click_leaves_none_behind(browser_peer, ending):
+    """The reader's N3: a right or middle press, a touch a scroll took and a long press's menu end in no click, so the
+    next click with no press of its own isn't measured against them."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, _a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            _down(page, _row(b), button=2 if ending == "right button" else 0)
+            event = {"pointercancel": "new PointerEvent('pointercancel', { bubbles: true, isPrimary: true })",
+                     "contextmenu": "new MouseEvent('contextmenu', { bubbles: true, cancelable: true })"}.get(ending)
+            if event:
+                page.evaluate(f"document.querySelector({json.dumps(_row(b))}).dispatchEvent({event})")
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            _click(page, SEND)
+            _sent(store, patient, b, KEPT)
+
+
+def test_a_press_that_landed_as_the_room_drew_and_a_second_finger_are_dropped(browser_peer):
+    """The re-check's Must 1: a press that lands while the next room draws is handled only after the draw, on what
+    replaced what it landed on, so it looks begun and ended on the new room's Send. Its event is made before the draw, as
+    the browser stamps it, and dispatched after: it sends nothing. Its Nit 3: a second finger's press doesn't stand in for
+    the first finger's, begun on a row, and a second finger's cancel doesn't end it."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            box = page.get_by_role("textbox", name="Message")
+
+            def nothing_sent():
+                page.wait_for_timeout(600)
+                assert box.input_value() == KEPT
+                assert KEPT not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+
+            def open_(room):
+                page.evaluate(f"openChat({json.dumps(room['id'])})")
+                _drawn(page, room)
+            page.evaluate("window.earlyPress = new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, clientX: 300, clientY: 300, button: 0 })")
+            open_(b)
+            page.evaluate(f"document.querySelector({json.dumps(SEND)}).dispatchEvent(earlyPress)")
+            _click(page, SEND)
+            nothing_sent()
+            open_(a)
+            _down(page, _row(b))
+            open_(b)
+            _down(page, SEND, primary=False)
+            _click(page, SEND)
+            nothing_sent()
+            open_(a)
+            _down(page, _row(b))
+            page.evaluate("document.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, isPrimary: false }))")
+            open_(b)
+            _click(page, SEND)
+            nothing_sent()
+            open_(a)  # the second re-check's Nit 1: a later move that replaces no node, between its handling and its click
+            page.evaluate("window.earlyPress = new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, clientX: 300, clientY: 300, button: 0 })")
+            open_(b)
+            page.evaluate(f"""() => {{ document.querySelector({json.dumps(SEND)}).dispatchEvent(earlyPress);
+                movingTheRoom(() => scrollBy(0, -40));
+                document.querySelector({json.dumps(SEND)}).dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, detail: 1 }})); }}""")
+            nothing_sent()
+
+
+def test_a_second_press_of_a_control_counts_only_on_the_drawing_it_was_made_on(browser_peer):
+    """The second re-check's Should 1: a press of Remove for someone in Room A, then Room B opened with no pointer press (a
+    key's Enter on its row, or Back), then a hurried press at the same spot on Room B's Remove for the same person removes
+    nobody; and Room B's Send, pressed, left and drawn again with no pointer press, doesn't send what's left in its box. On
+    one drawing, a press of Remove for one person and then, after a move, a hurried press at its spot on Remove for another
+    removes nobody: the same action on another person isn't the same control. Remove asks first, so a press that got
+    through shows its ask, and one that was dropped shows none."""
+    users = browser_peer["users"]
+    patient, family, doctor = users["patient"]["id"], users["family"]["id"], users["doctor"]["id"]
+    c = browser_peer["app"].state.store.create_room(patient, "Room C", [family, doctor])
+    for i in range(30):
+        browser_peer["app"].state.store.send_message(patient, c["id"], f"c-{i}", f"Room C {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            store, patient, a, b, _ = _two_rooms_one_draft(browser_peer, page)
+            spot, remove = [200, 300], f'[data-action="remove-participant"][data-id="{family}"]'
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, remove, spot) >= 400  # an ordinary press, long after any move
+            expect(page.locator(".room-ask")).to_have_count(1)  # it got through, and asks
+            page.evaluate(f"openChat({json.dumps(b['id'])})")  # no pointer press
+            _drawn(page, b)
+            assert _press(page, remove, spot) < 400
+            page.wait_for_timeout(600)
+            expect(page.locator(".room-ask")).to_have_count(0)  # dropped: Room A's ask stayed with Room A, and none opened
+            assert family in store.get_room(patient, b["id"])["member_ids"]
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, SEND, spot) >= 400
+            _sent(store, patient, b, KEPT)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done
+            page.get_by_role("textbox", name="Message").fill("Left in the box")
+            page.evaluate(f"openChat({json.dumps(a['id'])})")
+            _drawn(page, a)
+            reads_settled(page)
+            page.evaluate(f"openChat({json.dumps(b['id'])})")
+            _drawn(page, b)
+            assert _press(page, SEND, spot) < 400
+            page.wait_for_timeout(600)
+            assert "Left in the box" not in [m["body"] for m in store.get_room(patient, b["id"])["messages"]]
+            page.evaluate(f"openChat({json.dumps(c['id'])})")
+            _drawn(page, c)
+            reads_settled(page)
+            page.wait_for_timeout(450)
+            assert _press(page, remove, spot) >= 400
+            expect(page.get_by_role("group", name="Remove Sam Family from this room?")).to_be_visible()
+            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")
+            assert _press(page, f'[data-action="remove-participant"][data-id="{doctor}"]', spot) < 400
+            page.wait_for_timeout(600)
+            expect(page.get_by_role("group", name="Remove Sam Family from this room?")).to_be_visible()  # dropped: the ask didn't move to the other person
+            assert {family, doctor} <= set(store.get_room(patient, c["id"])["member_ids"])
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 960}, {"width": 390, "height": 844}], ids=["desktop", "phone"])
+def test_remove_and_clear_my_mark_ask_first_in_place(browser_peer, viewport):
+    """Board fix:room-acts-ask-first: Remove and Clear my mark act only after their ask's Yes. The question takes the
+    button's place, so a hurried double click there lands on words, at desktop and phone widths; Cancel is focused, Enter
+    on it is the safe choice, and it gives the focus back. An ask doesn't follow its room to another drawing, by another
+    room or another page, and after Yes the focus stays in the room, not at the page's top."""
+    users = browser_peer["users"]
+    store, base = browser_peer["app"].state.store, browser_peer["base_url"]
+    patient, family, doctor = users["patient"]["id"], users["family"]["id"], users["doctor"]["id"]
+    x = store.create_room(patient, "Room X", [family, doctor])
+    store.create_room(patient, "Room Y", [family])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport=viewport) as (page, _):
+            page.goto(f"{base}/#chats/{x['id']}")
+            page.reload()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            remove = page.get_by_role("button", name="Remove Sam Family from this room")
+            ask = page.get_by_role("group", name="Remove Sam Family from this room?")
+            remove.click()
+            expect(ask).to_have_accessible_description(re.compile("Their access here stops at once"))
+            expect(ask.get_by_role("button", name="Cancel")).to_be_focused()  # the safe choice, not the one under the pointer
+            page.keyboard.press("Enter")
+            expect(ask).to_have_count(0)
+            expect(remove).to_be_focused()
+            double_click_apart(page, remove)  # the second press lands where Remove was
+            page.wait_for_timeout(400)
+            expect(ask).to_be_visible()
+            assert family in store.get_room(patient, x["id"])["member_ids"]
+            page.get_by_role("button", name="Room Y").click()
+            expect(page.get_by_role("heading", name="Room Y")).to_be_visible()
+            page.get_by_role("button", name="Room X").click()
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            expect(ask).to_have_count(0)  # another room drew between
+            remove.click()
+            expect(ask).to_be_visible()
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Room X")).to_have_count(0)
+            page.goto(f"{base}/#chats/{x['id']}")
+            expect(page.get_by_role("heading", name="Room X")).to_be_visible()
+            expect(ask).to_have_count(0)  # another page drew between
+            remove.click()
+            confirm_remove(page)
+            expect(remove).to_have_count(0)
+            assert family not in store.get_room(patient, x["id"])["member_ids"]
+            expect(page.get_by_role("button", name="Remove Dr. Morgan from this room")).to_be_focused()  # the next one, not the top
+            page.get_by_role("button", name="Mark this room").click()
+            clear = page.get_by_role("button", name="Clear my mark")
+            mark_ask = page.get_by_role("group", name="Clear your mark on this room?")
+            expect(clear).to_be_visible()
+            double_click_apart(page, clear)
+            page.wait_for_timeout(400)
+            expect(mark_ask).to_have_accessible_description(re.compile(
+                "a member's connected app that reads all their rooms, or was given this one before it was marked, can read it"))
+            assert read_room(page, x).get("cloud")
+            mark_ask.get_by_role("button", name="Cancel").click()
+            expect(mark_ask).to_have_count(0)
+            expect(clear).to_be_focused()
+            clear.click()
+            confirm_clear(page)
+            keep = page.get_by_role("button", name="Mark this room")
+            expect(keep).to_be_focused()
+            assert not read_room(page, x).get("cloud")
+
+
+def test_an_ask_about_what_is_gone_goes_with_it(browser_peer):
+    """The reader's S4: an ask for a mark cleared in another tab, or for someone removed there, closes at the next draw,
+    so marking the room again doesn't bring back a "Yes, clear my mark" nobody just asked for."""
+    users = browser_peer["users"]
+    store, base = browser_peer["app"].state.store, browser_peer["base_url"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    x = store.create_room(patient, "Room X", [family, users["doctor"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{x['id']}")
+            page.reload()
+            page.get_by_role("button", name="Mark this room").click()
+            page.get_by_role("button", name="Clear my mark").click()
+            expect(page.get_by_role("group", name="Clear your mark on this room?")).to_be_visible()
+            page.evaluate("id => api(`/api/chats/${id}/cloud`, { method: 'DELETE', json: {} })", x["id"])  # another tab
+            page.evaluate("refresh()")
+            expect(page.get_by_role("button", name="Mark this room")).to_be_visible()
+            assert page.evaluate("state.roomAsk") is None
+            page.get_by_role("button", name="Mark this room").click()
+            expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
+            expect(page.locator(".room-ask")).to_have_count(0)
+            page.get_by_role("button", name="Remove Sam Family from this room").click()
+            expect(page.get_by_role("group", name="Remove Sam Family from this room?")).to_be_visible()
+            store.remove_participant(patient, x["id"], family)  # another tab
+            page.evaluate("refresh()")
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
+            expect(page.locator(".room-ask")).to_have_count(0)
+            assert page.evaluate("state.roomAsk") is None
+
+
+def test_remove_names_the_earlier_rooms_it_reaches(browser_peer):
+    """The reader's S2: a removal also takes the person out of the earlier rooms of the chain they're still in, so the ask
+    says so before the act, as the station's notice does after it. N2: once Yes is pressed, the ask's place says
+    "Removing …" until the answer, so the button doesn't come back as though it hadn't taken."""
+    users = browser_peer["users"]
+    store, base = browser_peer["app"].state.store, browser_peer["base_url"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    first = store.create_room(patient, "Chain", [family])
+    second = store.add_participants(patient, first["id"], [users["doctor"]["id"]])
+    third = store.add_participants(patient, second["id"], [users["organizer"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{third['id']}")
+            page.reload()
+            page.get_by_role("button", name="Remove Sam Family from this room").click()
+            ask = page.get_by_role("group", name="Remove Sam Family from this room and the 2 rooms before it?")
+            expect(ask).to_be_visible()
+            page.get_by_role("button", name="Cancel").click()
+            page.get_by_role("button", name="Remove Taylor Organizer from this room").click()
+            expect(page.get_by_role("group", name="Remove Taylor Organizer from this room?")).to_be_visible()  # in this room only
+            page.get_by_role("button", name="Cancel").click()
+            page.get_by_role("button", name="Remove Sam Family from this room").click()
+            removal = held_routes(page, f"**/api/chats/{third['id']}/participants/**")
+            page.get_by_role("button", name="Yes, remove Sam Family").click()
+            wait_for_hold(page, removal)
+            expect(page.get_by_role("status").filter(has_text="Removing Sam Family…")).to_be_focused()  # its place, and the focus, hold until the answer
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
+            release(removal)
+            expect(page.locator(".room-ask")).to_have_count(0)
+            for room in (first, second, third):
+                assert family not in store.get_room(patient, room["id"])["member_ids"]
 
 
 def test_a_refresh_appends_a_new_message_once(browser_peer):

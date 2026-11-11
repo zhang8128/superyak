@@ -29,7 +29,13 @@ jobs:
       # they fail here as in any fresh worktree. They're the imprint path end to end, so they run, not skip.
       - run: make setup-engram
       - run: uv run --locked --project peer playwright install --with-deps chromium
-      - run: make check-peer
+      # The suite's temp in RAM: on Tardis at 8eff27e0 it took 3 h 13 min with its temp on disk, and reached 82% in about 29 min
+      # with it on tmpfs, so there it waits on disk syncs. pytest keeps every test's dir until the session ends, which
+      # filled the Pi's 8 GB /dev/shm and failed the imprint route's 4 GiB free floor, so only a failed test's dir is kept.
+      - run: mkdir -p "$TMPDIR" && df -h /dev/shm && make check-peer && df -h /dev/shm
+        env:
+          TMPDIR: /dev/shm/peer-tmp
+          PYTEST_ADDOPTS: --basetemp=/dev/shm/pytest-peer -o tmp_path_retention_policy=failed
 
   atlas:
     name: Atlas workbench tests and offline demo

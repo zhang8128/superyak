@@ -196,6 +196,10 @@ once for each claimed item). Its long form:
   fixed live yet goes by bundle instead: see "Before any push".
 - While a reader I wait on is busy, I take work the reader won't have to read, not more for that queue. A hold
   isn't idle (Tardis, 2026-10-28).
+- A refusal by a permission check, the classifier or a person is its owner's decision: never carry the same act
+  through another ship, tool, script or wrapper. A fault (a timeout, a missing file) isn't a refusal, and another path
+  around it is fair (Tardis, 2026-11-11: it offered to have Rio Grande post a GitHub comment its own session's
+  permission check had refused, then withdrew it; "who refused" and the fault sentence are Rio Grande's).
 - Before taking a claimed or lapsed item, look for its branch on origin and in the room, and build on what's there
   (Serenity, 2026-10-28: a README claim that "lapsed with nothing done" had four drafts and two cold walks on its
   branch, and a parallel draft duplicated them).

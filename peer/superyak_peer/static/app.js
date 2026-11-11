@@ -178,7 +178,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -788,7 +788,7 @@ function showArrivals(answer) {
   if (news) announce(news === 1 ? "1 new message" : `${news} new messages`);
   if (following) {
     const { end, start } = newestMessagePlace();
-    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+    if (Math.min(end, start) > 0) movingTheRoom(() => window.scrollBy(0, Math.min(end, start)));
   } else if (news) {
     state.roomUnseen = answer.id;
     const button = document.querySelector('[data-action="new-messages"]');
@@ -1172,13 +1172,52 @@ function carryHelp(room) {
   return `<p class="meta carry-help">${CARRY_HELP}</p>${list}`;
 }
 
+// Removing someone can't be undone, and nor can what reads a room while it's unmarked, so Remove and Clear my mark each
+// ask first, in place: the question takes the button's place, so a hurried second press lands on words, and the safe
+// choice is focused. An ask belongs to one drawing of its room and to what it asks about: opening the room again, or the
+// person or the mark being gone, starts without it. Once Yes is pressed, its place says what's happening until the answer.
+function roomAskOnScreen(kind) { return state.room ? roomAskFor(state.room, kind) : null; }
+function roomAskFor(room, kind) {
+  const ask = state.roomAsk;
+  return ask?.roomId === room.id && ask.kind === kind ? ask : null;
+}
+// The rooms this one continues that still have this member, as the station finds them (_earlier_with): a removal takes
+// them out of those too. It walks only the rooms this home lists, so after the owner has left an earlier room it can
+// count fewer than the station removes from: the ask then understates, never overstates.
+function earlierRoomsWith(room, memberId) {
+  const known = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  let count = 0, key = room.linked_room_id;
+  const seen = new Set();
+  while (key && !seen.has(key) && known.has(key)) {
+    seen.add(key);
+    const earlier = known.get(key);
+    if ((earlier.owner_id ?? room.owner_id) === room.owner_id && (earlier.member_ids || []).includes(memberId)) count += 1;
+    key = earlier.linked_room_id;
+  }
+  return count;
+}
+function roomAskMarkup(question, words, cancel, yes) {
+  return `<div class="board-ask room-ask" role="group" aria-label="${question}" aria-describedby="room-ask-words"><p id="room-ask-words">${question} ${words}</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">${cancel}</button>${yes}</div></div>`;
+}
+function removeControl(room, id) {
+  const name = escapeHtml(participantName(id)), ask = roomAskFor(room, "remove");
+  if (ask?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
+  if (ask.pending) return `<p class="meta room-ask" role="status" tabindex="-1">Removing ${name}…</p>`;
+  const earlier = earlierRoomsWith(room, id);
+  const where = earlier === 1 ? "this room and the room before it" : earlier ? `this room and the ${earlier} rooms before it` : "this room";
+  return roomAskMarkup(`Remove ${name} from ${where}?`, "Their access here stops at once, and copies they have can't be erased.", "Cancel",
+    `<button class="button danger" type="button" data-action="remove-participant-confirm" data-id="${escapeHtml(id)}" aria-label="Yes, remove ${name}">Yes, remove</button>`);
+}
+
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
+  const ask = state.roomAsk, removable = (id) => canManage && !replaced && !isSelf(id) && (room.member_ids || []).includes(id);
+  if (ask && (ask.roomId !== room.id || roomDrawn !== room.id || (ask.kind === "clear" ? !room.cloud?.mine || room.origin : !removable(ask.id)))) state.roomAsk = null;
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
     ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1444,7 +1483,12 @@ function cloudControl(room, replaced) {
   const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading or changing it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
   if (room.cloud?.mine) {
     const yoursEarlier = earlierRoomsWithMe(room).some((item) => item.cloud?.mine) ? " Your marks on its earlier rooms stay." : "";
-    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+    const ask = roomAskFor(room, "clear");
+    const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
+      : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
+      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
+        "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
+    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
@@ -2148,7 +2192,7 @@ function render() {
   if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
   drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
-  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  if (drawing && drawing !== roomDrawn) { roomMovedAt = roomDrawnAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
@@ -2162,8 +2206,63 @@ function render() {
 function showNewestMessage() {
   seenNewMessages();
   const place = newestMessagePlace();
-  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+  if (place) movingTheRoom(() => window.scrollTo(0, window.scrollY + Math.min(place.end, place.start)));
 }
+
+// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest,
+// where the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there
+// before, would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press
+// isn't the press before the next one. A press that landed while the room drew is handled only after, on what replaced
+// what it landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on
+// the control it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on
+// the same drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its
+// node): that's someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it
+// lands isn't told from one meant for the new room, and nor is a redraw in place moving the next button under a second
+// press; Remove and Clear my mark ask first, so such a press only opens an ask. Each click takes
+// the first finger's or the mouse's primary press it began with, and a press a long press's menu or a scroll ended
+// leaves none. Each kind of pointer has its own first one, so a palm's touch cancelled during a pen's press clears the
+// pen's: that only ever lets a click through. A mouse press held while the room redraws ends in no click and stays, but
+// the clicks that come with no press of their own (a key's, element.click()) have detail 0 and are never measured.
+const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
+let roomMovedAt = -Infinity, roomDrawnAt = -Infinity, pressDown = null, lastPress = null;
+function movingTheRoom(scroll) {
+  const before = window.scrollY;
+  scroll();
+  if (window.scrollY !== before) roomMovedAt = performance.now();
+}
+// What a control is across the redraws that replace its node: the box's Send, or a button by its action and what that
+// acts on. It's compared only within one drawing of a room, so Send needs no room.
+function controlKey(control) {
+  if (!control) return null;
+  if (control.matches('#message-form button[type="submit"]')) return "send";
+  const action = control.dataset?.action;
+  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? control.dataset.revision ?? ""}` : null;
+}
+function pressTheRoomMoved(event, press, before) {
+  if (event.detail === 0 || !press) return false;
+  const control = event.target.closest?.(PRESSABLE);
+  if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
+  if (press.at < roomMovedAt) return press.found || control !== press.control;  // begun on what was here before
+  if (press.at - roomMovedAt >= MOVED_PRESS_MS || !before || before.at >= roomMovedAt) return false;
+  const key = controlKey(control);
+  if (key && before.at > roomDrawnAt && key === controlKey(before.control)) return false;  // pressed again on this drawing of the room
+  return Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
+}
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it
+  pressDown = event.button !== 0 ? null : {
+    x: event.clientX, y: event.clientY, at: event.timeStamp, found: event.timeStamp < roomMovedAt, control: event.target.closest?.(PRESSABLE) || null,
+  };
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
+document.addEventListener("contextmenu", () => { pressDown = null; }, true);  // a long press's menu: no click comes
+document.addEventListener("click", (event) => {
+  const press = pressDown, before = lastPress;
+  pressDown = null;
+  if (!pressTheRoomMoved(event, press, before)) { if (press) lastPress = press; return; }
+  event.preventDefault();  // a submit button's press sends nothing, and a box keeps its tick
+  event.stopImmediatePropagation();  // and a data-action button's never reaches the handler below
+}, true);
 
 // How far down the page would have to move to show the end of the messages with the composer under them, and to show
 // the last message's start.
@@ -3205,9 +3304,36 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (action === "app-receipts" || action === "app-receipts-earlier") await loadReceipts(target.dataset.id, action === "app-receipts-earlier");
-  if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if ((action === "remove-participant" || action === "cloud-clear") && state.room) {
+    state.roomAsk = { roomId: state.room.id, kind: action === "cloud-clear" ? "clear" : "remove", id: target.dataset.id };
+    render();
+    document.querySelector('.room-ask [data-action="room-ask-cancel"]')?.focus();  // the safe choice, not the one under the pointer
+  }
+  if (action === "room-ask-cancel" && state.roomAsk) {
+    const ask = state.roomAsk;
+    state.roomAsk = null;
+    render();
+    document.querySelector(ask.kind === "clear" ? '[data-action="cloud-clear"]' : `[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`)?.focus();
+  }
+  if (action === "remove-participant-confirm" && roomAskOnScreen("remove")?.id === target.dataset.id) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();  // the button that had it is gone until the answer
+    try { await removeParticipant(target.dataset.id); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    // not the page's top: the next one to remove, or the way to change who's here, or the button again if it failed
+    const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
+    if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
+  }
   if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
-  if (action === "cloud-clear" && state.room) await clearMark(state.room);
+  if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();
+    try { await clearMark(state.room); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    if (state.room?.id === roomId) app.querySelector('[data-action="cloud-mark"], [data-action="cloud-clear"]')?.focus();
+  }
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
