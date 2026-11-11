@@ -7820,6 +7820,8 @@ def test_the_consent_page_says_when_a_request_has_expired_and_offers_no_form(con
     {'status': 200, 'content_type': 'text/html', 'body': '<p>Sign in to the guest Wi-Fi</p>'},  # a portal's page
     {'status': 200, 'content_type': 'application/json', 'body': '{}'},  # JSON, but no consent view
     {'status': 200, 'content_type': 'application/json', 'body': '[]'},
+    # a consent view's shape, but not served as JSON: only the home's JSON answer counts (the reader's nit on 9b72e5d2)
+    {'status': 200, 'content_type': 'text/plain', 'body': '{"app": "Claude", "pending": "p", "csrf": "c", "rooms": []}'},
 ])
 def test_a_consent_sign_in_answered_by_something_else_says_the_connection_was_lost(connector_home, answer):
     """fix:consent-page-reads-any-200-as-the-home. consent.js read any 200 as the home's consent view, so a portal's page
