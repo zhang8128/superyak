@@ -7816,6 +7816,32 @@ def test_the_consent_page_says_when_a_request_has_expired_and_offers_no_form(con
     assert landed == []
 
 
+@pytest.mark.parametrize('answer', [
+    {'status': 200, 'content_type': 'text/html', 'body': '<p>Sign in to the guest Wi-Fi</p>'},  # a portal's page
+    {'status': 200, 'content_type': 'application/json', 'body': '{}'},  # JSON, but no consent view
+    {'status': 200, 'content_type': 'application/json', 'body': '[]'},
+])
+def test_a_consent_sign_in_answered_by_something_else_says_the_connection_was_lost(connector_home, answer):
+    """fix:consent-page-reads-any-200-as-the-home. consent.js read any 200 as the home's consent view, so a portal's page
+    or a proxy's answer left "Signing in..." on screen, and the page threw. Only a JSON consent view opens it now; anything
+    else says the connection was lost and keeps the form, so the person can try again."""
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            start_connecting(page, home)
+            page.route(lambda url: url.startswith(CONSENT_ORIGIN + '/authorize/signin'), lambda route: route.fulfill(**answer))
+            page.get_by_label('Username', exact=True).fill('sam@example.org')
+            page.get_by_label('Password', exact=True).fill('long-password-sam')
+            page.get_by_role('button', name='Sign in').click()
+            expect(page.get_by_text('The connection to your home was lost. Try again.')).to_be_visible()
+            expect(page.get_by_role('button', name='Sign in')).to_be_visible()
+            expect(page.get_by_text('Signing in...')).to_have_count(0)
+            assert errors == []
+    assert landed == []
+
+
 def test_deny_on_the_consent_page_sends_access_denied(connector_home):
     from urllib.parse import parse_qs, urlsplit
     home, landed = connector_home, []
