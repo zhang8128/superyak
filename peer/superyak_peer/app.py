@@ -190,9 +190,9 @@ class PublicRoute:
             return await self.app(scope, receive, send)
         if not counting.on():
             return await self._call(scope, receive, send)
-        # public-route-bound plan, Task 0: what follows on this request, its workers included, is counted under it
-        route = dispatched(self.router, scope) if scope['type'] == 'http' else None
-        token = counting.request(getattr(route, 'path', None) or scope.get('path'), is_public(scope))
+        # public-route-bound plan, Task 0: what follows on this request, its workers included, is counted under it, by
+        # its route's path (never the request's own, which would make a bucket per path a client sends)
+        token = counting.request(getattr(dispatched(self.router, scope), 'path', None), is_public(scope))
         try:
             return await self._call(scope, receive, send)
         finally:

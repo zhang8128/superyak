@@ -1278,6 +1278,13 @@ def main(argv=None):
             uvicorn.run(create_door(args.data_dir), host=args.host, port=args.port, access_log=False,
                         timeout_graceful_shutdown=SHUTDOWN_GRACE)  # status polls carry ?secret=
         else:
+            # public-route-bound plan, Task 0: a measure's scratch serve counts its store work and writes it when it
+            # stops, by Ctrl-C or SIGTERM. First, so a refused switch has written nothing (--peer-tls, --sync).
+            measure = os.environ.get('SUPERYAK_MEASURE_COUNTS')
+            write_counts = None
+            if measure:
+                from .counting import start_measuring
+                write_counts = start_measuring(args.data_dir, measure)
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
                 ipv4_loopback = loopback and ipaddress.ip_address(args.host).version == 4
@@ -1318,20 +1325,31 @@ def main(argv=None):
             model_config = load_config(args.model_config)
             other = 8081 if args.port == 8080 else 8080
             refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
-            # public-route-bound plan, Task 0: a measure's scratch serve counts its store work and writes it at a clean exit
-            measure = os.environ.get('SUPERYAK_MEASURE_COUNTS')
-            write_counts = None
-            if measure:
-                from .counting import start_measuring
-                write_counts = start_measuring(args.data_dir, measure)
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
-                        proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
-                        timeout_graceful_shutdown=SHUTDOWN_GRACE)
             if write_counts is not None:
-                write_counts()
+                import signal
+
+                def stopped(signum, frame):
+                    raise SystemExit(128 + signum)
+                # uvicorn puts this handler back after its graceful shutdown and raises SIGTERM again (0.52.4
+                # server.py:333-340): with the default one the process dies there and the counts are lost
+                previous = signal.signal(signal.SIGTERM, stopped)
+            try:
+                uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
+                            proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
+                            timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            except SystemExit:  # SIGTERM, by the handler above; a crash writes nothing
+                if write_counts is not None:
+                    write_counts()
+                raise
+            else:  # Ctrl-C: uvicorn.run returns
+                if write_counts is not None:
+                    write_counts()
+            finally:
+                if write_counts is not None:
+                    signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
 

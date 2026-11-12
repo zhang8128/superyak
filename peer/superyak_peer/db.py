@@ -173,7 +173,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         (health's 3 s); without it the Store's rule holds (30 s, or `busy_until`). Refused inside reading()."""
         if self.in_reading():
             raise RuntimeError('a write inside reading(): a gate-free snapshot never writes')
-        with counting.counted('transaction'), self.dispatch_gate:
+        with counting.counted('transaction'), self.dispatch_gate:  # counted at entry, after the refusal, before the gate
             with self._transaction(wait) as db:
                 yield db
 
@@ -229,29 +229,31 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             raise RuntimeError('reading() inside reading(): one snapshot at a time')
         if self.dispatch_gate.held():
             raise RuntimeError('reading() inside the dispatch gate: a gated caller reads in its own transaction')
-        self._check_paths()
-        if self._journal == 'wal':
-            db = self._read_only_connection()
-            try:
-                wal = db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
-            except BaseException:
+        # Counted once here, after its refusals and before the gate, as transaction() is (public-route-bound Task 0)
+        with counting.counted('read'):
+            self._check_paths()
+            if self._journal == 'wal':
+                db = self._read_only_connection()
+                try:
+                    wal = db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+                except BaseException:
+                    db.close()
+                    raise
+                if wal:
+                    with self._snapshot(db):
+                        yield db
+                    return
                 db.close()
-                raise
-            if wal:
-                with self._snapshot(db), counting.counted('read'):
+                self._journal = None  # the store left WAL since this Store looked: read under the gate, and look again
+            with self.dispatch_gate:
+                db = self._read_only_connection()
+                try:
+                    self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]
+                except BaseException:
+                    db.close()
+                    raise
+                with self._snapshot(db):
                     yield db
-                return
-            db.close()
-            self._journal = None  # the store left WAL since this Store looked: read under the gate, and look again
-        with self.dispatch_gate:
-            db = self._read_only_connection()
-            try:
-                self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]
-            except BaseException:
-                db.close()
-                raise
-            with self._snapshot(db), counting.counted('read'):
-                yield db
 
     def _read_only_connection(self):
         db = sqlite3.connect(self.db_path, timeout=self._wait())
