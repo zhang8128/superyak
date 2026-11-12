@@ -243,6 +243,11 @@ def test_serve_never_mints_under_a_key_its_start_did_not_load(station):
     store.tag_keys = {**store.tag_keys, 'invitation': {'ffffffff': b'x' * 32}}
     with pytest.raises(RuntimeError, match='tag key changed under this serve'):
         store.invite(admin['id'], 3600)
+    _, asked = requested(app)  # serve's approval mints through the same check (the re-check's nit)
+    with pytest.raises(RuntimeError, match='tag key changed under this serve'):
+        store.decide_access_request(admin['id'], asked['id'], True)
+    with store.reading() as db:  # each refusal was inside its mint's transaction, so nothing was written
+        assert db.execute('SELECT count(*) FROM invitations').fetchone()[0] == 0
 
 
 def test_an_untagged_invitation_from_before_the_deploy_still_redeems_once(station):

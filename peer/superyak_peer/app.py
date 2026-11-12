@@ -504,10 +504,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return Response(page.body, media_type=page.content_type)
 
     @app.get('/api/health')
-    def health():
+    def health(request: Request):
         """Spec 2026-10-14 S6: one database read, no session, nothing but ok. A database error goes to the 500 handler
         above. It says only that the station is up: the main app is public through Tailscale Funnel by Andy's choice
-        (2026-10-14), so this route is public too and must never say more. The access-request door has no such route."""
+        (2026-10-14), so this route is public too and must never say more. The access-request door has no such route.
+        Public-route-bound Task 8: a public request reads nothing, so a flood of public health checks costs the store
+        nothing; it says only that serve answers. Over the tailnet it reads as before, so the sitting's check still
+        finds a store that can't be read."""
+        if is_public(request.scope):
+            return {'ok': True}
         with store.transaction() as db:
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
