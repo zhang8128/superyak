@@ -2673,6 +2673,38 @@ def test_an_early_room_read_is_taken_only_by_its_own_room(browser_peer):
         assert page.evaluate("location.hash") == f"#chats/{y['id']}"
 
 
+def test_an_early_room_read_is_never_taken_by_the_next_person(browser_peer):
+    """The re-check's probe on 74ca3c9d: a hash change while the boot's /api/home is out starts a second load inside the
+    boot's. If the session has ended there, sign-in shows, and the next person to sign in meets the first person's early
+    read. A doctor who is also in the room must read it afresh, never take the patient's refusal."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Room X", [users["doctor"]["id"]])
+    store.send_message(users["patient"]["id"], room["id"], "who-1", "The newest words in Room X.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, context):
+        page.goto("about:blank")
+        first = [True]
+
+        def first_page(route):
+            if first[0]:
+                first[0] = False
+                route.fulfill(status=401, json={"detail": "Sign in again."})
+            else:
+                route.continue_()
+        page.route(re.compile(rf"/api/chats/{room['id']}\?limit="), first_page)
+        held_home = held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + f"/#chats/{room['id']}")
+        wait_for_hold(page, held_home)
+        context.clear_cookies()
+        page.evaluate("location.hash = '#home'")
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+        page.evaluate("(address) => { location.hash = address; }", f"#chats/{room['id']}")
+        page.get_by_label("Username", exact=True).fill("doctor")
+        page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+        page.get_by_role("button", name="Sign in").click()
+        expect(page.get_by_text("The newest words in Room X.")).to_be_visible()
+        expect(page.get_by_text("Your session ended")).to_have_count(0)
+
+
 def test_a_home_that_ends_the_session_signs_in_again_whatever_fails_first(browser_peer):
     """The reader's nit b on ae06f99a: /api/ships now runs beside /api/home, so its quick failure must not hide the home's
     401. The ended session goes back to sign-in, as when /api/ships waited for the home."""
