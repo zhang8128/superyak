@@ -185,3 +185,27 @@ byte, p50 / p95:
   which is the asset's `?v=` and main's `app.js`.
 - A wrong `v` or no `v` answers `no-store`, and HEAD gives GET's headers. No answer sets a cookie, and `/` stays
   `no-store`.
+
+## A signed-in person opening a busy room, before and after train 1127, 2026-11-12, from Rio Grande
+
+Goal 2's other half: not the sign-in page, but a signed-in person's load drawing a busy room's newest message. Rio
+Grande timed it on a scratch home on the Pi (all hands 7c84a4bd and 69f0d9da), quoted here: one person, 20 rooms, one of
+3,000 messages, headless Chromium, 10 loads each. The added latency is Chromium's network emulation over **HTTP/1.1**,
+standing in for Funnel's roughly 185 ms more first byte than the tailnet (the sign-in rows above). It isn't a live
+person's browser through Funnel, and HTTP/2 there should save some round trips more.
+
+**Before, main e29b490e.** The load made about 7 round trips in a row: the page, its scripts, /api/local-demo, then
+/api/me, then the home's 5 reads, then a second wave of 5, then the room.
+
+| Added latency | Cold, newest message drawn, p50 / p95 | Warm p50 |
+|---|---|---|
+| 0 | 264 / 294 ms | 259 ms |
+| 100 ms | 971 / 1,037 ms | not taken |
+| 185 ms | 1,647 / 1,795 ms | 1,466 ms |
+
+**After, main f2aa2f29 (train 1127, signed-in-load-in-one-wave effdd119).** The reads go in one wave. At 185 ms: **1,264
+ms cold and 1,076 ms warm**, against 1,648 and 1,467.
+
+**What it shows:** about 4 round trips fewer than 7 would give, so the load is still over 600 ms at Funnel-like
+latency. Goal 2's measure for a signed-in person is the next live "after": a person opening a busy room on their own
+phone through Funnel.
