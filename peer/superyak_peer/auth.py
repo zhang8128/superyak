@@ -441,13 +441,16 @@ class Auth:
 
     def _spent(self, token):
         """Task 7b: this token can redeem nothing more. Untagged, it leaves serve's start-time set; tagged, it enters the
-        spent set until its exp. A Store outside serve has neither."""
-        hashed = token_hash(token)
+        spent set until its exp. Only a tag that checks under serve's own keys enters, with its exp held to the longest a
+        mint site gives: the tailnet's path runs redeem with no check before it, so a forged tag there (any shape, any
+        kid, any exp) would otherwise stay until a restart (the 7b re-check's M1). A Store outside serve has neither."""
+        hashed, now = token_hash(token), self.clock()
         if self.untagged is not None:
             self.untagged.discard(hashed)
-        tagged = tags.TAGGED.fullmatch(token)
-        if tagged and self.spent is not None:
-            self.spent.add(hashed, int(tagged['exp']), self.clock())
+        if self.spent is None or self.tag_keys is None:
+            return
+        if any(tags.check(label, self.tag_keys[label], token, now) for label in tags.LABELS):
+            self.spent.add(hashed, min(int(tags.TAGGED.fullmatch(token)['exp']), now + tags.LONGEST), now)
 
     def _redeem(self, token, username, name, password, label, none_live):
         with self.transaction() as db:

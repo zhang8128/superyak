@@ -6,7 +6,7 @@ import sqlite3
 import subprocess
 import time
 
-from .dispatch import DispatchGate, serve_lock
+from .dispatch import DispatchGate, ServeLockHeld, serve_lock
 
 NAMES = ('peer.sqlite3', 'peer.sqlite3-journal', 'peer.sqlite3-wal', 'peer.sqlite3-shm')
 MODES = ('wal', 'delete')
@@ -80,7 +80,7 @@ def switch_journal(data_dir, mode, *, active=None, retry_seconds=10.0, clock=tim
     # list missed (one run by hand) refuses it, and no serve starts until it ends
     try:
         held = serve_lock(data_dir)
-    except ValueError:
+    except ServeLockHeld:  # only this: a symlinked dir says so itself (Rio Grande's nit on Task 9)
         raise ValueError('A serve still runs on this data dir; stop it first. Nothing was changed') from None
     try:
         return _switch(database, data_dir, mode, retry_seconds, clock, sleep)

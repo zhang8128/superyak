@@ -286,3 +286,14 @@ def test_no_serve_starts_during_a_switch_and_the_lock_is_free_after(tmp_path, mo
     with pytest.raises(ValueError):
         switch_journal(store.data_dir, 'delete', active=none_active)
     os.close(serve_lock(store.data_dir))  # and when it fails
+
+
+def test_the_switch_names_any_other_lock_refusal_as_itself(tmp_path, monkeypatch):
+    """Rio Grande's nit on Task 9: only a held lock is "a serve still runs"; any other refusal says what it is."""
+    store = station(tmp_path)
+
+    def refused(data_dir):
+        raise ValueError('Symlinked state is not allowed')
+    monkeypatch.setattr(journal_mode, 'serve_lock', refused)
+    with pytest.raises(ValueError, match='^Symlinked state is not allowed$'):
+        switch_journal(store.data_dir, 'wal', active=none_active)

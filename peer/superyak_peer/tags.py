@@ -21,6 +21,7 @@ import secrets
 import threading
 
 LABELS = ('invitation', 'activation')
+LONGEST = 604800  # the longest lifetime any mint site gives (invite's limit, an approval's and an activation's), seconds
 TAG_BYTES = 16
 CREDENTIAL_MAX = 128  # longer is refused before the HMAC
 # exp is canonical, no leading zero, sign, space or underscore, so one tag has one spelling and one hash (the Task 7a
@@ -135,14 +136,19 @@ class SpentSet:
     serve's own redeem commit, or at a lookup that finds no live row (used elsewhere, or marked used by a restore). So a
     used one replayed costs one read at most, then none until its exp, as revision 4 set the bar. Only a credential
     with a valid tag enters, and only an admin or the CLI mints those, so a stranger can't grow it."""
+    SWEEP_AT = 64  # the first size at which an add drops the expired; then twice what's left (the re-check's S1)
+
     def __init__(self):
         self._lock = threading.Lock()
         self._exps = {}
+        self._sweep_at = self.SWEEP_AT
 
     def add(self, hashed, exp, now):
         with self._lock:
-            self._exps = {held: until for held, until in self._exps.items() if until > now}  # each add drops the expired
             self._exps[hashed] = exp
+            if len(self._exps) >= self._sweep_at:  # a sweep when the set doubles, not a copy on every add
+                self._exps = {held: until for held, until in self._exps.items() if until > now}
+                self._sweep_at = max(self.SWEEP_AT, 2 * len(self._exps))
 
     def spent(self, hashed, now):
         with self._lock:

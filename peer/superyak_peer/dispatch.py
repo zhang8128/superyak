@@ -47,6 +47,10 @@ def federation_lock(data_dir):
         raise ValueError('another process already syncs this directory') from None
     return fd
 
+class ServeLockHeld(ValueError):
+    """serve.lock is held: another serve runs on this data dir."""
+
+
 def serve_lock(data_dir):
     """Public-route-bound plan, Task 1: one serve per data directory, since serve's live set (Task 2) is the one
     minter's memory of what it minted. An flock on serve.lock, opened O_NOFOLLOW|O_CLOEXEC at 0600 and taken LOCK_NB,
@@ -62,7 +66,7 @@ def serve_lock(data_dir):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         os.close(fd)
-        raise ValueError(f'another serve runs on this data dir: {path / "serve.lock"} is held') from None
+        raise ServeLockHeld(f'another serve runs on this data dir: {path / "serve.lock"} is held') from None
     return fd
 
 

@@ -1999,7 +1999,7 @@ async function downloadAttachment(link) {
   document.body.append(save);
   save.click();
   save.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);  // the download has the file by then
+  setTimeout(() => URL.revokeObjectURL(url), 40000);  // as FileSaver waits: long enough for a slow save to read it
 }
 
 // A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.

@@ -104,13 +104,42 @@ def test_a_used_invitation_replayed_costs_one_read_at_most_then_none(env):
         assert counted.total('transaction', lane='redeem') == reads and counted.total('transaction') == reads
 
 
-def test_the_spent_set_forgets_each_entry_at_its_exp():
+def test_the_spent_set_forgets_each_entry_at_its_exp_and_sweeps_when_it_doubles():
     spent = tags.SpentSet()
     spent.add('a', 100, now=0)
     spent.add('b', 200, now=0)
-    assert spent.spent('a', 99) and not spent.spent('a', 100) and len(spent) == 1  # gone at its exp
-    spent.add('c', 400, now=250)  # each add drops the expired
+    assert spent.spent('a', 99) and not spent.spent('a', 100) and len(spent) == 1  # gone at its exp, when asked
+    for n in range(tags.SpentSet.SWEEP_AT - 2):
+        spent.add(f'old-{n}', 10, now=0)
+    assert len(spent) == tags.SpentSet.SWEEP_AT - 1  # no sweep yet: an add copies nothing (the re-check's S1)
+    spent.add('c', 400, now=250)  # the add that reaches the sweep size drops everything expired
     assert len(spent) == 1 and spent.spent('c', 300)
+
+
+def test_a_forged_tag_redeemed_over_the_tailnet_never_enters_the_spent_set(env):
+    """The 7b re-check's M1: the tailnet's path runs redeem with no check before it, so a tag-shaped token whose lookup
+    finds no row must not enter on its shape alone, keeping an exp it chose."""
+    app, _ = env
+    store = app.state.store
+    [(kid, key)] = store.tag_keys['invitation'].items()
+    forged = [tags.mint('invitation', key, 'ffffffff', 999999999999),  # an unknown kid, a far exp
+              tags.mint('invitation', b'z' * 32, kid, time.time() + 3600),  # serve's kid, another key
+              tags.mint('invitation', key, kid, time.time() - 10)]  # expired
+    for token in forged:
+        assert client(app, TAILNET_CLIENT).post('/api/invitations/redeem', json=form(token)).status_code == 400
+    assert len(store.spent) == 0
+
+
+def test_a_spent_tags_exp_is_held_to_the_longest_a_mint_site_gives(env):
+    """A tag that does check under serve's key but names a far exp (no mint site makes one) enters for at most a week."""
+    app, _ = env
+    store = app.state.store
+    [(kid, key)] = store.tag_keys['invitation'].items()
+    far = tags.mint('invitation', key, kid, time.time() + 10 * 365 * 86400)
+    assert client(app, TAILNET_CLIENT).post('/api/invitations/redeem', json=form(far)).status_code == 400  # no row
+    assert len(store.spent) == 1
+    assert store.spent.spent(token_hash(far), time.time() + tags.LONGEST - 60)
+    assert not store.spent.spent(token_hash(far), time.time() + tags.LONGEST + 60)
 
 
 def a_persons_own_failures(app, token, username, name='A Newcomer'):

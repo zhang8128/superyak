@@ -194,13 +194,13 @@ def test_a_dropped_attachment_body_says_lost_and_the_saved_files_address_is_free
               const revoke = URL.revokeObjectURL.bind(URL);
               URL.revokeObjectURL = (url) => { window.__revoked.push(url); revoke(url); };
             """)
+            page.clock.install()  # the page's own timers, run forward from here (the re-check's N1: 40 s, as FileSaver)
             page.goto(address)
             with page.expect_download():
                 page.get_by_role('link', name='Download attachment 1').click()
-            for _ in range(30):  # polled from here: the page's CSP refuses wait_for_function's eval
-                if page.evaluate('window.__revoked.length') == 1:
-                    break
-                page.wait_for_timeout(100)
+            page.clock.run_for(39_000)
+            assert page.evaluate('window.__revoked.length') == 0  # a slow save still has it
+            page.clock.run_for(2_000)
             assert page.evaluate('window.__revoked.length') == 1
             page.evaluate('() => { Response.prototype.blob = () => Promise.reject(new TypeError("network error")); }')
             page.get_by_role('link', name='Download attachment 1').click()
