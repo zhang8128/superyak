@@ -10,10 +10,14 @@ from lighthouse_receipts import validate_receipt
 
 CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
 NOW = datetime(2026, 9, 6, tzinfo=timezone.utc)
+# The policies here are "valid now". Some tests hand them to code that reads the real clock itself (the neighbors
+# module and the context source take no clock when a test goes through the runtime), so the window ends far off,
+# not on a date the calendar will reach; tests that want a lapsed window pass their own valid_until in the past.
+VALID_UNTIL = "2100-01-01T00:00:00Z"
 ALLOW = {"effect": "allow", "ruleId": "publisher-rule", "code": None}
 
 
-def policy(path, actions=("recall", "read", "inject_context"), *, publisher="why", weight=1, issuer="engram", valid_until="2027-01-01T00:00:00Z"):
+def policy(path, actions=("recall", "read", "inject_context"), *, publisher="why", weight=1, issuer="engram", valid_until=VALID_UNTIL):
     rule = dict(id="chosen", effect="allow", publishers=[f"urn:engram:{publisher}"],
                 profiles=["urn:lighthouse:profile:engram-recall-trace"], domains=["memory.recall"],
                 actions=list(actions), contexts=["memory/technical"],
@@ -372,7 +376,7 @@ def remote_policy(path, *, local=("recall", "read", "inject_context"), remote=("
                     profiles=["urn:lighthouse:profile:engram-recall-trace"], domains=["memory.recall"],
                     actions=list(actions), contexts=["memory/technical"],
                     claimMediaTypes=["application/vnd.engram.recall-rank-claim+json"], purposes=["session-recall"],
-                    audiences=["self"], validFrom="2026-01-01T00:00:00Z", validUntil="2027-01-01T00:00:00Z",
+                    audiences=["self"], validFrom="2026-01-01T00:00:00Z", validUntil=VALID_UNTIL,
                     requiredEvidence=[], requiredAttestations=[])
     rules = ([rule("local", "urn:engram:why", local)] if local else []) + (
         [rule("remote", SHIP_REF, remote)] if remote else [])

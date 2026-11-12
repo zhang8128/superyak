@@ -23,6 +23,7 @@ from lighthouse_client import LighthouseClient, NeighborUnavailable
 from lighthouse_daemon import PublisherDaemon
 from lighthouse_protocol import FrameError, recall_frame, read_frame, validate_frame
 
+from tests.pinned_clock import pinned_clock
 from tests.test_embedder_lane import UnitProvider
 from tests.test_lighthouse_daemon import CONTEXT, NOW, FakeEmbeddings, build_publisher
 
@@ -252,7 +253,7 @@ def test_time_spent_before_the_embed_comes_off_its_wait(tmp_path, socket_dir, mo
     remainingMs - 150."""
     recorder = Recorder(socket_dir / "e.sock")
     pub = build_publisher(tmp_path)
-    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(socket_dir / "e.sock")))
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(socket_dir / "e.sock")), clock=pinned_clock())
     monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side([], wait=0.15), False))
     try:
         answer = daemon.handle_frame(_recall(remainingMs=2_000))
@@ -276,7 +277,7 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
     threading.Thread(target=server.serve_forever, daemon=True).start()
     caplog.set_level(logging.INFO)
     pub = build_publisher(tmp_path)
-    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(path), response_timeout=30))
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", RemoteEmbedProvider(str(path), response_timeout=30), clock=pinned_clock())
     closed = []
     monkeypatch.setattr(daemon, "_ledger_side", lambda *args: (Side(closed), False))
     try:
@@ -327,6 +328,6 @@ def test_an_expired_recall_costs_the_lane_nothing_and_writes_no_disclosure(tmp_p
 def test_a_publisher_with_its_model_in_process_serves_the_field_as_before(tmp_path):
     """FakeEmbeddings.embed takes no remaining_ms: a keyword passed to it would fail the frame."""
     pub = build_publisher(tmp_path)
-    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", FakeEmbeddings())
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock())
     out = daemon.handle_frame(_recall(remainingMs=5))
     assert out["decision"]["effect"] == "allow" and len(out["candidates"]) == 1

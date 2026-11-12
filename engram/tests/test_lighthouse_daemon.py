@@ -20,6 +20,7 @@ from lighthouse_protocol import (
     recall_frame,
 )
 from storage import Storage
+from tests.pinned_clock import pinned_clock
 
 
 class FakeEmbeddings:
@@ -269,7 +270,7 @@ def test_retrieve_excludes_copy_with_corrupt_sibling_share(tmp_db, corruption):
 def test_handle_recall_denies_before_retrieval(tmp_path):
     pub = build_publisher(tmp_path)
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     frame = recall_frame(
         receiver="stranger",
@@ -294,7 +295,7 @@ def test_handle_recall_denies_before_retrieval(tmp_path):
 def test_handle_recall_allows_and_discloses(tmp_path):
     pub = build_publisher(tmp_path)
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     frame = recall_frame(
         receiver="engram",
@@ -326,7 +327,7 @@ def test_read_requires_read_action(tmp_path):
     pub = build_publisher(tmp_path)
     write_policy(pub.policy_path, actions=("recall",))
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     recall = daemon.handle_frame(
         recall_frame(
@@ -358,7 +359,7 @@ def test_read_requires_read_action(tmp_path):
 def test_read_delivers_content_when_allowed(tmp_path):
     pub = build_publisher(tmp_path)
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     recall = daemon.handle_frame(
         recall_frame(
@@ -390,7 +391,7 @@ def test_read_delivers_content_when_allowed(tmp_path):
 def test_unknown_publisher_and_unavailable_store(tmp_path):
     pub = build_publisher(tmp_path)
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     unknown = daemon.handle_frame(
         recall_frame(
@@ -423,7 +424,7 @@ def test_unknown_publisher_and_unavailable_store(tmp_path):
 
 
 def test_missing_publisher_is_malformed_before_store_lookup(tmp_path):
-    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock())
     frame = _valid_recall()
     del frame["publisher"]
 
@@ -434,7 +435,7 @@ def test_missing_publisher_is_malformed_before_store_lookup(tmp_path):
 
 
 def test_invalid_recall_fields_are_malformed_before_store_lookup(tmp_path):
-    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock())
     invalid_frames = []
     for field, value in (
         ("at", "not-a-timestamp"),
@@ -453,7 +454,7 @@ def test_invalid_recall_fields_are_malformed_before_store_lookup(tmp_path):
 
 
 def test_invalid_read_memory_ids_are_malformed_before_store_lookup(tmp_path):
-    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock())
     frame = _valid_read()
     frame["memoryIds"] = [1]
 
@@ -468,7 +469,7 @@ def test_socket_round_trip_leaves_store_unchanged(tmp_path):
     before = hashlib.sha256(pub.db_path.read_bytes()).hexdigest()
     # Keep the socket path short on both macOS and Linux.
     sock_path = Path("/tmp") / f"engram-lh-{uuid.uuid4().hex}.sock"
-    daemon = PublisherDaemon({"why": pub}, sock_path, FakeEmbeddings())
+    daemon = PublisherDaemon({"why": pub}, sock_path, FakeEmbeddings(), clock=pinned_clock())
     thread = threading.Thread(target=daemon.serve_forever, daemon=True)
     thread.start()
     try:
@@ -509,7 +510,7 @@ def test_operational_error_on_open_is_publisher_unavailable(
 
     monkeypatch.setattr(Storage, "open_read_only", classmethod(refuse))
     daemon = PublisherDaemon(
-        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"why": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     out = daemon.handle_frame(
         recall_frame(
@@ -544,7 +545,7 @@ def test_pre_migration_store_without_shared_memories_is_unavailable(tmp_path):
         disclosures_path=inst / "lighthouse-disclosures.db",
     )
     daemon = PublisherDaemon(
-        {"agi": pub}, tmp_path / "s.sock", FakeEmbeddings()
+        {"agi": pub}, tmp_path / "s.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     out = daemon.handle_frame(
         recall_frame(
