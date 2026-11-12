@@ -450,6 +450,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         store.tag_keys = tags.every_label_key(db)
         store.untagged = tags.StartSet()  # Task 7b: the untagged ones live now, which only shrinks
         store.untagged.load(db, store.clock())
+        store.spent = tags.SpentSet()  # and the tagged ones spent from now on, each until its exp
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
@@ -729,7 +730,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             return await run_in_threadpool(store.redeem, token, *fields)
         # public-route-bound Task 7b: checked in memory first, so junk, a wrong tag, an expired or another label's tag,
         # an unknown kid or a made-up untagged token is refused with no read, no lock and no place in the lane
-        label = tags.redeemable(store.tag_keys, store.untagged, token, store.clock())
+        label = tags.redeemable(store.tag_keys, store.untagged, store.spent, token, store.clock())
         if label is None:
             raise Problem(400, 'Invitation unavailable')
         return await app.state.redeem_lane.run(store.redeem, token, *fields, label=label)

@@ -433,12 +433,21 @@ class Auth:
         try:
             redeemed = self._redeem(token, username, name, password, label, none_live)
         except Problem:
-            if none_live and self.untagged is not None:  # its lookup found no live row; the rollback undid nothing
-                self.untagged.discard(token_hash(token))
+            if none_live:  # its lookup found no live row; the rollback undid nothing
+                self._spent(token)
             raise
-        if self.untagged is not None:  # only once the commit returned: a failed COMMIT keeps a live row's entry
-            self.untagged.discard(token_hash(token))
+        self._spent(token)  # only once the commit returned: a failed COMMIT keeps a live row's place
         return redeemed
+
+    def _spent(self, token):
+        """Task 7b: this token can redeem nothing more. Untagged, it leaves serve's start-time set; tagged, it enters the
+        spent set until its exp. A Store outside serve has neither."""
+        hashed = token_hash(token)
+        if self.untagged is not None:
+            self.untagged.discard(hashed)
+        tagged = tags.TAGGED.fullmatch(token)
+        if tagged and self.spent is not None:
+            self.spent.add(hashed, int(tagged['exp']), self.clock())
 
     def _redeem(self, token, username, name, password, label, none_live):
         with self.transaction() as db:

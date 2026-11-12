@@ -1988,12 +1988,18 @@ async function downloadAttachment(link) {
     return says(busyWait(response) !== null ? "This home is busy just now. Try again in a moment." : "This attachment is unavailable.");
   }
   const named = /filename="([^"]*)"/.exec(response.headers.get("content-disposition") || "");
-  const url = URL.createObjectURL(await response.blob());
+  let blob;
+  try {
+    blob = await response.blob();  // a connection dropped mid-file throws here
+  } catch (_) {
+    return says("Connection lost. Try again when this home is reachable.");
+  }
+  const url = URL.createObjectURL(blob);
   const save = Object.assign(document.createElement("a"), { href: url, download: named ? named[1] : "attachment" });
   document.body.append(save);
   save.click();
   save.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);  // the download has the file by then
 }
 
 // A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.

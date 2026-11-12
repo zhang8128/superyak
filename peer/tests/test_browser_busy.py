@@ -181,3 +181,27 @@ def test_a_public_attachment_asks_once_more_after_a_marked_503_and_never_shows_i
                 page.wait_for_timeout(1500)
                 expect(page.get_by_role('heading', name='Open')).to_be_visible()  # still the page, not an answer's body
     assert len(log) == asked
+
+
+def test_a_dropped_attachment_body_says_lost_and_the_saved_files_address_is_freed(browser_peer):
+    """The 7b reader's N1 and N2: a connection dropped mid-file is said, not an unhandled rejection; a saved file's
+    object URL is revoked once the download has it."""
+    address = public_attachment(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.add_init_script("""
+              window.__revoked = [];
+              const revoke = URL.revokeObjectURL.bind(URL);
+              URL.revokeObjectURL = (url) => { window.__revoked.push(url); revoke(url); };
+            """)
+            page.goto(address)
+            with page.expect_download():
+                page.get_by_role('link', name='Download attachment 1').click()
+            for _ in range(30):  # polled from here: the page's CSP refuses wait_for_function's eval
+                if page.evaluate('window.__revoked.length') == 1:
+                    break
+                page.wait_for_timeout(100)
+            assert page.evaluate('window.__revoked.length') == 1
+            page.evaluate('() => { Response.prototype.blob = () => Promise.reject(new TypeError("network error")); }')
+            page.get_by_role('link', name='Download attachment 1').click()
+            expect(page.get_by_role('status')).to_have_text('Connection lost. Try again when this home is reachable.')

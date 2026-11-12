@@ -130,14 +130,43 @@ class StartSet:
             self._labels.pop(hashed, None)
 
 
-def redeemable(keys, untagged, token, now):
+class SpentSet:
+    """Task 7b (the reader's D1): tagged credentials that can redeem nothing more, by hash until their exp: entered at
+    serve's own redeem commit, or at a lookup that finds no live row (used elsewhere, or marked used by a restore). So a
+    used one replayed costs one read at most, then none until its exp, as revision 4 set the bar. Only a credential
+    with a valid tag enters, and only an admin or the CLI mints those, so a stranger can't grow it."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._exps = {}
+
+    def add(self, hashed, exp, now):
+        with self._lock:
+            self._exps = {held: until for held, until in self._exps.items() if until > now}  # each add drops the expired
+            self._exps[hashed] = exp
+
+    def spent(self, hashed, now):
+        with self._lock:
+            exp = self._exps.get(hashed)
+            if exp is not None and exp <= now:
+                del self._exps[hashed]
+                return False
+            return exp is not None
+
+    def __len__(self):
+        with self._lock:
+            return len(self._exps)
+
+
+def redeemable(keys, untagged, spent, token, now):
     """Task 7b, before redeem's lane: the label a public redeem may look up, or None. A tagged token under its label's
-    key, unexpired, or an untagged one the start-time set holds. In memory: no read, no lock, no place in the lane."""
+    key, unexpired and not spent, or an untagged one the start-time set holds. In memory: no read, no lock, no place in
+    the lane."""
     if not isinstance(token, str) or len(token) > CREDENTIAL_MAX:
         return None
     if UNTAGGED.fullmatch(token):
         return untagged.label(_hashed(token))
-    return next((label for label in LABELS if check(label, keys[label], token, now)), None)
+    label = next((label for label in LABELS if check(label, keys[label], token, now)), None)
+    return None if label is None or spent.spent(_hashed(token), now) else label
 
 
 def every_label_key(db):

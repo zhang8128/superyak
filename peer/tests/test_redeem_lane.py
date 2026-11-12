@@ -86,14 +86,93 @@ def test_a_real_redeem_is_admitted_while_junk_is_in_flight(env):
     assert counted.total('transaction', lane='redeem') == 1 and counted.total('transaction') == 1
 
 
-def test_a_used_invitation_replayed_takes_the_lane_reads_once_and_is_refused(env):
+def test_a_used_invitation_replayed_costs_one_read_at_most_then_none(env):
+    """Revision 4's bar, kept by the spent set (the reader's D1): redeemed by this serve, a replay reads nothing; used
+    elsewhere since (a restore marks rows used), the first replay reads once and each after it nothing."""
     app, admin = env
-    token = invitation(app, admin)
-    assert client(app).post('/api/invitations/redeem', json=form(token)).status_code == 201
+    store = app.state.store
+    mine, elsewhere = invitation(app, admin), invitation(app, admin)
+    assert client(app).post('/api/invitations/redeem', json=form(mine)).status_code == 201
+    with store.counting() as counted:
+        assert client(app).post('/api/invitations/redeem', json=form(mine, 'second')).status_code == 400
+    assert counted.total() == 0
+    with store.transaction() as db:
+        db.execute('UPDATE invitations SET used=1 WHERE token_hash=?', (token_hash(elsewhere),))
+    for reads in (1, 0, 0):
+        with store.counting() as counted:
+            assert client(app).post('/api/invitations/redeem', json=form(elsewhere, 'third')).status_code == 400
+        assert counted.total('transaction', lane='redeem') == reads and counted.total('transaction') == reads
+
+
+def test_the_spent_set_forgets_each_entry_at_its_exp():
+    spent = tags.SpentSet()
+    spent.add('a', 100, now=0)
+    spent.add('b', 200, now=0)
+    assert spent.spent('a', 99) and not spent.spent('a', 100) and len(spent) == 1  # gone at its exp
+    spent.add('c', 400, now=250)  # each add drops the expired
+    assert len(spent) == 1 and spent.spent('c', 300)
+
+
+def a_persons_own_failures(app, token, username, name='A Newcomer'):
+    """A weak password, a taken username and, for an activation, the wrong username: each refused for its own reason,
+    and none costs the credential its place."""
+    weak = client(app).post('/api/invitations/redeem', json={**form(token, username), 'name': name, 'password': 'short'})
+    taken = client(app).post('/api/invitations/redeem', json={**form(token, 'andy'), 'name': name})
+    assert weak.status_code == 400 and taken.status_code in (400, 409), (weak.text, taken.text)
+    return client(app).post('/api/invitations/redeem', json={**form(token, username), 'name': name})
+
+
+def test_an_untagged_invitation_refused_for_the_persons_own_reasons_still_redeems(env, tmp_path):
+    """The reader's S1: a mutant that shrank the set on any refusal would lock this person out."""
+    app, admin = env
+    old = 'w' * 43
+    made_before_the_deploy(app, admin, old)
+    app = start(tmp_path / 'home')
+    assert a_persons_own_failures(app, old, 'mine').status_code == 201
+
+
+def test_an_untagged_activation_refused_for_the_wrong_username_still_redeems(env, tmp_path):
+    app, admin = env
+    store, old = app.state.store, 'x' * 43
+    with store.transaction() as db:
+        pending = store._create_user(db, 'pending', 'Pending', 'long-password-pending')
+        db.execute('UPDATE users SET activation_pending=1 WHERE id=?', (pending['id'],))
+        db.execute('INSERT INTO account_activations(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(old), pending['id'], time.time() + 3600))
+    app = start(tmp_path / 'home')
+    assert app.state.store.untagged.label(token_hash(old)) == 'activation'
+    wrong = client(app).post('/api/invitations/redeem', json={**form(old, 'someone-else'), 'name': 'Pending'})
+    assert wrong.status_code == 400
+    assert a_persons_own_failures(app, old, 'pending', 'Pending').status_code == 201
+
+
+def test_a_used_row_at_the_start_is_never_loaded(env, tmp_path):
+    app, admin = env
+    old = 'y' * 43
+    made_before_the_deploy(app, admin, old, used=1)
+    app = start(tmp_path / 'home')
+    assert app.state.store.untagged.label(token_hash(old)) is None
     with app.state.store.counting() as counted:
-        again = client(app).post('/api/invitations/redeem', json=form(token, 'second'))
-    assert again.status_code == 400
-    assert counted.total('transaction', lane='redeem') == 1 and counted.total('transaction') == 1
+        assert client(app).post('/api/invitations/redeem', json=form(old)).status_code == 400
+    assert counted.total() == 0
+
+
+def test_a_tagged_activation_and_a_cli_invitation_made_while_serve_runs_redeem_once_publicly(env, tmp_path, capsys):
+    """The reader's S1: test_tags redeems over the tailnet, which never meets the check. These go through it."""
+    import json
+    from superyak_peer.__main__ import main
+    app, admin = env
+    home, claim = tmp_path / 'home', tmp_path / 'activation.json'
+    main(['bootstrap-super-admin', '--data-dir', str(home), '--username', 'stanley', '--name', 'Stanley', '--activation-file', str(claim)])
+    door = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    asked = door.post('/api/access-requests', json={'name': 'Eve', 'contact': 'eve@example.org', 'note': ''}).json()
+    main(['station-approve', '--data-dir', str(home), '--id', asked['id'][:8], '--as', 'andy'])
+    capsys.readouterr()
+    invited = door.get(f"/api/access-requests/{asked['id']}", params={'secret': asked['secret']}).json()['token']
+    activation = json.loads(claim.read_text())['token']
+    for token, username, name in ((activation, 'stanley', 'Stanley'), (invited, 'eve', 'Eve')):
+        assert tags.TAGGED.fullmatch(token)
+        assert client(app).post('/api/invitations/redeem', json={**form(token, username), 'name': name}).status_code == 201
+        assert client(app).post('/api/invitations/redeem', json={**form(token, username + '2'), 'name': name}).status_code == 400
 
 
 def made_before_the_deploy(app, admin, token, used=0):
@@ -184,9 +263,11 @@ def test_the_redeem_lane_admits_5_and_the_6th_is_busy(env, monkeypatch):
                                      headers={'origin': 'http://testserver'}) as http:
             return await asyncio.gather(*(http.post('/api/invitations/redeem', json=form(token, f'person{n}'))
                                           for n, token in enumerate(tokens)))
-    answers = asyncio.run(together())
+    with app.state.store.counting() as counted:
+        answers = asyncio.run(together())
     assert sorted(answer.status_code for answer in answers) == [201] * 5 + [503]
     assert busy(next(answer for answer in answers if answer.status_code == 503))
+    assert counted.peak('transaction', lane='redeem') == 1  # the reader's S2: one inside at a time
 
 
 def test_a_tailnet_redeem_passes_while_the_public_lane_is_full(env, monkeypatch):
