@@ -16,15 +16,3 @@ def pinned_clock(start: datetime = PINNED_START):
     began = time.monotonic()
     return lambda: start + timedelta(seconds=time.monotonic() - began)
 
-
-def pinned_datetime(start: datetime = PINNED_START):
-    """A stand-in for the `datetime` name inside a module that reads the real clock with no clock argument:
-    monkeypatch.setattr(module, 'datetime', pinned_datetime()). Only `now` is pinned; the rest is datetime."""
-    clock = pinned_clock(start)
-
-    class PinnedDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            moment = clock()
-            return moment if tz is None else moment.astimezone(tz)
-    return PinnedDatetime
