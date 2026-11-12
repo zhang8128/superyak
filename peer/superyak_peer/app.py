@@ -1,6 +1,7 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import asyncio
 import functools
+import math
 import hmac
 import re
 import ipaddress
@@ -19,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from . import counting
 from .agent_version import agent_update
-from .auth import DEVICE_LIFETIME
+from .auth import DEVICE_LIFETIME, token_hash
 from .common import Problem, valid_utf8
 from .live_set import LiveSet
 from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
@@ -178,13 +179,26 @@ class BrowserBoundary:
             await send(message)
         await self.app(scope, bounded_receive, secure_send)
 
+CREDENTIAL_MAX = 128  # public-route-bound Task 3: a public credential longer than this is junk, refused unhashed
+BUSY = 'This home is busy; try again shortly'
+BUSY_HEADERS = [(b'retry-after', b'1'), (b'x-superyak-busy', b'1')]  # spec R3: safe to retry, nothing was done
+
+
+class Busy(Exception):
+    """A full public lane (public-route-bound spec R3): 503 with Retry-After: 1 and x-superyak-busy: 1."""
+
+
 class PublicRoute:
     """Public route spec 2: default deny for public (Funnel) requests. Outermost, so it runs before the body is read.
     A public request passes to an allow-listed route, or with a valid session or ship key (checked, not just present;
     the route's own check still decides). Anything else gets 401 under /api/, which app.js acts on, and 404 elsewhere.
-    Tailnet requests pass untouched."""
-    def __init__(self, app, *, store, router):
-        self.app, self.store, self.router = app, store, router
+    Tailnet requests pass untouched, every lookup as before and outside every lane.
+
+    Public-route-bound Task 3: serve's live set is asked first, so a junk credential costs no read. A present bearer
+    key decides alone, as the routes use it; a key the set lacks (one the CLI made after serve started) is looked up in
+    the miss lane, and joins the set if it passes. With no key, a session cookie the set lacks is no cookie."""
+    def __init__(self, app, *, store, router, miss):
+        self.app, self.store, self.router, self.miss = app, store, router, miss
 
     async def __call__(self, scope, receive, send):
         if scope['type'] not in ('http', 'websocket'):
@@ -211,6 +225,7 @@ class PublicRoute:
             return await WebSocketClose()(scope, receive, send)
         response = JSONResponse({'error': refusal[1]}, refusal[0])
         response.raw_headers.extend(SECURITY_HEADERS)
+        response.raw_headers.extend(refusal[2] if len(refusal) > 2 else ())
         await response(scope, receive, send)
 
     async def refusal(self, scope):
@@ -223,14 +238,38 @@ class PublicRoute:
             return None
         request = Request(scope)  # Starlette's cookie parser and bearer_key, so this sees what the route will
         key, token = bearer_key(request), request.cookies.get(COOKIE)
-        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):
-            return None
+        try:
+            if await (self.key_valid(key) if key is not None else self.session_valid(token)):
+                return None
+        except Busy:
+            return (503, BUSY, BUSY_HEADERS)
         return (401, 'Sign in required') if scope['path'].startswith('/api/') else (404, 'Not found')
 
-    def valid(self, key, token):
-        """In a worker, as the inbox wait's store calls are: the store gate is a blocking flock."""
-        return bool(key is not None and self.store.ship_key_is_valid(key)
-                    or token is not None and self.store.session_is_valid(token))
+    async def key_valid(self, key):
+        """A present key decides alone (Task 3, P6). One the live set holds is looked up as before; one it lacks waits
+        in the miss lane, and joins the set if it passes. The lookups run in a worker: the store gate is a blocking
+        flock."""
+        if not 0 < len(key) <= CREDENTIAL_MAX:
+            return False
+        hashed = token_hash(key)
+        if self.store.live.has(hashed, 'ship_key', self.store.clock()):
+            return await run_in_threadpool(self.store.ship_key_is_valid, key)
+        if await self.miss.run(self.missed, key):
+            self.store.live.add('ship_key', hashed, math.inf, None)
+            return True
+        return False
+
+    def missed(self, key):
+        with counting.lane('miss'):
+            return self.store.ship_key_is_valid(key)
+
+    async def session_valid(self, token):
+        """With no key: a session the live set lacks is no session, and costs no read."""
+        if token is None or len(token) > CREDENTIAL_MAX:
+            return False
+        if not self.store.live.has(token_hash(token), 'session', self.store.clock()):
+            return False
+        return await run_in_threadpool(self.store.session_is_valid, token)
 
     def allowed(self, scope):
         """Whether the route the router dispatches this request to is on the allow-list, for this method."""
@@ -248,14 +287,24 @@ class SignInLane:
         self.size, self.queue, self.inside = size, queue, 0
         self.limiter = anyio.CapacityLimiter(size)
 
+    def refused(self):
+        return Problem(429, 'Too many sign-ins at once; try again shortly')
+
     async def run(self, call, *args, **kwargs):
         if self.inside >= self.size + self.queue:
-            raise Problem(429, 'Too many sign-ins at once; try again shortly')
+            raise self.refused()
         self.inside += 1  # only the event loop changes it
         try:
             return await anyio.to_thread.run_sync(functools.partial(call, *args, **kwargs), limiter=self.limiter)
         finally:
             self.inside -= 1
+
+class MissLane(SignInLane):
+    """Public-route-bound Task 3: a public ship key the live set lacks is looked up here, 1 inside and 4 waiting, so
+    a flood of junk keys reads one at a time. Full, it answers 503 busy and calls the store zero times."""
+    def refused(self):
+        return Busy()
+
 
 async def body(request, limit=None):
     if limit is not None and len(await request.body()) > limit:
@@ -393,7 +442,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.assets = assets
     app.mount('/assets', AssetApp(assets), name='assets')  # exact keys from the table: no path is normalized
     app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
-    app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
+    app.state.miss_lane = MissLane(1, 4)  # public-route-bound Task 3
+    app.add_middleware(PublicRoute, store=store, router=app.router, miss=app.state.miss_lane)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
     async def problem(request, exc):
