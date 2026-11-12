@@ -301,9 +301,26 @@ def test_the_counts_are_never_written_through_a_symlink(measure_root, tmp_path):
     kept.write_text('kept\n')
     out.symlink_to(kept)
     write = counting.start_measuring(measure_root / 'scratch', out)
-    with pytest.raises(OSError):
-        write()
+    write()  # the link itself is replaced, by a file of this user's
     assert kept.read_text() == 'kept\n'
+    assert not out.is_symlink() and 'totals' in json.loads(out.read_text())
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+
+
+def test_a_write_cut_short_leaves_the_last_counts_whole(measure_root, tmp_path, monkeypatch):
+    """The reader's N3: written in place, a second SIGTERM mid-write left an empty file. Now the old file stays until a
+    whole new one replaces it, and no temp file is left behind."""
+    out = tmp_path / 'counts.json'
+    out.write_text('{"totals": [], "peaks": []}\n')
+    write = counting.start_measuring(measure_root / 'scratch', out)
+
+    def cut(*_):
+        raise KeyboardInterrupt('stopped mid-write')
+    monkeypatch.setattr(counting.os, 'replace', cut)
+    with pytest.raises(KeyboardInterrupt):
+        write()
+    assert out.read_text() == '{"totals": [], "peaks": []}\n'
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(['counts.json', 'measure-root'])
 
 
 def free_port():
@@ -370,13 +387,30 @@ def test_serve_under_uvicorn_writes_its_counts_when_it_is_stopped(measure_root, 
 
 
 def test_serve_counts_nothing_without_the_switch(measure_root, tmp_path, monkeypatch):
+    """Nor does it touch SIGTERM (the reader's N1): live, serve's handler would end it by SystemExit(143), which
+    systemd counts as a failure."""
     import uvicorn
     from superyak_peer.__main__ import main
-    seen = []
-    monkeypatch.setattr(uvicorn, 'run', lambda app, **_: seen.append(counting.on()))
+    seen, before = [], signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **_: seen.append((counting.on(), signal.getsignal(signal.SIGTERM))))
     monkeypatch.delenv('SUPERYAK_MEASURE_COUNTS', raising=False)
     main(['serve', '--data-dir', str(tmp_path / 'live'), '--port', str(free_port())])
-    assert seen == [False]
+    assert seen == [(False, before)]
+
+
+def test_serve_writes_no_counts_when_uvicorn_exits_on_its_own(measure_root, tmp_path, monkeypatch):
+    """The reader's N2: uvicorn's sys.exit(3) at a failed start is not serve's SIGTERM, and leaves no counts file."""
+    import uvicorn
+    from superyak_peer.__main__ import main
+    out = tmp_path / 'counts.json'
+
+    def failed_start(app, **_):
+        raise SystemExit(3)
+    monkeypatch.setattr(uvicorn, 'run', failed_start)
+    monkeypatch.setenv('SUPERYAK_MEASURE_COUNTS', str(out))
+    with pytest.raises(SystemExit) as stopped:
+        main(['serve', '--data-dir', str(measure_root / 'scratch'), '--port', str(free_port())])
+    assert stopped.value.code == 3 and not out.exists()
 
 
 def test_serve_refuses_the_switch_outside_its_root_before_it_writes_anything(measure_root, tmp_path, monkeypatch,

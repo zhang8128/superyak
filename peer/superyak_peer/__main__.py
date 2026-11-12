@@ -1328,10 +1328,12 @@ def main(argv=None):
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
+            stopping = []  # the signal serve's own handler took, so only that SystemExit writes the counts
             if write_counts is not None:
                 import signal
 
                 def stopped(signum, frame):
+                    stopping.append(signum)
                     raise SystemExit(128 + signum)
                 # uvicorn puts this handler back after its graceful shutdown and raises SIGTERM again (0.52.4
                 # server.py:333-340): with the default one the process dies there and the counts are lost
@@ -1340,8 +1342,8 @@ def main(argv=None):
                 uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
                             proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
                             timeout_graceful_shutdown=SHUTDOWN_GRACE)
-            except SystemExit:  # SIGTERM, by the handler above; a crash writes nothing
-                if write_counts is not None:
+            except SystemExit:  # SIGTERM, by the handler above; uvicorn's own exits (3, a failed start) write nothing
+                if write_counts is not None and stopping:
                     write_counts()
                 raise
             else:  # Ctrl-C: uvicorn.run returns

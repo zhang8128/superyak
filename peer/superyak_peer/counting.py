@@ -155,7 +155,9 @@ def counts():
 def _own_root():
     """MEASURE_ROOT as this user's own directory, made 0700 if it is missing. /dev/shm is world-writable, so anyone can
     make MEASURE_ROOT first, as a link to the live data's parent or as their own directory: refuse a root that is a
-    symlink, not a directory, not this user's, or writable by anyone else. Returns it resolved."""
+    symlink, not a directory, not this user's, or writable by anyone else. Returns it resolved. Once checked, the root
+    stays this user's only because its parent has the sticky bit (/dev/shm is drwxrwxrwt): no other user can rename or
+    delete it to put another in its place. A parent without that bit would need its own check."""
     try:
         os.mkdir(MEASURE_ROOT, 0o700)
     except FileExistsError:
@@ -178,7 +180,7 @@ def start_measuring(data_dir, out):
     """SUPERYAK_MEASURE_COUNTS for serve: refuse a measure root that isn't this user's own directory, and any data dir
     that isn't under it once resolved (so MEASURE_ROOT/../lighthouse, and a link under the root to elsewhere, are
     refused), then count from empty. Returns the call that writes the totals and peaks to `out` as JSON, never through
-    a symlink, which serve makes when it exits cleanly or on SIGTERM."""
+    a symlink, which serve makes when Ctrl-C or SIGTERM stops it."""
     root = _own_root()
     resolved = Path(data_dir).resolve()
     if resolved == root or not resolved.is_relative_to(root):
@@ -189,7 +191,17 @@ def start_measuring(data_dir, out):
     target = Path(out)
 
     def write():
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-        with open(fd, 'w', encoding='utf-8') as file:
-            file.write(json.dumps(Counts().table(), indent=1) + '\n')
+        """A temp file beside `out`, made new (O_EXCL, so never through a planted link), then renamed over it: a write
+        cut short leaves the last file or none, never an empty or half one."""
+        text = json.dumps(Counts().table(), indent=1) + '\n'
+        temp = target.with_name(f'.{target.name}.{os.getpid()}.tmp')
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            with open(fd, 'w', encoding='utf-8') as file:
+                file.write(text)
+            os.replace(temp, target)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp)
+            raise
     return write
