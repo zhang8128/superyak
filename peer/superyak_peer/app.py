@@ -4,6 +4,7 @@ import functools
 import math
 import hmac
 import re
+import sqlite3
 import ipaddress
 import logging
 import time
@@ -22,6 +23,7 @@ from . import counting
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME, token_hash
 from .common import Problem, valid_utf8
+from .dispatch import GateTimeout
 from .live_set import LiveSet
 from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
@@ -302,11 +304,31 @@ class SignInLane:
         with counting.lane(self.name):  # what runs in a lane is counted as its work (public-route-bound Task 0)
             return call(*args, **kwargs)
 
-class MissLane(SignInLane):
-    """Public-route-bound Task 3: a public ship key the live set lacks is looked up here, 1 inside and 4 waiting, so
-    a flood of junk keys reads one at a time. Full, it answers 503 busy and calls the store zero times."""
+LANE_BOUND = 2.0  # public-route-bound Task 6: the longest a public lane's work waits for the gate or for SQLite
+
+
+class PublicLane(SignInLane):
+    """Public-route-bound Tasks 3 and 6: a lane public requests wait in before their store work (the miss lane's
+    lookup, published layers' reads). Full, it answers 503 busy and calls the store zero times. Its work runs under
+    the store's bound, so neither the dispatch gate nor SQLite's busy wait holds a slot past LANE_BOUND; work that
+    meets either is answered busy too, as nothing was done."""
+    def __init__(self, size, queue, name, *, store):
+        super().__init__(size, queue, name)
+        self.store = store
+
     def refused(self):
         return Busy()
+
+    def _counted(self, call, *args, **kwargs):
+        try:
+            with self.store.bounded(LANE_BOUND):
+                return super()._counted(call, *args, **kwargs)
+        except GateTimeout:
+            raise Busy() from None
+        except sqlite3.OperationalError as error:
+            if 'locked' not in str(error):
+                raise
+            raise Busy() from None
 
 
 async def body(request, limit=None):
@@ -444,12 +466,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.assets = assets
     app.mount('/assets', AssetApp(assets), name='assets')  # exact keys from the table: no path is normalized
     app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
-    app.state.miss_lane = MissLane(1, 4, 'miss')  # public-route-bound Task 3
+    app.state.miss_lane = PublicLane(1, 4, 'miss', store=store)  # public-route-bound Task 3
+    app.state.layer_lane = PublicLane(4, 32, 'layers', store=store)  # Task 6: it admits 36, and the 37th is busy
     app.add_middleware(PublicRoute, store=store, router=app.router, miss=app.state.miss_lane)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
     async def problem(request, exc):
         return JSONResponse({'error': exc.message}, status_code=exc.status)
+
+    @app.exception_handler(Busy)
+    async def busy(request, exc):  # a full public lane, or its work out of time: the marked 503 (spec R3)
+        response = JSONResponse({'error': BUSY}, status_code=503)
+        response.raw_headers.extend(BUSY_HEADERS)
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request, exc):
@@ -860,8 +889,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.active_layer(key, actor(request))
 
     @app.get('/public/layers/{key}')
-    def public_get(key: str):
-        return store.active_layer(key, public=True)
+    async def public_get(key: str, request: Request):
+        if is_public(request.scope):  # Task 6: a public reader waits in the layers' lane; the tailnet reads as before
+            return await app.state.layer_lane.run(store.active_layer, key, public=True)
+        return await run_in_threadpool(store.active_layer, key, public=True)
 
     @app.get('/api/files')
     def files(request: Request):
@@ -882,8 +913,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return download(store.download_file(actor(request), key, layer_id=layer_id))
 
     @app.get('/public/layers/{layer_id}/files/{key}')
-    def public_file_get(layer_id: str, key: str):
-        return download(store.download_file(None, key, layer_id=layer_id, public=True))
+    async def public_file_get(layer_id: str, key: str, request: Request):
+        if is_public(request.scope):
+            return download(await app.state.layer_lane.run(store.download_file, None, key, layer_id=layer_id, public=True))
+        return download(await run_in_threadpool(store.download_file, None, key, layer_id=layer_id, public=True))
 
     @app.get('/api/chats')
     def chats(request: Request):
