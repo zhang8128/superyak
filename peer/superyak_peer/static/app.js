@@ -1943,31 +1943,63 @@ async function renderPublic() {
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
 }
 
+// A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.
+const settled = (read) => read.then((value) => ({ value }), (error) => ({ error }));
+
+// The room the address names, read beside the first load's wave (fix:signed-in-load-in-one-wave). The next loadRoute
+// takes it once, only for that room and that person; any other read of the room starts afresh.
+let earlyRoom = null;
+function readRoomEarly() {
+  const { route, id } = routeParts();
+  if (route !== "chats" || !id || state.room) return;
+  earlyRoom = { id, who: identityKey(state.me), read: settled(loadRoom(id)) };
+}
+
 let dataLoadSequence = 0;
 async function loadData() {
   const user = state.me, identity = identityKey(user), sequence = ++dataLoadSequence;
   const valid = () => !!user && identityKey(state.me) === identity && sequence === dataLoadSequence;
   if (!user) return false;
   try {
-    const [home, contacts, files, sync, corrections] = await Promise.all([
-      api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections")
-    ]);
-    if (!valid()) return false;
-    if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints, connector] = await Promise.all([
+    // One wave (fix:signed-in-load-in-one-wave): through Funnel every read in a row costs about 185 ms, so everything
+    // goes out at once but the active layers' reads, which need /api/home's list. The admin reads go out by the flags
+    // /api/me gave, and count only by /api/home's, as before: a role that changed between the two reads gets its one
+    // late read, or its answer, refusal included, set aside.
+    const admin = (flag, path) => user[flag] ? settled(api(path)) : null;
+    const early = { accounts: admin("is_admin", "/api/accounts"), connections: admin("is_admin", "/api/connections"),
+      roleChanges: admin("is_super_admin", "/api/account-role-changes"), accessRequests: admin("is_admin", "/api/access-requests") };
+    const homeRead = api("/api/home");
+    const [home, contacts, files, sync, corrections, assistant, sources, ships, imprints, connector] = await Promise.all([
+      homeRead, api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections"),
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
+      api("/api/ships"),
+      loadImprints(),
+      loadConnectorNotice(),
+    ]).catch(async (error) => {
+      // A 401 from the home's own read wins over another read's quicker failure, so an ended session signs in again
+      // rather than showing a flash; /api/ships, which once waited for the home, now runs beside it.
+      const homeAnswer = error.status === 401 ? null : await settled(homeRead);
+      throw homeAnswer && "error" in homeAnswer && homeAnswer.error.status === 401 ? homeAnswer.error : error;
+    });
+    if (!valid()) return false;
+    if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
+    const adminAnswer = async (flag, path, read) => {
+      if (!home.user[flag]) return [];
+      if (!read) return api(path);
+      const answer = await read;
+      if ("error" in answer) throw answer.error;
+      return answer.value;
+    };
+    const [activePairs, accounts, connections, roleChanges, accessRequestList] = await Promise.all([
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
         try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
         catch (error) { if (error.status === 401) throw error; return { id: layer.id, error }; }
       })),
-      home.user.is_admin ? api("/api/accounts") : [],
-      home.user.is_admin ? api("/api/connections") : [],
-      home.user.is_super_admin ? api("/api/account-role-changes") : [],
-      home.user.is_admin ? api("/api/access-requests") : [],
-      api("/api/ships"),
-      loadImprints(),
-      loadConnectorNotice(),
+      adminAnswer("is_admin", "/api/accounts", early.accounts),
+      adminAnswer("is_admin", "/api/connections", early.connections),
+      adminAnswer("is_super_admin", "/api/account-role-changes", early.roleChanges),
+      adminAnswer("is_admin", "/api/access-requests", early.accessRequests),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -1983,6 +2015,8 @@ async function loadData() {
 
 async function loadRoute() {
   const { route, id } = routeParts();
+  let early = earlyRoom;
+  earlyRoom = null;
   state.preview = false;
   state.confirmWithdraw = false;
   state.chatDialog = null;
@@ -1995,6 +2029,7 @@ async function loadRoute() {
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
+    early = null;  // read before the room was listed, so it may be a refusal that no longer holds: read it afresh
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
@@ -2005,7 +2040,11 @@ async function loadRoute() {
       const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
       try {
         const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
-        await landRoom(() => (paged ? refreshRoom(state.room) : loadRoom(wanted)), still);
+        const taken = !paged && early?.id === wanted && early.who === who ? early.read : null;
+        await landRoom(() => (paged ? refreshRoom(state.room) : taken ? taken.then((answer) => {
+          if ("error" in answer) throw answer.error;
+          return answer.value;
+        }) : loadRoom(wanted)), still);
       }
       catch (error) {
         if (still()) {
@@ -2888,19 +2927,20 @@ async function bootstrap() {
     return;
   }
   try {
-    try {
-      state.demoAccounts = (await api("/api/local-demo")).accounts;
-    } catch (error) {
-      if (error.status !== 404) throw error;
-    }
-    try {
-      state.me = await api("/api/me");
-    } catch (error) {
-      if (error.status !== 401 || !isDemoAccount("patient")) throw error;
-      state.me = await demoLogin("patient");
-    }
+    // Both at once (fix:signed-in-load-in-one-wave), read in the order they were asked in one after the other.
+    const demo = settled(api("/api/local-demo")), me = settled(api("/api/me"));
+    const demoAnswer = await demo;
+    if ("error" in demoAnswer) {
+      if (demoAnswer.error.status !== 404) throw demoAnswer.error;
+    } else state.demoAccounts = demoAnswer.value.accounts;
+    const meAnswer = await me;
+    if (!("error" in meAnswer)) state.me = meAnswer.value;
+    else if (meAnswer.error.status !== 401 || !isDemoAccount("patient")) throw meAnswer.error;
+    else state.me = await demoLogin("patient");
     bindEditorIdentity(state.me);
-    await refresh();
+    readRoomEarly();
+    try { await refresh(); }
+    finally { earlyRoom = null; }  // the read was for this load: a refresh that never reached loadRoute leaves it, unread
   } catch (error) {
     showLogin(error.status === 401 ? "" : error.message);
   }

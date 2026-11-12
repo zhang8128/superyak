@@ -2585,6 +2585,167 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             page.screenshot(path=str(ARTIFACTS / "connections-mobile.png"))
 
 
+def asked_paths(page):
+    """Every path this page has asked for, with its query, in the order asked."""
+    asked = []
+    page.on("request", lambda request: asked.append(request.url.split("://", 1)[1].split("/", 1)[1]))
+    return asked
+
+
+def bare(asked):
+    return {path.split("?")[0] for path in asked}
+
+
+def room_with_words(store, owner, title, words):
+    room = store.create_room(owner["id"], title, [])
+    store.send_message(owner["id"], room["id"], f"{title}-1", words)
+    return room
+
+
+def test_a_signed_in_load_asks_its_reads_in_one_wave(browser_peer):
+    """fix:signed-in-load-in-one-wave: through Funnel each read in a row costs about 185 ms, and the load used to wait on
+    five. Now /api/me goes out beside the demo list, and while /api/home is held, every other read the load needs is
+    already out, the room the address names included. The room still draws once they answer."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]
+    room = room_with_words(store, patient, "Room X", "The newest words in Room X.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto("about:blank")
+        asked = asked_paths(page)
+        held_demo, held_home = held_routes(page, "**/api/local-demo"), held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + f"/#chats/{room['id']}")
+        wait_for_hold(page, held_demo)
+        until(page, lambda: "api/me" in bare(asked), "/api/me waited for the demo list")
+        held_demo[0].continue_()
+        wait_for_hold(page, held_home)
+        wanted = {f"api/chats/{room['id']}", "api/contacts", "api/files", "api/sync", "api/me/corrections", "api/assistant",
+                  "api/sources", "api/ships", "api/imprints", "api/connected-apps/notice"}
+        until(page, lambda: wanted <= bare(asked), f"still waiting for /api/home: {sorted(wanted - bare(asked))}")
+        assert not page.get_by_text("The newest words in Room X.").is_visible()
+        held_home[0].continue_()
+        expect(page.get_by_text("The newest words in Room X.")).to_be_visible()
+        # The early read is the one the room took: one first page, whatever later news reads (?since=) follow.
+        assert sum(path.startswith(f"api/chats/{room['id']}?limit=") for path in asked) == 1
+
+
+def test_an_early_room_read_from_a_failed_load_is_never_taken_later(browser_peer):
+    """The reader's finding 1 on ae06f99a: the boot's early room read belongs to its own load. When that load fails
+    before it opens the room, Try again reads the room afresh, and never takes the old failure ("didn't open")."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]
+    room = room_with_words(store, patient, "Room X", "The newest words in Room X.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto("about:blank")
+        failing = [True]
+        cut = lambda route: route.abort("failed") if failing[0] else route.continue_()
+        page.route("**/api/home", cut)
+        page.route(re.compile(rf"/api/chats/{room['id']}\?limit="), cut)
+        page.goto(browser_peer["base_url"] + f"/#chats/{room['id']}")
+        expect(page.get_by_role("heading", name="This home didn't open")).to_be_visible()
+        failing[0] = False
+        page.get_by_role("button", name="Try again").click()
+        expect(page.get_by_text("The newest words in Room X.")).to_be_visible()
+        expect(page.get_by_text("didn't open")).to_have_count(0)
+
+
+def test_an_early_room_read_is_taken_only_by_its_own_room(browser_peer):
+    """The address moves to Room Y while the load is out: Y draws at Y's address, never X's early read."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]
+    x = room_with_words(store, patient, "Room X", "The newest words in Room X.")
+    y = room_with_words(store, patient, "Room Y", "The newest words in Room Y.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto("about:blank")
+        held_home = held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + f"/#chats/{x['id']}")
+        wait_for_hold(page, held_home)
+        page.evaluate("""(address) => {  // a later read could put Y back, so watch every drawing, not just the last
+          window.drewX = false;
+          new MutationObserver(() => { if (document.body.textContent.includes("The newest words in Room X.")) window.drewX = true; })
+            .observe(document, { childList: true, subtree: true, characterData: true });
+          location.hash = address;
+        }""", f"#chats/{y['id']}")
+        # The hash change's own load runs while the boot's stays held, so its loadRoute meets the early read: only the
+        # room check keeps X's read from Y's address. Then the boot's load ends.
+        until(page, lambda: page.evaluate("window.drewX") or page.get_by_text("The newest words in Room Y.").is_visible(),
+              "the hash change's load drew nothing")
+        held_home[0].continue_()
+        expect(page.get_by_text("The newest words in Room Y.")).to_be_visible()
+        expect(page.get_by_text("The newest words in Room X.")).to_have_count(0)
+        assert not page.evaluate("window.drewX"), "X's early read was drawn at Y's address"
+        assert page.evaluate("location.hash") == f"#chats/{y['id']}"
+
+
+def test_an_early_room_read_is_never_taken_by_the_next_person(browser_peer):
+    """The re-check's probe on 74ca3c9d: a hash change while the boot's /api/home is out starts a second load inside the
+    boot's. If the session has ended there, sign-in shows, and the next person to sign in meets the first person's early
+    read. A doctor who is also in the room must read it afresh, never take the patient's refusal."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Room X", [users["doctor"]["id"]])
+    store.send_message(users["patient"]["id"], room["id"], "who-1", "The newest words in Room X.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, context):
+        page.goto("about:blank")
+        first = [True]
+
+        def first_page(route):
+            if first[0]:
+                first[0] = False
+                route.fulfill(status=401, json={"detail": "Sign in again."})
+            else:
+                route.continue_()
+        page.route(re.compile(rf"/api/chats/{room['id']}\?limit="), first_page)
+        held_home = held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + f"/#chats/{room['id']}")
+        wait_for_hold(page, held_home)
+        context.clear_cookies()
+        page.evaluate("location.hash = '#home'")
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+        page.evaluate("(address) => { location.hash = address; }", f"#chats/{room['id']}")
+        page.get_by_label("Username", exact=True).fill("doctor")
+        page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+        page.get_by_role("button", name="Sign in").click()
+        expect(page.get_by_text("The newest words in Room X.")).to_be_visible()
+        expect(page.get_by_text("Your session ended")).to_have_count(0)
+
+
+def test_a_home_that_ends_the_session_signs_in_again_whatever_fails_first(browser_peer):
+    """The reader's nit b on ae06f99a: /api/ships now runs beside /api/home, so its quick failure must not hide the home's
+    401. The ended session goes back to sign-in, as when /api/ships waited for the home."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto("about:blank")
+        page.route("**/api/ships", lambda route: route.fulfill(status=500, json={"detail": "Ships could not be read."}))
+        held_home = held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + "/")
+        wait_for_hold(page, held_home)
+        page.wait_for_timeout(200)  # the ships' refusal has landed first
+        held_home[0].fulfill(status=401, json={"detail": "Sign in again."})
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+
+
+@pytest.mark.parametrize("username, says_admin", [("patient", True), ("organizer", False)])
+def test_the_admin_reads_count_by_the_home_not_by_me(browser_peer, username, says_admin):
+    """The admin reads go out with the first wave by /api/me's flags, and /api/home's decide, as before. If /api/me says
+    admin and the home says participant, the refusals are set aside: no error, and no account support. If /api/me says
+    participant and the home says admin, the late read goes out and the admin's view is whole."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, username) as (page, _):
+        def me_says(route):
+            answer = route.fetch()
+            body = answer.json()
+            body["is_admin"] = says_admin
+            route.fulfill(response=answer, json=body)
+        page.route("**/api/me", lambda route: me_says(route) if route.request.method == "GET" else route.continue_())
+        asked, errors = asked_paths(page), []
+        page.on("pageerror", lambda error: errors.append(error))  # a refusal set aside must not surface as an unhandled rejection either
+        page.goto(browser_peer["base_url"] + "/#connections")
+        page.reload()
+        until(page, lambda: "api/accounts" in bare(asked), "/api/accounts was never asked")
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        if says_admin:
+            page.wait_for_timeout(300)
+            expect(page.get_by_role("heading", name="Account support")).to_have_count(0)
+            expect(page.locator(".notice.error")).to_have_count(0)
+        else:
+            expect(page.get_by_role("heading", name="Account support")).to_be_visible()
+        assert not errors, errors
+
+
 def test_attachment_stays_selected_through_upload_and_public_release(browser_peer):
     """Break caught: uploading a file resets unsaved text or omits the selected release file."""
     with sync_playwright() as playwright:
