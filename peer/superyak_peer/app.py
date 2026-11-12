@@ -19,7 +19,7 @@ from starlette.routing import Match, Mount
 from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from . import counting
+from . import counting, tags
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME, token_hash
 from .common import Problem, valid_utf8
@@ -446,6 +446,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
     store.live = LiveSet()  # public-route-bound Task 2: every live credential row, loaded once, before serve answers
     store.live.load_live_rows(store)
+    with store.transaction() as db:  # Task 7a: every label's tag key, made if missing, before serve answers
+        store.tag_keys = tags.every_label_key(db)
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)

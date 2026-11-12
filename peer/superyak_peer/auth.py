@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+from . import tags
 from .common import Problem, text, uid, require
 
 def token_hash(token):
@@ -23,7 +24,9 @@ PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD, DEVICE_ATTEMPTS_HOLD = (8, 300),
 # And per username across all its known browsers (section 2 review of 581cea18, should-fix 1): a cookieless success
 # mints a token for free, so the per-token count alone holds a browser, not an account holder.
 KNOWN_USER_HOLD = (24, 300)
-INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
+# What secrets.token_urlsafe(32) makes, for both kinds, and since public-route-bound Task 7a its tagged form
+# (tags.TAGGED); an untagged one made before the deploy still redeems
+INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}(?:\.[0-9a-f]{8}\.[0-9]{1,12}\.[A-Za-z0-9_-]{22})?')
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
 SESSION_LIFETIME = 86400
@@ -349,7 +352,8 @@ class Auth:
                     user = self._create_user(db, username, name, secrets.token_urlsafe(48), True)
                     db.execute('UPDATE users SET is_super_admin=1,activation_pending=1 WHERE id=?', (user['id'],))
                     db.execute('INSERT INTO account_role_changes(user_id,actor_id,old_role,new_role,role_version,created) VALUES(?,?,NULL,?,?,?)', (user['id'], user['id'], 'super_admin', 1, self.clock()))
-                token, expires = secrets.token_urlsafe(32), self.clock() + 604800
+                expires = self.clock() + 604800
+                token = tags.minted(db, 'activation', expires)  # Task 7a: tagged
                 db.execute('INSERT INTO account_activations(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(token), user['id'], expires))
                 json.dump({'user_id': user['id'], 'username': username, 'name': name, 'token': token, 'expires': expires}, stream, indent=2)
                 stream.write('\n')
@@ -404,8 +408,8 @@ class Auth:
             raise Problem(400, 'Invalid invitation lifetime')
         with self.transaction() as db:
             self._admin(db, actor)
-            token = secrets.token_urlsafe(32)
             expires = self.clock() + expires_in
+            token = tags.minted(db, 'invitation', expires)  # Task 7a: tagged
             db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, expires))
             return {'id': token_hash(token), 'token': token, 'expires': expires}
 
