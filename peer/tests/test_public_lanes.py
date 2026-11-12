@@ -195,3 +195,31 @@ def test_reading_takes_a_wait_for_sqlites_busy_wait(env):
     took = time.monotonic() - started
     holder.join(10)
     assert 0.25 <= took < 1.5, took
+
+
+def test_a_sign_ins_failure_is_never_marked_busy(env, monkeypatch):
+    """The Tasks 4-5 reader's C1: login, check_password_attempt and pending_sign_in commit _reserve's counted attempt
+    first, so a page that asked again after a later failure would count it twice. Only the public lanes (the miss lane,
+    the layers' lane) are bounded and marked; the sign-in lanes are neither, and a lock in login's later transaction
+    is the unmarked 500 a page never asks again after."""
+    from contextlib import contextmanager
+    from superyak_peer.app import PublicLane, SignInLane
+    app, _ = env
+    lanes = vars(app.state.sign_in_lanes)
+    assert set(lanes) == {'public', 'tailnet', 'known'}
+    assert all(type(lane) is SignInLane and not isinstance(lane, PublicLane) for lane in lanes.values())
+    store, opened, real = app.state.store, [], type(app.state.store)._transaction
+
+    @contextmanager
+    def locked_after_the_reserve(self, wait=None):
+        with real(self, wait) as db:
+            yield db
+            opened.append(1)
+            if len(opened) == 2:  # login's own transaction, after _reserve's committed the attempt
+                raise sqlite3.OperationalError('database is locked')
+    monkeypatch.setattr(type(store), '_transaction', locked_after_the_reserve)
+    browser = TestClient(app, base_url='http://testserver', client=PUBLIC_CLIENT, headers={'origin': 'http://testserver'},
+                         raise_server_exceptions=False)  # the answer a page gets, not the test's own exception
+    answer = browser.post('/api/login', json={'username': 'andy', 'password': 'long-password-andy'})
+    assert len(opened) == 2
+    assert answer.status_code == 500 and 'x-superyak-busy' not in answer.headers
