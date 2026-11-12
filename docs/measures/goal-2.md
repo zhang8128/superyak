@@ -206,6 +206,6 @@ person's browser through Funnel, and HTTP/2 there should save some round trips m
 **After, main f2aa2f29 (train 1127, signed-in-load-in-one-wave effdd119).** The reads go in one wave. At 185 ms: **1,264
 ms cold and 1,076 ms warm**, against 1,648 and 1,467.
 
-**What it shows:** at 185 ms, 383 ms saved cold is about 2 round trips, of the 3 the change expected (7 down to 4), so
-the load is still over 600 ms at Funnel-like latency. Goal 2's measure for a signed-in person is the next live "after": a person opening a busy room on their own
+**What it shows:** at 185 ms, 383 ms saved cold is about 2 round trips, of the 3 the change expected (7 down to 4).
+HTTP/1.1's six connections split the wave. The load is still over 600 ms at Funnel-like latency. Goal 2's measure for a signed-in person is the next live "after": a person opening a busy room on their own
 phone through Funnel.
