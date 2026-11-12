@@ -23,7 +23,9 @@ from superyak_peer.app import create_app
 PACKAGE = Path(superyak_peer.app.__file__).parent
 IDENTITY = {'actor', 'member', 'ship_member', 'current_user'}
 SERVICES = {'store', 'fed', 'manager', 'sources'}  # the names route modules reach the store through
-ON_THE_LOOP = {'store.inbox_wait_slot'}  # an in-memory count of a ship's waits, with no store read
+ON_THE_LOOP = {'store.inbox_wait_slot',  # an in-memory count of a ship's waits, with no store read
+               # PublicRoute's live set (public-route-bound Tasks 2-3): a dict under a lock, and the store's clock
+               'self.store.live.has', 'self.store.live.add', 'self.store.clock'}
 HANDOFFS = {'run_in_threadpool', 'asyncio.to_thread'}  # by exact name: a function of the package's own is no handoff
 
 
@@ -185,14 +187,17 @@ def test_no_async_function_in_the_package_calls_the_store_or_an_identity_check_o
     ('peer_routes.py', 'await run_in_threadpool(fed.make_due)\n',
      'await run_in_threadpool(fed.make_due)\n        fed.connections(who)\n', ('peer_routes.py', 'sync', 'fed.connections')),
     # the re-check's: a method reached through self, and a helper imported from a sibling module
-    ('app.py', 'await run_in_threadpool(self.valid, key, token)', 'self.valid(key, token)',
-     ('app.py', 'refusal', 'self.valid')),
+    ('app.py', 'if await self.miss.run(self.missed, key):', 'if self.missed(key):',
+     ('app.py', 'key_valid', 'self.missed')),
     ('app.py', 'return await run_in_threadpool(store.shorten_imprint, ',
      'sign_first(store)\n            return await run_in_threadpool(store.shorten_imprint, ',
      ('app.py', 'imprint_shorten', 'sign_first')),
     # the last pass's: an alias of self.store, and a held object reached through app.state
-    ('app.py', '        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):',
-     '        s = self.store\n        if s.session_is_valid(token):', ('app.py', 'refusal', 's.session_is_valid')),
+    ('app.py', '        return await run_in_threadpool(self.store.session_is_valid, token)',
+     '        s = self.store\n        return s.session_is_valid(token)', ('app.py', 'session_valid', 's.session_is_valid')),
+    # Task 3's: the live set's own calls are allowed by name, so a store call beside them is still seen
+    ('app.py', '            return await run_in_threadpool(self.store.ship_key_is_valid, key)',
+     '            return self.store.ship_key_is_valid(key)', ('app.py', 'key_valid', 'self.store.ship_key_is_valid')),
     ('app.py', "return await run_in_threadpool(store.rename_user, who, data.get('name'))",
      "app.state.federation.status(who)\n        return await run_in_threadpool(store.rename_user, who, data.get('name'))",
      ('app.py', 'rename_me', 'app.state.federation.status')),

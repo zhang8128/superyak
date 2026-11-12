@@ -21,18 +21,23 @@ class LiveSet:
         self._lock = threading.Lock()
         self._rows = {}  # (kind, hash) -> (exp, user_id); a ship key's exp is infinite, as it lasts until revoked
 
-    def load(self, db, now):
-        """Every live row of the three tables, read on `db` (one snapshot), replacing what the set held."""
+    def load_live_rows(self, store):
+        """Every live row of the three tables, read in one snapshot (store.reading(), so in WAL it waits for no
+        writer), replacing what the set held. Returns how many it holds. The plan's load(db), named so that the
+        moved-reads walk, which matches methods by name, never takes another `.load` for it."""
         rows = {}
-        for token, user, exp in db.execute('SELECT token_hash, user_id, expires FROM sessions WHERE expires>?', (now,)):
-            rows['session', token] = (exp, user)
-        for token, user, exp in db.execute('SELECT token_hash, user_id, expires FROM login_devices WHERE expires>?', (now,)):
-            rows['device', token] = (exp, user)
-        for token, user in db.execute("SELECT key_hash, ship_id FROM ship_keys JOIN users ON users.id=ship_keys.ship_id "
-                                      "WHERE revoked IS NULL AND users.kind='ship'"):
-            rows['ship_key', token] = (math.inf, user)
+        with store.reading() as db:
+            now = store.clock()
+            for token, user, exp in db.execute('SELECT token_hash, user_id, expires FROM sessions WHERE expires>?', (now,)):
+                rows['session', token] = (exp, user)
+            for token, user, exp in db.execute('SELECT token_hash, user_id, expires FROM login_devices WHERE expires>?', (now,)):
+                rows['device', token] = (exp, user)
+            for token, user in db.execute("SELECT key_hash, ship_id FROM ship_keys JOIN users ON users.id=ship_keys.ship_id "
+                                          "WHERE revoked IS NULL AND users.kind='ship'"):
+                rows['ship_key', token] = (math.inf, user)
         with self._lock:
             self._rows = rows
+        return len(rows)
 
     def has(self, token, kind, now):
         """Whether the set holds this hash as this kind, unexpired at `now`."""

@@ -420,8 +420,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
     store.live = LiveSet()  # public-route-bound Task 2: every live credential row, loaded once, before serve answers
-    with store.reading() as db:
-        store.live.load(db, store.clock())
+    store.live.load_live_rows(store)
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
