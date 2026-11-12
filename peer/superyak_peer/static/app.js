@@ -182,6 +182,15 @@ function bindEditorIdentity(user) {
   state.editorIdentity = next;
 }
 
+// Public-route-bound Task 5: a 503 marked x-superyak-busy was refused before the home did anything (spec R3), so it's
+// asked again once, after its Retry-After (at most 5 s) and up to 1 s more, so pages turned away together don't all come
+// back together. A 503 without the mark (a proxy's, or the home's own failure) is never asked again.
+function busyWait(response) {
+  if (response.status !== 503 || response.headers.get("x-superyak-busy") !== "1") return null;
+  const after = Number.parseInt(response.headers.get("retry-after") || "1", 10);
+  return (Math.min(Number.isFinite(after) && after >= 0 ? after : 1, 5) + Math.random()) * 1000;
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.json !== undefined) {
@@ -192,10 +201,15 @@ async function api(path, options = {}) {
     headers.set("x-csrf-token", state.me.csrf_token);
   }
   let response;
-  try {
-    response = await fetch(path, { credentials: "same-origin", ...options, headers });
-  } catch (_) {
-    throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(path, { credentials: "same-origin", ...options, headers });
+    } catch (_) {
+      throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
   }
   const isJson = (response.headers.get("content-type") || "").includes("application/json");
   const data = await (isJson ? response.json() : response.text()).catch(() => undefined);
