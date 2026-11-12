@@ -12,7 +12,10 @@ permissions:
 jobs:
   peer:
     name: Standalone peer, browser, and package checks
-    runs-on: ubuntu-latest
+    # Pinned while ubuntu-latest moves to 26.04: the peer suite ran 35:48 and 36:52 there (main e29b490e, f2aa2f29) against
+    # 23:47 on 24.04 with the same temp in RAM, and the slower runner widened a browser race. Unpin once the cause is
+    # known (board ci:peer-job-slower-on-ubuntu-26).
+    runs-on: ubuntu-24.04
     timeout-minutes: 60  # 15 cut the suite at 15m18s on 7d46e2b6; 35 cut it at 96% with 0 failures on 16c41c76, after a slow apt mirror; 45 cut the job on 728b0f64 just after 3,705 passed in 44m20s. Green runs took 24.3, 29.4 and 29.6 min early on; the suite alone took 44.3 min on 728b0f64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
