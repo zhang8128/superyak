@@ -2,6 +2,7 @@
 and ship key, and changed only after a commit: Store.login's new session, its new or extended device and every row its
 deletes remove (change C), logout's session, and a lookup that finds no live row. A lookup that raises changes nothing,
 and devices never leave on a lookup."""
+from contextlib import contextmanager
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -163,6 +164,45 @@ def test_a_rolled_back_sign_in_changes_nothing_in_the_set(env, monkeypatch):
     with pytest.raises(sqlite3.OperationalError):
         store.login('patient', PASSWORD, '127.0.0.1', public=False)
     assert len(store.live) == before and rows(app, 'sessions') == set()
+
+
+def test_a_sign_in_whose_commit_fails_takes_nothing_out_of_the_set(env, monkeypatch):
+    """The Tasks 2-3 reader's S1: login's whole body runs (the cap drops the oldest session, the prune the oldest
+    device), then its transaction fails where it would commit, as a "database is locked" at COMMIT does in rollback
+    mode. Nothing it gathered may reach the set: an apply before the commit would sign out a live session and device."""
+    app, clock, _ = env
+    store = app.state.store
+    sessions, devices = [], []
+    for _ in range(SESSIONS_PER_USER):  # 20 sessions and 20 devices, each newer than the last: both caps are due
+        _, session, device = sign_in(app)
+        sessions.append(session)
+        devices.append(device)
+        clock[0] += 1
+    held, opened, real = len(store.live), [], type(store)._transaction
+
+    @contextmanager
+    def fails_at_the_commit(self, wait=None):
+        with real(self, wait) as db:
+            yield db
+            opened.append(1)
+            if len(opened) == 2:  # login's own transaction, after _reserve's
+                raise sqlite3.OperationalError('database is locked')
+    monkeypatch.setattr(type(store), '_transaction', fails_at_the_commit)
+    with pytest.raises(sqlite3.OperationalError):
+        store.login('patient', PASSWORD, '127.0.0.1', public=False)
+    assert len(opened) == 2
+    monkeypatch.undo()
+    assert len(store.live) == held
+    assert live(app, 'session', sessions[0], clock) and live(app, 'device', devices[0], clock)
+    assert token_hash(sessions[0]) in rows(app, 'sessions') and token_hash(devices[0]) in rows(app, 'login_devices')
+
+
+def test_an_add_keeps_the_later_exp_whatever_order_it_lands_in():
+    """N1: two extensions of one device applied out of order leave the later exp."""
+    live_set = LiveSet()
+    live_set.add('device', 'd', 200.0, 'u')
+    live_set.add('device', 'd', 100.0, 'u')  # the earlier commit's add, applied late
+    assert live_set.has('d', 'device', 150.0)
 
 
 def test_the_set_holds_a_new_session_before_login_returns_its_cookie(env, monkeypatch):

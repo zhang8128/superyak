@@ -54,14 +54,17 @@ class LiveSet:
     def apply(self, changes):
         """Changes gathered in a committed transaction, applied together, in order, under the lock: ('add', kind, hash,
         exp, user_id), which also sets a new exp on an entry the set holds (a device's extension, which may have left
-        the set as expired: the plan's set_exp, as an upsert), or ('remove', kind, hash)."""
+        the set as expired: the plan's set_exp, as an upsert), or ('remove', kind, hash). An add keeps the later of
+        the two exps: two sign-ins extending one device can apply out of their commits' order, and the earlier exp
+        must not win (the Tasks 2-3 reader's N1)."""
         with self._lock:
             for change in changes:
                 verb, kind, token = change[:3]
                 if kind not in KINDS:
                     raise ValueError(f'not a live-set kind: {kind}')
                 if verb == 'add':
-                    self._rows[kind, token] = (change[3], change[4])
+                    held = self._rows.get((kind, token))
+                    self._rows[kind, token] = (change[3] if held is None else max(held[0], change[3]), change[4])
                 elif verb == 'remove':
                     self._rows.pop((kind, token), None)
                 else:
