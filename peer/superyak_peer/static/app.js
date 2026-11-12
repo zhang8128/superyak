@@ -1976,7 +1976,12 @@ async function loadData() {
       api("/api/ships"),
       loadImprints(),
       loadConnectorNotice(),
-    ]);
+    ]).catch(async (error) => {
+      // A 401 from the home's own read wins over another read's quicker failure, so an ended session signs in again
+      // rather than showing a flash; /api/ships, which once waited for the home, now runs beside it.
+      const homeAnswer = error.status === 401 ? null : await settled(homeRead);
+      throw homeAnswer && "error" in homeAnswer && homeAnswer.error.status === 401 ? homeAnswer.error : error;
+    });
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
     const adminAnswer = async (flag, path, read) => {
@@ -2010,7 +2015,7 @@ async function loadData() {
 
 async function loadRoute() {
   const { route, id } = routeParts();
-  const early = earlyRoom;
+  let early = earlyRoom;
   earlyRoom = null;
   state.preview = false;
   state.confirmWithdraw = false;
@@ -2024,6 +2029,7 @@ async function loadRoute() {
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
+    early = null;  // read before the room was listed, so it may be a refusal that no longer holds: read it afresh
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
@@ -2933,7 +2939,8 @@ async function bootstrap() {
     else state.me = await demoLogin("patient");
     bindEditorIdentity(state.me);
     readRoomEarly();
-    await refresh();
+    try { await refresh(); }
+    finally { earlyRoom = null; }  // the read was for this load: a refresh that never reached loadRoute leaves it, unread
   } catch (error) {
     showLogin(error.status === 401 ? "" : error.message);
   }
