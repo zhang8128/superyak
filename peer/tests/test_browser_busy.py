@@ -141,3 +141,43 @@ def test_the_consent_pages_wait_is_bounded_the_same_way(connector_home):
             start_connecting(page, connector_home)
             expect(page.get_by_label('Username', exact=True)).to_be_visible()
             waits_are_bounded(page.evaluate(WAITS))
+
+
+def public_attachment(peer):
+    """A published layer with one attachment, and the public page that shows it."""
+    import base64
+    store, owner = peer['app'].state.store, peer['users']['patient']['id']
+    made = store.upload_file(owner, 'notes.txt', 'text/plain', base64.b64encode(b'hello from the file').decode())
+    layer = store.create_layer(owner, {'title': 'Open', 'body': 'Shared', 'public': True, 'attachment_ids': [made['id']]})
+    store.activate_layer(owner, layer['id'], layer['version'])
+    return f"{peer['base_url']}/public/?layer={layer['id']}"
+
+
+@pytest.mark.parametrize('busy_times, marked, shown, asked', [
+    (1, True, None, 2),
+    (2, True, 'This home is busy just now. Try again in a moment.', 2),
+    (1, False, 'This attachment is unavailable.', 1),
+    (1, 'abort', 'Connection lost. Try again when this home is reachable.', 1),
+])
+def test_a_public_attachment_asks_once_more_after_a_marked_503_and_never_shows_its_json(browser_peer, busy_times, marked,
+                                                                                         shown, asked):
+    """The Task 6 reader's N3: a link that navigated straight to the file showed a busy answer's raw JSON. Now the page
+    fetches it, asks once more after a marked 503 only, and saves the file under its own name."""
+    log, address = [], public_attachment(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.goto(address)
+            link = page.get_by_role('link', name='Download attachment 1')
+            page.route('**/public/layers/*/files/*', answering(log, busy_times, marked))
+            if shown is None:
+                with page.expect_download() as saving:
+                    link.click()
+                saved = saving.value
+                assert saved.suggested_filename == 'notes.txt'
+                assert open(saved.path(), 'rb').read() == b'hello from the file'
+            else:
+                link.click()
+                expect(page.get_by_role('status')).to_have_text(shown)
+                page.wait_for_timeout(1500)
+                expect(page.get_by_role('heading', name='Open')).to_be_visible()  # still the page, not an answer's body
+    assert len(log) == asked

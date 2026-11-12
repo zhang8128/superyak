@@ -1955,6 +1955,45 @@ async function renderPublic() {
     }
   }
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
+  for (const link of app.querySelectorAll(".attachments .attachment")) {
+    link.addEventListener("click", (event) => { event.preventDefault(); downloadAttachment(link); });
+  }
+}
+
+// Public-route-bound Task 7b (the Task 6 reader's N3): a public file read waits in the layers' lane, so its busy answer
+// is asked again once, after the same wait api() takes, and a reader never sees that answer's raw JSON. The file is
+// saved from what came back, under the name its answer gives.
+async function downloadAttachment(link) {
+  const says = (words) => {
+    let status = link.closest(".attachments").querySelector(".attachment-status");
+    if (!status) {
+      status = Object.assign(document.createElement("p"), { className: "inline-message attachment-status" });
+      status.setAttribute("role", "status");
+      link.closest(".attachments").append(status);
+    }
+    status.textContent = words;
+  };
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(link.href, { credentials: "same-origin" });
+    } catch (_) {
+      return says("Connection lost. Try again when this home is reachable.");
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
+  }
+  if (!response.ok) {
+    return says(busyWait(response) !== null ? "This home is busy just now. Try again in a moment." : "This attachment is unavailable.");
+  }
+  const named = /filename="([^"]*)"/.exec(response.headers.get("content-disposition") || "");
+  const url = URL.createObjectURL(await response.blob());
+  const save = Object.assign(document.createElement("a"), { href: url, download: named ? named[1] : "attachment" });
+  document.body.append(save);
+  save.click();
+  save.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 // A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.
