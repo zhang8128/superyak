@@ -223,3 +223,18 @@ def test_a_sign_ins_failure_is_never_marked_busy(env, monkeypatch):
     answer = browser.post('/api/login', json={'username': 'andy', 'password': 'long-password-andy'})
     assert len(opened) == 2
     assert answer.status_code == 500 and 'x-superyak-busy' not in answer.headers
+
+
+def test_a_wait_asked_for_inside_the_bound_is_cut_to_it(env):
+    """A caller's own wait= (health's 3 s, say) can't take lane work past the bound: inside bounded(0.5) a transaction
+    asking for 5 s gives up at 0.5 s against a raw writer."""
+    app, _ = env
+    store = app.state.store
+    holder = holding(3.0, exclusive_outside_the_gate(store))
+    started = time.monotonic()
+    with pytest.raises(sqlite3.OperationalError, match='locked'):
+        with store.bounded(0.5), store.transaction(wait=5) as db:
+            db.execute('SELECT 1').fetchone()
+    took = time.monotonic() - started
+    holder.join(10)
+    assert 0.4 <= took < 1.5, took

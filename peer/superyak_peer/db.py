@@ -180,11 +180,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 yield db
 
     def _wait(self, wait=None):
-        if wait is not None:
-            return wait
-        default = 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
+        """A connection's SQLite busy wait: `wait` if given, else 30 s or what's left before `busy_until`, and inside
+        bounded() never past its deadline, even when a caller asks for longer (health's 3 s, say)."""
+        if wait is None:
+            wait = 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
         deadline = getattr(_bounded, 'deadline', None)
-        return default if deadline is None else max(0.001, min(default, deadline - self._monotonic()))
+        return wait if deadline is None else max(0.001, min(wait, deadline - self._monotonic()))
 
     @contextmanager
     def bounded(self, seconds):
