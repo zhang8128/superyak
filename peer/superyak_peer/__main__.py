@@ -873,6 +873,7 @@ def main(argv=None):
     serve.add_argument('--public-origin', help="The remote connector's issuer: one of --origin, its public https name. Without it the connector's routes don't exist")
     serve.add_argument('--connector-callback', help="The one redirect the connector accepts (default claude.ai's)")
     args = parser.parse_args(argv)
+    held = []  # descriptors this command holds while it runs (serve's serve.lock), closed when main() returns
     try:
         if args.command == 'bootstrap-super-admin':
             user = Store(args.data_dir).bootstrap_super_admin(args.username, args.name, args.activation_file, renew_activation=args.renew_activation)
@@ -1298,33 +1299,38 @@ def main(argv=None):
                 raise ValueError('--public-origin needs --proxy-headers: behind Funnel every sender would be 127.0.0.1, one shared bucket for the sign-in holds')
             if args.proxy_headers and (not ipv4_loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
                 raise ValueError('Proxy headers require an IPv4 loopback bind, explicit HTTPS origins, and no local demo')
+            # Each refusal that reads only its arguments, then the model config and the port: all before serve.lock, so
+            # a refused serve makes nothing (public-route-bound plan, Task 1)
+            if args.peer_tls and (args.tls_cert or args.tls_key):
+                raise ValueError('Choose generated peer TLS or explicit TLS files')
+            if args.federation_endpoint and not args.peer_tls:
+                raise ValueError('Federation serving requires --peer-tls to match its exported certificate')
+            if not loopback and not (args.peer_tls or (args.tls_cert and args.tls_key)):
+                raise ValueError('Remote binds require TLS certificate and key')
+            if bool(args.tls_cert) != bool(args.tls_key):
+                raise ValueError('TLS requires both certificate and key')
+            from .models import load_config
+            model_config = load_config(args.model_config)
+            other = 8081 if args.port == 8080 else 8080
+            refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
+            # Task 1: one serve per data dir, taken before the identity and the store, so a second serve touches nothing
+            from .dispatch import serve_lock
+            held.append(serve_lock(args.data_dir))
             if args.peer_tls:
                 from .identity import PeerIdentity
                 from urllib.parse import urlsplit
-                if args.tls_cert or args.tls_key:
-                    raise ValueError('Choose generated peer TLS or explicit TLS files')
                 host = urlsplit(args.federation_endpoint).hostname if args.federation_endpoint else args.host
                 from .signatures import refuse_a_lost_identity_before_the_store
                 refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before the identity is loaded or made with its hosts
                 identity = PeerIdentity.load_or_create(args.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
                 args.tls_cert, args.tls_key = identity.cert_path, identity.key_path
-            if args.federation_endpoint and not args.peer_tls:
-                raise ValueError('Federation serving requires --peer-tls to match its exported certificate')
             tls = bool(args.tls_cert and args.tls_key)
-            if not loopback and not tls:
-                raise ValueError('Remote binds require TLS certificate and key')
-            if bool(args.tls_cert) != bool(args.tls_key):
-                raise ValueError('TLS requires both certificate and key')
             if args.sync:  # one process syncs a directory: this one, or federate (federation pull plan, dispatch.py)
                 from .dispatch import federation_lock
                 sync_lock = federation_lock(args.data_dir)  # noqa: F841 - held for the life of the server
             from .app import TRUSTED_PROXY, create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
-            from .models import load_config
-            model_config = load_config(args.model_config)
-            other = 8081 if args.port == 8080 else 8080
-            refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
@@ -1354,6 +1360,9 @@ def main(argv=None):
                     signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
+    finally:
+        for fd in held:
+            os.close(fd)
 
 if __name__ == '__main__':
     main()

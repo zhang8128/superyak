@@ -2,6 +2,7 @@
 from contextlib import AbstractContextManager, contextmanager
 import fcntl
 import os
+from pathlib import Path
 import threading
 import time
 
@@ -45,6 +46,25 @@ def federation_lock(data_dir):
         os.close(fd)
         raise ValueError('another process already syncs this directory') from None
     return fd
+
+def serve_lock(data_dir):
+    """Public-route-bound plan, Task 1: one serve per data directory, since serve's live set (Task 2) is the one
+    minter's memory of what it minted. An flock on serve.lock, opened O_NOFOLLOW|O_CLOEXEC at 0600 and taken LOCK_NB,
+    held until the returned descriptor closes, which is when serve ends. It makes the directory as the Store does,
+    and refuses a symlinked one as the Store would, so the lock never lands in another directory. A second serve gets
+    ValueError and has touched nothing else. Only serve takes it: a Store, federate and the station commands don't."""
+    path = Path(data_dir)
+    if path.is_symlink():
+        raise ValueError('Symlinked state is not allowed')
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path / 'serve.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise ValueError(f'another serve runs on this data dir: {path / "serve.lock"} is held') from None
+    return fd
+
 
 class DispatchGate(AbstractContextManager):
     def __init__(self, path):
