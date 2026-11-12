@@ -296,22 +296,36 @@ def test_the_measure_root_is_made_this_users_own_and_refused_otherwise(tmp_path,
     assert not counting.on()
 
 
-def test_the_counts_are_never_written_through_a_symlink(measure_root, tmp_path):
+@pytest.mark.parametrize('made', ['file', 'link', 'dangling link'])
+def test_a_run_never_starts_on_an_existing_counts_file(measure_root, tmp_path, made):
+    """The re-check's nit: a run that writes nothing (a crash, SIGKILL, a second SIGTERM, a refused start) would leave
+    the last run's file at `out`, valid JSON that reads as this run's. So `out` must not exist, as a file or a link."""
+    kept, out = tmp_path / 'kept.json', tmp_path / 'counts.json'
+    kept.write_text('{"totals": [], "peaks": []}\n')
+    if made == 'file':
+        out.write_text(kept.read_text())
+    else:
+        out.symlink_to(kept if made == 'link' else tmp_path / 'nowhere')
+    with pytest.raises(ValueError, match='writes a new file: .* exists'):
+        counting.start_measuring(measure_root / 'scratch', out)
+    assert not counting.on() and kept.read_text() == '{"totals": [], "peaks": []}\n'
+
+
+def test_a_link_planted_after_the_start_is_replaced_never_followed(measure_root, tmp_path):
     kept, out = tmp_path / 'kept.json', tmp_path / 'counts.json'
     kept.write_text('kept\n')
-    out.symlink_to(kept)
     write = counting.start_measuring(measure_root / 'scratch', out)
+    out.symlink_to(kept)
     write()  # the link itself is replaced, by a file of this user's
     assert kept.read_text() == 'kept\n'
     assert not out.is_symlink() and 'totals' in json.loads(out.read_text())
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
 
 
-def test_a_write_cut_short_leaves_the_last_counts_whole(measure_root, tmp_path, monkeypatch):
-    """The reader's N3: written in place, a second SIGTERM mid-write left an empty file. Now the old file stays until a
-    whole new one replaces it, and no temp file is left behind."""
+def test_a_write_cut_short_leaves_no_file(measure_root, tmp_path, monkeypatch):
+    """The reader's N3: written in place, a second SIGTERM mid-write left an empty file. Now nothing is at `out` until
+    a whole file is renamed there, and no temp file is left behind."""
     out = tmp_path / 'counts.json'
-    out.write_text('{"totals": [], "peaks": []}\n')
     write = counting.start_measuring(measure_root / 'scratch', out)
 
     def cut(*_):
@@ -319,8 +333,7 @@ def test_a_write_cut_short_leaves_the_last_counts_whole(measure_root, tmp_path, 
     monkeypatch.setattr(counting.os, 'replace', cut)
     with pytest.raises(KeyboardInterrupt):
         write()
-    assert out.read_text() == '{"totals": [], "peaks": []}\n'
-    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(['counts.json', 'measure-root'])
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['measure-root']
 
 
 def free_port():

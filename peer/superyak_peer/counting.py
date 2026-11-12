@@ -179,16 +179,19 @@ def _own_root():
 def start_measuring(data_dir, out):
     """SUPERYAK_MEASURE_COUNTS for serve: refuse a measure root that isn't this user's own directory, and any data dir
     that isn't under it once resolved (so MEASURE_ROOT/../lighthouse, and a link under the root to elsewhere, are
-    refused), then count from empty. Returns the call that writes the totals and peaks to `out` as JSON, never through
-    a symlink, which serve makes when Ctrl-C or SIGTERM stops it."""
+    refused) and an `out` that exists, so no file there was ever another run's, then count from empty. Returns the call
+    that writes the totals and peaks to `out` as JSON, never through a symlink, which serve makes when Ctrl-C or
+    SIGTERM stops it."""
     root = _own_root()
     resolved = Path(data_dir).resolve()
     if resolved == root or not resolved.is_relative_to(root):
         raise ValueError(f'SUPERYAK_MEASURE_COUNTS counts only a data dir under {MEASURE_ROOT}, not {resolved}')
+    target = Path(out)
+    if os.path.lexists(target):  # a run that writes nothing (a crash, SIGKILL, a refused start) must leave no file
+        raise ValueError(f'SUPERYAK_MEASURE_COUNTS writes a new file: {target} exists, so give this run its own')
     with _lock:
         _clear()
         _state['on'] = True
-    target = Path(out)
 
     def write():
         """A temp file beside `out`, made new (O_EXCL, so never through a planted link), then renamed over it: a write
