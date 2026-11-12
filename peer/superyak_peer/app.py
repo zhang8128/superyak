@@ -17,6 +17,7 @@ from starlette.routing import Match, Mount
 from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from . import counting
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
@@ -187,6 +188,17 @@ class PublicRoute:
     async def __call__(self, scope, receive, send):
         if scope['type'] not in ('http', 'websocket'):
             return await self.app(scope, receive, send)
+        if not counting.on():
+            return await self._call(scope, receive, send)
+        # public-route-bound plan, Task 0: what follows on this request, its workers included, is counted under it
+        route = dispatched(self.router, scope) if scope['type'] == 'http' else None
+        token = counting.request(getattr(route, 'path', None) or scope.get('path'), is_public(scope))
+        try:
+            return await self._call(scope, receive, send)
+        finally:
+            counting.reset(token)
+
+    async def _call(self, scope, receive, send):
         try:  # only the classification and the lookup: 401 would tell the dock client its key was revoked
             refusal = await self.refusal(scope)
         except Exception as error:  # noqa: BLE001

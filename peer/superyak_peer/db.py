@@ -7,6 +7,7 @@ import sqlite3
 import stat
 import threading
 import time
+from . import counting
 from .auth import Auth
 from .spaces import Spaces
 from .layers import Layers
@@ -172,7 +173,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         (health's 3 s); without it the Store's rule holds (30 s, or `busy_until`). Refused inside reading()."""
         if self.in_reading():
             raise RuntimeError('a write inside reading(): a gate-free snapshot never writes')
-        with self.dispatch_gate:
+        with counting.counted('transaction'), self.dispatch_gate:
             with self._transaction(wait) as db:
                 yield db
 
@@ -204,6 +205,11 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         finally:
             db.close()
 
+    @staticmethod
+    def counting():
+        """For tests: count this process's store work by bucket while the block runs (public-route-bound plan, Task 0)."""
+        return counting.counts()
+
     def in_reading(self):
         """Whether this thread is inside reading() now."""
         return getattr(_reading, 'depth', 0) > 0
@@ -232,7 +238,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 db.close()
                 raise
             if wal:
-                with self._snapshot(db):
+                with self._snapshot(db), counting.counted('read'):
                     yield db
                 return
             db.close()
@@ -244,7 +250,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             except BaseException:
                 db.close()
                 raise
-            with self._snapshot(db):
+            with self._snapshot(db), counting.counted('read'):
                 yield db
 
     def _read_only_connection(self):

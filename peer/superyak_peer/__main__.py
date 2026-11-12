@@ -1318,12 +1318,20 @@ def main(argv=None):
             model_config = load_config(args.model_config)
             other = 8081 if args.port == 8080 else 8080
             refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
+            # public-route-bound plan, Task 0: a measure's scratch serve counts its store work and writes it at a clean exit
+            measure = os.environ.get('SUPERYAK_MEASURE_COUNTS')
+            write_counts = None
+            if measure:
+                from .counting import start_measuring
+                write_counts = start_measuring(args.data_dir, measure)
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
                         proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
                         timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            if write_counts is not None:
+                write_counts()
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
 

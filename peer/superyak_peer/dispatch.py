@@ -5,6 +5,8 @@ import os
 import threading
 import time
 
+from . import counting
+
 _gates = {}
 _registry = threading.Lock()
 POLL = 0.005  # a bounded wait asks for the file lock again this often: flock itself has no timeout
@@ -83,6 +85,7 @@ class DispatchGate(AbstractContextManager):
                     os.close(fd)
                     raise
                 local.fd = fd
+                counting.note('gate')
             local.depth = getattr(local, 'depth', 0) + 1
         except BaseException:
             lock.release()
