@@ -104,6 +104,30 @@ def test_a_used_invitation_replayed_costs_one_read_at_most_then_none(env):
         assert counted.total('transaction', lane='redeem') == reads and counted.total('transaction') == reads
 
 
+@pytest.mark.parametrize('made', ['tagged', 'untagged'])
+def test_a_burst_of_replays_reads_once_in_all(env, tmp_path, made):
+    """16 at once of an invitation used elsewhere: the lane admits 5, all past the in-memory check before the first
+    lookup finds it used. Each asks the sets again in the lane, so only the first reads (Task 11's bar, rev 4's)."""
+    app, admin = env
+    if made == 'tagged':
+        token = invitation(app, admin)
+    else:
+        token = 'b' * 43
+        made_before_the_deploy(app, admin, token)
+        app = start(tmp_path / 'home')
+    with app.state.store.transaction() as db:
+        db.execute('UPDATE invitations SET used=1 WHERE token_hash=?', (token_hash(token),))
+
+    async def burst():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=PUBLIC_CLIENT), base_url='http://testserver',
+                                     headers={'origin': 'http://testserver'}) as http:
+            return await asyncio.gather(*(http.post('/api/invitations/redeem', json=form(token, f'u{n}')) for n in range(16)))
+    with app.state.store.counting() as counted:
+        answers = asyncio.run(burst())
+    assert all(answer.status_code in (400, 503) for answer in answers)
+    assert counted.total('transaction', lane='redeem') == 1 and counted.total('transaction') == 1
+
+
 def test_the_spent_set_forgets_each_entry_at_its_exp_and_sweeps_when_it_doubles():
     spent = tags.SpentSet()
     spent.add('a', 100, now=0)

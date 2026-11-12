@@ -429,6 +429,8 @@ class Auth:
         text(token, 'invitation', 128)
         if not INVITATION_TOKEN.fullmatch(token):  # anonymous and public: a made-up token never reaches the database
             raise Problem(400, 'Invitation unavailable')
+        if label is not None and self._gone_since_its_check(token):
+            raise Problem(400, 'Invitation unavailable')
         none_live = []
         try:
             redeemed = self._redeem(token, username, name, password, label, none_live)
@@ -438,6 +440,15 @@ class Auth:
             raise
         self._spent(token)  # only once the commit returned: a failed COMMIT keeps a live row's place
         return redeemed
+
+    def _gone_since_its_check(self, token):
+        """A public redeem, now in its lane: the in-memory check ran before the lane, so up to its 4 waiting places passed
+        it before the first lookup found the token used. Asked again here, only that first one reads, as revision 4's bar
+        has it (at most one read, then none until its exp)."""
+        hashed = token_hash(token)
+        if tags.TAGGED.fullmatch(token):
+            return self.spent is not None and self.spent.spent(hashed, self.clock())
+        return self.untagged is not None and self.untagged.label(hashed) is None
 
     def _spent(self, token):
         """Task 7b: this token can redeem nothing more. Untagged, it leaves serve's start-time set; tagged, it enters the
