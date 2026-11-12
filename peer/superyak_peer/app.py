@@ -260,8 +260,7 @@ class PublicRoute:
         return False
 
     def missed(self, key):
-        with counting.lane('miss'):
-            return self.store.ship_key_is_valid(key)
+        return self.store.ship_key_is_valid(key)  # in the miss lane, so counted as its work
 
     async def session_valid(self, token):
         """With no key: a session the live set lacks is no session, and costs no read."""
@@ -283,8 +282,8 @@ class SignInLane:
     """Public route spec 3: all of Store.login runs in a worker under its lane's own limiter, so sign-ins never compete
     with sync routes for anyio's shared threads. `size` sign-ins at a time with `queue` waiting; a full lane answers
     429 without hashing or counting."""
-    def __init__(self, size, queue):
-        self.size, self.queue, self.inside = size, queue, 0
+    def __init__(self, size, queue, name):
+        self.size, self.queue, self.inside, self.name = size, queue, 0, name
         self.limiter = anyio.CapacityLimiter(size)
 
     def refused(self):
@@ -295,9 +294,13 @@ class SignInLane:
             raise self.refused()
         self.inside += 1  # only the event loop changes it
         try:
-            return await anyio.to_thread.run_sync(functools.partial(call, *args, **kwargs), limiter=self.limiter)
+            return await anyio.to_thread.run_sync(functools.partial(self._counted, call, *args, **kwargs), limiter=self.limiter)
         finally:
             self.inside -= 1
+
+    def _counted(self, call, *args, **kwargs):
+        with counting.lane(self.name):  # what runs in a lane is counted as its work (public-route-bound Task 0)
+            return call(*args, **kwargs)
 
 class MissLane(SignInLane):
     """Public-route-bound Task 3: a public ship key the live set lacks is looked up here, 1 inside and 4 waiting, so
@@ -428,7 +431,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.sync_enabled = sync_enabled
     app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
     # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
-    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8), tailnet=SignInLane(1, 4), known=SignInLane(1, 4))
+    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8, 'public'), tailnet=SignInLane(1, 4, 'tailnet'), known=SignInLane(1, 4, 'known'))
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
@@ -441,7 +444,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.assets = assets
     app.mount('/assets', AssetApp(assets), name='assets')  # exact keys from the table: no path is normalized
     app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
-    app.state.miss_lane = MissLane(1, 4)  # public-route-bound Task 3
+    app.state.miss_lane = MissLane(1, 4, 'miss')  # public-route-bound Task 3
     app.add_middleware(PublicRoute, store=store, router=app.router, miss=app.state.miss_lane)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
@@ -480,7 +483,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         the imprint confirm's password (R19) both take it, so a confirm is laned as a sign-in is (review S3)."""
         public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
         lane = lanes.public if public else lanes.tailnet
-        if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
+        # public-route-bound Task 4: a device cookie over 128 characters, or one serve's live set lacks, skips the
+        # pre-lane read; it goes through the public lane, where Store.login checks it as before
+        known = (public and device is not None and len(device) <= CREDENTIAL_MAX
+                 and store.live.has(token_hash(device), 'device', store.clock()))
+        if known and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
         return lane, public, device
     app.state.sign_in_lane = sign_in_lane  # the connector's sign-in (Task 5) is laned and counted the same way

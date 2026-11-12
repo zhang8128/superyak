@@ -25,7 +25,8 @@ IDENTITY = {'actor', 'member', 'ship_member', 'current_user'}
 SERVICES = {'store', 'fed', 'manager', 'sources'}  # the names route modules reach the store through
 ON_THE_LOOP = {'store.inbox_wait_slot',  # an in-memory count of a ship's waits, with no store read
                # PublicRoute's live set (public-route-bound Tasks 2-3): a dict under a lock, and the store's clock
-               'self.store.live.has', 'self.store.live.add', 'self.store.clock'}
+               'self.store.live.has', 'self.store.live.add', 'self.store.clock',
+               'store.live.has', 'store.clock'}  # the sign-in lane's pick (Task 4)
 HANDOFFS = {'run_in_threadpool', 'asyncio.to_thread'}  # by exact name: a function of the package's own is no handoff
 
 
