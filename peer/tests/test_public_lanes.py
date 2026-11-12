@@ -138,6 +138,26 @@ def test_the_miss_lanes_lookup_gives_up_at_the_bound_too(env, monkeypatch):
     assert busy(answer) and LANE_BOUND - 0.1 <= took < LANE_BOUND + 1.5, took
 
 
+@pytest.mark.journal('delete')
+@pytest.mark.parametrize('bound', [True, False])
+def test_the_miss_lanes_lookup_gives_up_at_the_bound_against_a_raw_writer(env, monkeypatch, bound):
+    """The Task 6 reader's S1, the SQLite arm of the miss lane: in rollback mode a raw BEGIN EXCLUSIVE from outside
+    the gate holds off the lookup's reading(), which gives up at 2 s, answered busy. Its control: with the lane's
+    deadline ignored by the connection's busy wait, the lookup waits out the 3.5 s hold and answers 401."""
+    app, _ = env
+    store = app.state.store
+    if not bound:
+        monkeypatch.setattr(type(store), '_wait', lambda self, wait=None: 30 if wait is None else wait)
+    holder = holding(3.5, exclusive_outside_the_gate(store))
+    ship = TestClient(app, base_url='http://testserver', client=PUBLIC_CLIENT, headers={'authorization': 'Bearer ' + 'k' * 43})
+    answer, took = timed(lambda: ship.get('/api/me'))
+    holder.join(10)
+    if bound:
+        assert busy(answer) and LANE_BOUND - 0.1 <= took < LANE_BOUND + 1.5, took
+    else:
+        assert answer.status_code == 401 and took >= 3.0, (answer.status_code, took)
+
+
 def slowed_layers(store, monkeypatch, seconds):
     read = type(store).active_layer
 
@@ -169,8 +189,10 @@ def test_a_tailnet_layer_read_passes_while_the_public_lane_is_full(env, monkeypa
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=PUBLIC_CLIENT), base_url='http://testserver') as flood, \
                 httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=TAILNET_CLIENT), base_url='http://testserver') as tailnet:
             waiting = [asyncio.create_task(flood.get(f'/public/layers/{JUNK_LAYER}-{n}')) for n in range(36)]
-            await asyncio.sleep(0.1)
-            assert app.state.layer_lane.inside == 36  # full
+            deadline = time.monotonic() + 10  # polled, not a fixed sleep, for a loaded CI runner (the reader's N4)
+            while app.state.layer_lane.inside < 36:
+                assert time.monotonic() < deadline, 'the lane never filled'
+                await asyncio.sleep(0.01)
             mine = await tailnet.get(f'/public/layers/{key}')
             return mine, await asyncio.gather(*waiting)
     mine, flood = asyncio.run(both())

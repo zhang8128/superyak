@@ -190,10 +190,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
 
     @contextmanager
     def bounded(self, seconds):
-        """Public-route-bound Task 6: store work inside waits at most `seconds` in all, both for the dispatch gate
-        (DispatchGate.bounded, then GateTimeout) and for SQLite's own busy wait (each connection's timeout, then
-        "database is locked"), so a public lane's slot is never held past it. Bounding only one would leave the other's
-        30 s. This thread's only, as the gate's bound is."""
+        """Public-route-bound Task 6: store work inside waits for the dispatch gate (DispatchGate.bounded, then
+        GateTimeout) and for SQLite's own busy wait (each connection's timeout, then "database is locked") only until
+        `seconds` from now, so a public lane's slot is never held for SQLite's 30 s. Bounding only one would leave the
+        other's. SQLite waits per statement, with the timeout set at connect, so a writer outside the gate that takes
+        the lock again between two statements can hold a slot about twice the bound in rollback mode, never 30 s (the
+        Task 6 reader's N1). This thread's only, as the gate's bound is."""
         deadline = self._monotonic() + seconds
         before = getattr(_bounded, 'deadline', None)
         _bounded.deadline = deadline if before is None else min(before, deadline)
