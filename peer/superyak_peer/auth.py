@@ -26,6 +26,8 @@ KNOWN_USER_HOLD = (24, 300)
 INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
+SESSION_LIFETIME = 86400
+SESSIONS_PER_USER = 20  # public-route-bound plan, Task 2: a user's live sessions, so the live set stays bounded
 
 
 def login_source(host, public):
@@ -150,16 +152,37 @@ class Auth:
     def _device_signed_in(self, db, user_id, device, now):
         """After a success: the presented token's row, kept and extended (its failures reset, its attempts kept), or a
         new token's row.
-        Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token."""
+        Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token and the
+        live set's changes (public-route-bound Task 2), each deleted hash selected before its DELETE."""
+        exp = now + DEVICE_LIFETIME
         if device is not None and db.execute('UPDATE login_devices SET expires=?, failures=0, failure_reset=0 WHERE token_hash=?',
-                                             (now + DEVICE_LIFETIME, token_hash(device))).rowcount:
-            return device
+                                             (exp, token_hash(device))).rowcount:
+            return device, [('add', 'device', token_hash(device), exp, user_id)]
         device = secrets.token_urlsafe(32)
+        expired = [row[0] for row in db.execute('SELECT token_hash FROM login_devices WHERE expires<=?', (now,))]
         db.execute('DELETE FROM login_devices WHERE expires<=?', (now,))
-        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(device), user_id, now + DEVICE_LIFETIME))
-        db.execute('DELETE FROM login_devices WHERE user_id=? AND token_hash NOT IN '
-                   '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)', (user_id, user_id, DEVICES_PER_USER))
-        return device
+        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(device), user_id, exp))
+        beyond = ('FROM login_devices WHERE user_id=? AND token_hash NOT IN '
+                  '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)')
+        pruned = [row[0] for row in db.execute(f'SELECT token_hash {beyond}', (user_id, user_id, DEVICES_PER_USER))]
+        db.execute(f'DELETE {beyond}', (user_id, user_id, DEVICES_PER_USER))
+        return device, [*(('remove', 'device', hashed) for hashed in expired + pruned),
+                        ('add', 'device', token_hash(device), exp, user_id)]
+
+    @staticmethod
+    def _session_made(db, user_id, hashed, csrf, now):
+        """Task 2's session cap: this user's expired sessions go, the new one is made, then the oldest beyond
+        SESSIONS_PER_USER go (never the new one, whatever the clock did). Returns the live set's changes, each deleted
+        hash selected before its DELETE."""
+        expired = [row[0] for row in db.execute('SELECT token_hash FROM sessions WHERE user_id=? AND expires<=?', (user_id, now))]
+        db.execute('DELETE FROM sessions WHERE user_id=? AND expires<=?', (user_id, now))
+        db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (hashed, user_id, csrf, now + SESSION_LIFETIME))
+        oldest = [row[0] for row in db.execute('SELECT token_hash FROM sessions WHERE user_id=? AND token_hash<>? '
+                                               'ORDER BY expires DESC, rowid DESC LIMIT -1 OFFSET ?',
+                                               (user_id, hashed, SESSIONS_PER_USER - 1))]
+        db.executemany('DELETE FROM sessions WHERE token_hash=?', [(gone,) for gone in oldest])
+        return [*(('remove', 'session', gone) for gone in expired + oldest),
+                ('add', 'session', hashed, now + SESSION_LIFETIME, user_id)]
 
     def _reserve(self, username, source, public, device):
         """Step 1 of login below, shared with check_password_attempt (R19): deletes expired counters, then refuses a
@@ -262,11 +285,13 @@ class Auth:
             current = self._settle(db, username, user, hashed, public, reserved)
             if current is not None:
                 now, token, csrf = self.clock(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, now + 86400))
-                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token,
-                          'device': self._device_signed_in(db, current['id'], device if known is not None else None, now)}
+                changes = self._session_made(db, current['id'], token_hash(token), csrf, now)
+                device, made = self._device_signed_in(db, current['id'], device if known is not None else None, now)
+                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token, 'device': device}
         if result is None:
             raise Problem(401, 'Invalid username or password')
+        if self.live is not None:  # Task 2's change C: after the commit, before the cookie leaves; a rollback applies none
+            self.live.apply([*changes, *made])
         return result
 
     def session(self, token):
@@ -278,16 +303,23 @@ class Auth:
 
     def session_is_valid(self, token):
         """Public route spec 2: the lookup `session` does, answered True or False. It writes nothing; the route's own
-        check still runs afterwards."""
+        check still runs afterwards. A lookup that finds no live row takes the session out of serve's live set (Task 2);
+        one that raises changes nothing."""
         if not isinstance(token, str):
             return False
+        hashed = token_hash(token)
         with self.reading() as db:
-            row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token), self.clock())).fetchone()
+            row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (hashed, self.clock())).fetchone()
+        if row is None and self.live is not None:
+            self.live.remove('session', hashed)
         return row is not None and not row['activation_pending'] and row['kind'] == 'person'
 
     def logout(self, token):
+        hashed = token_hash(token or '')
         with self.transaction() as db:
-            db.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash(token or ''),))
+            db.execute('DELETE FROM sessions WHERE token_hash=?', (hashed,))
+        if self.live is not None:  # after the commit (Task 2)
+            self.live.remove('session', hashed)
 
     def _admin(self, db, actor):
         row = require(db.execute('SELECT is_admin,activation_pending FROM users WHERE id=?', (actor,)).fetchone())

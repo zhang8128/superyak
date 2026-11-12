@@ -21,6 +21,7 @@ from . import counting
 from .agent_version import agent_update
 from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
+from .live_set import LiveSet
 from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
@@ -369,6 +370,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         raise ValueError('Federation requires HTTPS')
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
+    store.live = LiveSet()  # public-route-bound Task 2: every live credential row, loaded once, before serve answers
+    with store.reading() as db:
+        store.live.load(db, store.clock())
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)

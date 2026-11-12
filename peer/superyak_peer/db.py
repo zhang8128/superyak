@@ -68,6 +68,7 @@ _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, OwnerTrust, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
+    live = None  # serve's LiveSet, set by create_app (public-route-bound Task 2); a CLI's Store has none
     _keeper = None  # the connection keep_open() holds for a long-running process (store-wal-mode D2)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
