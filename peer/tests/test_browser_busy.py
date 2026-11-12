@@ -12,10 +12,13 @@ BUSY_ERROR = {'error': 'This home is busy; try again shortly'}
 
 
 def answering(log, busy_times, marked=True):
-    """A route handler: the first `busy_times` requests get a 503 (marked or not, Retry-After 0), the rest go on."""
+    """A route handler: the first `busy_times` requests get a 503 (marked or not, Retry-After 0), the rest go on.
+    marked='abort' fails them instead, as a dropped connection does."""
     def handle(route):
         log.append(route.request.method)
-        if len(log) <= busy_times:
+        if len(log) <= busy_times and marked == 'abort':
+            route.abort('failed')
+        elif len(log) <= busy_times:
             headers = {'retry-after': '0', **({'x-superyak-busy': '1'} if marked else {})}
             route.fulfill(status=503, json=BUSY_ERROR, headers=headers)
         else:
@@ -62,6 +65,19 @@ def test_the_app_never_asks_again_after_an_unmarked_503(browser_peer):
     assert log == ['POST']
 
 
+def test_the_app_never_asks_again_after_a_dropped_connection(browser_peer):
+    """The Tasks 4-5 reader's S1: a fetch that throws may have reached the home and changed something, so it's never
+    asked again; only the home's mark says nothing was done."""
+    log = []
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.route('**/api/login', answering(log, 1, marked='abort'))
+            sign_in(page, browser_peer)
+            expect(page.get_by_text('Connection lost. Try again when this home is reachable.')).to_be_visible()
+            page.wait_for_timeout(1500)
+    assert log == ['POST']
+
+
 def consent_sign_in(page):
     page.get_by_label('Username', exact=True).fill('sam@example.org')
     page.get_by_label('Password', exact=True).fill('long-password-sam')
@@ -72,6 +88,7 @@ def consent_sign_in(page):
     (1, True, 'Signed in as Sam Example', 2),
     (2, True, 'Your home is busy just now. Try again in a moment.', 2),
     (1, False, 'The connection to your home was lost. Try again.', 1),
+    (1, 'abort', 'The connection to your home was lost. Try again.', 1),  # S1: a dropped connection is never asked again
 ])
 def test_the_consent_page_asks_once_more_only_after_a_marked_503(connector_home, busy_times, marked, shown, asked):
     log, landed = [], []
@@ -91,15 +108,21 @@ WAITS = """() => {
   return {
     zero: wait(503, { ...marked, 'retry-after': '0' }), hour: wait(503, { ...marked, 'retry-after': '3600' }),
     junk: wait(503, { ...marked, 'retry-after': 'soon' }), none: wait(503, marked),
+    negative: wait(503, { ...marked, 'retry-after': '-5' }),
+    date: wait(503, { ...marked, 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }),
+    jitter: Array.from({ length: 20 }, () => wait(503, { ...marked, 'retry-after': '0' })),
     unmarked: wait(503, { 'retry-after': '0' }), ok: wait(200, marked),
   };
 }"""
 
 
 def waits_are_bounded(waits):
-    """Retry-After plus up to 1 s, at most 5 s of it; an unreadable or missing one is 1 s; unmarked or not a 503, none."""
+    """Retry-After plus up to 1 s, at most 5 s of it; a negative, an HTTP date (which parseInt can't read), an
+    unreadable or a missing one is 1 s; unmarked or not a 503, none. The jitter varies (the Tasks 4-5 reader's S2)."""
     assert 0 <= waits['zero'] < 1000 and 5000 <= waits['hour'] < 6000
-    assert 1000 <= waits['junk'] < 2000 and 1000 <= waits['none'] < 2000
+    for one in ('junk', 'none', 'negative', 'date'):
+        assert 1000 <= waits[one] < 2000, (one, waits[one])
+    assert all(0 <= wait < 1000 for wait in waits['jitter']) and len(set(waits['jitter'])) > 10
     assert waits['unmarked'] is None and waits['ok'] is None
 
 
