@@ -150,6 +150,16 @@ def signed_in_browser(playwright, peer, username, *, viewport=None):
         browser.close()
 
 
+def go_to(page, link, heading=None):
+    """Click a main navigation link and wait for its view's own heading, so the next click lands in that view. Home has
+    a button for each active release with the layer's own name ("Alpha layer"), which opens Shared spaces with the
+    layer's id in the address, so a nav click that hasn't drawn yet lets the next click open the wrong view and still
+    pass a wait on the address (test_a_new_account_on_the_page_forgets_the_release_history on ubuntu-26.04, CI run
+    43114454663; also 30310e87 and the caret round's)."""
+    page.get_by_role("navigation", name="Main navigation").get_by_role("link", name=link).click()
+    expect(page.get_by_role("heading", name=heading or link, level=1)).to_be_visible()
+
+
 @contextmanager
 def signed_out_browser(playwright, *, viewport=None):
     browser = playwright.chromium.launch(headless=True)
@@ -4896,7 +4906,7 @@ def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_l
     first, second = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -4922,7 +4932,7 @@ def test_save_clicked_while_another_layer_opens_sends_nothing_to_the_new_layer(b
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -4946,7 +4956,7 @@ def test_new_layer_has_the_same_window_closed(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = []
@@ -5380,7 +5390,7 @@ def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_l
     store.activate_layer(owner, second["id"], second["version"])
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -5412,7 +5422,7 @@ def test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers(browser_p
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.on("pageerror", lambda error: thrown.append(str(error)))
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(editor_history(page)).to_contain_text("Release 1")
             page.reload()  # a layer reached by its address, not a click, shows its own history too
@@ -5460,7 +5470,7 @@ def test_a_late_history_answer_doesnt_land_on_the_layer_now_open(browser_peer):
     released(browser_peer, second)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -5493,7 +5503,7 @@ def test_an_older_history_answer_for_the_same_layer_doesnt_replace_a_newer_one(b
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Beta layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
             answered = []  # answered by the server now, delivered to the page later
@@ -5526,7 +5536,7 @@ def test_an_older_failure_for_the_same_layer_says_nothing(browser_peer):
     released(browser_peer, first)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Beta layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
             held = []
@@ -5557,7 +5567,7 @@ def test_a_late_answer_for_the_open_layer_doesnt_wipe_what_the_page_said(browser
     first, _ = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             page.wait_for_timeout(200)
@@ -5595,7 +5605,7 @@ def test_a_read_held_across_a_sign_in_does_nothing(browser_peer, answer):
     released(browser_peer, second)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = []  # answered now, as the account that asked; let through, it would be answered as whoever is signed in by then
@@ -5630,7 +5640,7 @@ def test_a_read_landing_after_the_session_ended_does_nothing(browser_peer, answe
     first, second = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = []
@@ -5656,7 +5666,7 @@ def test_one_click_reads_a_layers_history_once(browser_peer):
     reads = []
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             page.wait_for_timeout(200)
@@ -5675,7 +5685,7 @@ def test_a_late_failure_after_going_home_says_nothing(browser_peer):
     first, second = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -5696,7 +5706,7 @@ def test_signing_out_forgets_the_release_history(browser_peer):
     released(browser_peer, first)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(editor_history(page)).to_contain_text("Release 1")
             page.get_by_role("button", name="Account and sign out").click()
@@ -5712,7 +5722,7 @@ def test_a_new_account_on_the_page_forgets_the_release_history(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             watch_reads(page)
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             page.wait_for_url(lambda url: first["id"] in url)
             expect(editor_history(page)).to_contain_text("Release 1")
@@ -5728,7 +5738,7 @@ def test_a_late_failure_for_a_layer_the_person_left_says_nothing(browser_peer):
     first, second = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
@@ -5750,7 +5760,7 @@ def test_a_late_answer_doesnt_clear_what_the_open_layer_said(browser_peer):
     first, second = two_layers(browser_peer)
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
-            page.get_by_role("link", name="My sharing layers").click()
+            go_to(page, "My sharing layers")
             page.get_by_role("button", name="Alpha layer").click()
             expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
             held = hold_revisions(page, second["id"])
