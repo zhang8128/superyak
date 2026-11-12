@@ -2585,6 +2585,63 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             page.screenshot(path=str(ARTIFACTS / "connections-mobile.png"))
 
 
+def asked_paths(page):
+    """Every path this page has asked for, in the order asked."""
+    asked = []
+    page.on("request", lambda request: asked.append(request.url.split("://", 1)[1].split("/", 1)[1].split("?")[0]))
+    return asked
+
+
+def test_a_signed_in_load_asks_its_reads_in_one_wave(browser_peer):
+    """fix:signed-in-load-in-one-wave: through Funnel each read in a row costs about 185 ms, and the load used to wait on
+    five. Now /api/me goes out beside the demo list, and while /api/home is held, every other read the load needs is
+    already out, the room the address names included. The room still draws once they answer."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]
+    room = store.create_room(patient["id"], "Room X", [])
+    store.send_message(patient["id"], room["id"], "one-wave-1", "The newest words in Room X.")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto("about:blank")
+        asked = asked_paths(page)
+        held_demo, held_home = held_routes(page, "**/api/local-demo"), held_routes(page, "**/api/home")
+        page.goto(browser_peer["base_url"] + f"/#chats/{room['id']}")
+        wait_for_hold(page, held_demo)
+        until(page, lambda: "api/me" in asked, "/api/me waited for the demo list")
+        held_demo[0].continue_()
+        wait_for_hold(page, held_home)
+        wanted = {f"api/chats/{room['id']}", "api/contacts", "api/files", "api/sync", "api/me/corrections", "api/assistant",
+                  "api/sources", "api/ships", "api/imprints", "api/connected-apps/notice"}
+        until(page, lambda: wanted <= set(asked), f"still waiting for /api/home: {sorted(wanted - set(asked))}")
+        assert not page.get_by_text("The newest words in Room X.").is_visible()
+        held_home[0].continue_()
+        expect(page.get_by_text("The newest words in Room X.")).to_be_visible()
+        assert asked.count(f"api/chats/{room['id']}") == 1  # the early read is the one the room took
+
+
+@pytest.mark.parametrize("username, says_admin", [("patient", True), ("organizer", False)])
+def test_the_admin_reads_count_by_the_home_not_by_me(browser_peer, username, says_admin):
+    """The admin reads go out with the first wave by /api/me's flags, and /api/home's decide, as before. If /api/me says
+    admin and the home says participant, the refusals are set aside: no error, and no account support. If /api/me says
+    participant and the home says admin, the late read goes out and the admin's view is whole."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, username) as (page, _):
+        def me_says(route):
+            answer = route.fetch()
+            body = answer.json()
+            body["is_admin"] = says_admin
+            route.fulfill(response=answer, json=body)
+        page.route("**/api/me", lambda route: me_says(route) if route.request.method == "GET" else route.continue_())
+        asked = asked_paths(page)
+        page.goto(browser_peer["base_url"] + "/#connections")
+        page.reload()
+        until(page, lambda: "api/accounts" in asked, "/api/accounts was never asked")
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        if says_admin:
+            page.wait_for_timeout(300)
+            expect(page.get_by_role("heading", name="Account support")).to_have_count(0)
+            expect(page.locator(".notice.error")).to_have_count(0)
+        else:
+            expect(page.get_by_role("heading", name="Account support")).to_be_visible()
+
+
 def test_attachment_stays_selected_through_upload_and_public_release(browser_peer):
     """Break caught: uploading a file resets unsaved text or omits the selected release file."""
     with sync_playwright() as playwright:
