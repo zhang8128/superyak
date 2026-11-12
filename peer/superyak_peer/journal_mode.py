@@ -1,11 +1,12 @@
 """station-journal (spec 2026-10-29-store-wal-mode D1): the store's journal mode, switched only with every station unit
 stopped, under the dispatch gate, and decided by SQLite's own lock. Standard library only: backups.py imports it."""
 from pathlib import Path
+import os
 import sqlite3
 import subprocess
 import time
 
-from .dispatch import DispatchGate
+from .dispatch import DispatchGate, serve_lock
 
 NAMES = ('peer.sqlite3', 'peer.sqlite3-journal', 'peer.sqlite3-wal', 'peer.sqlite3-shm')
 MODES = ('wal', 'delete')
@@ -75,6 +76,19 @@ def switch_journal(data_dir, mode, *, active=None, retry_seconds=10.0, clock=tim
     running = (active or units_active)()
     if running:
         raise ValueError(f'Stop every station unit first; still running: {", ".join(running)}')
+    # public-route-bound Task 9: serve.lock, taken without waiting and held through the switch, so a serve the unit
+    # list missed (one run by hand) refuses it, and no serve starts until it ends
+    try:
+        held = serve_lock(data_dir)
+    except ValueError:
+        raise ValueError('A serve still runs on this data dir; stop it first. Nothing was changed') from None
+    try:
+        return _switch(database, data_dir, mode, retry_seconds, clock, sleep)
+    finally:
+        os.close(held)
+
+
+def _switch(database, data_dir, mode, retry_seconds, clock, sleep):
     with DispatchGate(Path(data_dir).absolute() / 'dispatch.lock'):
         before = header_mode(database)
         deadline = clock() + retry_seconds  # from inside the gate, so a long wait for it still leaves the retries
