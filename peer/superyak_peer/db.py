@@ -71,6 +71,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
     live = None  # serve's LiveSet, set by create_app (public-route-bound Task 2); a CLI's Store has none
     tag_keys = None  # serve's {label: {kid: key}}, loaded by create_app (Task 7a); never in __init__
+    untagged = None  # serve's tags.StartSet of untagged invitations and activations (Task 7b)
     _keeper = None  # the connection keep_open() holds for a long-running process (store-wal-mode D2)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,

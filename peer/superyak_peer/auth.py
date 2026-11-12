@@ -413,12 +413,27 @@ class Auth:
             db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, expires))
             return {'id': token_hash(token), 'token': token, 'expires': expires}
 
-    def redeem(self, token, username, name, password):
+    def redeem(self, token, username, name, password, *, label=None):
+        """An invitation or activation, used once. `label` (public-route-bound Task 7b: the one its tag or the start-time
+        set named) looks in that table only; the tailnet's None looks in both, as before. A successful redeem, and a
+        lookup that finds no live row, take the token out of serve's start-time set."""
         text(token, 'invitation', 128)
         if not INVITATION_TOKEN.fullmatch(token):  # anonymous and public: a made-up token never reaches the database
             raise Problem(400, 'Invitation unavailable')
+        none_live = []
+        try:
+            redeemed = self._redeem(token, username, name, password, label, none_live)
+        except Problem:
+            if none_live and self.untagged is not None:  # its lookup found no live row; the rollback undid nothing
+                self.untagged.discard(token_hash(token))
+            raise
+        if self.untagged is not None:  # only once the commit returned: a failed COMMIT keeps a live row's entry
+            self.untagged.discard(token_hash(token))
+        return redeemed
+
+    def _redeem(self, token, username, name, password, label, none_live):
         with self.transaction() as db:
-            activation = db.execute('SELECT * FROM account_activations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone()
+            activation = db.execute('SELECT * FROM account_activations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone() if label in (None, 'activation') else None
             if activation:
                 current = require(db.execute('SELECT * FROM users WHERE id=?', (activation['user_id'],)).fetchone())
                 if not current['activation_pending'] or username != current['username'] or name != current['name']:
@@ -428,8 +443,9 @@ class Auth:
                 db.execute('UPDATE users SET salt=?,password_hash=?,activation_pending=0 WHERE id=?', (salt, password_hash(password, salt), current['id']))
                 db.execute('UPDATE account_activations SET used=1 WHERE token_hash=?', (token_hash(token),))
                 return public_user(db.execute('SELECT * FROM users WHERE id=?', (current['id'],)).fetchone())
-            invite = db.execute('SELECT * FROM invitations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone()
+            invite = db.execute('SELECT * FROM invitations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone() if label in (None, 'invitation') else None
             if not invite:
+                none_live.append(1)  # no live row: the start-time set drops it
                 raise Problem(400, 'Invitation unavailable')
             user = self._create_user(db, username, name, password)
             db.execute('UPDATE invitations SET used=1 WHERE token_hash=?', (token_hash(token),))

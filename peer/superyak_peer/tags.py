@@ -18,6 +18,7 @@ import hmac
 import json
 import re
 import secrets
+import threading
 
 LABELS = ('invitation', 'activation')
 TAG_BYTES = 16
@@ -75,6 +76,49 @@ def minted(db, label, exp):
     mint site calls inside its own transaction, in serve or in the CLI."""
     kid, key = label_key(db, label)
     return mint(label, key, kid, exp)
+
+
+UNTAGGED = re.compile(r'[A-Za-z0-9_-]{43}')  # an invitation or activation made before the deploy (Task 7b)
+
+
+def _hashed(token):
+    return hashlib.sha256(token.encode()).hexdigest()  # auth.token_hash, which imports this module
+
+
+class StartSet:
+    """Task 7b: the untagged invitations and activations that were live when serve started, by hash and label. It
+    is loaded once, in create_app, and only shrinks, on a successful redeem or on a lookup that finds no live row, so a
+    credential made before the deploy redeems once and a made-up 43-character one is refused unread."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._labels = {}
+
+    def load(self, db, now):
+        labels = {}
+        for label, table in (('invitation', 'invitations'), ('activation', 'account_activations')):
+            for (hashed,) in db.execute(f'SELECT token_hash FROM {table} WHERE used=0 AND expires>?', (now,)):
+                labels[hashed] = label
+        with self._lock:
+            self._labels = labels
+        return len(labels)
+
+    def label(self, hashed):
+        with self._lock:
+            return self._labels.get(hashed)
+
+    def discard(self, hashed):
+        with self._lock:
+            self._labels.pop(hashed, None)
+
+
+def redeemable(keys, untagged, token, now):
+    """Task 7b, before redeem's lane: the label a public redeem may look up, or None. A tagged token under its label's
+    key, unexpired, or an untagged one the start-time set holds. In memory: no read, no lock, no place in the lane."""
+    if not isinstance(token, str) or len(token) > CREDENTIAL_MAX:
+        return None
+    if UNTAGGED.fullmatch(token):
+        return untagged.label(_hashed(token))
+    return next((label for label in LABELS if check(label, keys[label], token, now)), None)
 
 
 def every_label_key(db):

@@ -448,6 +448,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     store.live.load_live_rows(store)
     with store.transaction() as db:  # Task 7a: every label's tag key, made if missing, before serve answers
         store.tag_keys = tags.every_label_key(db)
+        store.untagged = tags.StartSet()  # Task 7b: the untagged ones live now, which only shrinks
+        store.untagged.load(db, store.clock())
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
@@ -470,6 +472,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
     app.state.miss_lane = PublicLane(1, 4, 'miss', store=store)  # public-route-bound Task 3
     app.state.layer_lane = PublicLane(4, 32, 'layers', store=store)  # Task 6: it admits 36, and the 37th is busy
+    app.state.redeem_lane = PublicLane(1, 4, 'redeem', store=store)  # Task 7b, kept for good
     app.add_middleware(PublicRoute, store=store, router=app.router, miss=app.state.miss_lane)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
@@ -715,8 +718,16 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
         data = await body(request, SIGN_IN_BODY_MAX)
-        # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
-        return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
+        token, fields = data.get('token'), (data.get('username'), data.get('name'), data.get('password'))
+        if not is_public(request.scope):  # the tailnet's own path, outside the public lane (P8)
+            # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
+            return await run_in_threadpool(store.redeem, token, *fields)
+        # public-route-bound Task 7b: checked in memory first, so junk, a wrong tag, an expired or another label's tag,
+        # an unknown kid or a made-up untagged token is refused with no read, no lock and no place in the lane
+        label = tags.redeemable(store.tag_keys, store.untagged, token, store.clock())
+        if label is None:
+            raise Problem(400, 'Invitation unavailable')
+        return await app.state.redeem_lane.run(store.redeem, token, *fields, label=label)
 
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
