@@ -37,6 +37,48 @@ def test_a_tag_checks_for_its_own_label_key_and_time_only():
         tags.mint('session', KEY, KID, NOW)
 
 
+KNOWN = {'key': bytes(range(32)), 'random': 'r' * 43, 'kid': '0a1b2c3d', 'exp': 1800000000, 'tag': 'hXwJa6xFPo3HEllQo1dgOw'}
+
+
+def test_a_known_answer_pins_the_mac():
+    """The Task 7a reader's S2: HMAC-SHA256 under the 32-byte key over "label.random.kid.exp", its first 16 bytes in
+    unpadded base64url. The tag was computed once, outside this code; a cut tag, a shorter key, or a field out of the
+    MAC changes it."""
+    token = f"{KNOWN['random']}.{KNOWN['kid']}.{KNOWN['exp']}.{KNOWN['tag']}"
+    keys = {KNOWN['kid']: KNOWN['key']}
+    assert tags.check('invitation', keys, token, KNOWN['exp'] - 1)
+    assert tags._tag('invitation', KNOWN['key'], KNOWN['random'], KNOWN['kid'], KNOWN['exp']) == KNOWN['tag']
+    assert not tags.check('activation', keys, token, KNOWN['exp'] - 1)
+    four = tags._b64(tags.base64.urlsafe_b64decode(KNOWN['tag'] + '==')[:4] + bytes(12))  # 4 bytes, zero-padded
+    assert not tags.check('invitation', keys, token[:-22] + four, KNOWN['exp'] - 1)
+
+
+def test_one_key_under_two_kids_never_moves_a_tag():
+    """The kid is under the MAC: a tag made under one kid fails under another, even with the same key."""
+    token = tags.mint('invitation', KEY, KID, NOW + 60)
+    other = 'ffffffff'
+    moved = token.replace(f'.{KID}.', f'.{other}.')
+    assert not tags.check('invitation', {KID: KEY, other: KEY}, moved, NOW)
+
+
+def test_the_tag_is_compared_in_constant_time(monkeypatch):
+    """== would leak the tag a byte at a time; check() goes through hmac.compare_digest."""
+    compared, real = [], tags.hmac.compare_digest
+    monkeypatch.setattr(tags.hmac, 'compare_digest', lambda a, b: compared.append(1) or real(a, b))
+    assert tags.check('invitation', {KID: KEY}, tags.mint('invitation', KEY, KID, NOW + 60), NOW)
+    assert compared == [1]
+
+
+@pytest.mark.parametrize('exp', ['01800000000', '+1800000000', '-1800000000', ' 1800000000', '1_800_000_000', '0'])
+def test_an_exp_has_one_spelling(exp):
+    """The Task 7a reader's S1: int() reads each of these, so the MAC would pass under several spellings, each with
+    its own hash. Only the canonical decimal is the tagged form, for the check and the pattern alike."""
+    random, tag = 'r' * 43, tags._tag('invitation', KEY, 'r' * 43, KID, int(exp.replace('_', '')))
+    token = f'{random}.{KID}.{exp}.{tag}'
+    assert not tags.TAGGED.fullmatch(token) and not INVITATION_TOKEN.fullmatch(token)
+    assert not tags.check('invitation', {KID: KEY}, token, -10**13)
+
+
 def test_the_invitation_pattern_takes_both_forms_and_nothing_else():
     assert INVITATION_TOKEN.fullmatch('a' * 43)  # an untagged invitation made before the deploy
     assert INVITATION_TOKEN.fullmatch(tags.mint('activation', KEY, KID, NOW))
@@ -47,6 +89,30 @@ def test_the_invitation_pattern_takes_both_forms_and_nothing_else():
 def meta_keys(data_dir):
     with Store(data_dir, signing=False).reading() as db:
         return {row[0]: json.loads(row[1]) for row in db.execute("SELECT key, value FROM system_meta WHERE key LIKE 'tag_key:%'")}
+
+
+def test_a_fresh_key_is_32_bytes_and_each_home_makes_its_own(tmp_path):
+    keys = []
+    for home in ('one', 'two'):
+        with Store(tmp_path / home).transaction() as db:
+            keys.append(tags.label_key(db, 'invitation'))
+    assert all(len(key) == 32 and tags.KID.fullmatch(kid) for kid, key in keys)
+    assert keys[0][0] != keys[1][0] and keys[0][1] != keys[1][1]
+    # all 32 bytes random, not a short key padded out: two random keys agree at about 0.1 of 32 positions
+    assert sum(a == b for a, b in zip(keys[0][1], keys[1][1])) < 8
+
+
+@pytest.mark.parametrize('row', [
+    '{"kid": "0A1B2C3D", "key": "%s"}' % ('A' * 43), '{"kid": "0a1b2c3d", "key": "%s"}' % ('A' * 11),
+    '{"kid": "0a1b2c3d"}', 'not json', '{"kid": 7, "key": "%s"}' % ('A' * 43)])
+def test_a_bad_key_row_stops_serve_and_every_mint_naming_the_row(tmp_path, row):
+    """The Task 7a reader's N1: a bad kid would fail every new credential silently, a short key weaken every tag."""
+    home = tmp_path / 'home'
+    with Store(home).transaction() as db:
+        db.execute("INSERT INTO system_meta(key, value) VALUES('tag_key:invitation', ?)", (row,))
+    with pytest.raises(ValueError, match='tag_key:invitation is not a 32-byte tag key') as refused:
+        create_app(home, allowed_origins=['http://testserver'])
+    assert 'A' * 11 not in str(refused.value)  # the row is named, its key never shown
 
 
 def test_a_store_alone_makes_no_key_and_loads_none(tmp_path):
@@ -158,13 +224,25 @@ def test_a_renewed_activation_before_the_lighthouse_starts_redeems_once_and_the_
     first, renewed = tmp_path / 'first.json', tmp_path / 'renewed.json'
     common = ['--data-dir', str(home), '--username', 'stanley', '--name', 'Stanley']
     main(['bootstrap-super-admin', *common, '--activation-file', str(first)])
+    with Store(home, signing=False).transaction() as db:  # the reader's N5: a pre-deploy copy, as step 7 finds it, has none
+        db.execute("DELETE FROM system_meta WHERE key LIKE 'tag_key:%'")
     main(['bootstrap-super-admin', *common, '--activation-file', str(renewed), '--renew-activation'])
+    assert set(meta_keys(home)) == {'tag_key:activation'}  # the renewal made it
     capsys.readouterr()
     app = create_app(home, allowed_origins=['http://testserver'])
     stranger = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
     old = {'token': activation(first)['token'], 'username': 'stanley', 'name': 'Stanley', 'password': 'long-password-new'}
     assert stranger.post('/api/invitations/redeem', json=old).status_code == 400
     redeems_once(app, activation(renewed)['token'], 'stanley', 'Stanley')
+
+
+def test_serve_never_mints_under_a_key_its_start_did_not_load(station):
+    """The Task 7a reader's N2: after a restore under a running serve (which Task 9 refuses), the row's key and the
+    one serve checks with differ, and serve would refuse what it just made; it says so instead."""
+    app, store, admin, _, _ = station
+    store.tag_keys = {**store.tag_keys, 'invitation': {'ffffffff': b'x' * 32}}
+    with pytest.raises(RuntimeError, match='tag key changed under this serve'):
+        store.invite(admin['id'], 3600)
 
 
 def test_an_untagged_invitation_from_before_the_deploy_still_redeems_once(station):

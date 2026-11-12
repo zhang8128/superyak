@@ -23,7 +23,11 @@ import threading
 LABELS = ('invitation', 'activation')
 TAG_BYTES = 16
 CREDENTIAL_MAX = 128  # longer is refused before the HMAC
-TAGGED = re.compile(r'(?P<random>[A-Za-z0-9_-]{43})\.(?P<kid>[0-9a-f]{8})\.(?P<exp>[0-9]{1,12})\.(?P<tag>[A-Za-z0-9_-]{22})')
+# exp is canonical, no leading zero, sign, space or underscore, so one tag has one spelling and one hash (the Task 7a
+# reader's S1): int() would read '0123', '+123' and '1_23' as the numbers the MAC covers
+TAGGED = re.compile(r'(?P<random>[A-Za-z0-9_-]{43})\.(?P<kid>[0-9a-f]{8})\.(?P<exp>[1-9][0-9]{0,11})\.(?P<tag>[A-Za-z0-9_-]{22})')
+KID = re.compile(r'[0-9a-f]{8}')
+KEY_BYTES = 32
 
 
 def _b64(raw):
@@ -65,10 +69,25 @@ def label_key(db, label):
     re-read, so two processes making it at once both get the one that won."""
     if label not in LABELS:
         raise ValueError(f'not a tag label: {label}')
-    made = json.dumps({'kid': secrets.token_hex(4), 'key': _b64(secrets.token_bytes(32))})
+    made = json.dumps({'kid': secrets.token_hex(4), 'key': _b64(secrets.token_bytes(KEY_BYTES))})
     db.execute('INSERT OR IGNORE INTO system_meta(key, value) VALUES(?, ?)', (_meta_key(label), made))
-    held = json.loads(db.execute('SELECT value FROM system_meta WHERE key=?', (_meta_key(label),)).fetchone()[0])
-    return held['kid'], base64.urlsafe_b64decode(held['key'] + '=' * (-len(held['key']) % 4))
+    row = db.execute('SELECT value FROM system_meta WHERE key=?', (_meta_key(label),)).fetchone()[0]
+    return _valid(label, row)
+
+
+def _valid(label, row):
+    """A key row checked before it's used (the Task 7a reader's N1): a bad kid would fail every new credential without a
+    word, and a short key would weaken every tag. The error names the row, never its key."""
+    try:
+        held = json.loads(row)
+        kid, encoded = held['kid'], held['key']
+        key = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)) if isinstance(encoded, str) else b''
+    except (ValueError, TypeError, KeyError):
+        kid, key = None, b''
+    if not (isinstance(kid, str) and KID.fullmatch(kid)) or len(key) != KEY_BYTES:
+        raise ValueError(f'system_meta row {_meta_key(label)} is not a {KEY_BYTES}-byte tag key with an 8-hex kid; '
+                         'a restore with serve stopped may delete it, and serve then makes a new one')
+    return kid, key
 
 
 def minted(db, label, exp):

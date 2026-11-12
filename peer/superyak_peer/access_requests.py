@@ -1,7 +1,6 @@
 """Anonymous account requests that only admins can turn into invitations."""
 import hmac
 import secrets
-from . import tags
 from .auth import token_hash
 from .common import Problem, text, uid
 
@@ -81,7 +80,7 @@ class AccessRequests:
                 raise Problem(409, 'This request was already decided or has expired')
             token = share_url = share_status = None
             if approve:
-                token = tags.minted(db, 'invitation', now + INVITATION_LIFETIME)  # Task 7a
+                token = self._minted(db, 'invitation', now + INVITATION_LIFETIME)  # Task 7a
                 db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, now + INVITATION_LIFETIME))
                 share_url = self._share_link()
                 share_status = 'ready' if share_url else 'missing'

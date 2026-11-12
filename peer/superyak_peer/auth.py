@@ -26,7 +26,7 @@ PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD, DEVICE_ATTEMPTS_HOLD = (8, 300),
 KNOWN_USER_HOLD = (24, 300)
 # What secrets.token_urlsafe(32) makes, for both kinds, and since public-route-bound Task 7a its tagged form
 # (tags.TAGGED); an untagged one made before the deploy still redeems
-INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}(?:\.[0-9a-f]{8}\.[0-9]{1,12}\.[A-Za-z0-9_-]{22})?')
+INVITATION_TOKEN = re.compile(rf'[A-Za-z0-9_-]{{43}}|{tags.TAGGED.pattern}')  # built from it, so they never drift (N3)
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
 SESSION_LIFETIME = 86400
@@ -353,7 +353,7 @@ class Auth:
                     db.execute('UPDATE users SET is_super_admin=1,activation_pending=1 WHERE id=?', (user['id'],))
                     db.execute('INSERT INTO account_role_changes(user_id,actor_id,old_role,new_role,role_version,created) VALUES(?,?,NULL,?,?,?)', (user['id'], user['id'], 'super_admin', 1, self.clock()))
                 expires = self.clock() + 604800
-                token = tags.minted(db, 'activation', expires)  # Task 7a: tagged
+                token = self._minted(db, 'activation', expires)  # Task 7a: tagged
                 db.execute('INSERT INTO account_activations(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(token), user['id'], expires))
                 json.dump({'user_id': user['id'], 'username': username, 'name': name, 'token': token, 'expires': expires}, stream, indent=2)
                 stream.write('\n')
@@ -403,13 +403,22 @@ class Auth:
             self._admin(db, actor)
             return [public_user(r) for r in db.execute("SELECT * FROM users WHERE kind='person' ORDER BY created,id")]
 
+    def _minted(self, db, label, exp):
+        """A tagged credential from a mint site (Task 7a). In serve, its kid must be one serve's start loaded, which
+        its redeem check uses: they differ only after a restore under a running serve (which Task 9 refuses), and then
+        serve would refuse what it just made, so it says so instead (the Task 7a reader's N2)."""
+        token = tags.minted(db, label, exp)
+        if self.tag_keys is not None and token.split('.')[1] not in self.tag_keys[label]:
+            raise RuntimeError(f'the {label} tag key changed under this serve; restart it to load the new one')
+        return token
+
     def invite(self, actor, expires_in=86400):
         if type(expires_in) is not int or not 60 <= expires_in <= 604800:
             raise Problem(400, 'Invalid invitation lifetime')
         with self.transaction() as db:
             self._admin(db, actor)
             expires = self.clock() + expires_in
-            token = tags.minted(db, 'invitation', expires)  # Task 7a: tagged
+            token = self._minted(db, 'invitation', expires)  # Task 7a: tagged
             db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, expires))
             return {'id': token_hash(token), 'token': token, 'expires': expires}
 
