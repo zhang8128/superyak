@@ -232,3 +232,33 @@ def lessons_peers(tmp_path):
     key = pi_fed.identity.peer_id + ':' + room
     confirm_lessons_room(tardis, key)
     return {'peers': peers, 'deliver': deliver, 'clock': clock, 'room': room, 'key': key}
+
+
+# test:every-typed-box-has-an-owner (tests/typed_boxes.py): every browser context any test makes watches the typed boxes
+# the app draws, and a test that draws one a redraw can't tell apart fails once its own body has passed.
+def pytest_configure(config):
+    try:
+        from playwright.sync_api import Browser, BrowserContext
+    except ImportError:
+        return
+    from tests import typed_boxes
+    typed_boxes.watching(Browser, BrowserContext)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    from tests import typed_boxes
+    typed_boxes.start()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    result = yield
+    from tests import typed_boxes
+    typed_boxes.check()
+    return result
+
+
+def pytest_sessionfinish(session):
+    from tests import typed_boxes
+    typed_boxes.write_seen()

@@ -178,7 +178,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -462,7 +462,7 @@ function layerEditor(layer) {
   const instructions = layer.kind === "instructions";
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
-  return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
+  return `<section class="card editor" data-layer-id="${escapeHtml(layer.id)}" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
     <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}" data-version="${escapeHtml(String(layer.version))}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
@@ -788,7 +788,7 @@ function showArrivals(answer) {
   if (news) announce(news === 1 ? "1 new message" : `${news} new messages`);
   if (following) {
     const { end, start } = newestMessagePlace();
-    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+    if (Math.min(end, start) > 0) movingTheRoom(() => window.scrollBy(0, Math.min(end, start)));
   } else if (news) {
     state.roomUnseen = answer.id;
     const button = document.querySelector('[data-action="new-messages"]');
@@ -893,7 +893,7 @@ function roomBrief(room) {
     ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div>${briefAuthor(room, brief, "room-brief-author")}<p class="meta">${escapeHtml(briefMeta(brief))}</p>`
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
-    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    ? `<form id="brief-form" data-room="${escapeHtml(room.id)}"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
     : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
@@ -969,7 +969,7 @@ function roomBoard(room) {
   const open = items.filter((item) => item.state === "open"), closed = items.filter((item) => item.state !== "open");
   const draft = state.boardPost?.roomId === room.id ? state.boardPost : { key: "", title: "", kind: "build" };
   // No maxlength on the title: the station counts code points, a browser UTF-16 units (Review Focus 5).
-  const post = owner && !replaced ? `<form id="board-post-form" class="board-post"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
+  const post = owner && !replaced ? `<form id="board-post-form" class="board-post" data-room="${escapeHtml(room.id)}"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
   const note = replaced ? `<p class="meta board-replaced">This room was replaced by a newer linked room; its board takes no changes.</p>` : "";
   return `<section class="room-board" data-room="${escapeHtml(room.id)}" aria-labelledby="room-board-title">${head}${note}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
 }
@@ -1106,7 +1106,7 @@ async function makeGrant(form) {
 // what the station holds and the history shows the new line. focusKey: the item to focus afterwards (the panel's
 // heading if it left the open list); undefined leaves focus to the caller.
 async function boardWrite(path, json, message, { saved = () => {}, focusKey } = {}) {
-  const room = state.room;
+  const room = state.room, acts = personActs;
   if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
@@ -1130,7 +1130,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
-    if (!ok && state.boardDone?.roomId === room.id) document.querySelector("#board-outcome")?.focus();
+    if (!ok && state.boardDone?.roomId === room.id) reopenForTyping(document.querySelector("#board-outcome"), acts);
     else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
@@ -1138,9 +1138,10 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
 async function postBoardItem(form) {
   if (state.boardSaving || !state.room || !boardOnScreen(state.room)) return;
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
+  const acts = personActs;
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me && state.room?.id === roomId) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) reopenForTyping(document.querySelector("#board-key"), acts);  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -1172,13 +1173,52 @@ function carryHelp(room) {
   return `<p class="meta carry-help">${CARRY_HELP}</p>${list}`;
 }
 
+// Removing someone can't be undone, and nor can what reads a room while it's unmarked, so Remove and Clear my mark each
+// ask first, in place: the question takes the button's place, so a hurried second press lands on words, and the safe
+// choice is focused. An ask belongs to one drawing of its room and to what it asks about: opening the room again, or the
+// person or the mark being gone, starts without it. Once Yes is pressed, its place says what's happening until the answer.
+function roomAskOnScreen(kind) { return state.room ? roomAskFor(state.room, kind) : null; }
+function roomAskFor(room, kind) {
+  const ask = state.roomAsk;
+  return ask?.roomId === room.id && ask.kind === kind ? ask : null;
+}
+// The rooms this one continues that still have this member, as the station finds them (_earlier_with): a removal takes
+// them out of those too. It walks only the rooms this home lists, so after the owner has left an earlier room it can
+// count fewer than the station removes from: the ask then understates, never overstates.
+function earlierRoomsWith(room, memberId) {
+  const known = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  let count = 0, key = room.linked_room_id;
+  const seen = new Set();
+  while (key && !seen.has(key) && known.has(key)) {
+    seen.add(key);
+    const earlier = known.get(key);
+    if ((earlier.owner_id ?? room.owner_id) === room.owner_id && (earlier.member_ids || []).includes(memberId)) count += 1;
+    key = earlier.linked_room_id;
+  }
+  return count;
+}
+function roomAskMarkup(question, words, cancel, yes) {
+  return `<div class="board-ask room-ask" role="group" aria-label="${question}" aria-describedby="room-ask-words"><p id="room-ask-words">${question} ${words}</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">${cancel}</button>${yes}</div></div>`;
+}
+function removeControl(room, id) {
+  const name = escapeHtml(participantName(id)), ask = roomAskFor(room, "remove");
+  if (ask?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
+  if (ask.pending) return `<p class="meta room-ask" role="status" tabindex="-1">Removing ${name}…</p>`;
+  const earlier = earlierRoomsWith(room, id);
+  const where = earlier === 1 ? "this room and the room before it" : earlier ? `this room and the ${earlier} rooms before it` : "this room";
+  return roomAskMarkup(`Remove ${name} from ${where}?`, "Their access here stops at once, and copies they have can't be erased.", "Cancel",
+    `<button class="button danger" type="button" data-action="remove-participant-confirm" data-id="${escapeHtml(id)}" aria-label="Yes, remove ${name}">Yes, remove</button>`);
+}
+
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
+  const ask = state.roomAsk, removable = (id) => canManage && !replaced && !isSelf(id) && (room.member_ids || []).includes(id);
+  if (ask && (ask.roomId !== room.id || roomDrawn !== room.id || (ask.kind === "clear" ? !room.cloud?.mine || room.origin : !removable(ask.id)))) state.roomAsk = null;
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
     ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1444,7 +1484,12 @@ function cloudControl(room, replaced) {
   const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading or changing it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
   if (room.cloud?.mine) {
     const yoursEarlier = earlierRoomsWithMe(room).some((item) => item.cloud?.mine) ? " Your marks on its earlier rooms stay." : "";
-    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+    const ask = roomAskFor(room, "clear");
+    const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
+      : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
+      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
+        "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
+    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
@@ -1688,7 +1733,7 @@ function connectionsView() {
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form">${lessonsLine(state.pairPreview)}<div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form" data-fingerprint="${escapeHtml(state.pairPreview.fingerprint)}">${lessonsLine(state.pairPreview)}<div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${connectorAdminSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -2096,6 +2141,89 @@ function openFailedPage(message) {
   return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
 }
 
+// The box a person is typing in keeps the caret through a redraw, but only that box: the one their last keystroke or press went to,
+// still focused, drawn again with the same id and tag in the same chain of elements up to the app (each one's tag, id and
+// data: the layer, room or item it's for), showing the same words. A version is left out of the chain, since the person's
+// own save moves it while they type on, and a save from elsewhere fails the words check. A submit ends the typing, so its
+// own draw doesn't hold the caret (on a phone the keyboard closes, as before). Anything else and the caret stays out, so
+// no key lands in words or a place the person didn't see. (fix:care-starter-loses-first-words: on a slow home a new
+// draft's history answered mid-typing, the editor was drawn again, and the keys after that went nowhere.) So a box for
+// one of several things carries that thing's data on itself or a parent. tests/typed_boxes.py lists every typed box and
+// how it's told apart, and a browser test that draws a box it doesn't list, or without its mark, fails.
+const TYPED_INPUTS = new Set(["text", "search", "url", "tel", "password"]);  // not email: it has no selection to put back
+let typedBox = null;  // the box the person last aimed at: by a key (input), a press that landed, or a Tab
+let drawnFor = null;  // what the page on screen was drawn for (drawingFor), set by each render
+
+// A key belongs to the drawing it was aimed at, as a press does (Tardis, all hands d56f792e): the caret goes back only
+// when the page is drawn again for the same route and the same thing on it, so a box on a page drawn for something else
+// never takes it, whatever its markup carries. The thing is what the view draws. On chats and layers that's state.room
+// and state.selectedLayerId, and the address only follows them: openLayer sets the layer, then the address, and the
+// hashchange draws again only once the layer's history answers. So the address there would make the same layer's next
+// draw look like another page, and refuse the caret to a person typing in it (all hands 23e34401, 16566adf).
+// Elsewhere the address id is the thing. tests/typed_boxes.py checks after every draw that the open editor and the open
+// room are the thing this names.
+function drawingFor() {
+  const { route, id } = routeParts();
+  const thing = route === "chats" ? state.room?.id : route === "layers" ? state.selectedLayerId : id;
+  return JSON.stringify([route, thing || null]);
+}
+
+function boxChain(node) {
+  const chain = [];
+  for (let at = node; at && at !== app; at = at.parentElement) {
+    const { version, ...data } = at.dataset;
+    chain.push([at.tagName, at.id, data]);
+  }
+  return JSON.stringify(chain);
+}
+
+function typedBoxRule(node) {  // a box a person types words into, whose caret and selection can be put back
+  return node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
+}
+function typingIn(node) {
+  if (!typedBoxRule(node) || !node.id || node !== typedBox) return null;
+  return { id: node.id, tag: node.tagName, value: node.value, chain: boxChain(node), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
+}
+
+// The app's own focus on a box it opens for the person to type in: Edit brief, Mark done, a board post or a refused save
+// starting over, using an earlier brief. Each runs from the person's own act (their press, or their submit's answer
+// across its await, which goes through reopenForTyping below), never from a timer, a poll or a render, and it makes the
+// box the one a redraw may give the caret back to, as their press into it would (Tardis, all hands feecc21d;
+// fix:app-focused-box-has-no-owner). A plain .focus()
+// on a typed box sets no owner, so a redraw before the person's first key would send it nowhere; tests/typed_boxes.py's
+// watch reports one on a signed-in page outside a dialog.
+function focusForTyping(box) {
+  if (!box) return;
+  box.focus();
+  if (typedBoxRule(box) && document.activeElement === box) typedBox = box;  // only where the focus landed (nit 4)
+}
+// A submit's answer comes after an await, and the person may have done anything since: typed in the composer, pressed
+// into it, pressed a button or the page (the reader's CHANGES on bd25f63a, finding 1). So the submit notes how many acts
+// the person had made (personActs), and its answer opens its box again only if that's unchanged: if they did anything at
+// all since, it takes neither the focus nor the caret from where they are (Tardis, all hands 18404245). A pan, a modifier
+// key and an auto-repeat count too, which errs toward leaving their focus alone.
+let personActs = 0;  // the person's own trusted presses, keys, words put in and wheel turns, counted
+document.addEventListener("pointerdown", (event) => { if (event.isTrusted && event.isPrimary) personActs += 1; }, true);
+document.addEventListener("keydown", (event) => { if (event.isTrusted) personActs += 1; }, true);
+// Words that arrive with no key (dictation, an assistive tool) and a wheel's scroll are acts too (the re-check's nits 2
+// and 4 on ee71f24f): an answer after them leaves the focus, and the page, where the person put it.
+document.addEventListener("input", (event) => { if (event.isTrusted) personActs += 1; }, true);
+document.addEventListener("wheel", (event) => { if (event.isTrusted) personActs += 1; }, { capture: true, passive: true });
+function reopenForTyping(box, actsAtSubmit) {
+  if (personActs !== actsAtSubmit) return;
+  focusForTyping(box);
+}
+
+function keepTyping(typing) {
+  typedBox = null;
+  const again = document.getElementById(typing.id);
+  if (!again || !app.contains(again) || again.tagName !== typing.tag || again.matches(":disabled") || again.readOnly) return;
+  if (again.value !== typing.value || boxChain(again) !== typing.chain) return;
+  again.focus({ preventScroll: true });
+  try { again.setSelectionRange(typing.start, typing.end, typing.direction); } catch (_) { /* a type with no selection */ }
+  typedBox = again;
+}
+
 function render() {
   if (!state.me) return;
   if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
@@ -2106,6 +2234,8 @@ function render() {
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
+  const drawn = drawingFor();
+  const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
@@ -2128,8 +2258,10 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
+  drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
-  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  if (drawing && drawing !== roomDrawn) { roomMovedAt = roomDrawnAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
@@ -2143,8 +2275,67 @@ function render() {
 function showNewestMessage() {
   seenNewMessages();
   const place = newestMessagePlace();
-  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+  if (place) movingTheRoom(() => window.scrollTo(0, window.scrollY + Math.min(place.end, place.start)));
 }
+
+// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest,
+// where the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there
+// before, would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press
+// isn't the press before the next one. A press that landed while the room drew is handled only after, on what replaced
+// what it landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on
+// the control it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on
+// the same drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its
+// node): that's someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it
+// lands isn't told from one meant for the new room, and nor is a redraw in place moving the next button under a second
+// press; Remove and Clear my mark ask first, so such a press only opens an ask. Each click takes
+// the first finger's or the mouse's primary press it began with, and a press a long press's menu or a scroll ended
+// leaves none. Each kind of pointer has its own first one, so a palm's touch cancelled during a pen's press clears the
+// pen's: that only ever lets a click through. A mouse press held while the room redraws ends in no click and stays, but
+// the clicks that come with no press of their own (a key's, element.click()) have detail 0 and are never measured.
+const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
+let roomMovedAt = -Infinity, roomDrawnAt = -Infinity, pressDown = null, lastPress = null;
+function movingTheRoom(scroll) {
+  const before = window.scrollY;
+  scroll();
+  if (window.scrollY !== before) roomMovedAt = performance.now();
+}
+// What a control is across the redraws that replace its node: the box's Send, or a button by its action and what that
+// acts on. It's compared only within one drawing of a room, so Send needs no room.
+function controlKey(control) {
+  if (!control) return null;
+  if (control.matches('#message-form button[type="submit"]')) return "send";
+  const action = control.dataset?.action;
+  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? control.dataset.revision ?? ""}` : null;
+}
+function pressTheRoomMoved(event, press, before) {
+  if (event.detail === 0 || !press) return false;
+  const control = event.target.closest?.(PRESSABLE);
+  if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
+  if (press.at < roomMovedAt) return press.found || control !== press.control;  // begun on what was here before
+  if (press.at - roomMovedAt >= MOVED_PRESS_MS || !before || before.at >= roomMovedAt) return false;
+  const key = controlKey(control);
+  if (key && before.at > roomDrawnAt && key === controlKey(before.control)) return false;  // pressed again on this drawing of the room
+  return Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
+}
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it
+  pressDown = event.button !== 0 ? null : {
+    x: event.clientX, y: event.clientY, at: event.timeStamp, found: event.timeStamp < roomMovedAt, control: event.target.closest?.(PRESSABLE) || null,
+  };
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
+document.addEventListener("contextmenu", () => { pressDown = null; }, true);  // a long press's menu: no click comes
+// This listener must stay before the press owner's click listener (near typedBoxRule's users below): a press it drops
+// stops that one too, so a press aimed at the room drawn before neither sets nor clears the box a redraw may give the
+// caret back to (Tardis, all hands 2349eb48), though it can't stop the focus. test_a_press_the_guard_drops_makes_no_
+// owner_of_the_box_it_focused pins the order.
+document.addEventListener("click", (event) => {
+  const press = pressDown, before = lastPress;
+  pressDown = null;
+  if (!pressTheRoomMoved(event, press, before)) { if (press) lastPress = press; return; }
+  event.preventDefault();  // a submit button's press sends nothing, and a box keeps its tick
+  event.stopImmediatePropagation();  // and a data-action button's never reaches the handler below
+}, true);
 
 // How far down the page would have to move to show the end of the messages with the composer under them, and to show
 // the last message's start.
@@ -2632,7 +2823,7 @@ async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
   // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
   if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
-  const who = identityKey(state.me);
+  const who = identityKey(state.me), acts = personActs;
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
   form.querySelector('button[type="submit"]').disabled = true;
@@ -2664,7 +2855,7 @@ async function saveBrief(form) {
     }
     announce(message);
     render();
-    document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
+    reopenForTyping(document.querySelector("#brief-body"), acts);  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
   if (state.briefEdit === edit) state.briefEdit = null;
@@ -2706,7 +2897,7 @@ function useBriefRevision(room, revision, confirmed = false) {
                       shipAuthor: briefAuthorClass(room, item) === "ship" ? item.author_name : null };
   render();
   const box = document.querySelector("#brief-body");
-  if (box) { box.value = item.body; box.focus(); }
+  if (box) { box.value = item.body; focusForTyping(box); }
 }
 
 async function removeParticipant(id) {
@@ -2948,6 +3139,7 @@ async function bootstrap() {
 
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
+  typedBox = null;  // a submit ends the typing: its own draw gives no caret back (keepTyping)
   const form = event.target;
   if (form.matches('.account-role-form')) {
     const account = state.accounts.find(row => row.id === form.dataset.id);
@@ -3118,7 +3310,7 @@ document.addEventListener("click", async (event) => {
     if (slot) slot.innerHTML = carryHelp(room);
   }
   if (action.startsWith("board-") && event.detail !== 0 && boardClickBlocked()) return;  // a key press (detail 0) is never a double click
-  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); document.querySelector("#board-outcome")?.focus(); }
+  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); focusForTyping(document.querySelector("#board-outcome")); }
   if ((action === "board-drop" || action === "board-release") && state.room) {
     state.boardDone = null; state.boardAsk = { roomId: state.room.id, key: target.dataset.key, action: action.slice(6) };
     render();
@@ -3186,16 +3378,43 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (action === "app-receipts" || action === "app-receipts-earlier") await loadReceipts(target.dataset.id, action === "app-receipts-earlier");
-  if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if ((action === "remove-participant" || action === "cloud-clear") && state.room) {
+    state.roomAsk = { roomId: state.room.id, kind: action === "cloud-clear" ? "clear" : "remove", id: target.dataset.id };
+    render();
+    document.querySelector('.room-ask [data-action="room-ask-cancel"]')?.focus();  // the safe choice, not the one under the pointer
+  }
+  if (action === "room-ask-cancel" && state.roomAsk) {
+    const ask = state.roomAsk;
+    state.roomAsk = null;
+    render();
+    document.querySelector(ask.kind === "clear" ? '[data-action="cloud-clear"]' : `[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`)?.focus();
+  }
+  if (action === "remove-participant-confirm" && roomAskOnScreen("remove")?.id === target.dataset.id) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();  // the button that had it is gone until the answer
+    try { await removeParticipant(target.dataset.id); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    // not the page's top: the next one to remove, or the way to change who's here, or the button again if it failed
+    const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
+    if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
+  }
   if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
-  if (action === "cloud-clear" && state.room) await clearMark(state.room);
+  if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();
+    try { await clearMark(state.room); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    if (state.room?.id === roomId) app.querySelector('[data-action="cloud-mark"], [data-action="cloud-clear"]')?.focus();
+  }
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
     state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", opened: brief?.body || "", status: "", error: false,
                         shipAuthor: brief && briefAuthorClass(state.room, brief) === "ship" ? brief.author_name : null };
     render();
-    document.querySelector("#brief-body")?.focus();
+    focusForTyping(document.querySelector("#brief-body"));
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "load-earlier") await loadEarlier();
@@ -3209,7 +3428,7 @@ document.addEventListener("click", async (event) => {
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
-  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); document.querySelector("#brief-body")?.focus(); }
+  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); focusForTyping(document.querySelector("#brief-body")); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
@@ -3466,7 +3685,52 @@ async function submitTrust(form) {
   }
 }
 
+// A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e), but only a press that completes. A finger
+// that pans to scroll sends pointerdown and then pointercancel, and the box being typed in must keep its caret through
+// the next redraw (the reader's CHANGES on a2451971, finding 1; Tardis's fix, 8f81d6f5). So the person's own primary
+// press is held from pointerdown and decides at its click, the moment the press guard decides too:
+// - a press that began on a typed box that now has the focus makes it the one a redraw may give the caret back to (a
+//   drag that selects words and ends just outside the box still began there);
+// - a press that began and ended on anything else, a label for a box included, clears that;
+// - a press a scroll or a long press's menu ended (pointercancel, contextmenu) has no click and changes nothing.
+// A trusted Tab or Shift+Tab is a key, so the box it focuses is the person's aim too, and a Tab to anything else clears
+// it (finding 2). A focus by autofocus or the app's own .focus() sets nothing. So the rule reads "the box the person
+// last aimed at, by a key, a completed press or Tab". (fix:unsaved-note-typing-flake: a redraw between the click into a
+// box and the first key sent that key, and every key after it, nowhere.)
+// - A press the guard above drops (one aimed at the room drawn before) never reaches the click listener here, so it
+//   sets and clears nothing; the guard's listener must stay first.
+// - A known gap: a redraw between a mouse press's pointerdown and its click (about a click's length) still finds no
+//   owner, as before this rule, and as the guard drops a press the room drew under (the re-check's nit 2, ecce414f).
+// - pointercancel and contextmenu are belt and braces: a cancelled press has no click, and every real click begins
+//   with a pointerdown that resets the press (Tardis, ee0c07b5).
+let pressing = null;  // the person's own primary press, from pointerdown until its click or its cancel
+let tabbing = false;  // a trusted Tab was just pressed, so the focus it moves is the person's aim
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it, as the guard
+  pressing = event.isTrusted && event.button === 0 ? event.target : null;
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressing = null; }, true);
+document.addEventListener("contextmenu", () => { pressing = null; }, true);
+document.addEventListener("click", (event) => {
+  const began = pressing;
+  pressing = null;
+  if (!event.isTrusted || event.detail === 0 || !began) return;  // a key's click, or element.click(): no press
+  if (typedBoxRule(began) && began === document.activeElement) typedBox = began;
+  else if (began === event.target) typedBox = null;
+}, true);
+document.addEventListener("keydown", (event) => {
+  tabbing = event.isTrusted && event.key === "Tab";
+  // The Tab's own focus move happens in this task, so the mark ends with it: a Tab held down doesn't make the app's own
+  // .focus() later on look like the person's aim (the re-check's nit 1).
+  if (tabbing) setTimeout(() => { tabbing = false; }, 0);
+}, true);
+document.addEventListener("keyup", (event) => { if (event.key === "Tab") tabbing = false; }, true);
+document.addEventListener("focusin", (event) => {
+  if (tabbing) typedBox = typedBoxRule(event.target) ? event.target : null;
+}, true);
+
 document.addEventListener("input", (event) => {
+  typedBox = event.target;  // the box a redraw may give the caret back to (keepTyping)
   Research.remember(event.target); Dashboard.input(event.target);
   if (event.target.id === "brief-body" && state.briefEdit) {
     state.briefEdit.body = event.target.value;
@@ -3495,7 +3759,9 @@ document.addEventListener("input", (event) => {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
   }
-  if (event.target.closest("#layer-form")) rememberLayerForm();
+  // The form the input came from, never whichever one is on screen (Tardis, all hands 98b9000c). It's the same today:
+  // an input from a box a redraw replaced never reaches the document, and a page has one #layer-form. It says what's meant.
+  if (event.target.closest("#layer-form")) rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "message-body") {
     const roomId = event.target.form.dataset.room;  // the room on screen: see sendMessage
     const previous = readChatDraft(roomId);
@@ -3507,7 +3773,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
-  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
+  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "layer-kind" && !editorSwitching()) {
     const edit = currentLayerEdit();
     if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }
