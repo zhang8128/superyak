@@ -521,6 +521,27 @@ def test_a_handler_that_raises_is_logged_and_the_socket_answers_again(monkeypatc
         sockets.stop()
 
 
+def test_a_probe_that_connects_and_closes_is_no_failure(monkeypatch, caplog):
+    """`superyak-runtime status` checks crossing.sock by connecting and closing, sending nothing. That's no request: no
+    answer, and nothing logged at ERROR, so each `make status` doesn't write a false failure into federate's log."""
+    from superyak_peer import crossing
+    clock, a, mac = short_puller()
+    asked = []
+    monkeypatch.setattr(crossing, 'ask', lambda fed, raw: asked.append(raw) or {'ok': False, 'code': 'ASKED'})
+    sockets = started_socket(mac[2])
+    path = mac[0].data_dir / 'crossing.sock'
+    try:
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as probe:
+            probe.settimeout(5)
+            probe.connect(str(path))
+        failed = lambda: [r for r in caplog.records if 'crossing.sock' in r.getMessage() and r.levelname == 'ERROR']
+        assert not wait_until(failed, 3)
+        assert _json.loads(over_socket(path, LINE)) == {'ok': False, 'code': 'ASKED'}  # and it answers a real one
+    finally:
+        sockets.stop()
+    assert asked == [LINE]
+
+
 def test_a_server_that_dies_is_logged_and_comes_back_within_2_s_while_passes_run(monkeypatch, caplog):
     from superyak_peer import crossing
     from superyak_peer.federate import Federate
