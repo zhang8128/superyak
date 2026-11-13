@@ -85,6 +85,16 @@ with open("lighthouse-receiver-policy.json", "x") as stream:
     json.dump(artifact, stream, indent=2)
 ```
 
+A rule's window holds both its ends: it allows at `validFrom` and at `validUntil` itself, and refuses from the next
+instant (`validFrom <= at <= validUntil`, in lighthouse_policy.py and the TypeScript policy.ts alike). In Python it is
+pinned by test_lighthouse_policy's window test and by a walk of the receiver's own window on the source's clock
+(`LighthouseSource(clock=...)`, test_context_lighthouse); no interop fixture asks at `validUntil` itself yet, so the
+TypeScript side's end is checked by reading, not by a test. The permissions ledger's windows are half-open instead: a
+record no longer allows at its own `valid_until` (permissions-by-place spec, `valid_from <= t < valid_until`). The
+ledger's place rule is judged by the publisher: under `enforce`, when a place record's `valid_until` is the same instant
+as the receiver rule's `validUntil`, the ledger's refusal decides at that instant; otherwise (another instant, `shadow`,
+or no ledger) the receiver rule allows at `validUntil`. Both stay as they are.
+
 Weights are receiver preferences keyed by publisher URN in the artifact's extension; unspecified weights are 1, zero excludes a publisher's candidates from selection. There is no transitive discovery or shared reputation. Receiver policies use the unchanged Lighthouse 0.1 ConnectionPolicy schema, plus bounded validation of selectors and weights. Reseal the artifact with `artifact_digest` after edits. Replace complete policy files atomically to avoid temporarily invalid JSON.
 
 ## Remote publishers: crossings between peers

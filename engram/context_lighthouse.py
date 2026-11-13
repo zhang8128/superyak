@@ -48,7 +48,12 @@ def _settings_digest(settings):
 class LighthouseSource:
     mode = 'lighthouse'
 
-    def __init__(self, store, *, receiver, instance_dir, context_id, purpose, thread=None, turn_id=None, deadline=None):
+    def __init__(self, store, *, receiver, instance_dir, context_id, purpose, thread=None, turn_id=None, deadline=None,
+                 clock=None):
+        """`clock` is when the receiver's own permissions are judged and its receipts dated: the real clock unless a test
+        walks a window to its end (Rio Grande's doubt on train-1132), the way PublisherDaemon takes one. It returns an
+        aware UTC datetime, as datetime.now(timezone.utc) does: a naive one would be read as UTC by the policy and date
+        a receipt with no offset (the reader's N1)."""
         from pathlib import Path
         if not isinstance(receiver, str) or not NAME.fullmatch(receiver):
             raise ValueError('Lighthouse requires a named receiver')
@@ -59,6 +64,7 @@ class LighthouseSource:
         self.context, self.purpose = context_ref(context_id), purpose
         self.thread, self.turn_id = thread, turn_id
         self.deadline = deadline
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.entries = {}
         self.coverage = {}
 
@@ -66,7 +72,7 @@ class LighthouseSource:
         # The HTTP runtime is shared; evidence and handles must not cross threads.
         return LighthouseSource(self.store, receiver=self.receiver, instance_dir=self.instance_dir,
                                 context_id=self.context['id'], purpose=self.purpose,
-                                thread=thread, turn_id=turn_id, deadline=deadline)
+                                thread=thread, turn_id=turn_id, deadline=deadline, clock=self.clock)
 
     def _deadline(self, settings):
         now = time.monotonic()
@@ -91,7 +97,7 @@ class LighthouseSource:
             decision = policy.decide(PolicyRequest(
                 publisher=publisher, profile=PROFILE, domain='memory.recall', action=action,
                 context_id=self.context['id'], claim_type=CLAIM_TYPE, purpose=self.purpose,
-                audience='self', at=datetime.now(timezone.utc)))
+                audience='self', at=self.clock()))
             allowed = allowed and decision.effect == 'allow'
             if decisions is not None:
                 decisions.append(dict(publisher=publisher, action=action, phase=phase, **decision.to_json()))
@@ -132,7 +138,8 @@ class LighthouseSource:
         result = neighbor_arm(query=query, context=self.context, purpose=self.purpose,
                               storage=log, session_id=self.thread, recall_id=self.turn_id or str(uuid.uuid4()),
                               receiver=self.receiver, **{**local, 'k': min(settings['k'], max(1, limit)),
-                                                        'timeout_s': timeout}, remote_publishers=(), ask=None)
+                                                        'timeout_s': timeout}, remote_publishers=(), ask=None,
+                              now=self.clock)
         if result is None:
             return []
         self.coverage.update(receipt_id=result['receipt_id'], diagnostics=result['diagnostics'])
@@ -194,7 +201,7 @@ class LighthouseSource:
         for group in groups.values():
             receipt = deepcopy(next(iter(group.values()))['receipt'])
             receipt['id'] = f'urn:engram:{self.receiver}:receipt:{uuid.uuid4()}'
-            receipt['issuedAt'] = datetime.now(timezone.utc).isoformat()
+            receipt['issuedAt'] = self.clock().isoformat()
             receipt['payload']['turnId'] = self.turn_id or str(uuid.uuid4())
             receipt['payload']['selected'] = [i for i in receipt['payload']['selected'] if _key(i) in group]
             receipt['payload']['delivered'] = [dict(publisher=verified[key]['publisher'],
