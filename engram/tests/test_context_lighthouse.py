@@ -387,3 +387,52 @@ def test_lighthouse_source_never_asks_a_remote_publisher(crossing):
         assert sock.requests == []
     finally:
         sock.close()
+
+
+@pytest.mark.parametrize('past_end, crosses', [(0, True), (1, False)])
+def test_a_receivers_own_window_ends_where_its_rule_says(crossing, past_end, crosses):
+    """Rio Grande's doubt on train-1132: walk the receiver's permission window to its real end, on the source's own
+    clock. The lighthouse counts validUntil as inside the window (lighthouse_policy.py, start <= at <= end; policy.ts the
+    same), so a recall at that instant crosses and one a second later doesn't, with no receipt of a delivery."""
+    from datetime import datetime, timedelta, timezone
+    from context_lighthouse import LighthouseSource
+    store, _, calls, state, settings, policy_path = crossing
+    policy(policy_path, valid_until='2026-12-01T00:00:00Z')
+    end = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    source = LighthouseSource(store, receiver='engram', instance_dir=settings.parent, context_id='memory/technical',
+                              purpose='session-recall', clock=lambda: end + timedelta(seconds=past_end))
+    provider = RecordingProvider()
+    ContextRuntime(store, provider, Budget(), sources=[source]).chat('t', 'What should we inspect?')
+    assert (state['content'] in json.dumps(provider.requests[0])) is crosses
+    dispatch = [r for r in store.recent_kind('t', 'lighthouse_receipt', 8) if r['metadata']['stage'] == 'model_dispatch']
+    assert len(dispatch) == (1 if crosses else 0)
+    if crosses:  # the receipt is dated by the same clock
+        assert dispatch[0]['metadata']['receipt']['issuedAt'] == end.isoformat()
+    else:  # past its window, the receiver never asks: the arm judges on the same clock, not the real one
+        assert calls == []
+
+
+def test_a_window_that_ends_mid_turn_delivers_nothing(crossing, monkeypatch):
+    """The source's own recheck, on its clock: the arm's recall and read run at the window's last instant, and the
+    clock passes the end before the source rereads for delivery, so nothing crosses into the session."""
+    from datetime import datetime, timedelta, timezone
+    import context_lighthouse
+    from context_lighthouse import LighthouseSource
+    store, _, calls, state, settings, policy_path = crossing
+    policy(policy_path, valid_until='2026-12-01T00:00:00Z')
+    end = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    now = [end]
+    arm = context_lighthouse.neighbor_arm
+
+    def arm_then_the_window_ends(**kwargs):
+        result = arm(**kwargs)
+        now[0] = end + timedelta(seconds=1)
+        return result
+    monkeypatch.setattr(context_lighthouse, 'neighbor_arm', arm_then_the_window_ends)
+    source = LighthouseSource(store, receiver='engram', instance_dir=settings.parent, context_id='memory/technical',
+                              purpose='session-recall', clock=lambda: now[0])
+    provider = RecordingProvider()
+    ContextRuntime(store, provider, Budget(), sources=[source]).chat('t', 'What should we inspect?')
+    assert [call['kind'] for call in calls][:2] == ['recall', 'read']  # the arm ran inside the window
+    assert state['content'] not in json.dumps(provider.requests[0])
+    assert not [r for r in store.recent_kind('t', 'lighthouse_receipt', 8) if r['metadata']['stage'] == 'model_dispatch']
