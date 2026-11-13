@@ -153,6 +153,7 @@ only-include = [
     "tests/test_identity.py",
     "tests/connector_support.py",
     "tests/imprint_support.py",
+    "tests/typed_boxes.py",
     "tests/fixtures/imprints/ceiling_agreement.json",
     "tests/test_imprint_admission.py",
     "tests/test_imprint_approval.py",
@@ -228,6 +229,7 @@ only-include = [
     "tests/test_station_cli.py",
     "tests/test_station_units.py",
     "tests/test_transport.py",
+    "tests/test_typed_boxes.py",
     "tests/test_wal_costs.py",
     "uv.lock",
 ]
