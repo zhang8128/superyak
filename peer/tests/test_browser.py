@@ -4886,8 +4886,11 @@ def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_pe
             expect(editor.get_by_label("Kind")).to_have_value("note")
             expect(editor.get_by_text("Private draft", exact=True)).to_be_visible()
             expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
-            editor.get_by_label("Kind").focus()
-            page.keyboard.press("Tab")  # into the note's words as a keyboard user does: Tab is aim, a bare focus() isn't
+            # A press into the words is aim, and a redraw gives a typed box its caret back. The waits above pass on the
+            # editor that the nav click's load drew, so the Plain note click's own load may redraw it from here on. A
+            # redraw gives no focus back to a select, so a Tab from Kind went elsewhere and the "!" was lost (CI run
+            # 43516196877, main 52d5c0f4).
+            editor.get_by_label("What do you want to share?").click()
             page.keyboard.press("ControlOrMeta+Home")
             page.keyboard.type("!")
             page.get_by_role("button", name="Account and sign out").click()  # typing does not rerender; the dialog does
