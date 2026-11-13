@@ -414,7 +414,8 @@ def test_a_receivers_own_window_ends_where_its_rule_says(crossing, past_end, cro
 
 def test_a_window_that_ends_mid_turn_delivers_nothing(crossing, monkeypatch):
     """The source's own recheck, on its clock: the arm's recall and read run at the window's last instant, and the
-    clock passes the end before the source rereads for delivery, so nothing crosses into the session."""
+    clock passes the end right after the arm returns, so valid() refuses at compile time (context_lighthouse.py, the
+    reader's S3) and nothing crosses into the session."""
     from datetime import datetime, timedelta, timezone
     import context_lighthouse
     from context_lighthouse import LighthouseSource
@@ -436,3 +437,29 @@ def test_a_window_that_ends_mid_turn_delivers_nothing(crossing, monkeypatch):
     assert [call['kind'] for call in calls][:2] == ['recall', 'read']  # the arm ran inside the window
     assert state['content'] not in json.dumps(provider.requests[0])
     assert not [r for r in store.recent_kind('t', 'lighthouse_receipt', 8) if r['metadata']['stage'] == 'model_dispatch']
+
+
+def test_a_window_that_ends_after_the_sources_own_reread_delivers_nothing(crossing, monkeypatch):
+    """The race the delivery recheck exists for (the reader's S3): the arm's recall and read, and the source's own
+    re-read of the publisher, all run at the window's last instant; the clock passes the end only after that re-read
+    (the third publisher call), so only the recheck before delivery stands between the text and the session."""
+    from datetime import datetime, timedelta, timezone
+    from context_lighthouse import LighthouseSource
+    store, _, calls, state, settings, policy_path = crossing
+    policy(policy_path, valid_until='2026-12-01T00:00:00Z')
+    end = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    now = [end]
+    asked = neighbors.LighthouseClient.call
+
+    def then_the_window_ends(self, frame, *, deadline=None):
+        answer = asked(self, frame, deadline=deadline)
+        if len(calls) == 3:  # the source's own re-read, after the arm's recall and read
+            now[0] = end + timedelta(seconds=1)
+        return answer
+    monkeypatch.setattr(neighbors.LighthouseClient, 'call', then_the_window_ends)
+    source = LighthouseSource(store, receiver='engram', instance_dir=settings.parent, context_id='memory/technical',
+                              purpose='session-recall', clock=lambda: now[0])
+    provider = RecordingProvider()
+    ContextRuntime(store, provider, Budget(), sources=[source]).chat('t', 'What should we inspect?')
+    assert [call['kind'] for call in calls] == ['recall', 'read', 'read']  # the re-read ran inside the window
+    assert state['content'] not in json.dumps(provider.requests[0])

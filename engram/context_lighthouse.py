@@ -51,7 +51,9 @@ class LighthouseSource:
     def __init__(self, store, *, receiver, instance_dir, context_id, purpose, thread=None, turn_id=None, deadline=None,
                  clock=None):
         """`clock` is when the receiver's own permissions are judged and its receipts dated: the real clock unless a test
-        walks a window to its end (Rio Grande's doubt on train-1132), the way PublisherDaemon takes one."""
+        walks a window to its end (Rio Grande's doubt on train-1132), the way PublisherDaemon takes one. It returns an
+        aware UTC datetime, as datetime.now(timezone.utc) does: a naive one would be read as UTC by the policy and date
+        a receipt with no offset (the reader's N1)."""
         from pathlib import Path
         if not isinstance(receiver, str) or not NAME.fullmatch(receiver):
             raise ValueError('Lighthouse requires a named receiver')
