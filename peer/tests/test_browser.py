@@ -627,6 +627,295 @@ def test_the_typed_box_watch_reports_a_drawing_that_names_another_thing_than_the
     assert found == [f"{words} drawingFor() names"], found
 
 
+def open_account_dialog(page):
+    page.get_by_role('button', name='Account and sign out').click()
+    expect(page.get_by_role('heading', name='Your account')).to_be_visible()
+
+
+def open_new_chat_dialog(page):
+    page.get_by_role('link', name='Chats').click()
+    page.get_by_role('button', name='New chat').first.click()
+    expect(page.get_by_label('Chat title')).to_be_visible()
+
+
+def open_new_space_dialog(page):
+    page.get_by_role('button', name='Create space').click()
+    expect(page.get_by_label('Space name')).to_be_visible()
+
+
+def open_reauth_dialog(page):
+    page.evaluate("() => { state.reauth = true; state.reauthError = null; render(); }")
+    expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+
+
+DIALOG_BOXES = {'account': (open_account_dialog, 'display-name'), 'new-chat': (open_new_chat_dialog, 'chat-title'),
+                'new-space': (open_new_space_dialog, 'space-name'), 'reauth': (open_reauth_dialog, 'reauth-password')}
+
+
+def caret_in(page):
+    return page.evaluate("() => { const box = document.activeElement; return [box.id, box.value, box.selectionStart, box.selectionEnd]; }")
+
+
+@pytest.mark.parametrize('which', DIALOG_BOXES)
+def test_a_redraw_that_changes_nothing_keeps_an_open_dialog_with_its_words_and_caret(browser_peer, which):
+    """fix:dialog-redraw-loses-typed-words (Tardis, all hands d9907cf4 and 1b0d489c). render() used to rebuild an open
+    dialog from state and focus its box again by id, so the words typed there were gone, or the next key landed at the
+    start. A redraw that draws the same dialog markup now keeps the very node: here the words typed at the end of each
+    dialog's box, a password's half included, its caret and its focus all stay through two renders, and the next key
+    lands after them. It also pins that no dialog draws a clock or anything else that changes on its own."""
+    opener, box = DIALOG_BOXES[which]
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        opener(page)
+        page.locator(f'#{box}').click()
+        page.keyboard.press('End')
+        page.keyboard.type('Half typed')
+        page.evaluate("() => { document.querySelector('#dialogs dialog').kept = true; }")
+        before = caret_in(page)
+        assert before[0] == box and before[1].endswith('Half typed') and before[2] == before[3] == len(before[1])
+        page.evaluate("() => { render(); render(); }")
+        assert page.evaluate("() => document.querySelector('#dialogs dialog').kept === true")  # the same node
+        assert page.locator('#app dialog').count() == 0
+        assert caret_in(page) == before
+        page.keyboard.type('!')
+        assert page.locator(f'#{box}').input_value() == before[1] + '!'
+
+
+def test_a_dialog_drawn_anew_carries_the_words_and_ticks_the_person_set(browser_peer):
+    """Tardis's case (all hands 1b0d489c): the person ticks a member and types a title in a new chat, and something in
+    the dialog changes, here an error line. The dialog is drawn anew, and the title, the tick, the focus and the caret are
+    carried into it: same id, same place, same drawn default."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_new_chat_dialog(page)
+        dialog = page.locator('#dialogs dialog')
+        dialog.get_by_role('checkbox', name='Dr. Morgan').check()
+        page.locator('#chat-title').click()
+        page.keyboard.type('Care plan')
+        page.evaluate("() => { document.querySelector('#dialogs dialog').kept = true; state.chatError = 'Pick again'; render(); }")
+        expect(dialog.get_by_role('alert')).to_have_text('Pick again')
+        assert not page.evaluate("() => document.querySelector('#dialogs dialog').kept")  # drawn anew
+        assert caret_in(page) == ['chat-title', 'Care plan', 9, 9]
+        expect(dialog.get_by_role('checkbox', name='Dr. Morgan')).to_be_checked()
+        page.keyboard.type(' for May')
+        expect(page.locator('#chat-title')).to_have_value('Care plan for May')
+
+
+def test_words_whose_box_the_draw_changed_are_named_not_carried(browser_peer):
+    """The third case: the ground moved. The person is typing a name correction when their name changes underneath (a save
+    from another tab). Their words aren't carried over the new name, which the box now shows with the caret at its end,
+    and a line in the dialog says theirs were replaced and what they were, so nothing is lost without a word."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_account_dialog(page)
+        page.locator('#display-name').click()
+        page.keyboard.press('End')
+        page.keyboard.type(' Jr')
+        typed = page.locator('#display-name').input_value()
+        page.evaluate("() => { state.me = { ...state.me, name: 'Alex Other' }; render(); }")
+        dialog = page.locator('#dialogs dialog')
+        expect(page.locator('#display-name')).to_have_value('Alex Other')
+        expect(dialog.locator('.dialog-dropped')).to_have_text(
+            f'Display name changed while you typed, so it shows the new words. You had typed: “{typed}”.')
+        expect(dialog.locator('.dialog-dropped')).to_have_attribute('role', 'alert')
+        assert caret_in(page) == ['display-name', 'Alex Other', 10, 10]
+        assert page.evaluate("() => typedBox") is None  # not the person's words, so not their box to keep through a redraw
+
+
+def test_a_different_dialog_starts_empty_with_its_first_control_focused(browser_peer):
+    """Only the same dialog carries anything (Tardis, d9907cf4): words typed in the account dialog never follow into the
+    new-space dialog that replaces it, which starts with its own first control focused."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_account_dialog(page)
+        page.locator('#display-name').click()
+        page.keyboard.type(' Jr')
+        page.evaluate("() => { state.profileDialog = false; state.spaceDialog = true; render(); }")
+        expect(page.get_by_label('Space name')).to_be_focused()
+        expect(page.get_by_label('Space name')).to_have_value('')
+        assert page.locator('#dialogs dialog').count() == 1
+
+
+@pytest.mark.parametrize('submit', ['Enter', 'click'])
+def test_a_wrong_password_in_the_sign_in_again_dialog_shows_why_with_an_empty_box_and_the_caret_in_it(browser_peer, submit):
+    """Tardis's second test (1b0d489c). A wrong password changes the dialog (its alert line), so it's drawn anew, and a
+    password box never carries: the box is empty, the caret is in it, and the alert says why, whether the person pressed
+    Enter in the box or the button."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='My sharing layers').click()
+        open_new_layer(page)
+        page.get_by_label('Layer title').fill('Kept while I sign in')
+        with browser_peer['app'].state.store.transaction() as db:
+            db.execute('DELETE FROM sessions')
+        page.get_by_role('button', name='Save private draft').click()
+        expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+        expect(page.locator('#reauth-password')).to_be_focused()  # the dialog is for the password
+        page.keyboard.type('not the password')
+        if submit == 'Enter':
+            page.keyboard.press('Enter')
+        else:
+            page.get_by_role('button', name='Sign in again').click()
+        alert = page.locator('#dialogs dialog').get_by_role('alert')
+        expect(alert).to_be_visible()
+        expect(page.locator('#reauth-password')).to_have_value('')
+        expect(page.locator('#reauth-password')).to_be_focused()
+        said = alert.inner_text()
+        # The reader's finding 1 on 51e8d0b8: a second wrong try draws the same alert, so the dialog is kept, and the
+        # wrong password stayed in the box with the next try typed after it. It goes, and the refusal is said again by the
+        # dialog's own alert line, emptied and given its words back: while the modal is open, #announcer is out of the
+        # accessibility tree (the re-check on f3868733), so a word there reaches no screen reader.
+        page.evaluate("""() => { const line = document.querySelector('#dialogs dialog [role="alert"]'); window.said = [];
+          new MutationObserver(() => window.said.push(line.textContent)).observe(line, { childList: true, characterData: true, subtree: true }); }""")
+        page.keyboard.type('still not it')
+        if submit == 'Enter':
+            page.keyboard.press('Enter')
+        else:
+            page.get_by_role('button', name='Sign in again').click()
+        expect(page.locator('#reauth-password')).to_have_value('')
+        expect(page.locator('#reauth-password')).to_be_focused()
+        page.wait_for_function("() => window.said.length >= 2")
+        assert page.evaluate("() => window.said") == ['', said]  # the same node, its words said again
+        assert page.evaluate("() => document.querySelector('#dialogs dialog [role=\"alert\"]').isConnected")
+        expect(page.get_by_label('Layer title')).to_have_value('Kept while I sign in')
+
+
+def test_a_password_being_typed_carries_into_a_dialog_drawn_anew(browser_peer):
+    """Tardis, all hands 582f12c5: a password never carried, so a replace while the person typed one (here another dialog
+    opening, which redraws every open dialog) emptied the box under their caret, and the rest of the password went in
+    alone. A password carries while the box is theirs, since their last submit, with its caret."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_reauth_dialog(page)
+        page.locator('#reauth-password').click()
+        page.keyboard.type('half')
+        page.evaluate("() => { document.querySelector('#dialogs [aria-labelledby=\"reauth-title\"]').kept = true; state.spaceDialog = true; render(); }")
+        expect(page.get_by_label('Space name')).to_be_attached()
+        assert not page.evaluate("() => document.querySelector('#dialogs [aria-labelledby=\"reauth-title\"]').kept")  # drawn anew
+        assert caret_in(page) == ['reauth-password', 'half', 4, 4]
+        page.keyboard.type('way')
+        expect(page.locator('#reauth-password')).to_have_value('halfway')
+
+
+def test_a_password_sent_never_carries_into_a_dialog_drawn_anew(browser_peer):
+    """The other half of the rule: a submit ends the typing, so once the password is sent, a replace while its answer is
+    out starts the box empty, and the refusal that follows leaves it empty with the caret in it."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='My sharing layers').click()
+        open_new_layer(page)
+        page.get_by_label('Layer title').fill('Kept while I sign in')
+        with browser_peer['app'].state.store.transaction() as db:
+            db.execute('DELETE FROM sessions')
+        page.get_by_role('button', name='Save private draft').click()
+        expect(page.locator('#reauth-password')).to_be_focused()
+        page.keyboard.type('not the password')
+        held = held_routes(page, '**/api/login')
+        page.keyboard.press('Enter')
+        wait_for_hold(page, held)
+        page.evaluate("() => { state.spaceDialog = true; render(); }")
+        expect(page.locator('#reauth-password')).to_have_value('')
+        release(held)
+        expect(page.locator('#dialogs dialog').get_by_role('alert')).to_be_visible()
+        expect(page.locator('#reauth-password')).to_have_value('')
+
+
+def test_words_typed_while_a_save_is_out_never_go_to_the_sign_in_again_box(browser_peer):
+    """The reader's finding 2 on 51e8d0b8. The sign-in-again dialog opens on the save's answer, after an await. An
+    autofocus put the focus in its password box whatever the person had done since Save, so the end of the words they
+    were still typing landed there, and their Enter sent them as a sign-in. The save's answer opens the box only through
+    reopenForTyping: here the person typed on during the save, so the focus isn't put in the password box, the box stays
+    empty, and no sign-in is sent."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='My sharing layers').click()
+        open_new_layer(page)
+        page.get_by_label('Layer title').fill('Kept while I sign in')
+        with browser_peer['app'].state.store.transaction() as db:
+            db.execute('DELETE FROM sessions')
+        held = held_routes(page, re.compile(r'/api/layers/[^/?]+$'))
+        page.get_by_role('button', name='Save private draft').click()
+        wait_for_hold(page, held)
+        page.get_by_label('Layer title').click()
+        page.keyboard.press('End')
+        page.keyboard.type(' and more words')
+        logins = []
+        page.on('request', lambda request: logins.append(request.url) if '/api/login' in request.url else None)
+        release(held)
+        expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+        expect(page.locator('#reauth-password')).not_to_be_focused()
+        page.keyboard.type('xyz')
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(300)
+        expect(page.locator('#reauth-password')).to_have_value('')
+        assert logins == []
+
+
+def test_a_box_the_new_draw_leaves_out_is_named_with_the_words_it_held(browser_peer):
+    """The reader's finding 4 on 51e8d0b8: a typed box that a dialog drawn anew no longer has took its words with it,
+    unsaid. No dialog draws a typed box only sometimes today, so carryInto is given two drawings of one dialog."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        said = page.evaluate("""() => {
+          const draw = (html) => { const box = document.createElement('div'); box.innerHTML = html; return box.firstElementChild; };
+          const old = draw('<dialog aria-labelledby="t"><div class="dialog-body"><h2 id="t">T</h2><label for="note">Note</label><input id="note"></div></dialog>');
+          const fresh = draw('<dialog aria-labelledby="t"><div class="dialog-body"><h2 id="t">T</h2><p>Changed</p></div></dialog>');
+          old.querySelector('#note').value = 'my words';
+          carryInto(fresh, old);
+          const note = fresh.querySelector('.dialog-dropped');
+          return [note.getAttribute('role'), note.textContent, note.previousElementSibling.tagName];
+        }""")
+    assert said == ['alert', 'Note is no longer in this dialog. You had typed: “my words”.', 'H2']
+
+
+def test_a_box_another_modal_covers_is_not_made_the_owner(browser_peer):
+    """The reader's nit 3 on 51e8d0b8: a replace focused the carried box again and made it the caret's owner even when a
+    later modal dialog held the focus, against focusForTyping's rule that the owner is only where the focus landed."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_account_dialog(page)
+        page.locator('#display-name').click()
+        page.keyboard.type(' Jr')
+        assert page.evaluate("() => typedBox && typedBox.id") == 'display-name'
+        page.evaluate("() => { state.reauth = true; state.reauthError = null; render(); }")
+        expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+        assert page.evaluate("() => document.activeElement.id") != 'display-name'  # the later modal holds the focus
+        assert page.evaluate("() => typedBox === null || typedBox === document.activeElement")
+
+
+def test_a_second_failed_sign_out_is_said_again_inside_the_account_dialog(browser_peer):
+    """A second failed sign-out draws the same alert, so the account dialog is kept, and its alert line says the words
+    again: #announcer is out of a screen reader's reach behind the modal (the re-checks on f3868733 and 19cf5683)."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, context):
+        open_account_dialog(page)
+        context.set_offline(True)
+        page.get_by_role('button', name='Sign out', exact=True).click()
+        alert = page.locator('#dialogs dialog').get_by_role('alert')
+        expect(alert).to_contain_text('Sign-out could not be completed')
+        said = alert.inner_text()
+        page.evaluate("""() => { const line = document.querySelector('#dialogs dialog [role="alert"]'); window.said = [];
+          new MutationObserver(() => window.said.push(line.textContent)).observe(line, { childList: true, characterData: true, subtree: true }); }""")
+        page.get_by_role('button', name='Retry sign out').click()
+        page.wait_for_function("() => window.said.length >= 2")
+        assert page.evaluate("() => window.said") == ['', said]
+        context.set_offline(False)
+
+
+def test_signing_out_takes_every_open_dialog_down(browser_peer):
+    """Dialogs live beside #app now, so a page drawn outside render() clears them: signing out from the account dialog
+    leaves none open over the sign-in page."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        open_account_dialog(page)
+        page.get_by_role('button', name='Sign out', exact=True).click()
+        expect(page.get_by_role('heading', name='Sign in to this home')).to_be_visible()
+        expect(page.locator('#dialogs dialog')).to_have_count(0)
+        expect(page.locator('dialog')).to_have_count(0)
+
+
+def test_the_typed_box_watch_reads_the_dialog_root_too(browser_peer):
+    """Dialogs have their own root, and the watch reads it as it reads #app (Rio Grande, all hands 751ada42): a box no
+    rule names there is reported, and so is a dialog's box drawn in both roots at once."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        assert typed_boxes.take() == []
+        page.evaluate("""() => { document.getElementById('dialogs').insertAdjacentHTML('beforeend',
+          '<dialog><input id="a-dialog-box-nobody-listed"><input id="space-name"></dialog>');
+          app.insertAdjacentHTML('beforeend', '<dialog><input id="space-name"></dialog>'); }""")
+        found = typed_boxes.take()
+    assert len(found) == 2, found
+    assert any(line.startswith('#a-dialog-box-nobody-listed on ') and "isn't listed" in line for line in found), found
+    assert any(line.startswith('#space-name on ') and 'without drawn once inside a dialog' in line for line in found), found
+
+
 @pytest.fixture
 def a_page_left_open(browser_peer):
     """A signed-out page whose context closes only in teardown, after conftest.py's check has run (as
@@ -3908,8 +4197,12 @@ def test_durable_name_corrections_shared_attribution_and_complete_revision(brows
             page.get_by_role("button", name="Account and sign out").click()
             page.get_by_label("Display name").fill("Alex Rivera")
             page.get_by_role("button", name="Save name correction").click()
+            watch_reads(page)
             page.get_by_role("link", name="My sharing layers").click()
             page.locator(f'[data-action="open-layer"][data-id="{layer["id"]}"]').click()
+            # Both clicks read the layer's revisions, and the second read's draw closes a <details> opened before it
+            # lands (held, it fails on 6730222f too). So the summary is opened once those reads are in.
+            reads_settled(page)
             page.get_by_text("Release 1 · draft version 1").click()
             expect(page.locator("details").get_by_text(full_body, exact=True)).to_be_visible()
             expect(page.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()

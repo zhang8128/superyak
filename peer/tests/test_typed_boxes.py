@@ -151,3 +151,46 @@ def test_every_template_id_is_expanded_into_the_ids_it_draws():
     assert set(EXPANDED) == templates, 'a template id with no expansion: list the ids it draws in EXPANDED'
     for template, ids in EXPANDED.items():
         assert ids and all(re.fullmatch(typed_boxes.pattern(template), box) for box in ids), template
+
+
+def test_no_top_level_name_in_app_js_is_declared_twice():
+    """app.js is one classic script, so a second `function name` at its top level silently replaces the first. The
+    dialog root's first draft named a helper controlKey, and the press guard's own controlKey, declared later, took its
+    place: the dialog carried nothing, and had the order been the other way the guard would have broken instead."""
+    names = re.findall(r'^(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)|^(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)',
+                       (STATIC / 'app.js').read_text(), re.M)
+    seen = [a or b for a, b in names]
+    assert len(seen) > 100  # the finder still reads the file's declarations
+    assert sorted({name for name in seen if seen.count(name) > 1}) == []
+
+
+def test_every_dialog_names_what_it_is_for():
+    """drawDialogs carries a person's words only into the dialog drawn anew for the same purpose, told by its
+    aria-labelledby: a dialog without one would match any other dialog without one."""
+    tags = [tag for script in sorted(STATIC.rglob('*.js')) for tag in re.findall(r'<dialog\b[^>]*>', script.read_text())]
+    assert len(tags) >= 14
+    assert [tag for tag in tags if not re.search(r'aria-labelledby="[\w-]+"', tag)] == []
+
+
+# Dialogs whose error line is written in place by code (error.textContent = ...) on every refusal, a new text node each
+# time, as before the dialog root: a repeat is said without a re-render, so they needn't call sayAgainInDialog.
+SAID_IN_PLACE = {'imprint-title': '#imprint-error, written by the Allow handler',
+                 'imprint-ask-title': '#imprint-error, written by the withdraw and shorten handlers'}
+
+
+def test_every_dialog_that_draws_an_error_says_a_repeat_again():
+    """A kept dialog's alert doesn't change when the same refusal comes twice, and #announcer is out of reach behind a
+    modal, so each dialog that draws an error line calls sayAgainInDialog with its own aria-labelledby after the error's
+    render (the reader's re-checks on f3868733 and 19cf5683 each found one more dialog that didn't)."""
+    scripts = {script.name: script.read_text() for script in sorted(STATIC.rglob('*.js'))}
+    drawing = set()
+    for text in scripts.values():
+        for found in re.finditer(r'<dialog aria-labelledby="([\w-]+)"', text):
+            body = text[found.end():text.find('</dialog>', found.end())]
+            if re.search(r'role=\\?"(alert|status)\\?"', body) or 'errorMarkup()' in body:
+                drawing.add(found.group(1))
+    assert {'reauth-title', 'chat-dialog-title', 'member-preview-title', 'new-source-title'} <= drawing  # the finder works
+    called = {label for text in scripts.values() for args in re.findall(r'sayAgainInDialog\(([^)]*)\)', text)
+              for label in re.findall(r'"([\w-]+)"', args)}
+    assert sorted(drawing - called - set(SAID_IN_PLACE)) == []
+    assert sorted(set(SAID_IN_PLACE) - drawing) == []  # an exemption names a dialog that still draws one
