@@ -372,6 +372,9 @@ impl Jail {
     /// each hidden directory, and an empty file over each hidden file; then the two directories, writable, so
     /// that nothing hides them; every namespace private; no capabilities; its own session, so it has no
     /// terminal; and gone when its parent goes.
+    ///
+    /// Only what is hidden inside something shown is covered. The rest of the machine is not there at all,
+    /// and a cover would make its name, telling the run that it exists.
     fn bubblewrap_args(&self) -> Vec<String> {
         let mut args: Vec<String> = [
             "--die-with-parent",
@@ -406,7 +409,14 @@ impl Jail {
             let dir = text(dir);
             args.extend(["--ro-bind".to_string(), dir.clone(), dir]);
         }
-        for hidden in &self.hidden {
+        let shown = |path: &Path| {
+            LINUX_SYSTEM_DIRS
+                .iter()
+                .map(Path::new)
+                .chain(self.readable.iter().map(PathBuf::as_path))
+                .any(|dir| path.starts_with(dir))
+        };
+        for hidden in self.hidden.iter().filter(|h| shown(&h.path)) {
             if hidden.dir {
                 args.extend(["--tmpfs".to_string(), text(&hidden.path)]);
             } else {
@@ -498,6 +508,11 @@ mod tests {
                 Hidden {
                     path: PathBuf::from("/room"),
                     dir: true,
+                },
+                // Hidden, and inside nothing that is shown.
+                Hidden {
+                    path: PathBuf::from("/home/someone/.netrc"),
+                    dir: false,
                 },
             ],
         }
@@ -631,8 +646,12 @@ mod tests {
         // a hidden directory that holds the checkout must not cover it.
         let at = |part: &str| joined.find(part).unwrap();
         assert!(at("--ro-bind /tools /tools") < at("--tmpfs /tools/keys"));
-        assert!(at("--tmpfs /room") < at("--bind /room/checkout /room/checkout"));
+        assert!(at("--tmpfs /tools/keys") < at("--bind /room/checkout /room/checkout"));
         assert!(at("--ro-bind /dev/null /tools/token") < at("--bind /room/checkout"));
+        // What is hidden outside everything shown is not there at all, so it gets no cover: a cover would
+        // make its name, and tell the run that it exists.
+        assert!(!joined.contains("/home/someone"), "{joined}");
+        assert!(!joined.contains("--tmpfs /room"), "{joined}");
         // Every writable bind is one of the two directories.
         let writable: Vec<&str> = args
             .windows(2)
