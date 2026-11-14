@@ -248,3 +248,35 @@ fn artifact_metadata_cannot_carry_free_text() {
         ItemState::PassedVerified
     );
 }
+
+/// The clock finds files that say they belong to an attempt. It asks the room whether there was one.
+#[test]
+fn the_room_knows_the_attempts_it_made_and_no_others() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = Room::init(d.path()).unwrap();
+    let id = open_item(&mut r);
+    let lease = r.take("codex:sol", 100).unwrap().unwrap();
+    assert!(r.knows_attempt(&lease.attempt).unwrap());
+    // An attempt that ended is still one the room made.
+    r.release(&lease, 101).unwrap();
+    assert!(r.knows_attempt(&lease.attempt).unwrap());
+    for other in [
+        "",
+        "a",
+        "a000000000000",
+        &id.0,
+        "a' OR '1'='1",
+        "a%",
+        &"a".repeat(100_000),
+        "a\u{0}b",
+    ] {
+        assert!(
+            !r.knows_attempt(&AttemptId(other.to_string())).unwrap(),
+            "{other:.20}"
+        );
+    }
+    // A reader of the room can ask too.
+    drop(r);
+    let reader = Room::open_read_only(d.path()).unwrap();
+    assert!(reader.knows_attempt(&lease.attempt).unwrap());
+}

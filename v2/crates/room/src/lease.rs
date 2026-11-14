@@ -268,6 +268,18 @@ impl Room {
         }))
     }
 
+    /// Whether the room made an attempt with this name, running or ended. The clock asks before it acts on a
+    /// file that says it belongs to one.
+    pub fn knows_attempt(&self, attempt: &AttemptId) -> Result<bool, RoomError> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1)",
+                [&attempt.0],
+                |r| r.get(0),
+            )
+            .map_err(db)
+    }
+
     pub fn expire_due(&mut self, now: Ts) -> Result<Vec<ItemId>, RoomError> {
         let tx = self.conn.transaction().map_err(db)?;
         let due = {
