@@ -1,0 +1,267 @@
+{
+ "sync": {
+  "peer": []
+ },
+ "mutants": [
+  {
+   "name": "the panel shows whatever is held",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (state.revisionsOf !== state.selectedLayerId) return `<p class=\"meta\">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "the panel trusts an empty hold (the reader's O1)",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "if (state.revisionsOf !== state.selectedLayerId) return",
+   "new": "if (state.revisionsOf && state.revisionsOf !== state.selectedLayerId) return",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "a late answer lands",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (!current() || read < revisionsTaken) return false;\n",
+   "new": "    if (read < revisionsTaken) return false;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_read_held_across_a_sign_in_does_nothing"
+   ]
+  },
+  {
+   "name": "an older answer lands",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (!current() || read < revisionsTaken) return false;\n",
+   "new": "    if (!current()) return false;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_an_older_history_answer_for_the_same_layer_doesnt_replace_a_newer_one"
+   ]
+  },
+  {
+   "name": "the newest taken isn't kept",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    revisionsTaken = read;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_an_older_history_answer_for_the_same_layer_doesnt_replace_a_newer_one"
+   ]
+  },
+  {
+   "name": "whose history is never recorded",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    state.revisionsOf = id;\n",
+   "new": "",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_history_answer_doesnt_land_on_the_layer_now_open"
+   ]
+  },
+  {
+   "name": "a late failure speaks",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (current() && read === revisionsRead) throw error;\n",
+   "new": "    throw error;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_failure_for_a_layer_the_person_left_says_nothing"
+   ]
+  },
+  {
+   "name": "a failure for the open layer is swallowed",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (current() && read === revisionsRead) throw error;\n",
+   "new": "    return false;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "an older failure speaks",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (current() && read === revisionsRead) throw error;\n",
+   "new": "    if (current()) throw error;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_an_older_failure_for_the_same_layer_says_nothing"
+   ]
+  },
+  {
+   "name": "a failure elsewhere speaks",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (current() && read === revisionsRead) throw error;\n",
+   "new": "    if (read === revisionsRead) throw error;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_read_held_across_a_sign_in_does_nothing"
+   ]
+  },
+  {
+   "name": "off the page still counts",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "const current = () => state.me && routeParts().route === \"layers\" && state.selectedLayerId === id;",
+   "new": "const current = () => state.me && state.selectedLayerId === id;",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_failure_after_going_home_says_nothing"
+   ]
+  },
+  {
+   "name": "another selection still counts",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "const current = () => state.me && routeParts().route === \"layers\" && state.selectedLayerId === id;",
+   "new": "const current = () => state.me && routeParts().route === \"layers\";",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_read_held_across_a_sign_in_does_nothing"
+   ]
+  },
+  {
+   "name": "the route load reads raw",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "      await loadRevisions(state.selectedLayerId);\n",
+   "new": "      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "the route load goes silent (the reader's O2)",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "      await loadRevisions(state.selectedLayerId);\n",
+   "new": "      await loadRevisions(state.selectedLayerId).catch(() => {});\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "one click reads twice",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read\n    location.hash = address;\n    return;\n  }\n",
+   "new": "  location.hash = address;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_one_click_reads_a_layers_history_once"
+   ]
+  },
+  {
+   "name": "the same layer again reads nothing",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read\n    location.hash = address;\n    return;\n  }\n",
+   "new": "  location.hash = address;\n  return;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_one_click_reads_a_layers_history_once"
+   ]
+  },
+  {
+   "name": "an older answer renders",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    if (!await loadRevisions(id)) return;  // a newer read renders itself\n",
+   "new": "    await loadRevisions(id);\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_late_answer_for_the_open_layer_doesnt_wipe_what_the_page_said"
+   ]
+  },
+  {
+   "name": "a good read keeps the old error",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    state.flash = null;\n  } catch (error) {\n    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "  } catch (error) {\n    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_layer_whose_history_cant_be_read_doesnt_show_another_layers"
+   ]
+  },
+  {
+   "name": "a failed read is thrown away",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "    throw error;\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_opening_the_layer_already_open_says_when_its_history_cant_be_read"
+   ]
+  },
+  {
+   "name": "a failed read says nothing",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    setFlash(error.message, true);\n  }\n  render();\n}\n\nasync function resolveConflict",
+   "new": "  }\n  render();\n}\n\nasync function resolveConflict",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_opening_the_layer_already_open_says_when_its_history_cant_be_read"
+   ]
+  },
+  {
+   "name": "sign-out keeps the words",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "    forgetRevisions();\n    state.editorIdentity = null;\n",
+   "new": "    state.editorIdentity = null;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_signing_out_forgets_the_release_history"
+   ]
+  },
+  {
+   "name": "a new account keeps the words",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "{ forgetRevisions(); state.briefEdit = null;",
+   "new": "{ state.briefEdit = null;",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_new_account_on_the_page_forgets_the_release_history"
+   ]
+  },
+  {
+   "name": "forgetting leaves the words",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "function forgetRevisions() {\n  state.revisions = [];\n",
+   "new": "function forgetRevisions() {\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_signing_out_forgets_the_release_history"
+   ]
+  },
+  {
+   "name": "forgetting leaves whose they were",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  state.revisionsOf = null;\n  state.selectedLayerId = null;\n",
+   "new": "  state.selectedLayerId = null;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_signing_out_forgets_the_release_history"
+   ]
+  },
+  {
+   "name": "forgetting leaves the selection",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "  state.revisionsOf = null;\n  state.selectedLayerId = null;\n",
+   "new": "  state.revisionsOf = null;\n",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_signing_out_forgets_the_release_history"
+   ]
+  },
+  {
+   "name": "a read counts with nobody signed in",
+   "file": "peer/superyak_peer/static/app.js",
+   "old": "const current = () => state.me && routeParts().route === \"layers\" && state.selectedLayerId === id;",
+   "new": "const current = () => routeParts().route === \"layers\" && state.selectedLayerId === id;",
+   "project": "peer",
+   "tests": [
+    "tests/test_browser.py::test_a_read_landing_after_the_session_ended_does_nothing"
+   ]
+  }
+ ]
+}

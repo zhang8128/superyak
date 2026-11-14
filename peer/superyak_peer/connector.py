@@ -328,8 +328,8 @@ class Connector:
     def pending_decide(self, pending, csrf, allow, rooms, days=DAYS_MAX, *, issuer, callback):
         """Allow or Deny, from the stored request only: its pending id and CSRF token (403 for a wrong token), within
         its ten minutes from /authorize, and once (400 already_decided after either). Deny sends access_denied. Allow
-        takes the rooms chosen ("*" sent as itself, or current rooms of the person's that no member keeps away from
-        cloud models, each once, at least one) and 1 to 30 days, makes the grant and a code (256 bits, 60 s, stored as
+        takes the rooms chosen ("*" sent as itself, or current rooms of the person's that no member has marked, each
+        once, at least one) and 1 to 30 days, makes the grant and a code (256 bits, 60 s, stored as
         a hash), and writes the client's oauth_clients row when it has none. Returns the URL to send the browser to,
         with the state and iss."""
         from urllib.parse import urlencode
@@ -522,7 +522,7 @@ class Connector:
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
-        grouped under it as `earlier_of` (spec D9), and `cloud` where a member keeps it away from cloud models."""
+        grouped under it as `earlier_of` (spec D9), and `cloud` where a member has marked it."""
         rows = db.execute('SELECT rooms.id, rooms.title FROM room_members JOIN rooms ON rooms.id=room_members.room_id '
                           'WHERE room_members.user_id=? ORDER BY rooms.title, rooms.id', (person_id,)).fetchall()
         current, earlier = [], {}

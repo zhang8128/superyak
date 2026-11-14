@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS connector_reads_by_person ON connector_reads(person_i
 # removed can still be shown on its own (Rio Grande and Tardis, on the restore design).
 
 REFUSALS = {
-    'marked': 'A member of this room keeps it away from cloud models.',
+    'marked': 'A member has marked this room, so no connection can read it.',
     'not_shared': "This room isn't shared with Claude. You can add it in Connected apps on your home.",
     'remote': 'This room is on another home. This connector reads rooms on this home only.',
     'no_such': 'No such room.',

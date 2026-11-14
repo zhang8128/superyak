@@ -14,6 +14,7 @@ import fcntl
 import http.client
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -255,7 +256,13 @@ def _left(deadline):
 def daemon_call(socket_path, frame, deadline):
     """One canonical JSON line to the publisher's lighthouse daemon and one line back, at most DAEMON_REPLY_MAX, all
     within `deadline` (time.monotonic). TimeoutError at the deadline; OSError when it can't be reached or closes
-    early; Problem when its line isn't one JSON object."""
+    early; Problem when its line isn't one JSON object.
+
+    A recall tells the daemon how long it waits (`remainingMs`, spec 2026-11-10), so the publisher's embed gives up
+    with it. It goes on the frame sent to the daemon only, rounded up so it stays an upper bound, after the request
+    was checked and digested: the asker's signed request, its FRAME_KEYS and its crossing_digest never carry it."""
+    if frame.get('kind') == 'recall':
+        frame = {**frame, 'remainingMs': math.ceil(_left(deadline) * 1000)}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(_left(deadline))
         connection.connect(str(socket_path))
@@ -464,6 +471,8 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.connection.settimeout(10)
         raw = self.rfile.readline(LOCAL_REQUEST_MAX + 2)
+        if not raw:  # connected and closed, asking nothing, as `superyak-runtime status`'s probe does: no request
+            return
         if not raw.endswith(b'\n') or len(raw) > LOCAL_REQUEST_MAX + 1:
             reply = _no('BAD_REQUEST')
         else:

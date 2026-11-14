@@ -1,5 +1,6 @@
 """Tests for the SessionStart wake hook."""
 
+import datetime
 import importlib.util
 import io
 import json
@@ -738,7 +739,10 @@ def _deliver_remote_through_a_recall(tmp_path, text):
     import neighbors
     import server
     from lighthouse_protocol import content_digest
-    from tests.test_neighbors import ALLOW, CONTEXT, NOW, PEER, SHIP, remote_policy
+    from tests.test_neighbors import ALLOW, CONTEXT, PEER, SHIP, remote_policy
+    # The delivery is recorded at this clock and the server's guard looks back 90 days from the real one, so the
+    # record must be stamped with the real now: a fixed date would age out of the guard's window as the calendar moves.
+    _now = lambda: datetime.datetime.now(datetime.timezone.utc)
     policy = tmp_path / "receiver-policy.json"
     remote_policy(policy, local=())
 
@@ -752,7 +756,7 @@ def _deliver_remote_through_a_recall(tmp_path, text):
                     items=[dict(memoryId="m9", content=text, audiences=["commons"], decision=ALLOW)])
     result = neighbors.neighbor_arm(query="what did the crossing keep", context=copy.deepcopy(CONTEXT),
                                     purpose="session-recall", k=1, storage=server._storage, session_id="s",
-                                    recall_id="r", receiver="engram", publishers=[], policy_path=policy, now=lambda: NOW,
+                                    recall_id="r", receiver="engram", publishers=[], policy_path=policy, now=_now,
                                     remote_publishers=[dict(peer_id=PEER, ship=SHIP, context="memory/technical")],
                                     receiver_ship="e" * 32, receiver_instance="x", ask=ask)
     return [item["content"] for item in result["delivered"]]

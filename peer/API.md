@@ -184,7 +184,7 @@ Only local known users, spaces the author belongs to, and owned file IDs may be
 selected. Unknown layer fields, including an acting `owner_id`, are rejected.
 
 Draft response adds `{id,owner_id,version,resource_version,active_revision,state}`.
-`version` starts at 1 and increments only on draft save. `resource_version` starts
+`version` starts at 1 and increments on a draft save, and on a revoke that narrows the draft. `resource_version` starts
 at 0 and increments on activation, restriction or withdrawal. `active_revision`
 is null or the active immutable resource revision. `state` says `draft` or
 `active` (an active layer can ALSO have newer unpublished draft text; compare the
@@ -197,7 +197,7 @@ release's `draft_version` with draft `version`).
 | GET `/api/layers/{id}/preview` | — | Owner-only saved draft, selected `files`, named `people`, `audience_details`, and `space_versions` |
 | PUT `/api/layers/{id}` | `{version,...changedDraftFields}` | Saved draft; omitted fields preserved |
 | POST `/api/layers/{id}/activate` | `{version,space_versions?}` | Exact current draft activated; supplied space versions must still match |
-| POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision |
+| POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision, with `layer_version` and `layer_version_before`: the draft's version after and before |
 | POST `/api/layers/{id}/withdraw` | none | Draft with no active release |
 | GET `/api/layers/{id}/revisions` | — | Immutable revision array; owner only |
 | GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only (see Signed records) |
@@ -240,14 +240,15 @@ cannot exclude an individual. Personal exclusions are not implemented in this sl
 `revoke` requires the current active `revision`. `public:true` means remove public
 access; user_ids remove direct person grants and space_ids remove entire selected
 space grants. It narrows the ACTIVE snapshot, appends an immutable revision/event,
-and never copies or changes a newer private draft. Other routes remain effective.
+and takes what it removed out of the draft too, so it doesn't come back with the next
+version. It publishes none of the draft's other changes. Other routes remain effective.
 Removing a direct person grant does not revoke a separate space/public route.
 For frozen spaces, remove the space route or activate a newly selected audience.
-Existing private draft selections remain available for deliberate later activation;
-the UI must preview them again before reactivation.
 
 `withdraw` stops all hosted sharing, emits one ordered withdrawal event, and is
-idempotent while already withdrawn. Historical revisions remain owner-only.
+idempotent while already withdrawn. Historical revisions remain owner-only. The draft's
+selections remain available for deliberate later activation; the UI must preview them
+again before reactivation.
 Public responses contain ONLY `{id,revision,title,body,attachment_ids}`. Public
 JSON has no owner-account, audience, draft, chat, or private citation metadata.
 All incoming JSON keys/values, domain text and audience IDs must encode as valid
@@ -409,7 +410,7 @@ Origin; the consent page's posts keep it.
   again on one request switches the person; a decided one answers 400 `already_decided`.
 - `POST /authorize/decision` `{pending, csrf, allow, rooms, days}`: 403 for a wrong CSRF token, 400
   `request_expired` 10 minutes after `/authorize`, 400 `already_decided` after a first decision. Allow takes `rooms`
-  as `"*"` or a list of the person's current rooms no member keeps away from cloud models, each once, and `days` 1 to
+  as `"*"` or a list of the person's current rooms no member has marked, each once, and `days` 1 to
   30 (30 by default), and answers `{redirect}` with a `code` (single use, 60 s), the `state` and `iss`. Deny answers
   `{redirect}` with `error=access_denied`, the `state` and `iss`.
 - `POST /token` (RFC 6749 4.1.3, 6): `application/x-www-form-urlencoded` only (anything else is 400 `invalid_request`
@@ -440,7 +441,7 @@ Origin; the consent page's posts keep it.
   `structuredContent` and the same JSON as text; a refusal is a result with `isError: true` and one sentence. The four
   tools (`rooms`, `read_room`, `search`, `fetch`) are read-only and read only rooms on this home that the connection's
   person chose, is still in, and nobody has marked, asked again at every call. A refusal is one sentence: the room is
-  kept away from cloud models, isn't shared, is on another home, or "No such room.". Every call writes a receipt
+  marked, isn't shared, is on another home, or "No such room.". Every call writes a receipt
   (room ids, never an argument), and the limit is counted from them, so it holds across a restart. A result is cut at a
   message or room boundary at 100,000 characters with `truncated` and the cursor to continue; one message alone past
   that is kept with its text cut and `text_cut`, the number of characters left out.

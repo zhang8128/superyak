@@ -38,7 +38,8 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
-Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each tied to an overarching goal:
+Refreshed 2026-11-08, after an outside read found the 11-03 lines stale, and R3 and R6 on 2026-11-10. Each tied to an
+overarching goal:
 - R1 (goal 1): the first blind lessons crossing. The lessons-room adds landed on 11-04 (b12b8452). Adding Tardis's
   account needs Andy's word at Rio Grande's terminal, by CLAUDE.md's lessons-room steps; then Tardis lays its lessons
   and each side runs the task committed by hash. Measure: the receipt and transcript of each blind session, and its
@@ -48,7 +49,7 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   (`log_outcome`), never recalls made for the count. Measure: used recalls per day on each ship, then E1′'s one run once
   a log holds a few hundred, read against its pre-registered outcomes.
 - R3 (goal 1): the n-category store, stage 3 of the plan on issue #2 (spec `2026-11-07-ncat-store.md`), on Tardis's
-  kernel. It has both ships' yes at 2ab883e1, a local branch on the Pi with its spec, and lands with the kernel on Andy's word. Nothing more is built on it
+  kernel. It landed with the kernel in train-1111 (9bf56122): `engram/ncat_store.py`. Nothing more is built on it
   until R2 shows real use. Measure: on the Pi, 10,000 recall rows rebuilt in under 10 s and a 200-road session in
   under 5 ms, under 256 MB (0.9 s, 3.7 ms and 66 MB at 2ab883e1), and the store holding real sessions.
 - R4 (goals 2 and 5): the chats people use. The send fix and room updates (train-1107f, 1c585762) landed with train-1109
@@ -59,19 +60,35 @@ Refreshed 2026-11-08, after an outside read found the 11-03 lines stale. Each ti
   and `spec:mention-reaches-the-working-session` if that isn't enough. Hold the purpose, not the queue: post when
   something moves, never a reflect that only says nothing did. Measure: read-only runs on mentions a writable session
   already answered, toward none.
+- R6 (goal 4, added 2026-11-10 after the outside read found goal 4 had no line of Rio Grande's): the first real walk
+  of `docs/two-people.md`, budgeted at 15 minutes of Andy's and 30 of a new person's, not yet timed. Rio Grande owns the
+  walk; Tardis keeps the page true at every train (T4). Steps 1 and 2 aren't where a person stops: from a fresh clone
+  with an empty uv cache they took 6 s on Tardis, with 281 MB downloaded (all hands 3f905815). The stop is reading and
+  step 3, a personal Tailscale account and the share, so a one-page note for the person playing Sam
+  (`docs/two-people-for-sam.md`) spends its words there, and on the codes the two of them read aloud and type.
+  Measure: someone who isn't a ship pairs with Andy and sends one message.
 - Parked, not dropped: memory that follows the ship (spec approved; waits on R2), and owner trust's restore follow-ups
   (on the board).
 
 ## Tardis: federation, the public route, CI, and the visitor's view
 
-Refreshed 2026-11-08, in Tardis's words (a station room post). Each line is tied to an overarching goal:
-- T1 (goal 1): a blind lessons crossing. Tardis isn't in the lessons room yet, and adding it needs Andy's word at Rio
-  Grande's terminal. Then lay the lessons and run the task committed by hash. Measure as now.
-- T2 (goals 1 and 3): the crossing in use, not only built. 8 crossings ever, the last on 11-04. Measure: recalls in
-  real work, logged helped or misled.
-- T3 (goal 1): the n-category kernel. Its spec is approved, and it lands with Rio Grande's store. Measure: a `rewalt`
-  cross-check, and Rio Grande's reference agreeing at n ≤ 4 on targeted 4-cells.
-- T4 (goal 4): the mark's words (approved; they follow the train), then the voice gateway once Andy approves its ship.
-  Measure: someone outside us gets through the two-laptop guide or the gateway.
-- T5 (goals 2 and 5): CI and partner reads, unchanged.
-- Done since 11-03: the old T3 (23c43e1a), stage 2 of the crossing (4158fc61), and the sign-in and in-app words.
+Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied to an overarching goal:
+- T1 (goal 1): rail B. Tardis joins the lessons room through Andy's owner trust, which he grants at the Pi's terminal
+  (train-1114, which it needed, is on main), then lays its own lessons. Measure: the two-part pass test (all hands
+  bd7b170b), a receipt of a Tardis lesson on the Pi and of a Pi lesson on Tardis, each within a day of the CONFIRM.
+- T2 (goals 1 and 3): the crossing in use, with deadlines end to end (the embedder client in train-1112, the frame's in
+  train-1114, the peer's lessons client in train-1117), and the embedder dropping an asker that has gone. 8 crossings
+  ever, the last on 11-04. Measure: recalls in real work, logged helped or misled, and no embed in the publisher's log
+  waiting past its asker.
+- T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
+  C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
+  oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
+  from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
+  1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
+- T4 (goal 4): `two-people.md` kept true at every train (each label and number checked against main), for R6's first
+  real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3), once Andy has tried replies read
+  back. Measure: the guide's checks after each train, and R6's walk getting through.
+- T5 (goals 2 and 5): CI, and partner reads from the bundle itself.
+- Done since 11-08: the embedder client half (train-1112), the kernel on main (train-1111), the mark's true words
+  (train-1113), goal 2's before and after for the downloads build (train-1115, in `docs/measures/goal-2.md`), the sheaf
+  standard's outside read, and partner reads of the ledger fix, the trust command and train-1116.

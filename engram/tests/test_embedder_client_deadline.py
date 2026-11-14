@@ -75,7 +75,8 @@ def test_a_timeout_with_no_finite_wait_sends_no_deadline(socket_dir, timeout):
     request = {}
     provider = RemoteEmbedProvider(str(socket_dir / "unused.sock"), response_timeout=timeout)
     provider._verified = True
-    provider._call = lambda sent: request.update(sent) or {**MODEL, "vectors": [[0.0] * MODEL["dimension"]]}
+    provider._call = lambda sent, *_args, **_kwargs: (request.update(sent)
+                                                       or {**MODEL, "vectors": [[0.0] * MODEL["dimension"]]})
     provider.embed(["x"])
     assert request["op"] == "embed" and "remaining_ms" not in request
 
@@ -113,9 +114,11 @@ def test_a_client_that_gave_up_costs_the_lane_nothing(socket_dir, caplog):
         embedded = [text for texts, _prefix in provider.calls for text in texts]
         assert "abandoned" not in embedded
         assert "after" in embedded
-        drops = [message for message in (r.getMessage() for r in caplog.records)
-                 if message.startswith("dropped an expired batch request")]
-        assert len(drops) == 1 and drops[0].startswith("dropped an expired batch request: 0 of 1 texts embedded")
+        # The drop is logged after its unit leaves the lane, so the live request can run and answer first: wait for it.
+        drops = lambda: [message for message in (r.getMessage() for r in caplog.records)
+                         if message.startswith("dropped an expired batch request")]
+        _wait_for(drops)
+        assert len(drops()) == 1 and drops()[0].startswith("dropped an expired batch request: 0 of 1 texts embedded")
     finally:
         provider.gate.set()
         server.shutdown()

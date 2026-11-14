@@ -175,7 +175,7 @@ def test_roster_cannot_add_to_existing_room(two_peers):
         b[2].receive(event)
 
 
-def test_revoke_preserves_private_draft_and_delivers_tombstone(two_peers):
+def test_revoke_keeps_the_drafts_text_and_delivers_tombstone(two_peers):
     a,b,ca,cb=two_peers
     layer=a[0].create_layer(a[1],{'body':'released','audience_users':[ca['id']]})
     a[0].activate_layer(a[1],layer['id'],1)
@@ -1490,3 +1490,18 @@ def test_a_peer_unpaired_under_main_lists_no_contact_as_confirmed_and_shows_no_c
     listed = {c['id']: c for c in a[2].connections(a[1])}
     for contact in (ca['id'], c2['id']):
         assert (listed[contact]['paired'], listed[contact]['confirmed'], listed[contact]['pairing_code']) == (0, False, None)
+
+
+def test_words_said_after_a_mark_still_go_to_a_member_on_another_home(two_peers):
+    """What the mark says at the moment it's set: a member already on another home stays, new words still go to their
+    home, and nothing tells that home about the mark."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Across peers', [ca['id']])
+    a[0].send_message(a[1], room['id'], 'one', 'before the mark')
+    deliver(a, b)
+    a[0].mark_room(a[1], room['id'])
+    a[0].send_message(a[1], room['id'], 'two', 'after the mark')
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]
+    assert [m['body'] for m in b[0].get_room(b[1], remote['id'])['messages']] == ['before the mark', 'after the mark']
+    assert 'cloud' not in b[0].get_room(b[1], remote['id'])

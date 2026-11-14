@@ -70,6 +70,66 @@ def test_files_require_owned_explicit_release_and_limits(env):
     patient.post('/api/layers/' + layer['id'] + '/withdraw', json={})
     assert visitor.get(route).status_code == 404
 
+def test_what_a_person_turned_off_doesnt_come_back_with_the_next_version(env):
+    """They turned off a public link and removed someone, then fixed a typo and turned on a new version. It stays narrowed."""
+    app, clients, users, _ = env
+    patient, doctor = clients[:2]
+    made = patient.post('/api/layers', json={'title': 'Note', 'body': 'one', 'public': True, 'audience_users': [users[1]['id']]}).json()
+    key, version = made['id'], made['version']
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': version}).status_code == 200
+    assert doctor.get(f'/api/shared/layers/{key}').status_code == 200
+    revoked = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True, 'user_ids': [users[1]['id']]})
+    assert revoked.status_code == 200
+    draft = patient.get(f'/api/layers/{key}').json()
+    assert draft['public'] is False and draft['audience_users'] == []
+    assert revoked.json()['draft_version'] == draft['version']  # no false "unpublished changes" from the revoke itself
+    edited = patient.put(f'/api/layers/{key}', json={'version': draft['version'], 'body': 'two'}).json()
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': edited['version']}).status_code == 200
+    assert TestClient(app).get(f'/public/layers/{key}').status_code == 404
+    assert doctor.get(f'/api/shared/layers/{key}').status_code == 404
+
+
+def test_a_revoke_leaves_edits_made_since_the_release_as_unpublished(env):
+    app, clients, users, _ = env
+    patient = clients[0]
+    made = patient.post('/api/layers', json={'title': 'Note', 'body': 'one', 'public': True}).json()
+    key = made['id']
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': made['version']}).status_code == 200
+    edited = patient.put(f'/api/layers/{key}', json={'version': made['version'], 'body': 'two'}).json()
+    revoked = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True}).json()
+    draft = patient.get(f'/api/layers/{key}').json()
+    assert draft['body'] == 'two' and draft['public'] is False and draft['version'] == edited['version'] + 1
+    assert revoked['draft_version'] != draft['version']  # the edit is still unpublished
+
+
+def test_a_revoke_says_where_the_draft_is_now_and_copes_with_an_old_row(env):
+    app, clients, users, _ = env
+    patient = clients[0]
+    store = app.state.store
+    made = patient.post('/api/layers', json={'title': 'Note', 'body': 'one', 'public': True}).json()
+    key = made['id']
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': made['version']}).status_code == 200
+    answer = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True}).json()
+    assert answer['layer_version'] == patient.get(f'/api/layers/{key}').json()['version'] and answer['layer_version_before'] == answer['layer_version'] - 1
+    old = patient.post('/api/layers', json={'title': 'Old', 'body': 'older', 'audience_users': [users[1]['id']]}).json()
+    assert patient.post(f"/api/layers/{old['id']}/activate", json={'version': old['version']}).status_code == 200
+    with store.transaction() as db:
+        db.execute('UPDATE layers SET draft=? WHERE id=?', ('{"title": "Old", "body": "older"}', old['id']))
+    answer = patient.post(f"/api/layers/{old['id']}/revoke", json={'revision': 1, 'user_ids': [users[1]['id']]})
+    assert answer.status_code == 200 and answer.json()['layer_version'] == old['version']  # nothing to narrow, so no new version
+
+
+def test_a_revoke_with_nothing_in_the_draft_leaves_its_version_alone(env):
+    app, clients, users, _ = env
+    patient = clients[0]
+    made = patient.post('/api/layers', json={'title': 'Note', 'body': 'one', 'audience_users': [users[1]['id']]}).json()
+    key = made['id']
+    assert patient.post(f'/api/layers/{key}/activate', json={'version': made['version']}).status_code == 200
+    revoked = patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'public': True})
+    assert revoked.status_code == 200
+    assert patient.get(f'/api/layers/{key}').json()['version'] == made['version']
+
+
 def test_revoke_active_routes_never_publishes_private_replacement(env):
     app, clients, users, _ = env
     patient, doctor, admin, _ = clients
@@ -88,6 +148,7 @@ def test_revoke_active_routes_never_publishes_private_replacement(env):
     assert patient.post(f'/api/layers/{key}/revoke', json={'revision': 1, 'space_ids': [org['id']]}).status_code == 409
     assert patient.post(f'/api/layers/{key}/revoke', json={'revision': 2, 'space_ids': [org['id']]}).status_code == 200
     assert doctor.get(f'/api/shared/layers/{key}').status_code == 404
+    assert patient.get(f'/api/layers/{key}').json()['audience_spaces'] == []  # the next version doesn't bring it back
 
 def test_care_circle_audience_is_frozen_at_release(env):
     _, clients, users, _ = env

@@ -116,6 +116,13 @@ class LighthouseClient:
             if frame["kind"] == "recall":
                 _require(len(frame["query"]) <= MAX_QUERY_CHARS, "QUERY_TOO_LARGE")
                 _require(frame["k"] <= MAX_CANDIDATES, "INVALID_LIMIT")
+                # The daemon learns how long this asker waits, so its embed gives up with it (spec 2026-11-10, a
+                # recall frame says how long its asker waits). Rounded up, so it stays an upper bound; on a copy,
+                # never the caller's frame; never longer than a value the caller's frame already carries; and the
+                # copy is validated again before it's encoded.
+                left = math.ceil(_remaining(end) * 1000)
+                frame = {**frame, "remainingMs": min(frame.get("remainingMs", left), left)}
+                validate_frame(frame)
             wire = encode(frame)
         except FrameError as exc:
             raise NeighborUnavailable(exc.code) from exc

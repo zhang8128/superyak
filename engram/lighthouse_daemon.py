@@ -26,12 +26,14 @@ import sqlite3
 import struct
 import sys
 import threading
+import time
 import tomllib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from embeddings import EmbedderExpired, RemoteEmbedProvider
 from lighthouse_client import MAX_CANDIDATES
 from lighthouse_policy import Policy, PolicyRequest
 from lighthouse_validation import load_owned_policy
@@ -338,12 +340,19 @@ def retrieve(
     k: int,
     allowed_audiences: frozenset[str],
     eligible: frozenset[str] | None = None,
+    deadline: float | None = None,
 ) -> list[dict]:
     """Return audience-visible episodes and semantics ranked by similarity. With ``eligible`` (the memory ids the
-    permission decisions allow) a copy outside it is refused before ranking, not dropped after it."""
+    permission decisions allow) a copy outside it is refused before ranking, not dropped after it. With ``deadline``
+    (time.monotonic: when the frame's asker stops waiting), the shared embedder's wait is bounded by it too; a model
+    loaded in this process has no queue to wait in, so it isn't told."""
     if not allowed_audiences or eligible == frozenset():
         return []
-    vector = embeddings.embed([query], prefix="search_query")[0]
+    if deadline is not None and isinstance(embeddings, RemoteEmbedProvider):
+        vector = embeddings.embed([query], prefix="search_query",
+                                  remaining_ms=(deadline - time.monotonic()) * 1000)[0]
+    else:
+        vector = embeddings.embed([query], prefix="search_query")[0]
     scored: list[tuple[float, str, str, dict, list[str]]] = []
     for layer in PUBLISHED_LAYERS:
         try:
@@ -866,8 +875,13 @@ class PublisherDaemon:
         return effective_gate(self.engram_home, served, busy_ms=LEDGER_BUSY_MS)
 
     def handle_frame(self, frame: dict) -> dict:
+        arrival = time.monotonic()
         try:
             validate_frame(frame)
+            # A recall may say how long its asker still waits (spec 2026-11-10): the embed gives up with it. The
+            # validated value becomes a float once; nothing later uses the raw one.
+            deadline = (arrival + float(frame["remainingMs"]) / 1000
+                        if frame["kind"] == "recall" and "remainingMs" in frame else None)
             if frame["kind"] not in ("recall", "read"):
                 return error_frame(
                     "MALFORMED_FRAME", f"unexpected kind {frame['kind']}"
@@ -916,7 +930,7 @@ class PublisherDaemon:
                     return error_frame("PUBLISHER_UNAVAILABLE", "an imprint is never served to another peer")
                 house = _FrameHouse(publisher, storage)
                 if frame["kind"] == "recall":
-                    return self._recall(house, frame, policy, gate)
+                    return self._recall(house, frame, policy, gate, deadline)
                 return self._read(house, frame, policy, gate)
             finally:
                 publisher.checkin(storage)
@@ -925,6 +939,12 @@ class PublisherDaemon:
         except _LedgerBusyFrame:
             logger.warning("permission ledger busy: serving nothing to this frame, which is told to retry")
             return error_frame(*LEDGER_BUSY)
+        except EmbedderExpired as expired:
+            # The asker has gone: the frame aborts here, before any disclosure, and its ledger side has already
+            # closed and freed its slot. Nobody reads this answer; the code is today's for an embedder failure.
+            logger.info("dropped an expired recall from %s: %s, %.0f ms after it arrived with %s ms left",
+                        frame.get("receiver"), expired, (time.monotonic() - arrival) * 1000, frame.get("remainingMs"))
+            return error_frame("PUBLISHER_UNAVAILABLE", "the asker's deadline passed")
         except Exception:
             logger.warning("frame handling failed", exc_info=True)
             return error_frame("PUBLISHER_UNAVAILABLE", "internal failure")
@@ -979,7 +999,7 @@ class PublisherDaemon:
         return True
 
     def _recall(
-        self, publisher: PublisherStore, frame: dict, policy: Policy, gate
+        self, publisher: PublisherStore, frame: dict, policy: Policy, gate, deadline: float | None = None
     ) -> dict:
         decision = policy.decide(self._request(frame, "recall"))
         turn_id = str(uuid.uuid4())
@@ -989,7 +1009,7 @@ class PublisherDaemon:
             side, serve_nothing = self._ledger_side(publisher, frame, gate, decision)
             try:
                 if not serve_nothing:
-                    candidates = self._rank_recall(publisher, frame, policy, gate, side)
+                    candidates = self._rank_recall(publisher, frame, policy, gate, side, deadline)
             finally:
                 if side is not None:
                     side.close()
@@ -1019,7 +1039,7 @@ class PublisherDaemon:
             disclosure_id=disclosure_id,
         )
 
-    def _rank_recall(self, publisher, frame, policy, gate, side) -> list[dict]:
+    def _rank_recall(self, publisher, frame, policy, gate, side, deadline=None) -> list[dict]:
         """Rank the copies the policy and the audiences allow. With a ledger side, ``recall`` is decided for each
         placement first: under ``enforce`` the refused are left out before ranking, under ``shadow`` they are only
         counted. The receipt is written before the reply, so a reply never names a candidate whose receipt failed
@@ -1041,6 +1061,7 @@ class PublisherDaemon:
             min(int(frame["k"]), MAX_CANDIDATES),
             _allowed_audiences(policy, receiver_ref(frame["receiver"]), mode=gate.mode),
             eligible=placed.eligible if placed is not None and enforce else None,
+            deadline=deadline,
         )
         if side is not None:
             try:

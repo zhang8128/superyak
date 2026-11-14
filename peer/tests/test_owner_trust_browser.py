@@ -391,6 +391,29 @@ def test_contacts_mark_a_trust_ship(trust_station):
     assert 'trust_ship' not in contacts[st.sam['id']]  # a local account
 
 
+def test_a_room_with_a_member_this_home_lists_as_a_ship_isnt_marked(trust_station):
+    """The page names this member "ship of Andy B: tardis", so a mark standing over them would say what this home knows is
+    false. Marking waits, as for a ship on this home. A plain
+    contact on another home isn't refused: this home can't tell, and the mark's words say so."""
+    from superyak_peer.common import Problem
+    from superyak_peer.room_cloud import ASK_OWNER, SHIPS_FIRST
+    st = trust_station
+    grant(st)
+    tardis = pair_ship(st, 'tardis')
+    room = st.store.create_room(st.andy['id'], 'With a ship away', [st.sam['id'], tardis['id']])['id']
+
+    def refusal(actor, key):
+        with pytest.raises(Problem) as caught:
+            st.store.mark_room(actor['id'], key)
+        return caught.value.status, caught.value.message
+    assert refusal(st.andy, room) == (409, SHIPS_FIRST)
+    assert refusal(st.sam, room) == (409, ASK_OWNER.format(owner=st.andy['name']))
+    with st.store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM room_cloud').fetchone()[0] == 0
+    plain = st.store.create_room(st.andy['id'], 'With a person away', [st.sam['id'], st.owner['id']])['id']
+    assert st.store.mark_room(st.sam['id'], plain)['cloud'] == {'count': 1, 'mine': True}
+
+
 # ---- In a real browser -----------------------------------------------------------------------------------------------
 
 @pytest.fixture

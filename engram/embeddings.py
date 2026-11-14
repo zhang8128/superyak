@@ -276,6 +276,12 @@ class EmbedderUnavailableError(RuntimeError):
     """ENGRAM_EMBEDDER_SOCKET is set but the shared embedder did not answer."""
 
 
+class EmbedderExpired(EmbedderUnavailableError):
+    """The asker's deadline passed before the shared embedder answered: nothing was left before asking, the service
+    answered `expired`, or the socket timed out on a call whose time came from the asker (spec 2026-11-10, a recall
+    frame says how long its asker waits). A subclass, so a caller that catches EmbedderUnavailableError still does."""
+
+
 class RemoteEmbedProvider:
     """nomic-embed-text-v1.5 served by embedder_service.py over a Unix socket.
 
@@ -300,14 +306,26 @@ class RemoteEmbedProvider:
     def dimension(self) -> int:
         return self.DIMENSION
 
-    def embed(self, texts: list[str], *, prefix: str = "search_document") -> list[list[float]]:
+    def embed(self, texts: list[str], *, prefix: str = "search_document",
+              remaining_ms: float | None = None) -> list[list[float]]:
+        """`remaining_ms`, when given, is how long the asker still waits: the embed waits the smaller of it and this
+        client's own timeout, for the model check too, and never longer. It is per call, never kept on the instance,
+        since one provider serves many threads (the lighthouse daemon's)."""
         if not texts:
             return []
+        own = self._response_timeout
+        end = asker = None
+        if remaining_ms is not None:
+            if not remaining_ms > 0:  # nothing left, or NaN: a socket timeout of 0 would mean non-blocking
+                raise EmbedderExpired("the asker's deadline passed before the shared embedder was asked")
+            if not remaining_ms / 1000 >= own:  # the asker's is the smaller (own may be inf or nan)
+                end, asker = time.monotonic() + remaining_ms / 1000, True
         if not self._verified:
-            self._check_model(self._call({"op": "info"}))
+            self._check_model(self._call({"op": "info"}, self._left(end, own), asker=bool(asker)))
             self._verified = True
         request = {"op": "embed", "texts": list(texts), "prefix": prefix}
-        remaining_ms = self._response_timeout * 1000
+        wait = self._left(end, own)
+        remaining_ms = wait * 1000
         if math.isfinite(remaining_ms) and remaining_ms >= 0:
             # This client hangs up once its response timeout passes, so it says so: the service then drops the request
             # if it hasn't reached the lane by then, instead of embedding for nobody (embedder_service.py's
@@ -317,7 +335,7 @@ class RemoteEmbedProvider:
             # client still waits for. The value is tested after the multiplication, so nothing the service refuses as
             # not finite reaches the wire. An older service ignores the field.
             request["remaining_ms"] = remaining_ms
-        response = self._call(request)
+        response = self._call(request, wait, asker=bool(asker))
         self._check_model(response)
         vectors = response.get("vectors")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
@@ -332,23 +350,43 @@ class RemoteEmbedProvider:
                 f"({response.get('dimension')} dims), expected {self.MODEL_NAME!r}"
             )
 
-    def _call(self, request: dict) -> dict:
+    @staticmethod
+    def _left(end: float | None, own: float) -> float:
+        """The wait for the next call: this client's own timeout, or what's left of the asker's when that's smaller."""
+        if end is None:
+            return own
+        left = end - time.monotonic()
+        if left <= 0:
+            raise EmbedderExpired("the asker's deadline passed before the shared embedder was asked")
+        return left
+
+    def _call(self, request: dict, timeout: float | None = None, *, asker: bool = False) -> dict:
         import socket
 
         from embedder_service import recv_message, send_message
 
+        timeout = self._response_timeout if timeout is None else timeout
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(self.CONNECT_TIMEOUT)
+                sock.settimeout(min(self.CONNECT_TIMEOUT, timeout) if asker else self.CONNECT_TIMEOUT)
                 sock.connect(self._socket_path)
-                sock.settimeout(self._response_timeout)
+                sock.settimeout(timeout)
                 send_message(sock, request)
                 response = recv_message(sock)
+        except TimeoutError as e:
+            if asker:  # the asker's time set this wait, so its passing is the asker's deadline
+                raise EmbedderExpired(f"the asker's deadline passed waiting for the shared embedder at "
+                                      f"{self._socket_path}") from e
+            raise EmbedderUnavailableError(
+                f"shared embedder at {self._socket_path} is unavailable: {type(e).__name__}: {e}"
+            ) from e
         except (OSError, ValueError) as e:
             raise EmbedderUnavailableError(
                 f"shared embedder at {self._socket_path} is unavailable: {type(e).__name__}: {e}"
             ) from e
         if not response.get("ok"):
+            if response.get("error") == "expired":
+                raise EmbedderExpired("shared embedder error: expired")
             raise EmbedderUnavailableError(f"shared embedder error: {response.get('error')}")
         return response
 

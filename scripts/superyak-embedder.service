@@ -12,7 +12,8 @@ Restart=on-failure
 RestartSec=5
 # The model loads on the first request and is dropped after five idle minutes, so a quiet machine holds only the
 # process (Andy, 2026-11-02: "engram should be able to be run with very little memory"). A request after a pause waits
-# 2-3 s on the Pi for the reload. Loaded: ~1.1 GB; measured peak 1.8 GB on a full re-embed (2026-10-02).
+# 2-3 s on the Pi for the reload. With ENGRAM_EMBED_IDLE_SECONDS=0 the model is kept and loaded when the service
+# starts; the Pi sets that with `make embedder-keep-loaded` (scripts/superyak-embedder-keep-loaded.conf). Loaded: ~1.1 GB; measured peak 1.8 GB on a full re-embed (2026-10-02).
 Environment=ENGRAM_EMBED_IDLE_SECONDS=300
 MemoryMax=3G
 MemorySwapMax=0

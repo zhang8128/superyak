@@ -73,7 +73,7 @@ const Dashboard = (() => {
     const valid = validNow(); pending = true; memberError = null;
     try { await operation(valid); }
     catch (error) { if (valid()) { setFlash(error.message, true); if (memberChange) memberError = error.message; if (error.status === 401) state.reauth = true; } }
-    finally { if (valid()) { pending = false; render(); } }
+    finally { if (valid()) { pending = false; render(); if (memberError) sayAgainInDialog("member-preview-title"); } }  // a repeat keeps the dialog
   }
   async function submit(form) {
     if (form.id === 'home-search-form') { query = form.querySelector('input').value; location.hash = 'search'; render(); }

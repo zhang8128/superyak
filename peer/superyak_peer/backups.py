@@ -1086,7 +1086,7 @@ def _settle_trust(db, old, now, report):
     report['counts']['owner trusts revoked'] = sum(how.startswith('revoked') for *_, how in report['trusts'])
 
 
-MARKS_NOT_KEPT = ('Marks set since the copy to keep rooms away from cloud models were not kept: ask the members of the '
+MARKS_NOT_KEPT = ('Marks set since the copy, which keep rooms from ships and connected apps, were not kept: ask the members of the '
                   'rooms that matter to check their marks before any ship is added.')
 
 

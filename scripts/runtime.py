@@ -108,10 +108,36 @@ RECEIVER_KEYS = frozenset({
 })
 
 
-def _valid_publishers(value: object) -> bool:
+_PEER_ID = re.compile(r"[0-9a-f]{64}\Z")
+_PARTICIPANT = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+
+
+def _valid_remote_publishers(value: object) -> bool:
+    """engram/lighthouse_receiver_config.py's valid_remote_publishers; a test holds them to the same answers."""
+    if not isinstance(value, list) or len(value) > 8:
+        return False
+    seen = set()
+    for remote in value:
+        if not isinstance(remote, dict) or set(remote) != {"peer_id", "ship", "context"}:
+            return False
+        if not (
+            isinstance(remote["peer_id"], str)
+            and _PEER_ID.fullmatch(remote["peer_id"])
+            and isinstance(remote["ship"], str)
+            and _PARTICIPANT.fullmatch(remote["ship"])
+            and _valid_context(remote["context"])
+        ):
+            return False
+        if (remote["peer_id"], remote["ship"]) in seen:
+            return False
+        seen.add((remote["peer_id"], remote["ship"]))
+    return True
+
+
+def _valid_publishers(value: object, *, allow_empty: bool = False) -> bool:
     return (
         isinstance(value, list)
-        and 1 <= len(value) <= 8
+        and (0 if allow_empty else 1) <= len(value) <= 8
         and all(isinstance(item, str) and NAME.fullmatch(item) for item in value)
         and len(set(value)) == len(value)
     )
@@ -332,7 +358,10 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     if settings.get("enabled") is False:
         return {**base, "state": "disabled"}, None, errors
     publishers = settings.get("publishers")
+    remotes = settings.get("remote_publishers", [])
     socket_value = settings.get("socket_path")
+    crossing_value = settings.get("crossing_socket")
+    receiver_ship = settings.get("receiver_ship")
     policy_value = settings.get("policy_path")
     limit = settings.get("limit", 1)
     timeout = settings.get("timeout_s", 2.0)
@@ -340,9 +369,12 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
         settings.get("enabled") is not True
         or set(settings) - RECEIVER_KEYS
         or ("default_context" in settings and not _valid_context(settings["default_context"]))
-        or not _valid_publishers(publishers)
-        or not isinstance(socket_value, str)
-        or not socket_value
+        or not _valid_publishers(publishers, allow_empty=bool(remotes))
+        or not _valid_remote_publishers(remotes)
+        or not 1 <= len(publishers) + len(remotes) <= 8
+        or (publishers and (not isinstance(socket_value, str) or not socket_value))  # only a local publisher needs it
+        or (remotes and (not isinstance(crossing_value, str) or not crossing_value))
+        or (remotes and (not isinstance(receiver_ship, str) or not _PARTICIPANT.fullmatch(receiver_ship)))
         or not isinstance(policy_value, str)
         or not policy_value
         or type(limit) is not int
@@ -356,7 +388,7 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
             "state": "invalid",
             "error": "invalid receiver configuration",
         }, None, ["receiver configuration is invalid"]
-    socket_path = (settings_path.parent / socket_value).resolve()
+    socket_path = (settings_path.parent / socket_value).resolve() if publishers else None
     policy_path = (settings_path.parent / policy_value).resolve()
     policy_parseable = _parseable_json(policy_path)
     status = {
@@ -367,6 +399,14 @@ def _receiver_status(instance_dir: Path, now: datetime) -> tuple[dict, Path | No
     }
     if "default_context" in settings:
         status["default_context"] = settings["default_context"]
+    if remotes:
+        status["remote_publishers"] = [
+            {"peer": remote["peer_id"][:12], "ship": remote["ship"], "context": remote["context"]}
+            for remote in remotes
+        ]
+        status["crossing"], crossing_connected = _socket_status((settings_path.parent / crossing_value).resolve())
+        if not crossing_connected:  # every crossing fails closed until federate runs with --crossing-socket
+            errors.append("crossing socket is unavailable")
     if not policy_parseable:
         status["error"] = "receiver policy is missing or not parseable"
         errors.append("receiver policy is unavailable")

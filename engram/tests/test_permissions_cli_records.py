@@ -156,9 +156,13 @@ def test_u18_each_widening_act_works_only_with_the_yes(cli_home, fake_tty):
 
 def test_u26_the_cli_takes_full_ids_and_unique_prefixes_and_refuses_ambiguous_ones(
         cli_home, fake_tty, capsys, monkeypatch):
+    import itertools
     import os
     import permission_ledger
-    monkeypatch.setattr(permission_ledger, "new_id", lambda prefix: prefix + "ab12" + os.urandom(14).hex())
+    # Each id shares its first six characters with the others and differs by the eighth. Those two characters were random,
+    # so one run in 256 the ids shared eight, and the check below failed on no fault in the code.
+    seq = itertools.count(1)
+    monkeypatch.setattr(permission_ledger, "new_id", lambda prefix: f"{prefix}ab12{next(seq):02x}" + os.urandom(13).hex())
     a = make_allow(cli_home, fake_tty, sel(memories=["mem:S/episode/m1"]))
     b = make_allow(cli_home, fake_tty, sel(memories=["mem:S/episode/m2"]))
     assert a[:6] == b[:6] and a[:8] != b[:8]

@@ -210,6 +210,20 @@ def _nullable_id_is_valid(value: Any) -> bool:
     return value is None or _nonempty_string(value)
 
 
+def remaining_ms_is_valid(value: Any) -> bool:
+    """A recall frame's optional `remainingMs`: how many milliseconds its asker still waits, at most (spec 2026-11-10,
+    a recall frame says how long its asker waits). An int or a float but not a bool, finite, and not negative. An
+    integer too large for a float (10**400) is not finite. A very large finite value is valid: the publisher's embed
+    clamps it to its own timeout."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(number) and number >= 0
+
+
 def _validate_recall(frame: dict) -> bool:
     return (
         _required(
@@ -235,6 +249,7 @@ def _validate_recall(frame: dict) -> bool:
         and not isinstance(frame["k"], bool)
         and frame["k"] > 0
         and _timestamp_is_valid(frame["at"])
+        and ("remainingMs" not in frame or remaining_ms_is_valid(frame["remainingMs"]))
     )
 
 

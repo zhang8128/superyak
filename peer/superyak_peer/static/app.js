@@ -2,6 +2,8 @@
 
 const app = document.querySelector("#app");
 const announcer = document.querySelector("#announcer");
+// Open dialogs live here, beside #app, so a redraw of the page can't touch them (drawDialogs below).
+const dialogRoot = document.querySelector("#dialogs") || app.insertAdjacentElement("afterend", Object.assign(document.createElement("div"), { id: "dialogs" }));
 
 const state = {
   me: null,
@@ -23,6 +25,7 @@ const state = {
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
+  revisionsOf: null,
   room: null,
   selectedLayerId: null,
   selectedSharedId: null,
@@ -177,7 +180,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -282,6 +285,7 @@ function showLogin(message = "") {
   state.home = null;
   state.room = null;  // the next person on this browser starts from the route, and no timer asks about this room for them
   state.roomGone = null;
+  clearDialogs();
   app.innerHTML = `<main class="login-page" id="main-content">
     <div class="login-wrap">
       <section class="login-story">
@@ -404,6 +408,7 @@ function editorState(layer, active) {
 }
 
 function revisionHistory() {
+  if (state.revisionsOf !== state.selectedLayerId) return `<p class="meta">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
   return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
@@ -441,7 +446,7 @@ async function createSpace(form) {
     await api("/api/spaces", { method: "POST", json: { name: form.elements.name.value, kind: form.elements.kind.value, member_ids: [...form.querySelectorAll('[name="space-member"]:checked')].map((input) => input.value) } });
     state.spaceDialog = false;
     await refresh("Space created. Choose it in a saved layer and preview before sharing.");
-  } catch (error) { state.spaceError = error.message; render(); }
+  } catch (error) { state.spaceError = error.message; render(); sayAgainInDialog("space-title"); }
 }
 
 function withdrawDialog() {
@@ -460,8 +465,8 @@ function layerEditor(layer) {
   const instructions = layer.kind === "instructions";
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
-  return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
-    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
+  return `<section class="card editor" data-layer-id="${escapeHtml(layer.id)}" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your draft</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
+    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}" data-version="${escapeHtml(String(layer.version))}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
@@ -786,7 +791,7 @@ function showArrivals(answer) {
   if (news) announce(news === 1 ? "1 new message" : `${news} new messages`);
   if (following) {
     const { end, start } = newestMessagePlace();
-    if (Math.min(end, start) > 0) window.scrollBy(0, Math.min(end, start));
+    if (Math.min(end, start) > 0) movingTheRoom(() => window.scrollBy(0, Math.min(end, start)));
   } else if (news) {
     state.roomUnseen = answer.id;
     const button = document.querySelector('[data-action="new-messages"]');
@@ -891,8 +896,8 @@ function roomBrief(room) {
     ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div>${briefAuthor(room, brief, "room-brief-author")}<p class="meta">${escapeHtml(briefMeta(brief))}</p>`
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
-    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
-    : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
+    ? `<form id="brief-form" data-room="${escapeHtml(room.id)}"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="toggle-brief-history" aria-expanded="${historyOpen}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
@@ -967,7 +972,7 @@ function roomBoard(room) {
   const open = items.filter((item) => item.state === "open"), closed = items.filter((item) => item.state !== "open");
   const draft = state.boardPost?.roomId === room.id ? state.boardPost : { key: "", title: "", kind: "build" };
   // No maxlength on the title: the station counts code points, a browser UTF-16 units (Review Focus 5).
-  const post = owner && !replaced ? `<form id="board-post-form" class="board-post"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
+  const post = owner && !replaced ? `<form id="board-post-form" class="board-post" data-room="${escapeHtml(room.id)}"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
   const note = replaced ? `<p class="meta board-replaced">This room was replaced by a newer linked room; its board takes no changes.</p>` : "";
   return `<section class="room-board" data-room="${escapeHtml(room.id)}" aria-labelledby="room-board-title">${head}${note}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
 }
@@ -1104,7 +1109,7 @@ async function makeGrant(form) {
 // what the station holds and the history shows the new line. focusKey: the item to focus afterwards (the panel's
 // heading if it left the open list); undefined leaves focus to the caller.
 async function boardWrite(path, json, message, { saved = () => {}, focusKey } = {}) {
-  const room = state.room;
+  const room = state.room, acts = personActs;
   if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
@@ -1128,7 +1133,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
-    if (!ok && state.boardDone?.roomId === room.id) document.querySelector("#board-outcome")?.focus();
+    if (!ok && state.boardDone?.roomId === room.id) reopenForTyping(document.querySelector("#board-outcome"), acts);
     else if (focusKey !== undefined && state.room?.id === room.id) focusBoardItem(focusKey);
   }
 }
@@ -1136,9 +1141,10 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
 async function postBoardItem(form) {
   if (state.boardSaving || !state.room || !boardOnScreen(state.room)) return;
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
+  const acts = personActs;
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (state.me && state.room?.id === roomId) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
+  if (state.me && state.room?.id === roomId) reopenForTyping(document.querySelector("#board-key"), acts);  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -1170,13 +1176,52 @@ function carryHelp(room) {
   return `<p class="meta carry-help">${CARRY_HELP}</p>${list}`;
 }
 
+// Removing someone can't be undone, and nor can what reads a room while it's unmarked, so Remove and Clear my mark each
+// ask first, in place: the question takes the button's place, so a hurried second press lands on words, and the safe
+// choice is focused. An ask belongs to one drawing of its room and to what it asks about: opening the room again, or the
+// person or the mark being gone, starts without it. Once Yes is pressed, its place says what's happening until the answer.
+function roomAskOnScreen(kind) { return state.room ? roomAskFor(state.room, kind) : null; }
+function roomAskFor(room, kind) {
+  const ask = state.roomAsk;
+  return ask?.roomId === room.id && ask.kind === kind ? ask : null;
+}
+// The rooms this one continues that still have this member, as the station finds them (_earlier_with): a removal takes
+// them out of those too. It walks only the rooms this home lists, so after the owner has left an earlier room it can
+// count fewer than the station removes from: the ask then understates, never overstates.
+function earlierRoomsWith(room, memberId) {
+  const known = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  let count = 0, key = room.linked_room_id;
+  const seen = new Set();
+  while (key && !seen.has(key) && known.has(key)) {
+    seen.add(key);
+    const earlier = known.get(key);
+    if ((earlier.owner_id ?? room.owner_id) === room.owner_id && (earlier.member_ids || []).includes(memberId)) count += 1;
+    key = earlier.linked_room_id;
+  }
+  return count;
+}
+function roomAskMarkup(question, words, cancel, yes) {
+  return `<div class="board-ask room-ask" role="group" aria-label="${question}" aria-describedby="room-ask-words"><p id="room-ask-words">${question} ${words}</p><div class="button-row"><button class="button secondary" type="button" data-action="room-ask-cancel">${cancel}</button>${yes}</div></div>`;
+}
+function removeControl(room, id) {
+  const name = escapeHtml(participantName(id)), ask = roomAskFor(room, "remove");
+  if (ask?.id !== id) return `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${name} from this room</button>`;
+  if (ask.pending) return `<p class="meta room-ask" role="status" tabindex="-1">Removing ${name}…</p>`;
+  const earlier = earlierRoomsWith(room, id);
+  const where = earlier === 1 ? "this room and the room before it" : earlier ? `this room and the ${earlier} rooms before it` : "this room";
+  return roomAskMarkup(`Remove ${name} from ${where}?`, "Their access here stops at once, and copies they have can't be erased.", "Cancel",
+    `<button class="button danger" type="button" data-action="remove-participant-confirm" data-id="${escapeHtml(id)}" aria-label="Yes, remove ${name}">Yes, remove</button>`);
+}
+
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members or messages (409)
+  const ask = state.roomAsk, removable = (id) => canManage && !replaced && !isSelf(id) && (room.member_ids || []).includes(id);
+  if (ask && (ask.roomId !== room.id || roomDrawn !== room.id || (ask.kind === "clear" ? !room.cloud?.mine || room.origin : !removable(ask.id)))) state.roomAsk = null;
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
     ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1411,8 +1456,12 @@ function dockingDialog() {
 }
 
 function cloudBadge(room) {
-  // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
-  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+  // A room's mark: only a marked room carries `cloud`, its count and whether one of the marks is this person's. It promises
+  // nothing here: what a mark does and can't do takes more than a badge, and it's said at the control.
+  if (!room.cloud) return "";
+  const count = Number(room.cloud.count) || 0;  // a number only, whoever sent it
+  const yours = !room.cloud.mine ? "" : count === 1 ? " (yours)" : " (one yours)";
+  return `<span class="badge cloud-badge">Marked · ${count} mark${count === 1 ? "" : "s"}${yours}</span>`;
 }
 
 function earlierRoomsWithMe(room) {
@@ -1432,14 +1481,24 @@ function earlierRoomsWithMe(room) {
 
 function cloudControl(room, replaced) {
   if (room.origin) return "";  // a received room's mark is its home's to keep
-  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
-  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
-    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
-  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  // This home can't always tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  const away = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? "<li>stop what's said here still going to a member already on another home, who may be a person or a ship, under that home's rules. Their home isn't told about the mark.</li>" : "";
+  const limits = `<p class="meta">It can't:</p><ul class="meta"><li>stop whoever runs this home, or an AI agent they run on its computer, reading or changing it</li><li>take back what a ship or app has already read</li><li>stop a member copying the words or giving them to an AI</li>${away}</ul>`;
+  if (room.cloud?.mine) {
+    const yoursEarlier = earlierRoomsWithMe(room).some((item) => item.cloud?.mine) ? " Your marks on its earlier rooms stay." : "";
+    const ask = roomAskFor(room, "clear");
+    const clear = !ask ? `<button class="button secondary" data-action="cloud-clear">Clear my mark</button>`
+      : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
+      : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
+        "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
+    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
+  }
   if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1453,13 +1512,14 @@ async function markRoom(room, earlier) {
     return;
   }
   if (identityKey(state.me) !== who) return;  // not the next person's news
-  await refresh(`${room.title} is kept away from cloud models.`);  // by name: another room may have opened while this was sent
+  await refresh(`${room.title} is kept away from ships and connected apps on this home.`);  // by name: another room may have opened while this was sent
 }
 
 async function clearMark(room) {
   const who = identityKey(state.me);
+  let answer;
   try {
-    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
+    answer = await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
   } catch (error) {
     if (identityKey(state.me) !== who) return;
     setFlash(aboutRoom(room, error.message), true);
@@ -1467,7 +1527,8 @@ async function clearMark(room) {
     return;
   }
   if (identityKey(state.me) !== who) return;
-  await refresh(`Your mark on ${room.title} is cleared. Other members' marks still stand.`);
+  await refresh(answer?.cloud?.count ? `Your mark on ${room.title} is cleared. Other members' marks still stand.`
+    : `Your mark on ${room.title} is cleared. This room has no marks now.`);
 }
 
 function shipBanner(room) {
@@ -1482,8 +1543,8 @@ function shipBanner(room) {
   const homes = room.origin
     ? `<strong>This room's home is another home.</strong><p>What you write here is copied there and to each member's home, under their rules. This home can't see whether ships there send it to Claude.</p>`
     : away.length === 1
-      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or a ship that sends text to Claude.</p>`
-      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
+      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't always tell whether the member is a person or a ship that sends text to Claude.</p>`
+      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't always tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
   return claude || bridge || homes ? `<div class="notice ship-banner">${claude}${bridge}${homes}</div>` : "";
 }
 
@@ -1675,7 +1736,7 @@ function connectionsView() {
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form">${lessonsLine(state.pairPreview)}<div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form" data-fingerprint="${escapeHtml(state.pairPreview.fingerprint)}">${lessonsLine(state.pairPreview)}<div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${connectorAdminSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -1692,7 +1753,7 @@ const APP_ENDED = new Map([
   ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
   ["unknown", "Why it ended wasn't recorded."]]);  // a NULL reason, from before 9a recorded one (9a's N1)
-const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
+const APP_REFUSED = new Map([["marked", "a member keeps it from ships and apps"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
 const RECEIPT_PAGE = 20;
 
 function appName(host) {
@@ -1809,7 +1870,7 @@ function appRoomsForm(app) {
   const id = escapeHtml(app.id), chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room)), name = escapeHtml(appName(app.app));
   const choices = appRoomChoices(app).map((room) => `<label class="choice"><input type="checkbox" name="app-room" value="${escapeHtml(room.id)}"${chosen.has(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
     || `<p class="meta">You have no room it can read.</p>`;
-  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
+  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from ships and apps.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
 }
 
 async function saveAppRooms(form) {
@@ -1825,13 +1886,13 @@ function appRoomsList(app, live) {
   const name = escapeHtml(appName(app.app));
   if (app.damaged) return `<div class="app-rooms"><p class="meta">Its room list is damaged, so it can't read any room. Revoke it, then connect again.</p></div>`;
   const verb = live ? "It reads" : "It could read";  // an ended connection reads nothing
-  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from cloud models.</p></div>`;
+  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from ships and apps.</p></div>`;
   if (!app.rooms.length) return "";  // a connection a restore removed: only its receipts are left
   const ids = new Set(app.rooms.map((room) => room.room));
   const rows = app.rooms.map((room) => {
     const next = room.continues_in, offer = live && next && !ids.has(next.room)
       ? `<p class="app-offer">${escapeHtml(room.title)} continues in a new room. Let ${name} read it? <button class="button secondary" type="button" data-action="app-room-add" data-id="${escapeHtml(app.id)}" data-room="${escapeHtml(next.room)}" aria-label="Let ${name} read the new ${escapeHtml(next.title)}">Yes, add it</button></p>` : "";
-    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">Never to a cloud model</span>' : ""}${offer}</li>`;
+    return `<li>${escapeHtml(room.title)}${room.cloud ? ": it can't read this one, because a member has marked it." : ""}${offer}</li>`;
   }).join("");
   return `<div class="app-rooms"><p class="meta">${verb} these rooms:</p><ul>${rows}</ul></div>`;
 }
@@ -1927,7 +1988,20 @@ async function renderPublic() {
       content = error.status === 404 ? `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>` : `<article class="public-article"><h1>This page is unavailable</h1><p>This home could not be reached or could not load this page. Try again later; its sharing status is unknown.</p></article>`;
     }
   }
+  clearDialogs();
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
+}
+
+// A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.
+const settled = (read) => read.then((value) => ({ value }), (error) => ({ error }));
+
+// The room the address names, read beside the first load's wave (fix:signed-in-load-in-one-wave). The next loadRoute
+// takes it once, only for that room and that person; any other read of the room starts afresh.
+let earlyRoom = null;
+function readRoomEarly() {
+  const { route, id } = routeParts();
+  if (route !== "chats" || !id || state.room) return;
+  earlyRoom = { id, who: identityKey(state.me), read: settled(loadRoom(id)) };
 }
 
 let dataLoadSequence = 0;
@@ -1936,25 +2010,45 @@ async function loadData() {
   const valid = () => !!user && identityKey(state.me) === identity && sequence === dataLoadSequence;
   if (!user) return false;
   try {
-    const [home, contacts, files, sync, corrections] = await Promise.all([
-      api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections")
-    ]);
-    if (!valid()) return false;
-    if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints, connector] = await Promise.all([
+    // One wave (fix:signed-in-load-in-one-wave): through Funnel every read in a row costs about 185 ms, so everything
+    // goes out at once but the active layers' reads, which need /api/home's list. The admin reads go out by the flags
+    // /api/me gave, and count only by /api/home's, as before: a role that changed between the two reads gets its one
+    // late read, or its answer, refusal included, set aside.
+    const admin = (flag, path) => user[flag] ? settled(api(path)) : null;
+    const early = { accounts: admin("is_admin", "/api/accounts"), connections: admin("is_admin", "/api/connections"),
+      roleChanges: admin("is_super_admin", "/api/account-role-changes"), accessRequests: admin("is_admin", "/api/access-requests") };
+    const homeRead = api("/api/home");
+    const [home, contacts, files, sync, corrections, assistant, sources, ships, imprints, connector] = await Promise.all([
+      homeRead, api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections"),
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
+      api("/api/ships"),
+      loadImprints(),
+      loadConnectorNotice(),
+    ]).catch(async (error) => {
+      // A 401 from the home's own read wins over another read's quicker failure, so an ended session signs in again
+      // rather than showing a flash; /api/ships, which once waited for the home, now runs beside it.
+      const homeAnswer = error.status === 401 ? null : await settled(homeRead);
+      throw homeAnswer && "error" in homeAnswer && homeAnswer.error.status === 401 ? homeAnswer.error : error;
+    });
+    if (!valid()) return false;
+    if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
+    const adminAnswer = async (flag, path, read) => {
+      if (!home.user[flag]) return [];
+      if (!read) return api(path);
+      const answer = await read;
+      if ("error" in answer) throw answer.error;
+      return answer.value;
+    };
+    const [activePairs, accounts, connections, roleChanges, accessRequestList] = await Promise.all([
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
         try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
         catch (error) { if (error.status === 401) throw error; return { id: layer.id, error }; }
       })),
-      home.user.is_admin ? api("/api/accounts") : [],
-      home.user.is_admin ? api("/api/connections") : [],
-      home.user.is_super_admin ? api("/api/account-role-changes") : [],
-      home.user.is_admin ? api("/api/access-requests") : [],
-      api("/api/ships"),
-      loadImprints(),
-      loadConnectorNotice(),
+      adminAnswer("is_admin", "/api/accounts", early.accounts),
+      adminAnswer("is_admin", "/api/connections", early.connections),
+      adminAnswer("is_super_admin", "/api/account-role-changes", early.roleChanges),
+      adminAnswer("is_admin", "/api/access-requests", early.accessRequests),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -1970,19 +2064,21 @@ async function loadData() {
 
 async function loadRoute() {
   const { route, id } = routeParts();
+  let early = earlyRoom;
+  earlyRoom = null;
   state.preview = false;
   state.confirmWithdraw = false;
   state.chatDialog = null;
   if (route === "layers") {
     state.selectedLayerId = id || state.selectedLayerId || state.home.layers[0]?.id || null;
     if (state.selectedLayerId && state.home.layers.some((item) => item.id === state.selectedLayerId)) {
-      state.revisions = await api(`/api/layers/${pathPart(state.selectedLayerId)}/revisions`);
+      await loadRevisions(state.selectedLayerId);
     } else {
       state.selectedLayerId = null;
-      state.revisions = [];
     }
   }
   if (route === "chats" && (id || state.selectedChatId) && !state.home.chats.some((item) => item.id === (id || state.selectedChatId))) {
+    early = null;  // read before the room was listed, so it may be a refusal that no longer holds: read it afresh
     try { await loadData(); } catch (_) { /* the list below says so if the room is still unknown */ }  // a room made after this page loaded
   }
   if (route === "chats") {
@@ -1993,7 +2089,11 @@ async function loadRoute() {
       const still = () => state.selectedChatId === wanted && identityKey(state.me) === who;  // or a late answer for a room the person has left
       try {
         const paged = state.room?.id === wanted && state.room.paged;  // keep the earlier messages the reader loaded
-        await landRoom(() => (paged ? refreshRoom(state.room) : loadRoom(wanted)), still);
+        const taken = !paged && early?.id === wanted && early.who === who ? early.read : null;
+        await landRoom(() => (paged ? refreshRoom(state.room) : taken ? taken.then((answer) => {
+          if ("error" in answer) throw answer.error;
+          return answer.value;
+        }) : loadRoom(wanted)), still);
       }
       catch (error) {
         if (still()) {
@@ -2045,16 +2145,267 @@ function openFailedPage(message) {
   return `<main id="main-content" class="loading-page"><div class="brand-mark" aria-hidden="true">S</div><h1>This home didn't open</h1><p>${escapeHtml(message)}</p><div class="button-row"><button class="button" type="button" data-action="retry-open">Try again</button><button class="button secondary" type="button" data-action="logout">Sign out</button></div></main>`;
 }
 
+// The box a person is typing in keeps the caret through a redraw, but only that box: the one their last keystroke or press went to,
+// still focused, drawn again with the same id and tag in the same chain of elements up to the app (each one's tag, id and
+// data: the layer, room or item it's for), showing the same words. A version is left out of the chain, since the person's
+// own save moves it while they type on, and a save from elsewhere fails the words check. A submit ends the typing, so its
+// own draw doesn't hold the caret (on a phone the keyboard closes, as before). Anything else and the caret stays out, so
+// no key lands in words or a place the person didn't see. (fix:care-starter-loses-first-words: on a slow home a new
+// draft's history answered mid-typing, the editor was drawn again, and the keys after that went nowhere.) So a box for
+// one of several things carries that thing's data on itself or a parent. tests/typed_boxes.py lists every typed box and
+// how it's told apart, and a browser test that draws a box it doesn't list, or without its mark, fails.
+const TYPED_INPUTS = new Set(["text", "search", "url", "tel", "password"]);  // not email: it has no selection to put back
+let typedBox = null;  // the box the person last aimed at: by a key (input), a press that landed, or a Tab
+let drawnFor = null;  // what the page on screen was drawn for (drawingFor), set by each render
+
+// A key belongs to the drawing it was aimed at, as a press does (Tardis, all hands d56f792e): the caret goes back only
+// when the page is drawn again for the same route and the same thing on it, so a box on a page drawn for something else
+// never takes it, whatever its markup carries. The thing is what the view draws. On chats and layers that's state.room
+// and state.selectedLayerId, and the address only follows them: openLayer sets the layer, then the address, and the
+// hashchange draws again only once the layer's history answers. So the address there would make the same layer's next
+// draw look like another page, and refuse the caret to a person typing in it (all hands 23e34401, 16566adf).
+// Elsewhere the address id is the thing. tests/typed_boxes.py checks after every draw that the open editor and the open
+// room are the thing this names.
+function drawingFor() {
+  const { route, id } = routeParts();
+  const thing = route === "chats" ? state.room?.id : route === "layers" ? state.selectedLayerId : id;
+  return JSON.stringify([route, thing || null]);
+}
+
+function boxChain(node) {
+  const chain = [];
+  for (let at = node; at && at !== app; at = at.parentElement) {
+    const { version, ...data } = at.dataset;
+    chain.push([at.tagName, at.id, data]);
+  }
+  return JSON.stringify(chain);
+}
+
+function typedBoxRule(node) {  // a box a person types words into, whose caret and selection can be put back
+  return node?.tagName === "TEXTAREA" || (node?.tagName === "INPUT" && TYPED_INPUTS.has(node.type));
+}
+function typingIn(node) {
+  if (!typedBoxRule(node) || !node.id || node !== typedBox) return null;
+  return { id: node.id, tag: node.tagName, value: node.value, chain: boxChain(node), start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection };
+}
+
+// The app's own focus on a box it opens for the person to type in: Edit brief, Mark done, a board post or a refused save
+// starting over, using an earlier brief. Each runs from the person's own act (their press, or their submit's answer
+// across its await, which goes through reopenForTyping below), never from a timer, a poll or a render, and it makes the
+// box the one a redraw may give the caret back to, as their press into it would (Tardis, all hands feecc21d;
+// fix:app-focused-box-has-no-owner). A plain .focus()
+// on a typed box sets no owner, so a redraw before the person's first key would send it nowhere; tests/typed_boxes.py's
+// watch reports one on a signed-in page outside a dialog.
+function focusForTyping(box) {
+  if (!box) return;
+  box.focus();
+  if (typedBoxRule(box) && document.activeElement === box) typedBox = box;  // only where the focus landed (nit 4)
+}
+// A submit's answer comes after an await, and the person may have done anything since: typed in the composer, pressed
+// into it, pressed a button or the page (the reader's CHANGES on bd25f63a, finding 1). So the submit notes how many acts
+// the person had made (personActs), and its answer opens its box again only if that's unchanged: if they did anything at
+// all since, it takes neither the focus nor the caret from where they are (Tardis, all hands 18404245). A pan, a modifier
+// key and an auto-repeat count too, which errs toward leaving their focus alone.
+let personActs = 0;  // the person's own trusted presses, keys, words put in and wheel turns, counted
+document.addEventListener("pointerdown", (event) => { if (event.isTrusted && event.isPrimary) personActs += 1; }, true);
+document.addEventListener("keydown", (event) => { if (event.isTrusted) personActs += 1; }, true);
+// Words that arrive with no key (dictation, an assistive tool) and a wheel's scroll are acts too (the re-check's nits 2
+// and 4 on ee71f24f): an answer after them leaves the focus, and the page, where the person put it.
+document.addEventListener("input", (event) => { if (event.isTrusted) personActs += 1; }, true);
+document.addEventListener("wheel", (event) => { if (event.isTrusted) personActs += 1; }, { capture: true, passive: true });
+function reopenForTyping(box, actsAtSubmit) {
+  if (personActs !== actsAtSubmit) return;
+  focusForTyping(box);
+}
+
+function keepTyping(typing) {
+  typedBox = null;
+  const again = document.getElementById(typing.id);
+  if (!again || !app.contains(again) || again.tagName !== typing.tag || again.matches(":disabled") || again.readOnly) return;
+  if (again.value !== typing.value || boxChain(again) !== typing.chain) return;
+  again.focus({ preventScroll: true });
+  try { again.setSelectionRange(typing.start, typing.end, typing.direction); } catch (_) { /* a type with no selection */ }
+  typedBox = again;
+}
+
+// A button, a select, or a tick box, radio or file input the person was on, drawn again for the same drawing in the same
+// place: the redraw gives it its focus back, so a keyboard user's next Tab goes on from where they were, not from the top
+// of the page (fix:redraw-keeps-control-focus). Those only, since none takes words: a typed box stays keepTyping's, which
+// asks for the person's aim, and a number or date box isn't one of these, since a submit's draw must leave it unfocused,
+// as it does a text box, so a phone's keyboard closes and the next digits don't land in the next draft (the reader's
+// Should 1 on 69aac5b1). Headings and main, which the app focuses itself, aren't controls either. A control is found
+// again by its id, or, as buttons have none, by its tag and data-action; its chain (boxChain, which holds its own data-id
+// and every parent's marks) must be the same, and only one control may match it, so two alike never take a guess. A
+// control with neither an id nor a data-action isn't found again, and a dialog keeps its own return (dialogReturn).
+const CONTROL_INPUTS = new Set(["checkbox", "radio", "file"]);
+
+function controlIn(node) {
+  if (!node || !app.contains(node)) return null;
+  if (!(node.tagName === "BUTTON" || node.tagName === "SELECT" || (node.tagName === "INPUT" && CONTROL_INPUTS.has(node.type)))) return null;
+  if (!node.id && !node.dataset.action) return null;
+  return { id: node.id, action: node.dataset.action, tag: node.tagName, chain: boxChain(node) };
+}
+
+function keepControl(control) {
+  const candidates = control.id ? [document.getElementById(control.id)]
+    : [...app.querySelectorAll(`${control.tag}[data-action="${CSS.escape(control.action)}"]`)];
+  const same = candidates.filter((again) => again && app.contains(again) && again.tagName === control.tag
+    && !again.matches(":disabled") && boxChain(again) === control.chain);
+  if (same.length === 1) same[0].focus({ preventScroll: true });
+}
+
+// A redraw never rebuilds a dialog the person is in (fix:dialog-redraw-loses-typed-words; Tardis, all hands d9907cf4 and
+// 1b0d489c, keyed on the markup in 751ada42). render() still writes each dialog into the page's markup, and drawDialogs
+// moves them into their own root beside #app. While the dialogs a render draws are, markup for markup, the ones that drew
+// the open dialogs, the open ones stay as they are: the same nodes, so the words, the caret, the selection, a phone's
+// half-built word and an opened <details> all stay, and showModal never runs again. Words aren't in the markup (a password
+// box draws no value, and every other box draws state), so a poll that changes nothing keeps everything. When a dialog's
+// markup changes (an error line, a new contact, another dialog), the dialogs are replaced, and each control the person set
+// in the old one is carried into the new one when it's the same control (its id, or a tick box's name and value) in the
+// same place (its chain inside the dialog) and the draw put the same default there: their words, their ticks, and the
+// caret if it was there. A password box never carries: after a submit it starts empty, and the dialog's alert says why.
+// Words whose box the draw changed under them aren't carried either: the box shows the new words, and a line in the
+// dialog says theirs were replaced and what they were. Focus goes back to the same control in the replaced dialog.
+function dialogControlKey(node) {  // how a control is found again in a dialog drawn anew; none for one that can't be told apart
+  if (node.id) return `#${node.id}`;
+  if (node.name && (node.type === "checkbox" || node.type === "radio")) return `${node.name}=${node.value}`;
+  if (node.dataset?.action) return `[${node.dataset.action}]${node.dataset.id || ""}`;
+  if (node.type === "submit" && node.form) return `submit:${node.form.id}`;
+  return null;
+}
+function controlsIn(dialog) {  // key -> its one control; a key drawn twice tells nothing apart, so neither of them counts
+  const found = new Map();
+  for (const node of dialog.querySelectorAll("input, textarea, select, button, a[href], summary")) {
+    const key = dialogControlKey(node);
+    if (key) found.set(key, found.has(key) ? null : node);
+  }
+  return found;
+}
+function chainIn(node, dialog) {  // like boxChain, up to the dialog: each element's tag, id and data, its version left out
+  const chain = [];
+  for (let at = node; at; at = at === dialog ? null : at.parentElement) {
+    const { version, ...data } = at.dataset;
+    chain.push([at.tagName, at.id, data]);
+  }
+  return JSON.stringify(chain);
+}
+function drawnSettingOf(node) {  // what the draw put in a control
+  if (node.type === "checkbox" || node.type === "radio") return String(node.defaultChecked);
+  if (node.tagName === "SELECT") { const options = [...node.options]; return JSON.stringify([options.map((option) => option.value), Math.max(0, options.findIndex((option) => option.defaultSelected))]); }
+  return node.defaultValue;
+}
+function settingOf(node) {  // what the control holds now
+  if (node.type === "checkbox" || node.type === "radio") return String(node.checked);
+  if (node.tagName === "SELECT") return JSON.stringify([[...node.options].map((option) => option.value), node.selectedIndex]);
+  return node.value;
+}
+function carryInto(dialog, old, owned) {  // the person's settings from `old` into `dialog`, drawn anew for the same purpose
+  const fresh = controlsIn(dialog), dropped = [];
+  const labelOf = (box) => old.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent || "A box";
+  for (const [key, was] of controlsIn(old)) {
+    if (!was || !("defaultValue" in was || "defaultChecked" in was || was.tagName === "SELECT")) continue;
+    const now = settingOf(was), into = fresh.get(key);
+    if (now === drawnSettingOf(was)) continue;  // not the person's
+    // A password carries only while the person is typing it: the box is theirs since their last submit (a submit ends
+    // the typing). Otherwise a poll that replaces the dialog mid-password empties the box under the caret, and the rest
+    // of the password goes in alone (Tardis, all hands 582f12c5). After a submit it never carries, and is never named.
+    if ((was.type === "password" || into?.type === "password") && was !== owned) continue;
+    if (!into) {  // the new draw has no such box: their words go, and the dialog says so
+      if (typedBoxRule(was) && was.type !== "password") dropped.push(`${labelOf(was)} is no longer in this dialog. You had typed: “${was.value}”.`);
+      continue;
+    }
+    const same = into.tagName === was.tagName && into.type === was.type && chainIn(into, dialog) === chainIn(was, old);
+    if (same && drawnSettingOf(into) === drawnSettingOf(was) && !into.disabled && !into.readOnly) {
+      if (into.type === "checkbox" || into.type === "radio") into.checked = was.checked;
+      else if (into.tagName === "SELECT") into.selectedIndex = was.selectedIndex;
+      else into.value = was.value;
+    } else if (typedBoxRule(was) && was.type !== "password" && settingOf(into) !== now) {
+      dropped.push(`${labelOf(was)} changed while you typed, so it shows the new words. You had typed: “${was.value}”.`);
+    }
+  }
+  if (!dropped.length) return;
+  const body = dialog.querySelector(".dialog-body, .dialog-content") || dialog;
+  const note = Object.assign(document.createElement("p"), { className: "notice error dialog-dropped" });
+  note.setAttribute("role", "alert");
+  note.textContent = dropped.join(" ");
+  const heading = body.querySelector("h2");
+  body.insertBefore(note, heading ? heading.nextSibling : body.firstChild);
+}
+function openDialog(dialog) {
+  dialog.showModal();
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const controls = [...dialog.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  });
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
+}
+let dialogsKept = false;  // whether the last render kept the open dialogs as they were
+function drawDialogs() {  // after app.innerHTML: the dialogs now open
+  const drawn = [...app.querySelectorAll("dialog")];
+  for (const dialog of drawn) { dialog.drawnAs = dialog.outerHTML; dialog.remove(); }
+  const open = [...dialogRoot.children];
+  dialogsKept = drawn.length > 0 && drawn.length === open.length && drawn.every((dialog, at) => dialog.drawnAs === open[at].drawnAs);
+  if (dialogsKept) return open;
+  const focused = document.activeElement, from = open.find((dialog) => dialog.contains(focused));
+  const caret = from && typedBoxRule(focused) ? { value: focused.value, start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
+  const owned = open.some((dialog) => dialog.contains(typedBox)) ? typedBox : null;
+  const purpose = (dialog) => dialog.getAttribute("aria-labelledby");
+  for (const dialog of drawn) {
+    const old = open.find((was) => purpose(was) === purpose(dialog));
+    if (old) carryInto(dialog, old, owned);
+  }
+  for (const dialog of open) dialog.remove();
+  dialogRoot.append(...drawn);
+  for (const dialog of drawn) openDialog(dialog);
+  if (owned) typedBox = null;
+  const into = from && drawn.find((dialog) => purpose(dialog) === purpose(from));
+  const again = into && dialogControlKey(focused) && controlsIn(into).get(dialogControlKey(focused));
+  if (again && !again.disabled && again.getClientRects().length) {
+    again.focus({ preventScroll: true });
+    if (caret && typedBoxRule(again)) {
+      const kept = again.value === caret.value, end = again.value.length;
+      try { again.setSelectionRange(kept ? caret.start : end, kept ? caret.end : end, kept ? caret.direction : "none"); } catch (_) { /* a type with no selection */ }
+      if (kept && owned === focused && document.activeElement === again) typedBox = again;  // a later modal may hold the focus
+    }
+  }
+  return drawn;
+}
+// A refusal that repeats draws the same alert, so the kept dialog's alert line doesn't change and nobody hears it again.
+// #announcer can't say it either: while a modal is open the browser takes everything outside it out of the accessibility
+// tree (the reader's re-check on f3868733). So after a render that kept the dialogs, the alert line of the dialog the
+// error is for (named by its aria-labelledby) says its words again, emptied and given them back in the next frame, as a
+// newly drawn alert would. A dialog drawn anew says them by itself, so this does nothing then, and nothing on a page with
+// no dialog or under another dialog. Every dialog that draws an error line calls it after its error's render
+// (test_every_dialog_that_draws_an_error_says_a_repeat_again).
+function sayAgainInDialog(...purposes) {
+  if (!dialogsKept) return;
+  const open = [...dialogRoot.querySelectorAll("dialog[open]")].filter((dialog) => purposes.includes(dialog.getAttribute("aria-labelledby")));
+  const line = open.flatMap((dialog) => [...dialog.querySelectorAll('[role="alert"], .notice.error[role="status"]')]).pop();
+  if (!line?.textContent) return;
+  const words = line.textContent;
+  line.textContent = "";
+  requestAnimationFrame(() => { line.textContent = words; });
+}
+function clearDialogs() {  // a page drawn outside render() (signed out, a public page, a home that didn't open) has none
+  if (dialogRoot.contains(typedBox)) typedBox = null;
+  dialogRoot.replaceChildren();
+}
+
 function render() {
   if (!state.me) return;
-  if (!state.home) { if (state.flash?.error) app.innerHTML = openFailedPage(state.flash.message); return; }
+  if (!state.home) { if (state.flash?.error) { clearDialogs(); app.innerHTML = openFailedPage(state.flash.message); } return; }
   const route = routeParts().route;
   const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, apps: connectedAppsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
-  const hadDialog = !!app.querySelector("dialog[open]");
+  const hadDialog = !!dialogRoot.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
-  const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
+  const drawn = drawingFor();
+  const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
+  const control = !hadDialog && drawn === drawnFor && !typing ? controlIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
@@ -2063,22 +2414,13 @@ function render() {
   if (nav && current && nav.scrollWidth > nav.clientWidth) {
     nav.scrollLeft += current.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - current.offsetWidth) / 2;
   }
-  const dialogs = app.querySelectorAll("dialog");
-  for (const dialog of dialogs) {
-    dialog.showModal();
-    dialog.addEventListener("keydown", (event) => {
-      if (event.key !== "Tab") return;
-      const controls = [...dialog.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
-      const first = controls[0], last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    });
-    dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
-  }
+  const dialogs = drawDialogs();
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
-  else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
+  if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
+  else if (control && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepControl(control);
+  drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
-  if (drawing && drawing !== roomDrawn) showNewestMessage();
+  if (drawing && drawing !== roomDrawn) { roomMovedAt = roomDrawnAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
   else if (!drawing && roomDrawn && leftByLink) window.scrollTo(0, 0);  // a long room's scroll means nothing in the next view
   roomDrawn = drawing;
   leftByLink = false;
@@ -2092,8 +2434,67 @@ function render() {
 function showNewestMessage() {
   seenNewMessages();
   const place = newestMessagePlace();
-  if (place) window.scrollTo(0, window.scrollY + Math.min(place.end, place.start));
+  if (place) movingTheRoom(() => window.scrollTo(0, window.scrollY + Math.min(place.end, place.start)));
 }
+
+// A press the page moved under (Tardis's finding, 2026-11-07). A room draws, or the page moves itself to the newest,
+// where the person's pointer already is, so a hurried second press at the same spot, or a press begun on what was there
+// before, would land on the room's Send, Mark or Remove. Both are dropped in a room, and so is a third: a dropped press
+// isn't the press before the next one. A press that landed while the room drew is handled only after, on what replaced
+// what it landed on, so it's dropped whatever it ends on. A key press (detail 0) never is, nor a press that began on
+// the control it ends on, nor one at another spot or 400 ms after the move, nor a second press of the same control on
+// the same drawing of the room (its Send, or the same action on the same thing, though a send's redraw replaced its
+// node): that's someone aiming at what they now see. A press aimed elsewhere that the room draws under just before it
+// lands isn't told from one meant for the new room, and nor is a redraw in place moving the next button under a second
+// press; Remove and Clear my mark ask first, so such a press only opens an ask. Each click takes
+// the first finger's or the mouse's primary press it began with, and a press a long press's menu or a scroll ended
+// leaves none. Each kind of pointer has its own first one, so a palm's touch cancelled during a pen's press clears the
+// pen's: that only ever lets a click through. A mouse press held while the room redraws ends in no click and stays, but
+// the clicks that come with no press of their own (a key's, element.click()) have detail 0 and are never measured.
+const MOVED_PRESS_MS = 400, SAME_SPOT_PX = 24, PRESSABLE = "button, input, select, summary, label, a[href]";
+let roomMovedAt = -Infinity, roomDrawnAt = -Infinity, pressDown = null, lastPress = null;
+function movingTheRoom(scroll) {
+  const before = window.scrollY;
+  scroll();
+  if (window.scrollY !== before) roomMovedAt = performance.now();
+}
+// What a control is across the redraws that replace its node: the box's Send, or a button by its action and what that
+// acts on. It's compared only within one drawing of a room, so Send needs no room.
+function controlKey(control) {
+  if (!control) return null;
+  if (control.matches('#message-form button[type="submit"]')) return "send";
+  const action = control.dataset?.action;
+  return action ? `${action}:${control.dataset.id ?? control.dataset.key ?? control.dataset.revision ?? ""}` : null;
+}
+function pressTheRoomMoved(event, press, before) {
+  if (event.detail === 0 || !press) return false;
+  const control = event.target.closest?.(PRESSABLE);
+  if (!control?.closest(".split-detail")?.querySelector(".messages")) return false;  // in a room, not another page's detail
+  if (press.at < roomMovedAt) return press.found || control !== press.control;  // begun on what was here before
+  if (press.at - roomMovedAt >= MOVED_PRESS_MS || !before || before.at >= roomMovedAt) return false;
+  const key = controlKey(control);
+  if (key && before.at > roomDrawnAt && key === controlKey(before.control)) return false;  // pressed again on this drawing of the room
+  return Math.abs(before.x - press.x) <= SAME_SPOT_PX && Math.abs(before.y - press.y) <= SAME_SPOT_PX;
+}
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it
+  pressDown = event.button !== 0 ? null : {
+    x: event.clientX, y: event.clientY, at: event.timeStamp, found: event.timeStamp < roomMovedAt, control: event.target.closest?.(PRESSABLE) || null,
+  };
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressDown = null; }, true);  // a scroll took the touch
+document.addEventListener("contextmenu", () => { pressDown = null; }, true);  // a long press's menu: no click comes
+// This listener must stay before the press owner's click listener (near typedBoxRule's users below): a press it drops
+// stops that one too, so a press aimed at the room drawn before neither sets nor clears the box a redraw may give the
+// caret back to (Tardis, all hands 2349eb48), though it can't stop the focus. test_a_press_the_guard_drops_makes_no_
+// owner_of_the_box_it_focused pins the order.
+document.addEventListener("click", (event) => {
+  const press = pressDown, before = lastPress;
+  pressDown = null;
+  if (!pressTheRoomMoved(event, press, before)) { if (press) lastPress = press; return; }
+  event.preventDefault();  // a submit button's press sends nothing, and a box keeps its tick
+  event.stopImmediatePropagation();  // and a data-action button's never reaches the handler below
+}, true);
 
 // How far down the page would have to move to show the end of the messages with the composer under them, and to show
 // the last message's start.
@@ -2162,9 +2563,18 @@ function rememberLayerForm(form = document.querySelector("#layer-form")) {
     dirty: true,
     conflict: previous?.conflict || false,
     generation: (previous?.generation || 0) + 1,
+    // The version these words were begun from: the one the form was drawn from, not the page's. A refresh gives the page the
+    // newest draft before it redraws the form, and if the save went by that, it would overwrite another tab's words with no
+    // conflict.
+    baseVersion: previous?.baseVersion ?? drawnVersion(form, layer),
   };
   state.layerEdits[layer.id] = edit;
   return edit;
+}
+
+function drawnVersion(form, layer) {
+  const drawn = Number(form.dataset.version);
+  return Number.isInteger(drawn) && drawn > 0 ? drawn : layer.version;
 }
 
 function updateLayer(layer) {
@@ -2178,18 +2588,21 @@ async function saveLayer(form) {
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
   const status = form.querySelector("#layer-status");
+  const who = identityKey(state.me), acts = personActs;
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
-    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: layer.version, ...values } });
+    const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: submitted.baseVersion, ...values } });
+    if (identityKey(state.me) !== who) return;  // answered after the person changed: not the next person's news
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     const newerEdits = current && current.generation !== submitted.generation;
     if (!newerEdits) delete state.layerEdits[layer.id];
-    else current.conflict = false;
+    else { current.conflict = false; current.baseVersion = saved.version; }
     setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     if (error.status === 401) {
       const current = state.layerEdits[layer.id] || submitted;
       current.conflict = false;
@@ -2197,6 +2610,9 @@ async function saveLayer(form) {
       state.reauth = true;
       state.reauthError = null;
       render();
+      // The password box, unless the person did anything since Save (the reader's finding 2 on 51e8d0b8): their next
+      // keys are in some other box, and an Enter there mustn't send them as a sign-in.
+      reopenForTyping(document.querySelector("#reauth-password"), acts);
       return;
     }
     if (error.status === 409) {
@@ -2257,6 +2673,7 @@ async function uploadFile(input) {
       dirty: true,
       conflict: current?.conflict || false,
       generation: (current?.generation || 0) + 1,
+      baseVersion: current?.baseVersion ?? savedLayer.version,
     };
     if (state.selectedLayerId === layerId) {
       render();
@@ -2268,11 +2685,45 @@ async function uploadFile(input) {
   }
 }
 
+// One layer's release history. A read counts only while the person is still on that layer's page, and only if no newer
+// read has already been taken: an answer that comes late, good or bad, changes nothing here. revisionHistory shows only
+// what's held for the layer on screen.
+let revisionsRead = 0, revisionsTaken = 0;
+async function loadRevisions(id) {
+  const read = ++revisionsRead;
+  const current = () => state.me && routeParts().route === "layers" && state.selectedLayerId === id;
+  try {
+    const revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
+    if (!current() || read < revisionsTaken) return false;
+    revisionsTaken = read;
+    state.revisions = revisions;
+    state.revisionsOf = id;
+    return true;
+  } catch (error) {
+    if (current() && read === revisionsRead) throw error;
+    return false;
+  }
+}
+
+function forgetRevisions() {
+  state.revisions = [];
+  state.revisionsOf = null;
+  state.selectedLayerId = null;
+}
+
 async function openLayer(id) {
   state.selectedLayerId = id;
-  location.hash = `layers/${pathPart(id)}`;
-  state.revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
-  state.flash = null;
+  const address = `layers/${pathPart(id)}`;
+  if (location.hash !== `#${address}`) {  // the hash change reads it and renders, so one click is one read
+    location.hash = address;
+    return;
+  }
+  try {
+    if (!await loadRevisions(id)) return;  // a newer read renders itself
+    state.flash = null;
+  } catch (error) {
+    setFlash(error.message, true);
+  }
   render();
 }
 
@@ -2281,20 +2732,32 @@ async function resolveConflict() {
   const layer = selectedLayer();
   const initial = rememberLayerForm();
   if (!layer || !initial) return;
+  const who = identityKey(state.me);
   try {
     const latest = await api(`/api/layers/${pathPart(layer.id)}`);
+    if (identityKey(state.me) !== who) return;
     const submitted = state.layerEdits[layer.id];
+    // "My text": who can see it stays as the latest draft has it, or this tab's old boxes put back someone just turned off.
+    const { audience_users: users, audience_spaces: spaces, public: isPublic, ...text } = submitted.values;
     const saved = await api(`/api/layers/${pathPart(layer.id)}`, {
       method: "PUT",
-      json: { version: latest.version, ...submitted.values },
+      json: { version: latest.version, ...text },
     });
+    if (identityKey(state.me) !== who) return;
     updateLayer(saved);
     const current = state.layerEdits[layer.id];
     if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
-    else if (current) current.conflict = false;
-    setFlash("Private draft saved");
+    else if (current) {
+      current.conflict = false;
+      current.baseVersion = saved.version;
+      Object.assign(current.values, { audience_users: saved.audience_users, audience_spaces: saved.audience_spaces, public: saved.public });
+    }
+    const same = (a = [], b = []) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    const moved = !same(users, saved.audience_users) || !same(spaces, saved.audience_spaces) || Boolean(isPublic) !== Boolean(saved.public);
+    setFlash(moved ? "Your text is saved. Who can see it stays as the latest draft has it, so check that before you turn on a version." : "Private draft saved");
     render();
   } catch (error) {
+    if (identityKey(state.me) !== who) return;
     setFlash(`${error.message} Your text is still here.`, true);
     render();
   }
@@ -2314,11 +2777,45 @@ async function activateLayer() {
   }
 }
 
+// A revoke narrows the draft on the station too. Unsaved words in the editor stay, and what was just turned off stays off in
+// them, or the next save would turn it back on.
+function narrowEdit(layerId, { off = false, users = [], spaces = [] }, answer) {
+  // The draft moved with the revoke. Only an editor that was current moves with it: if another tab saved first, that's a real conflict.
+  // The page's copy moves as the station's did: its version and what was narrowed, together. If only the version moved and the
+  // refresh after this failed, the editor would be drawn from that copy with the old boxes ticked, under a version the station
+  // takes, and the next Save would put back what was just turned off.
+  const moved = answer.layer_version !== answer.layer_version_before;
+  const layer = state.home?.layers?.find((item) => item.id === layerId);
+  if (layer && moved && layer.version === answer.layer_version_before) {
+    layer.version = answer.layer_version;
+    if (off) layer.public = false;
+    layer.audience_users = (layer.audience_users || []).filter((id) => !users.includes(id));
+    layer.audience_spaces = (layer.audience_spaces || []).filter((id) => !spaces.includes(id));
+  }
+  const edit = state.layerEdits[layerId];
+  if (edit?.baseVersion === answer.layer_version_before) edit.baseVersion = answer.layer_version;
+  // The form on screen first: a Save before the page's next draw reads these boxes.
+  const form = document.querySelector("#layer-form");
+  if (form?.dataset.layerId === layerId) {
+    if (moved && form.dataset.version === String(answer.layer_version_before)) form.dataset.version = String(answer.layer_version);
+    if (off && form.elements.public) form.elements.public.checked = false;
+    for (const [name, ids] of [["audience-user", users], ["audience-ship", users], ["audience-space", spaces]]) {
+      for (const id of ids) { const box = form.querySelector(`[name="${name}"][value="${CSS.escape(id)}"]`); if (box) box.checked = false; }
+    }
+  }
+  const values = state.layerEdits[layerId]?.values;
+  if (!values) return;
+  if (off) values.public = false;
+  values.audience_users = (values.audience_users || []).filter((id) => !users.includes(id));
+  values.audience_spaces = (values.audience_spaces || []).filter((id) => !spaces.includes(id));
+}
+
 async function publicOff() {
   const layer = selectedLayer();
   const active = state.activeLayers[layer.id];
   try {
     const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
+    narrowEdit(layer.id, { off: true }, narrowed);
     const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
     await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
@@ -2339,6 +2836,7 @@ async function revokeRoute(kind, id) {
         space_ids: kind === "space" ? [id] : [],
       },
     });
+    narrowEdit(layer.id, { users: kind === "person" ? [id] : [], spaces: kind === "space" ? [id] : [] }, narrowed);
     const remainingNames = [
       ...(narrowed.audience_users || []).map(contactName),
       ...(narrowed.audience_spaces || []).map(spaceName),
@@ -2462,6 +2960,7 @@ async function createChat(form) {
       state.chatError = error.message;
       announce(state.chatError);
       render();
+      sayAgainInDialog("chat-dialog-title");  // the same refusal again keeps the dialog (the re-check on 19cf5683)
       return;
     }
     if (error.status === 409 && stillThisRoom) {
@@ -2475,6 +2974,7 @@ async function createChat(form) {
       }
       announce(state.chatError);
       render();
+      sayAgainInDialog("chat-dialog-title");
       document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
       return;
     }
@@ -2487,7 +2987,7 @@ async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
   // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
   if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
-  const who = identityKey(state.me);
+  const who = identityKey(state.me), acts = personActs;
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
   form.querySelector('button[type="submit"]').disabled = true;
@@ -2519,7 +3019,7 @@ async function saveBrief(form) {
     }
     announce(message);
     render();
-    document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
+    reopenForTyping(document.querySelector("#brief-body"), acts);  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
   if (state.briefEdit === edit) state.briefEdit = null;
@@ -2561,7 +3061,7 @@ function useBriefRevision(room, revision, confirmed = false) {
                       shipAuthor: briefAuthorClass(room, item) === "ship" ? item.author_name : null };
   render();
   const box = document.querySelector("#brief-body");
-  if (box) { box.value = item.body; box.focus(); }
+  if (box) { box.value = item.body; focusForTyping(box); }
 }
 
 async function removeParticipant(id) {
@@ -2688,6 +3188,7 @@ async function logout() {
     state.assistance = {};
     state.sources = [];
     Research.reset(); Dashboard.reset();
+    forgetRevisions();
     state.editorIdentity = null;
     state.selectedChatId = null; state.room = null; state.board = null; state.composerNote = null; state.unsentIn = null; clearPressed();  // so no late answer finds a room to land in
     state.me = null;
@@ -2706,6 +3207,7 @@ async function logout() {
     state.profileDialog = !!state.home;  // the failed page has no dialog: the flash below says it
     if (!state.home) setFlash(`Sign-out could not be completed. ${reasonOf(error)}`, true);  // no dialog on the failed page
     render();
+    sayAgainInDialog("account-title");  // a second failed sign-out draws the same alert
   }
 }
 
@@ -2781,19 +3283,20 @@ async function bootstrap() {
     return;
   }
   try {
-    try {
-      state.demoAccounts = (await api("/api/local-demo")).accounts;
-    } catch (error) {
-      if (error.status !== 404) throw error;
-    }
-    try {
-      state.me = await api("/api/me");
-    } catch (error) {
-      if (error.status !== 401 || !isDemoAccount("patient")) throw error;
-      state.me = await demoLogin("patient");
-    }
+    // Both at once (fix:signed-in-load-in-one-wave), read in the order they were asked in one after the other.
+    const demo = settled(api("/api/local-demo")), me = settled(api("/api/me"));
+    const demoAnswer = await demo;
+    if ("error" in demoAnswer) {
+      if (demoAnswer.error.status !== 404) throw demoAnswer.error;
+    } else state.demoAccounts = demoAnswer.value.accounts;
+    const meAnswer = await me;
+    if (!("error" in meAnswer)) state.me = meAnswer.value;
+    else if (meAnswer.error.status !== 401 || !isDemoAccount("patient")) throw meAnswer.error;
+    else state.me = await demoLogin("patient");
     bindEditorIdentity(state.me);
-    await refresh();
+    readRoomEarly();
+    try { await refresh(); }
+    finally { earlyRoom = null; }  // the read was for this load: a refresh that never reached loadRoute leaves it, unread
   } catch (error) {
     showLogin(error.status === 401 ? "" : error.message);
   }
@@ -2801,6 +3304,7 @@ async function bootstrap() {
 
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
+  typedBox = null;  // a submit ends the typing: its own draw gives no caret back (keepTyping)
   const form = event.target;
   if (form.matches('.account-role-form')) {
     const account = state.accounts.find(row => row.id === form.dataset.id);
@@ -2838,7 +3342,7 @@ document.addEventListener("submit", async (event) => {
     return;
   }
   if (form.id === "reauth-form") {
-    const expectedId = state.me.id;
+    const expectedId = state.me.id, acts = personActs;
     try {
       let signedIn;
       if (isDemoAccount(state.me.username)) {
@@ -2858,7 +3362,10 @@ document.addEventListener("submit", async (event) => {
       render();
     } catch (error) {
       state.reauthError = error.message;
+      if (form.elements.password) form.elements.password.value = "";  // a repeat of the same refusal keeps the dialog: the wrong try goes
       render();
+      sayAgainInDialog("reauth-title");  // a repeat of the same refusal keeps the dialog, and its alert says it again
+      reopenForTyping(document.querySelector("#reauth-password"), acts);  // the next keys are a new try, unless the person moved on
     }
     return;
   }
@@ -2966,12 +3473,11 @@ document.addEventListener("click", async (event) => {
     render();  // the dialog opens at once, with the help text only if there is a brief
     const room = state.room, items = await openBoardItems(room);
     if (state.chatDialog !== "linked" || state.room?.id !== room.id) return;
-    state.chatBoard = items;  // fill in the slot only, so nothing the owner already ticked is redrawn
-    const slot = document.querySelector("dialog .carry-help-slot");
-    if (slot) slot.innerHTML = carryHelp(room);
+    state.chatBoard = items;
+    render();  // the help fills in; the dialog is drawn anew, and what the owner already ticked or typed is carried
   }
   if (action.startsWith("board-") && event.detail !== 0 && boardClickBlocked()) return;  // a key press (detail 0) is never a double click
-  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); document.querySelector("#board-outcome")?.focus(); }
+  if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); focusForTyping(document.querySelector("#board-outcome")); }
   if ((action === "board-drop" || action === "board-release") && state.room) {
     state.boardDone = null; state.boardAsk = { roomId: state.room.id, key: target.dataset.key, action: action.slice(6) };
     render();
@@ -3039,16 +3545,43 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (action === "app-receipts" || action === "app-receipts-earlier") await loadReceipts(target.dataset.id, action === "app-receipts-earlier");
-  if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if ((action === "remove-participant" || action === "cloud-clear") && state.room) {
+    state.roomAsk = { roomId: state.room.id, kind: action === "cloud-clear" ? "clear" : "remove", id: target.dataset.id };
+    render();
+    document.querySelector('.room-ask [data-action="room-ask-cancel"]')?.focus();  // the safe choice, not the one under the pointer
+  }
+  if (action === "room-ask-cancel" && state.roomAsk) {
+    const ask = state.roomAsk;
+    state.roomAsk = null;
+    render();
+    document.querySelector(ask.kind === "clear" ? '[data-action="cloud-clear"]' : `[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`)?.focus();
+  }
+  if (action === "remove-participant-confirm" && roomAskOnScreen("remove")?.id === target.dataset.id) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();  // the button that had it is gone until the answer
+    try { await removeParticipant(target.dataset.id); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    // not the page's top: the next one to remove, or the way to change who's here, or the button again if it failed
+    const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
+    if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
+  }
   if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
-  if (action === "cloud-clear" && state.room) await clearMark(state.room);
+  if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
+    const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
+    render();
+    app.querySelector('.room-ask[role="status"]')?.focus();
+    try { await clearMark(state.room); }
+    finally { if (state.roomAsk === ask) { state.roomAsk = null; render(); } }
+    if (state.room?.id === roomId) app.querySelector('[data-action="cloud-mark"], [data-action="cloud-clear"]')?.focus();
+  }
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
     state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", opened: brief?.body || "", status: "", error: false,
                         shipAuthor: brief && briefAuthorClass(state.room, brief) === "ship" ? brief.author_name : null };
     render();
-    document.querySelector("#brief-body")?.focus();
+    focusForTyping(document.querySelector("#brief-body"));
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "load-earlier") await loadEarlier();
@@ -3058,11 +3591,15 @@ document.addEventListener("click", async (event) => {
     const list = app.querySelector(".messages");
     if (list) { list.tabIndex = -1; list.focus({ preventScroll: true }); }
   }
-  if (action === "brief-history" && state.room) await openBriefHistory(state.room);
-  if (action === "hide-brief-history") { state.briefHistory = null; render(); }
+  // One action for both states, so the redraw finds the same button and gives it its focus back (keepControl); its label
+  // and aria-expanded say which way it goes (fix:toggle-keeps-focus; the reader's nit 3 on 69aac5b1).
+  if (action === "toggle-brief-history" && state.room) {
+    if (state.briefHistory?.roomId === state.room.id) { state.briefHistory = null; render(); }
+    else await openBriefHistory(state.room);
+  }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
-  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); document.querySelector("#brief-body")?.focus(); }
+  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); focusForTyping(document.querySelector("#brief-body")); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
@@ -3319,7 +3856,52 @@ async function submitTrust(form) {
   }
 }
 
+// A press is the same evidence of aim as a key (Tardis, all hands b22aaf6e), but only a press that completes. A finger
+// that pans to scroll sends pointerdown and then pointercancel, and the box being typed in must keep its caret through
+// the next redraw (the reader's CHANGES on a2451971, finding 1; Tardis's fix, 8f81d6f5). So the person's own primary
+// press is held from pointerdown and decides at its click, the moment the press guard decides too:
+// - a press that began on a typed box that now has the focus makes it the one a redraw may give the caret back to (a
+//   drag that selects words and ends just outside the box still began there);
+// - a press that began and ended on anything else, a label for a box included, clears that;
+// - a press a scroll or a long press's menu ended (pointercancel, contextmenu) has no click and changes nothing.
+// A trusted Tab or Shift+Tab is a key, so the box it focuses is the person's aim too, and a Tab to anything else clears
+// it (finding 2). A focus by autofocus or the app's own .focus() sets nothing. So the rule reads "the box the person
+// last aimed at, by a key, a completed press or Tab". (fix:unsaved-note-typing-flake: a redraw between the click into a
+// box and the first key sent that key, and every key after it, nowhere.)
+// - A press the guard above drops (one aimed at the room drawn before) never reaches the click listener here, so it
+//   sets and clears nothing; the guard's listener must stay first.
+// - A known gap: a redraw between a mouse press's pointerdown and its click (about a click's length) still finds no
+//   owner, as before this rule, and as the guard drops a press the room drew under (the re-check's nit 2, ecce414f).
+// - pointercancel and contextmenu are belt and braces: a cancelled press has no click, and every real click begins
+//   with a pointerdown that resets the press (Tardis, ee0c07b5).
+let pressing = null;  // the person's own primary press, from pointerdown until its click or its cancel
+let tabbing = false;  // a trusted Tab was just pressed, so the focus it moves is the person's aim
+document.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary) return;  // a second finger's press neither stands in for the first's nor ends it, as the guard
+  pressing = event.isTrusted && event.button === 0 ? event.target : null;
+}, true);
+document.addEventListener("pointercancel", (event) => { if (event.isPrimary) pressing = null; }, true);
+document.addEventListener("contextmenu", () => { pressing = null; }, true);
+document.addEventListener("click", (event) => {
+  const began = pressing;
+  pressing = null;
+  if (!event.isTrusted || event.detail === 0 || !began) return;  // a key's click, or element.click(): no press
+  if (typedBoxRule(began) && began === document.activeElement) typedBox = began;
+  else if (began === event.target) typedBox = null;
+}, true);
+document.addEventListener("keydown", (event) => {
+  tabbing = event.isTrusted && event.key === "Tab";
+  // The Tab's own focus move happens in this task, so the mark ends with it: a Tab held down doesn't make the app's own
+  // .focus() later on look like the person's aim (the re-check's nit 1).
+  if (tabbing) setTimeout(() => { tabbing = false; }, 0);
+}, true);
+document.addEventListener("keyup", (event) => { if (event.key === "Tab") tabbing = false; }, true);
+document.addEventListener("focusin", (event) => {
+  if (tabbing) typedBox = typedBoxRule(event.target) ? event.target : null;
+}, true);
+
 document.addEventListener("input", (event) => {
+  typedBox = event.target;  // the box a redraw may give the caret back to (keepTyping)
   Research.remember(event.target); Dashboard.input(event.target);
   if (event.target.id === "brief-body" && state.briefEdit) {
     state.briefEdit.body = event.target.value;
@@ -3348,7 +3930,9 @@ document.addEventListener("input", (event) => {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
   }
-  if (event.target.closest("#layer-form")) rememberLayerForm();
+  // The form the input came from, never whichever one is on screen (Tardis, all hands 98b9000c). It's the same today:
+  // an input from a box a redraw replaced never reaches the document, and a page has one #layer-form. It says what's meant.
+  if (event.target.closest("#layer-form")) rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "message-body") {
     const roomId = event.target.form.dataset.room;  // the room on screen: see sendMessage
     const previous = readChatDraft(roomId);
@@ -3360,7 +3944,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
-  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
+  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm(event.target.closest("#layer-form"));
   if (event.target.id === "layer-kind" && !editorSwitching()) {
     const edit = currentLayerEdit();
     if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }
@@ -3379,7 +3963,20 @@ document.addEventListener("change", async (event) => {
   }
 });
 
-document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
+// A link that was followed: one whose own listener prevented it (the skip link) leaves nothing, so it marks nothing.
+document.addEventListener("click", (event) => { if (!event.defaultPrevented && event.target.closest?.('a[href^="#"]')) leftByLink = true; });
+
+// The skip link moves the focus to this page's main region and leaves the address alone. Its #main-content is no route:
+// as an address, routeParts reads it as an unknown one and draws Home, so pressed from Grants it left Grants and dropped
+// the focus on the page (fix:skip-link-draws-home; the reader's nit 5 on 69aac5b1). Without JavaScript it's a plain
+// anchor, and works as one. The sign-in page's main has no tabindex, so it gets one to take the focus.
+document.querySelector(".skip-link")?.addEventListener("click", (event) => {
+  const main = document.getElementById("main-content");
+  if (!main) return;
+  event.preventDefault();
+  if (!main.hasAttribute("tabindex")) main.setAttribute("tabindex", "-1");
+  main.focus();
+});
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
