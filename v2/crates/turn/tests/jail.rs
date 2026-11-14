@@ -892,12 +892,15 @@ libproc = c.CDLL("/usr/lib/libproc.dylib", use_errno=True)
 buf = c.create_string_buffer(4096)
 said.append("path-of-other:" + ("told" if libproc.proc_pidpath(other, buf, 4096) > 0 else "refused"))
 said.append("path-of-self:" + ("told" if libproc.proc_pidpath(os.getpid(), buf, 4096) > 0 else "refused"))
-# Another process's arguments and environment.
-mib = (c.c_int * 3)(1, 49, other)
-buf = c.create_string_buffer(262144)
-n = c.c_size_t(len(buf))
-raw = buf.raw[: n.value] if lib.sysctl(mib, 3, buf, c.byref(n), None, 0) == 0 else b""
-said.append("environment-of-other:" + ("read" if b"YAK_JAIL_CANARY=FAKE_ONLY" in raw else "refused"))
+# Another process's arguments and environment, asked for by each of the two numbers the kernel has for them.
+def environment(number):
+    mib = (c.c_int * 3)(1, number, other)
+    buf = c.create_string_buffer(262144)
+    n = c.c_size_t(len(buf))
+    raw = buf.raw[: n.value] if lib.sysctl(mib, 3, buf, c.byref(n), None, 0) == 0 else b""
+    return b"YAK_JAIL_CANARY=FAKE_ONLY" in raw
+read = [environment(49), environment(38)]
+said.append("environment-of-other:" + ("read" if all(read) else "refused" if not any(read) else "read-one-way"))
 print(" ".join(said))
 "#;
 

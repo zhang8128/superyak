@@ -578,17 +578,39 @@ impl Sandbox {
         })
     }
 
-    /// Removes the sandbox's directory, even where a worker took away its own write permission.
+    /// Removes the sandbox: the clone that was made, even where a worker took away its own write permission,
+    /// and the scratch directory a jailed run was given. Only those. If something else is at either path by
+    /// now, it is not the room's to remove: it is left as it is, the rest is still removed, and the error says
+    /// what was left.
     pub fn destroy(self) -> Result<(), TurnError> {
+        let mut left = Vec::new();
         let scratch = self.scratch();
-        if fs::symlink_metadata(&scratch).is_ok() {
-            remove_tree(&scratch)?;
+        // The scratch directory, when a jailed run made one and it is still that one.
+        match self.scratch_id.get() {
+            Some(&id) if identity(&scratch).ok() == Some(id) => remove_tree(&scratch)?,
+            Some(_) if fs::symlink_metadata(&scratch).is_ok() => left.push(scratch.clone()),
+            _ => {}
         }
-        // The Linux jail's filter file, beside the scratch directory.
+        // The Linux jail's filter, a file beside the scratch directory.
         let mut filter = scratch.into_os_string();
         filter.push(".filter");
-        clear(Path::new(&filter))?;
-        remove_tree(&self.dir)
+        let filter = PathBuf::from(filter);
+        if fs::symlink_metadata(&filter).is_ok_and(|meta| meta.is_file()) {
+            fs::remove_file(&filter).map_err(io("remove the jail's filter"))?;
+        }
+        if identity(&self.dir).ok() == Some(self.id) {
+            remove_tree(&self.dir)?;
+        } else if fs::symlink_metadata(&self.dir).is_ok() {
+            left.push(self.dir.clone());
+        }
+        if left.is_empty() {
+            return Ok(());
+        }
+        let left: Vec<String> = left.iter().map(|p| p.display().to_string()).collect();
+        Err(TurnError::Refused(format!(
+            "not removed, because it is not what the room made there: {}",
+            left.join(", ")
+        )))
     }
 }
 
@@ -862,24 +884,38 @@ fn output(command: Command, what: &str) -> Result<Vec<u8>, TurnError> {
     output_within(command, what, Duration::from_secs(ROOM_GIT_SECS))
 }
 
-/// Runs `command` for at most `limit` and returns its stdout. One that is still going then is ended, and that
-/// is an error: the room's own git reads repositories a worker has had its hands on, and must not wait on one
-/// for ever.
+/// Runs the room's git, as `safe_git` made it and with what the caller added, for at most `ROOM_GIT_SECS`, and
+/// returns its stdout. For the clock's own fetch: one runner, so one limit.
+pub fn safe_git_output(command: Command, what: &str) -> Result<Vec<u8>, TurnError> {
+    output(command, what)
+}
+
+/// Runs `command` for at most `limit` and returns its stdout. The room's own git reads repositories a worker
+/// has had its hands on, and must not wait on one for ever.
+///
+/// The limit covers everything: the program, and its output, which something the program started may hold
+/// open after the program itself is done. The program runs in a group of its own, and when the limit passes
+/// the whole group is ended, so nothing it started is left.
 fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Vec<u8>, TurnError> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(io("start git"))?;
-    // Each pipe is read on its own thread, so a full one never holds the program up.
+    let group = child.id();
+    // Each pipe is read on its own thread, so a full one never holds the program up, and hands over what it
+    // read when the pipe closes.
     let read = |pipe: Option<Box<dyn Read + Send>>| {
+        let (done, wait) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             let mut bytes = Vec::new();
             if let Some(mut pipe) = pipe {
                 let _ = pipe.read_to_end(&mut bytes);
             }
-            bytes
-        })
+            let _ = done.send(bytes);
+        });
+        wait
     };
     let stdout = read(
         child
@@ -894,6 +930,15 @@ fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Ve
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
     );
     let deadline = Instant::now() + limit;
+    let late = |child: &mut Child| {
+        signal_group(group, "KILL");
+        let _ = child.kill();
+        let _ = child.wait();
+        TurnError::Git(format!(
+            "{what} did not finish in {} seconds and was ended",
+            limit.as_secs()
+        ))
+    };
     // git usually answers in a few milliseconds, so the first looks come quickly and the later ones less often.
     let mut pause = Duration::from_millis(1);
     let status = loop {
@@ -903,22 +948,21 @@ fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Ve
                 thread::sleep(pause);
                 pause = (pause * 2).min(POLL);
             }
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                // The readers are left to end by themselves: something the program started may hold a pipe.
-                return Err(TurnError::Git(format!(
-                    "{what} did not finish in {} seconds and was ended",
-                    limit.as_secs()
-                )));
-            }
+            Ok(None) | Err(_) => return Err(late(&mut child)),
         }
     };
-    let stdout = stdout.join().unwrap_or_default();
+    let left = |deadline: Instant| deadline.saturating_duration_since(Instant::now());
+    let Ok(stdout) = stdout.recv_timeout(left(deadline)) else {
+        return Err(late(&mut child));
+    };
+    let Ok(stderr) = stderr.recv_timeout(left(deadline)) else {
+        return Err(late(&mut child));
+    };
+    // The program is done and so is its output. Anything it left in its group goes with it.
+    signal_group(group, "KILL");
     if status.success() {
         return Ok(stdout);
     }
-    let stderr = stderr.join().unwrap_or_default();
     let stderr = String::from_utf8_lossy(&stderr);
     let stderr: String = stderr.trim().chars().take(300).collect();
     Err(TurnError::Git(format!("{what} failed: {stderr}")))
@@ -1078,6 +1122,33 @@ mod tests {
             "{ended:?}"
         );
         assert!(start.elapsed() < Duration::from_secs(5));
+        // A leader that is done at once, while something it started keeps the pipe: the limit still holds,
+        // and what it started is ended with it.
+        let mut leaves_one = Command::new("/bin/sh");
+        leaves_one.args(["-c", "sleep 37.123 & echo started"]);
+        let start = Instant::now();
+        let ended = output_within(leaves_one, "a read", Duration::from_millis(500));
+        assert!(
+            matches!(&ended, Err(TurnError::Git(why)) if why.contains("did not finish")),
+            "{ended:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
+        thread::sleep(Duration::from_millis(300));
+        // Looked for by its whole command, and not by a piece of text: a search for the text would also find
+        // whatever shell was told to run this test by name.
+        let all = Command::new("ps")
+            .args(["-Ao", "command="])
+            .output()
+            .unwrap();
+        let left = String::from_utf8_lossy(&all.stdout)
+            .lines()
+            .filter(|command| command.trim() == "sleep 37.123")
+            .count();
+        assert_eq!(left, 0, "the sleeper is still running");
         // One that finishes in time gives its output, and one that fails says why.
         let mut quick = Command::new("/bin/sh");
         quick.args(["-c", "echo out"]);

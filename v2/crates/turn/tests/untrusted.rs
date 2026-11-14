@@ -328,7 +328,8 @@ fn a_run_is_shown_the_tools_named_for_it_and_none_of_the_homes_secrets() {
         e = at("codex/auth.json"),
         home = quote(&home.dir),
     );
-    let toolchain = home.dir.join(".cargo");
+    // The tool's own directory is named, and not the one above it that also holds the credentials.
+    let toolchain = home.dir.join(".cargo/bin");
     let agent = home.dir.join(".cargo/agent");
     let codex = home.dir.join("codex");
     let variables: [(&str, &Path); 4] = [
@@ -371,9 +372,16 @@ fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
     let missing = home.dir.join("no-such-tools");
     let keys = home.dir.join(".ssh");
     let key = home.dir.join(".ssh/id");
+    // A directory that holds a secret, and one that only could: nothing is at `.local/share` in this home, and
+    // the jail is given the directory above it as it is at this moment, not as it will be.
+    let holds_one = home.dir.join(".cargo");
+    let could_hold_one = home.dir.join(".local");
+    fs::create_dir(&could_hold_one).unwrap();
     for (named, why) in [
         (keys.as_path(), "is hidden"),
         (key.as_path(), "is hidden"),
+        (holds_one.as_path(), "would also show"),
+        (could_hold_one.as_path(), "would also show"),
         (home.dir.as_path(), "holds the home directory"),
         (above.as_path(), "holds the home directory"),
         (Path::new("tools/bin"), "not an absolute path"),

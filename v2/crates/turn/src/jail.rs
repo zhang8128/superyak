@@ -13,6 +13,24 @@
 //! `tests/jail.rs` holds the measurement. On Linux a jailed run's processes are numbered apart and it sees
 //! no other.
 //!
+//! **Whom the jail holds, and whom it does not.** The jail is for code the room runs and did not write: a
+//! check's command, a script worker, and the room's own git in a tree a worker has had its hands on. A model
+//! worker (`claude:`, `codex:`) is not put in this jail. It runs under its own program's sandbox, which the room
+//! sets to let it write in its clone and nowhere else of the room's. The room's own files (`turns/`, `checks/`,
+//! the store) are therefore safe from a jailed run by this module, and from a model worker only as far as that
+//! program's sandbox holds. Where the room trusts one of those files it says so: a run's record is acted on
+//! only for an attempt the room made, and a sandbox is removed only if it is still the directory the room made.
+//! Those checks raise the bar against a file put there from outside; they are not a wall against a process
+//! with the person's own authority.
+//!
+//! **What "the same directory" means.** A sandbox remembers which directory it made, by device and number, and
+//! looks again before each run and before removing it. That catches a directory swapped between two runs. It
+//! does not hold a directory still while a run is going; the jail's own rules do that for a jailed run.
+//!
+//! **Writing, on Linux.** A jailed run there also has an empty `/tmp`, `/run` and `/dev` of its own, and can
+//! write in them. They are the run's alone, in memory, and gone with it. Nothing written there reaches the
+//! machine's own.
+//!
 //! On macOS this is `sandbox-exec` with a profile that denies by default. On Linux it is `bwrap` with only the
 //! system directories and what is named visible, every namespace private, and nothing it started able to
 //! outlive it. With neither tool, `Jail::new` refuses. Nothing here falls back to running unjailed.
@@ -211,9 +229,11 @@ fn wanted_from(value: Option<&str>) -> bool {
 /// for a toolchain outside the system directories. The home's keys and tokens, and the directories the agent
 /// programs keep their settings in, stay hidden whatever is shown.
 ///
-/// A path in `YAK_JAIL_READ` is refused when it is not absolute, is not there, holds the home directory, or
-/// is hidden: one that was silently left out would look like a missing tool, and the home would show
-/// everything the jail is for.
+/// A path in `YAK_JAIL_READ` is refused when it is not absolute, is not there, holds the home directory, is
+/// hidden, or holds a place where keys or settings are kept, whether or not anything is there yet. One that
+/// was silently left out would look like a missing tool, and the home would show everything the jail is for.
+/// So a toolchain is named by its own directory (`~/.cargo/bin`), not by one above it (`~/.cargo`, which is
+/// also where a credentials file goes).
 pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
     let settings = Settings::read()?;
     let mut jail = Jail::new(checkout, scratch)?;
@@ -273,8 +293,11 @@ impl Settings {
                         .into(),
                 )
             })?;
+        // Every protected name, whether or not anything is there now, and those that are there as real paths.
+        let mut protected = Vec::new();
         let mut hidden = Vec::new();
         let mut hide = |path: &Path| -> Result<(), TurnError> {
+            protected.push(path.to_path_buf());
             if path.exists() {
                 hidden.push(real_path(path)?);
             }
@@ -315,6 +338,20 @@ impl Settings {
                     return Err(refuse(&format!(
                         "which is hidden from every run: {} holds keys or settings",
                         hidden.display()
+                    )));
+                }
+                // A jail is given a directory as it is when the run starts. A secret that appears in it
+                // afterwards would be shown with the rest, and on Linux cannot be covered once the run is
+                // going. So a directory that holds a protected name, or could, is not named at all.
+                if let Some(inside) = protected
+                    .iter()
+                    .chain(&hidden)
+                    .find(|protected| protected.starts_with(&real))
+                {
+                    return Err(refuse(&format!(
+                        "which would also show {}, where keys or settings are kept, if that is ever there: \
+                         name the tool's own directory inside it",
+                        inside.display()
                     )));
                 }
                 shown.push(real_path(&real)?);

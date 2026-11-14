@@ -837,3 +837,56 @@ fn a_running_check_has_a_record_beside_its_work_directory() {
     assert!(seen.1, "the record named no running group");
     assert!(!record.exists(), "the record outlived the check");
 }
+
+/// Removing a sandbox removes the directory that was made, and its scratch directory. If something else is at
+/// either path by then, it is not the room's to remove: it is left as it is, and the room says so.
+#[test]
+fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
+    // The clone replaced by another directory.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let at = sb.dir.clone();
+    std::fs::rename(&at, repo.scratch("moved-away")).unwrap();
+    std::fs::create_dir(&at).unwrap();
+    std::fs::write(at.join("canary"), "KEEP").unwrap();
+    assert!(matches!(sb.destroy(), Err(TurnError::Refused(_))));
+    assert_eq!(std::fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
+
+    // The scratch directory replaced by another directory; the clone is still the room's and goes.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let status = sb
+        .run_untrusted("sh", &strings(&["-c", "true"]), "", 30, &mut |_| {})
+        .unwrap();
+    assert_eq!(status.exit_code, 0);
+    let mut name = sb.dir.file_name().unwrap().to_os_string();
+    name.push(".scratch");
+    let scratch = sb.dir.with_file_name(name);
+    std::fs::rename(&scratch, repo.scratch("moved-scratch")).unwrap();
+    std::fs::create_dir(&scratch).unwrap();
+    std::fs::write(scratch.join("canary"), "KEEP").unwrap();
+    let clone = sb.dir.clone();
+    assert!(matches!(sb.destroy(), Err(TurnError::Refused(_))));
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("canary")).unwrap(),
+        "KEEP"
+    );
+    assert!(
+        !clone.exists(),
+        "the clone, which was the room's, is still there"
+    );
+
+    // A scratch path the room never made anything at is not touched either.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let mut name = sb.dir.file_name().unwrap().to_os_string();
+    name.push(".scratch");
+    let scratch = sb.dir.with_file_name(name);
+    std::fs::create_dir(&scratch).unwrap();
+    std::fs::write(scratch.join("canary"), "KEEP").unwrap();
+    let _ = sb.destroy();
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("canary")).unwrap(),
+        "KEEP"
+    );
+}
