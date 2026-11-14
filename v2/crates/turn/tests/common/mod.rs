@@ -129,6 +129,40 @@ pub fn pid_alive(pid: u32) -> bool {
     kill_zero(&pid.to_string())
 }
 
+pub struct EndOnDrop(pub u32);
+
+pub struct EndGroupOnDrop(pub std::process::Child);
+
+impl Drop for EndGroupOnDrop {
+    fn drop(&mut self) {
+        let group = self.0.id();
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{group}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = self.0.wait();
+        let _ = wait_until(Instant::now() + Duration::from_secs(2), || {
+            !group_alive(group)
+        });
+    }
+}
+
+impl Drop for EndOnDrop {
+    fn drop(&mut self) {
+        if pid_alive(self.0) {
+            let _ = Command::new("kill")
+                .args(["-KILL", &self.0.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = wait_until(Instant::now() + Duration::from_secs(2), || {
+                !pid_alive(self.0)
+            });
+        }
+    }
+}
+
 /// Whether any process remains in this process group.
 pub fn group_alive(pgid: u32) -> bool {
     kill_zero(&format!("-{pgid}"))

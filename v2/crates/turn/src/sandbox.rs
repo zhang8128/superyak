@@ -1,10 +1,8 @@
 //! A turn's sandbox: a local clone with no remote, a scrubbed environment, and runs that end with everything
 //! they started.
 //!
-//! Each run gets its own process group. Ending one is SIGTERM to the group, up to `TERM_GRACE_SECS` for its
-//! leader to go, then SIGKILL to the group: the idea of `_end_group` in `agent/superyak_agent/runs.py`. With no
-//! `unsafe`, the signal is sent by the `kill` program. A run whose leader exits on its own also has whatever it
-//! left in its group killed, so a background job can neither outlive the turn nor hold its output pipe open.
+//! Each run gets its own process group and random environment marker. Supervision records observed
+//! descendants by process identity and confirms their cleanup, including after normal exit.
 
 use std::ffi::OsString;
 use std::fs;
@@ -20,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use room::limits::TERM_GRACE_SECS;
 
+use crate::process::{Identity, Supervisor, marker};
 use crate::{TurnError, io};
 
 /// The longest line a run hands over. The rest of a longer line is dropped, so one line without an end cannot
@@ -174,14 +173,8 @@ impl Sandbox {
         rev_parse(&self.dir, &format!("refs/heads/{}", self.branch))
     }
 
-    /// Takes the clone's git directory back from the worker, so that git run by the room there (to commit what an
-    /// agent left, to read the branch, to fetch it) runs nothing the worker planted. A worker can name programs in
-    /// its clone's config (a filter driver, a filesystem monitor, a pager), add a second config through
-    /// `config.worktree`, or point git at another repository with `commondir` or by swapping `.git` for a link;
-    /// the room's git runs outside the worker's own sandbox, so any of those would escape it. This refuses a
-    /// `.git`, `objects` or `refs` that is no longer a real directory, removes `commondir`, `config.worktree`,
-    /// alternates and a stale index lock, writes the room's own copy of the config back, and points HEAD at the
-    /// turn's branch again. The room's git also ignores system and global config and runs no hooks.
+    /// Restores the room's git configuration and branch after confirming that all metadata paths are plain.
+    /// The room's git ignores system and global config, writes no reflogs and runs no hooks.
     pub fn reclaim(&self) -> Result<(), TurnError> {
         let git_dir = self.dir.join(".git");
         for dir in [
@@ -196,6 +189,20 @@ impl Sandbox {
                 )));
             }
         }
+        let mut pending = vec![git_dir.clone()];
+        while let Some(path) = pending.pop() {
+            let meta = fs::symlink_metadata(&path).map_err(io("inspect git metadata"))?;
+            if meta.is_symlink() {
+                return Err(TurnError::Refused(
+                    "git metadata must contain no symbolic links".into(),
+                ));
+            }
+            if meta.is_dir() {
+                for entry in fs::read_dir(path).map_err(io("read git metadata"))? {
+                    pending.push(entry.map_err(io("read git metadata entry"))?.path());
+                }
+            }
+        }
         let info = git_dir.join("objects").join("info");
         if fs::symlink_metadata(&info).is_ok_and(|m| !m.is_dir()) {
             clear(&info)?;
@@ -207,6 +214,7 @@ impl Sandbox {
             "index.lock",
             "config",
             "HEAD",
+            "logs",
         ] {
             clear(&git_dir.join(name))?;
         }
@@ -217,10 +225,73 @@ impl Sandbox {
         )
     }
 
-    /// From now on, each run writes its process group id to `path` as decimal text as soon as it starts, and
-    /// removes the file when it ends. The clock keeps it beside the sandbox, not inside the clone.
+    /// Requires a single repository and an index containing only ordinary entries.
+    pub(crate) fn single_repository(&self) -> Result<(), TurnError> {
+        let mut pending = vec![self.dir.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).map_err(io("read the work tree"))? {
+                let entry = entry.map_err(io("read a work tree entry"))?;
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(".git")
+                {
+                    if dir == self.dir {
+                        continue;
+                    }
+                    return Err(TurnError::Refused(
+                        "the work tree must contain a single repository".into(),
+                    ));
+                }
+                if entry
+                    .file_type()
+                    .map_err(io("inspect a work tree entry"))?
+                    .is_dir()
+                {
+                    pending.push(entry.path());
+                }
+            }
+        }
+        self.ordinary_index()
+    }
+
+    pub(crate) fn ordinary_index(&self) -> Result<(), TurnError> {
+        let entries = git(&self.dir, &["ls-files", "--stage", "-z"])?;
+        if entries
+            .split(|&b| b == 0)
+            .any(|entry| entry.starts_with(b"160000 "))
+        {
+            return Err(TurnError::Refused(
+                "the index must contain no gitlinks".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Each run atomically writes its group and leader start time, one per line, to this path, and
+    /// removes the file after confirmed cleanup. The clock keeps it beside the clone.
     pub fn set_pid_file(&mut self, path: PathBuf) {
         self.pid_file = Some(path);
+    }
+
+    /// Recovers a run after a clock restart, confirming the stored leader identity before signalling its
+    /// observed descendants. An absent or changed leader identity results in no signals.
+    pub fn end_stale(pid_file: &Path) -> Result<bool, TurnError> {
+        let Some(identity) = Identity::read(pid_file)? else {
+            return Ok(false);
+        };
+        match Supervisor::recover(identity)? {
+            None => Ok(false),
+            Some(mut supervisor) => {
+                let ended = supervisor.end()?;
+                match fs::remove_file(pid_file) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io("remove the recovered pid file")(e)),
+                }
+                Ok(ended)
+            }
+        }
     }
 
     /// Runs `program` in the sandbox with the scrubbed environment, in its own process group, for at most
@@ -236,11 +307,20 @@ impl Sandbox {
         on_line: &mut dyn FnMut(&str),
     ) -> Result<RunStatus, TurnError> {
         let launch = Launch::new(program, args, limit_secs);
+        let marker = marker()?;
         let (reader, writer) = std::io::pipe().map_err(io("make a pipe"))?;
-        let mut command = scrubbed(&launch.program);
+        // The leader waits on stdin until its identity has been recorded, then exec preserves that identity.
+        let mut command = scrubbed("sh");
         command
+            .args([
+                "-c",
+                "IFS= read -r yak_start || exit 125; exec \"$@\"",
+                "yak-run",
+            ])
+            .arg(&launch.program)
             .args(&launch.args)
             .envs(launch.env)
+            .env("YAK_TURN", &marker)
             .current_dir(&self.dir)
             .stdin(Stdio::piped())
             .stdout(writer.try_clone().map_err(io("make a pipe"))?)
@@ -250,7 +330,14 @@ impl Sandbox {
         // The command holds the pipe's write ends; until it is gone the pipe never reaches its end.
         drop(command);
         let group = child.id();
-        let _pid_file = match PidFile::write(self.pid_file.as_deref(), group) {
+        let mut supervisor = match Supervisor::start(group) {
+            Ok(supervisor) => supervisor,
+            Err(e) => {
+                end_group(&mut child, group);
+                return Err(e);
+            }
+        };
+        let mut pid_file = match PidFile::write(self.pid_file.as_deref(), &supervisor.identity) {
             Ok(file) => file,
             Err(e) => {
                 end_group(&mut child, group);
@@ -258,7 +345,7 @@ impl Sandbox {
             }
         };
         if let Some(mut input) = child.stdin.take() {
-            let input_text = stdin.to_string();
+            let input_text = format!("\n{stdin}");
             // A child that never reads its stdin must not hold the run up, so the write has its own thread.
             thread::spawn(move || {
                 let _ = input.write_all(input_text.as_bytes());
@@ -270,6 +357,13 @@ impl Sandbox {
         let deadline = Instant::now() + Duration::from_secs(u64::from(limit_secs));
         let mut timed_out = false;
         let status = loop {
+            if let Err(e) = supervisor.poll() {
+                end_group(&mut child, group);
+                if supervisor.end().is_ok() {
+                    pid_file.remove();
+                }
+                return Err(e);
+            }
             let now = Instant::now();
             if now >= deadline {
                 timed_out = true;
@@ -293,6 +387,9 @@ impl Sandbox {
                 Ok(None) => {}
                 Err(e) => {
                     end_group(&mut child, group);
+                    if supervisor.end().is_ok() {
+                        pid_file.remove();
+                    }
                     return Err(io("wait for the run")(e));
                 }
             }
@@ -300,6 +397,8 @@ impl Sandbox {
                 thread::sleep(wait);
             }
         };
+        supervisor.end()?;
+        pid_file.remove();
         drain(&rx, on_line);
         Ok(RunStatus {
             exit_code: exit_code(status),
@@ -358,7 +457,7 @@ impl Drop for Remove {
 struct PidFile(Option<PathBuf>);
 
 impl PidFile {
-    fn write(path: Option<&Path>, group: u32) -> Result<PidFile, TurnError> {
+    fn write(path: Option<&Path>, identity: &Identity) -> Result<PidFile, TurnError> {
         let Some(path) = path else {
             return Ok(PidFile(None));
         };
@@ -366,16 +465,14 @@ impl PidFile {
         let mut partial = path.as_os_str().to_owned();
         partial.push(".partial");
         let partial = PathBuf::from(partial);
-        fs::write(&partial, group.to_string()).map_err(io("write the pid file"))?;
+        write_new(&partial, identity.text().as_bytes())?;
         fs::rename(&partial, path).map_err(io("write the pid file"))?;
         Ok(PidFile(Some(path.to_path_buf())))
     }
-}
 
-impl Drop for PidFile {
-    fn drop(&mut self) {
-        if let Some(path) = &self.0 {
-            let _ = fs::remove_file(path);
+    fn remove(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -498,13 +595,19 @@ pub(crate) fn scrubbed(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 /// Flags for every git the room runs: no hooks, no filesystem monitor, no attributes file of the user's.
-pub(crate) const SAFE_GIT_FLAGS: [&str; 6] = [
+pub(crate) const SAFE_GIT_FLAGS: [&str; 12] = [
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
     "core.fsmonitor=false",
     "-c",
     "core.attributesFile=/dev/null",
+    "-c",
+    "core.logAllRefUpdates=false",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "diff.ignoreSubmodules=all",
 ];
 
 /// And no system or global config, where a driver for an attribute could be named.

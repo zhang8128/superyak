@@ -369,6 +369,7 @@ impl Drop for Removed<'_> {
 /// group with a limit.
 fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError> {
     sandbox.reclaim()?;
+    sandbox.single_repository()?;
     let git = |args: &[&str], on_line: &mut dyn FnMut(&str)| -> Result<(), TurnError> {
         // Through `env`, since a run's environment is the scrubbed one.
         let mut argv: Vec<String> = SAFE_GIT_ENV
@@ -389,13 +390,19 @@ fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError
     };
     let mut changed = false;
     git(
-        &["status", "--porcelain", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=all",
+        ],
         &mut |line| changed |= !line.is_empty(),
     )?;
     if !changed {
         return Ok(());
     }
     git(&["add", "-A"], &mut |_| {})?;
+    sandbox.ordinary_index()?;
     let message = format!(
         "Turn by {worker}, committed by the room.\n\nMade by {worker}.\nCo-Authored-By: {coauthor}"
     );

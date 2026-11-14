@@ -5,6 +5,7 @@
 
 pub mod check;
 pub mod jail;
+mod process;
 pub mod sandbox;
 pub mod transcript;
 pub mod worker;
