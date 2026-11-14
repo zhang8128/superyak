@@ -162,7 +162,10 @@ fn json_num(text: &str, key: &str) -> Option<i64> {
 
 /// The item's `attempts` in `yak item show ID --json` (task 10).
 fn attempts(r: &Room, id: &str) -> Option<i64> {
-    json_num(&ok(&yak(&r.room, &["item", "show", id, "--json"])), "attempts")
+    json_num(
+        &ok(&yak(&r.room, &["item", "show", id, "--json"])),
+        "attempts",
+    )
 }
 
 fn state(r: &Room, id: &str) -> String {
