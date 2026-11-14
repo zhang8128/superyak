@@ -2228,6 +2228,32 @@ function keepTyping(typing) {
   typedBox = again;
 }
 
+// A button, a select, or a tick box, radio or file input the person was on, drawn again for the same drawing in the same
+// place: the redraw gives it its focus back, so a keyboard user's next Tab goes on from where they were, not from the top
+// of the page (fix:redraw-keeps-control-focus). Those only, since none takes words: a typed box stays keepTyping's, which
+// asks for the person's aim, and a number or date box isn't one of these, since a submit's draw must leave it unfocused,
+// as it does a text box, so a phone's keyboard closes and the next digits don't land in the next draft (the reader's
+// Should 1 on 69aac5b1). Headings and main, which the app focuses itself, aren't controls either. A control is found
+// again by its id, or, as buttons have none, by its tag and data-action; its chain (boxChain, which holds its own data-id
+// and every parent's marks) must be the same, and only one control may match it, so two alike never take a guess. A
+// control with neither an id nor a data-action isn't found again, and a dialog keeps its own return (dialogReturn).
+const CONTROL_INPUTS = new Set(["checkbox", "radio", "file"]);
+
+function controlIn(node) {
+  if (!node || !app.contains(node)) return null;
+  if (!(node.tagName === "BUTTON" || node.tagName === "SELECT" || (node.tagName === "INPUT" && CONTROL_INPUTS.has(node.type)))) return null;
+  if (!node.id && !node.dataset.action) return null;
+  return { id: node.id, action: node.dataset.action, tag: node.tagName, chain: boxChain(node) };
+}
+
+function keepControl(control) {
+  const candidates = control.id ? [document.getElementById(control.id)]
+    : [...app.querySelectorAll(`${control.tag}[data-action="${CSS.escape(control.action)}"]`)];
+  const same = candidates.filter((again) => again && app.contains(again) && again.tagName === control.tag
+    && !again.matches(":disabled") && boxChain(again) === control.chain);
+  if (same.length === 1) same[0].focus({ preventScroll: true });
+}
+
 // A redraw never rebuilds a dialog the person is in (fix:dialog-redraw-loses-typed-words; Tardis, all hands d9907cf4 and
 // 1b0d489c, keyed on the markup in 751ada42). render() still writes each dialog into the page's markup, and drawDialogs
 // moves them into their own root beside #app. While the dialogs a render draws are, markup for markup, the ones that drew
@@ -2379,6 +2405,7 @@ function render() {
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   const drawn = drawingFor();
   const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
+  const control = !hadDialog && drawn === drawnFor && !typing ? controlIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
@@ -2390,6 +2417,7 @@ function render() {
   const dialogs = drawDialogs();
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   if (typing && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepTyping(typing);
+  else if (control && !dialogs.length && (!document.activeElement || document.activeElement === document.body)) keepControl(control);
   drawnFor = drawn;
   const drawing = route === "chats" && state.room ? state.room.id : null;
   if (drawing && drawing !== roomDrawn) { roomMovedAt = roomDrawnAt = performance.now(); showNewestMessage(); }  // a whole room is new under the pointer
