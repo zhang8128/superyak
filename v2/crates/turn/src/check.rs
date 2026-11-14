@@ -151,14 +151,24 @@ fn judge(
     })
 }
 
-/// The SHA-256 of the command, a newline, then each file sorted by path as the path, a NUL, the hex SHA-256 of
-/// its content and a newline.
+/// A check's identity: the SHA-256 of `v2`, a newline, the command, a newline, then each file sorted by path
+/// as the path, a NUL, its mode as six octal digits, a NUL, the hex SHA-256 of its content and a newline.
+///
+/// The mode is part of it. The same bytes with and without the executable bit are two checks: a command that
+/// runs every executable test it finds would skip one whose bit was taken away.
 fn hash_of(command: &str, files: &[CheckFile]) -> String {
     let mut hash = Sha256::new();
+    hash.update(b"v2\n");
     hash.update(command.as_bytes());
     hash.update(b"\n");
     for file in files {
         hash.update(file.path.as_bytes());
+        hash.update([0]);
+        hash.update(if file.executable {
+            b"100755"
+        } else {
+            b"100644"
+        });
         hash.update([0]);
         hash.update(hex(&Sha256::digest(&file.content)).as_bytes());
         hash.update(b"\n");
@@ -326,4 +336,47 @@ fn write_new(at: &PathBuf, file: &CheckFile) -> Result<(), TurnError> {
     out.write_all(&file.content).map_err(io(what()))?;
     // The mode exactly, whatever the umask took away.
     fs::set_permissions(at, fs::Permissions::from_mode(mode)).map_err(io(what()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str, content: &[u8], executable: bool) -> CheckFile {
+        CheckFile {
+            path: path.to_string(),
+            content: content.to_vec(),
+            executable,
+        }
+    }
+
+    /// The answers were worked out apart from this code, from the plan's words: SHA-256 of `v2`, a newline, the
+    /// command, a newline, then for each file its path, a NUL, its mode as six octal digits, a NUL, the SHA-256
+    /// of its content in hex, and a newline.
+    #[test]
+    fn a_checks_identity_is_the_plans_formula_and_holds_each_files_mode() {
+        let run = hash_of("sh check.sh", &[file("check.sh", b"exit 1\n", true)]);
+        let plain = hash_of("sh check.sh", &[file("check.sh", b"exit 1\n", false)]);
+        assert_eq!(
+            run,
+            "7d9d70b15eaa65de9007d820c4f1356c63401d8298111d7a8715af8c9d0491bd"
+        );
+        assert_eq!(
+            plain,
+            "3b999ff429256d2eb60963014ff1b0faa3071d8df1f53d4c9ad13aa7ba4272c0"
+        );
+        // The same bytes with and without the executable bit are two checks.
+        assert_ne!(run, plain);
+        let two = hash_of(
+            "make test",
+            &[
+                file("a.txt", b"", false),
+                file("b/t.sh", b"#!/bin/sh\n", true),
+            ],
+        );
+        assert_eq!(
+            two,
+            "ff54204828a223b917e1b59225f034321013fda7e2b1d5b762a25f194dbd4d43"
+        );
+    }
 }

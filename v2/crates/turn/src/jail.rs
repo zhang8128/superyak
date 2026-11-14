@@ -52,7 +52,7 @@ const LINUX_SYSTEM_DIRS: [&str; 17] = [
 
 /// The names in `/etc` that ordinary tools read, and no others: `/etc` is also where a machine's services keep
 /// their settings, and some of those are readable by everyone on it.
-const LINUX_ETC: [&str; 22] = [
+const LINUX_ETC: [&str; 23] = [
     "/etc/alternatives",
     "/etc/ca-certificates",
     "/etc/debian_version",
@@ -72,7 +72,8 @@ const LINUX_ETC: [&str; 22] = [
     "/etc/python3",
     "/etc/services",
     "/etc/shells",
-    "/etc/ssl",
+    "/etc/ssl/certs",
+    "/etc/ssl/openssl.cnf",
     "/etc/terminfo",
     "/etc/timezone",
 ];
@@ -98,7 +99,7 @@ const MACOS_SYSTEM_DIRS: [&str; 18] = [
     "/Library/Frameworks",
     "/private/etc/manpaths.d",
     "/private/etc/paths.d",
-    "/private/etc/ssl",
+    "/private/etc/ssl/certs",
     "/private/var/db/timezone",
     "/private/var/select",
 ];
@@ -121,7 +122,7 @@ const MACOS_PACKAGE_PARTS: [&str; 9] = [
 /// Single names a run on macOS reads: the root directory's own list (every program reads it as it starts), the
 /// three links at the root, the link that says where the developer tools are, and the files in `/private/etc`
 /// that ordinary tools read. Not all of `/private/etc`, where services keep their settings too.
-const MACOS_SYSTEM_FILES: [&str; 20] = [
+const MACOS_SYSTEM_FILES: [&str; 23] = [
     "/",
     "/etc",
     "/tmp",
@@ -139,6 +140,9 @@ const MACOS_SYSTEM_FILES: [&str; 20] = [
     "/private/etc/resolv.conf",
     "/private/etc/services",
     "/private/etc/shells",
+    "/private/etc/ssl/cert.pem",
+    "/private/etc/ssl/openssl.cnf",
+    "/private/etc/ssl/x509v3.cnf",
     "/private/etc/zprofile",
     "/private/etc/zshenv",
     "/private/etc/zshrc",
@@ -649,6 +653,15 @@ impl Jail {
             ]
             .map(String::from),
         );
+        // The kernel lists the keys a process may see, and a run would see those of the person it runs
+        // for. The filter refuses the calls that reach a key; these two files would still name them.
+        for list in ["/proc/keys", "/proc/key-users"] {
+            args.extend([
+                "--ro-bind-try".to_string(),
+                "/dev/null".to_string(),
+                list.to_string(),
+            ]);
+        }
         for dir in &self.readable {
             let dir = text(dir);
             args.extend(["--ro-bind".to_string(), dir.clone(), dir]);
@@ -871,6 +884,8 @@ mod tests {
             "\"/private\")",
             "\"/private/etc\")",
             "/private/etc/sudoers",
+            "\"/private/etc/ssl\")",
+            "/private/etc/ssl/private",
             "homebrew/etc",
             "homebrew/var",
             "local/etc",
@@ -976,6 +991,17 @@ mod tests {
         assert!(joined.contains("--ro-bind-try /usr/bin /usr/bin"));
         assert!(joined.contains("--ro-bind-try /etc/passwd /etc/passwd"));
         assert!(!joined.contains("/etc/shadow") && !joined.contains("/etc/environment"));
+        // Of /etc/ssl, the public certificates and the settings file, and not the directory of private keys.
+        assert!(joined.contains("--ro-bind-try /etc/ssl/certs /etc/ssl/certs"));
+        assert!(!joined.contains("/etc/ssl /etc/ssl") && !joined.contains("/etc/ssl/private"));
+        // The kernel's lists of keys are covered: they name the keys of the person the run is for.
+        let proc = joined.find("--proc /proc").unwrap();
+        for list in ["/proc/keys", "/proc/key-users"] {
+            let cover = joined
+                .find(&format!("--ro-bind-try /dev/null {list}"))
+                .unwrap_or_else(|| panic!("{list} is not covered: {joined}"));
+            assert!(proc < cover, "{list} is covered before /proc is mounted");
+        }
         // The whole machine is never bound, and the usual homes of sockets are empty directories.
         assert!(!joined.contains("--ro-bind / /") && !joined.contains("--bind / /"));
         assert!(joined.contains("--tmpfs /tmp") && joined.contains("--tmpfs /run"));

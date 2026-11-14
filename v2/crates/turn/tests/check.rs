@@ -114,11 +114,14 @@ fn the_same_spec_freezes_to_the_same_hash() {
     spec.files.reverse();
     let reordered = freeze(&item.repo.path, &base, &spec, &item.repo.scratch("c3")).unwrap();
     assert_eq!(first.check_hash, reordered.check_hash);
-    // The plan's definition, worked out here by hand: the command, a newline, then each file sorted as its
-    // path, a NUL, its SHA-256 at base, a newline.
-    let mut text = format!("{COMMAND}\n").into_bytes();
+    // The plan's definition, worked out here by hand: `v2`, a newline, the command, a newline, then each file
+    // sorted as its path, a NUL, its mode in six octal digits, a NUL, its SHA-256 at base, a newline. Neither
+    // file is executable.
+    let mut text = format!("v2\n{COMMAND}\n").into_bytes();
     for (path, content) in [("check.sh", "grep fixed src/a.txt\n"), ("other.txt", "x\n")] {
         text.extend_from_slice(path.as_bytes());
+        text.push(0);
+        text.extend_from_slice(b"100644");
         text.push(0);
         text.extend_from_slice(sha256_hex(content.as_bytes()).as_bytes());
         text.push(b'\n');

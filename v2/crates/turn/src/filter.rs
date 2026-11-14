@@ -1,21 +1,31 @@
 //! The system-call filter the Linux jail gives `bwrap`.
 //!
-//! `bwrap` gives a run its own network, but a Unix socket is a file. One that lies inside anything the jail
-//! shows (a named tool directory, say, where some service of the machine listens) can be connected to from
-//! inside, whatever the network is, and a mount that is read-only does not stop it. So a jailed run is not
-//! given the means: it cannot make a Unix socket.
+//! `bwrap` gives a run its own network, its own process numbers and its own view of the files. Some things the
+//! kernel offers are in none of those. A Unix socket is a file: one that lies inside anything the jail shows (a
+//! named tool directory, say, where some service of the machine listens) can be connected to from inside,
+//! whatever the network is, and a mount that is read-only does not stop it. A virtual machine's socket to its
+//! host is not on the network either. And the kernel's keyring is the person's own: a run started by them
+//! carries it in.
 //!
-//! What the filter refuses, with "operation not permitted":
+//! So the filter says which sockets a run may make, and refuses the rest with "operation not permitted":
 //!
-//! - `socket` for the Unix family;
-//! - `socketpair` for the Unix family, except a stream pair. A stream pair is two ends joined to each other and
+//! - `socket`: the two internet families, which reach only the run's own empty network; and netlink for
+//!   routes, which a name lookup asks about. No other family: not Unix, not raw packets, not a virtual
+//!   machine's host, not one added to the kernel later;
+//! - `socketpair`: a Unix stream pair and nothing else. A stream pair is two ends joined to each other and
 //!   can reach nothing else; programs use one to talk to their own children. A datagram end could be sent
-//!   from to a named socket;
-//! - `io_uring_setup`: that interface can make sockets too, and a filter of system calls does not see what
-//!   it does.
+//!   from to a named socket.
+//!
+//! And it refuses seven calls outright: the three that reach the keyring (`add_key`, `request_key`, `keyctl`);
+//! `io_uring_setup`, whose interface can make sockets where a filter of system calls does not see; and
+//! `bpf`, `userfaultfd` and `perf_event_open`, which a test has no use for and which have been ways into the
+//! kernel.
 //!
 //! A call made through another kind of machine's numbering (32-bit calls on a 64-bit machine) ends the process:
 //! the numbers below would mean other calls there.
+//!
+//! What it does not do: it is not a list of every call a run may make. A run can still make a user namespace
+//! of its own. That is written down as a limit in the plan.
 //!
 //! The program is in the form the kernel takes: eight bytes an instruction. It is built from named steps and
 //! jumps to labels, and `tests` runs it as the kernel would, so a jump that lands in the wrong place is found
@@ -28,24 +38,28 @@ pub(crate) struct Machine {
     pub arch: u32,
     pub socket: u32,
     pub socketpair: u32,
-    pub io_uring_setup: u32,
+    /// Calls refused whatever their arguments: `add_key`, `request_key`, `keyctl`, `bpf`, `userfaultfd`,
+    /// `perf_event_open`, `io_uring_setup`.
+    pub refused: [u32; 7],
     /// Whether calls numbered from this value up are another numbering on the same machine (x32).
     pub other_numbering_from: Option<u32>,
 }
 
+/// Read from the kernel's headers on the machine the filter first ran on.
 pub(crate) const AARCH64: Machine = Machine {
     arch: 0xC000_00B7,
     socket: 198,
     socketpair: 199,
-    io_uring_setup: 425,
+    refused: [217, 218, 219, 280, 282, 241, 425],
     other_numbering_from: None,
 };
 
+/// From the published table. This one has not run.
 pub(crate) const X86_64: Machine = Machine {
     arch: 0xC000_003E,
     socket: 41,
     socketpair: 53,
-    io_uring_setup: 425,
+    refused: [248, 249, 250, 321, 323, 298, 425],
     other_numbering_from: Some(0x4000_0000),
 };
 
@@ -64,6 +78,11 @@ pub(crate) fn this_machine() -> Option<Machine> {
 }
 
 const UNIX_FAMILY: u32 = 1;
+const INTERNET_FAMILY: u32 = 2;
+const INTERNET_6_FAMILY: u32 = 10;
+const NETLINK_FAMILY: u32 = 16;
+/// The one kind of netlink a run may open: the table of routes and addresses.
+const NETLINK_ROUTE: u32 = 0;
 const STREAM: u32 = 1;
 /// The part of a socket's type that says which kind it is; the rest are flags.
 const KIND_OF_TYPE: u32 = 0xf;
@@ -79,6 +98,7 @@ const AT_NUMBER: u32 = 0;
 const AT_ARCH: u32 = 4;
 const AT_FIRST: u32 = 16;
 const AT_SECOND: u32 = 24;
+const AT_THIRD: u32 = 32;
 
 #[derive(Clone, Copy)]
 enum To {
@@ -112,17 +132,28 @@ pub(crate) fn socket_filter(machine: Machine) -> Vec<u8> {
     if let Some(from) = machine.other_numbering_from {
         steps.push((None, IfAtLeast(from, Label("end"), Next)));
     }
+    for number in machine.refused {
+        steps.push((None, IfEqual(number, Label("refuse"), Next)));
+    }
     steps.extend([
-        (None, IfEqual(machine.io_uring_setup, Label("refuse"), Next)),
         (None, IfEqual(machine.socket, Label("socket"), Next)),
         (
             None,
             IfEqual(machine.socketpair, Label("pair"), Label("allow")),
         ),
+        // A socket: one of the two internet families, or netlink for routes.
         (Some("socket"), Load(AT_FIRST)),
-        (None, IfEqual(UNIX_FAMILY, Label("refuse"), Label("allow"))),
+        (None, IfEqual(INTERNET_FAMILY, Label("allow"), Next)),
+        (None, IfEqual(INTERNET_6_FAMILY, Label("allow"), Next)),
+        (None, IfEqual(NETLINK_FAMILY, Next, Label("refuse"))),
+        (None, Load(AT_THIRD)),
+        (
+            None,
+            IfEqual(NETLINK_ROUTE, Label("allow"), Label("refuse")),
+        ),
+        // A pair: Unix, and a stream.
         (Some("pair"), Load(AT_FIRST)),
-        (None, IfEqual(UNIX_FAMILY, Next, Label("allow"))),
+        (None, IfEqual(UNIX_FAMILY, Next, Label("refuse"))),
         (None, Load(AT_SECOND)),
         (None, Mask(KIND_OF_TYPE)),
         (None, IfEqual(STREAM, Label("allow"), Label("refuse"))),
@@ -175,6 +206,7 @@ mod tests {
         number: u32,
         first: u64,
         second: u64,
+        third: u64,
     }
 
     /// Runs a filter the way the kernel does and returns its answer. It knows the five kinds of instruction a
@@ -186,6 +218,7 @@ mod tests {
         seen[4..8].copy_from_slice(&call.arch.to_le_bytes());
         seen[16..24].copy_from_slice(&call.first.to_le_bytes());
         seen[24..32].copy_from_slice(&call.second.to_le_bytes());
+        seen[32..40].copy_from_slice(&call.third.to_le_bytes());
         let count = filter.len() / 8;
         let (mut at, mut loaded) = (0usize, 0u32);
         for _ in 0..count {
@@ -210,7 +243,6 @@ mod tests {
         panic!("the filter never answered");
     }
 
-    const INTERNET_FAMILY: u64 = 2;
     const DATAGRAM: u64 = 2;
     const SEQUENCED: u64 = 5;
     const CLOSE_ON_EXEC: u64 = 0o2_000_000;
@@ -228,6 +260,7 @@ mod tests {
                         number,
                         first,
                         second,
+                        third: 0,
                     },
                 )
             };
@@ -239,22 +272,128 @@ mod tests {
             }
             // The family is the low half of the argument: the kernel reads no more of it.
             assert_eq!(answer(machine.socket, unix | (7 << 32), stream), REFUSE);
-            // An internet socket is the network's business, and the jail has none.
-            assert_eq!(answer(machine.socket, INTERNET_FAMILY, stream), ALLOW);
+            // An internet socket is the network's business, and the jail's network has nothing on it.
+            assert_eq!(
+                answer(machine.socket, u64::from(INTERNET_FAMILY), stream),
+                ALLOW
+            );
             // A stream pair, with or without flags, and no other pair.
             for flags in [0, CLOSE_ON_EXEC, NOT_BLOCKING, CLOSE_ON_EXEC | NOT_BLOCKING] {
                 assert_eq!(answer(machine.socketpair, unix, stream | flags), ALLOW);
                 assert_eq!(answer(machine.socketpair, unix, DATAGRAM | flags), REFUSE);
                 assert_eq!(answer(machine.socketpair, unix, SEQUENCED | flags), REFUSE);
             }
-            assert_eq!(answer(machine.socketpair, INTERNET_FAMILY, DATAGRAM), ALLOW);
-            assert_eq!(answer(machine.io_uring_setup, 0, 0), REFUSE);
+            assert_eq!(
+                answer(machine.socketpair, u64::from(INTERNET_FAMILY), DATAGRAM),
+                REFUSE
+            );
+            for number in machine.refused {
+                assert_eq!(answer(number, 0, 0), REFUSE, "call {number}");
+            }
             // Everything else goes through, also with arguments that look like the ones refused.
             for number in [0, 1, 63, 64, 221, machine.socket + 2, 424, 426] {
-                if [machine.socket, machine.socketpair, machine.io_uring_setup].contains(&number) {
+                if [machine.socket, machine.socketpair].contains(&number)
+                    || machine.refused.contains(&number)
+                {
                     continue;
                 }
                 assert_eq!(answer(number, unix, DATAGRAM), ALLOW, "call {number}");
+            }
+        }
+    }
+
+    /// The numbers here are written out from the kernel's tables, and not taken from this file's own, so that
+    /// a wrong number above is caught here. Those for aarch64 were read from the headers of the machine the
+    /// filter runs on; those for x86-64 are from the published table and have not run.
+    #[test]
+    fn only_the_internet_families_and_route_netlink_can_be_made_and_no_keyring_is_reached() {
+        struct Table {
+            machine: Machine,
+            socket: u32,
+            socketpair: u32,
+            /// add_key, request_key, keyctl, bpf, userfaultfd, perf_event_open, io_uring_setup.
+            refused: [u32; 7],
+        }
+        let tables = [
+            Table {
+                machine: AARCH64,
+                socket: 198,
+                socketpair: 199,
+                refused: [217, 218, 219, 280, 282, 241, 425],
+            },
+            Table {
+                machine: X86_64,
+                socket: 41,
+                socketpair: 53,
+                refused: [248, 249, 250, 321, 323, 298, 425],
+            },
+        ];
+        const INTERNET: u64 = 2;
+        const INTERNET_6: u64 = 10;
+        const NETLINK: u64 = 16;
+        const ROUTE: u64 = 0;
+        for table in tables {
+            let filter = socket_filter(table.machine);
+            let answer = |number: u32, first: u64, second: u64, third: u64| {
+                run(
+                    &filter,
+                    &Call {
+                        arch: table.machine.arch,
+                        number,
+                        first,
+                        second,
+                        third,
+                    },
+                )
+            };
+            // A run has a network of its own, with nothing on it but itself. It may use that.
+            for family in [INTERNET, INTERNET_6] {
+                for kind in [1, 2, 1 | CLOSE_ON_EXEC] {
+                    assert_eq!(
+                        answer(table.socket, family, kind, 0),
+                        ALLOW,
+                        "family {family}"
+                    );
+                }
+            }
+            // Asking the kernel which addresses there are, as a name lookup does, and nothing else of netlink.
+            assert_eq!(answer(table.socket, NETLINK, 3, ROUTE), ALLOW);
+            for other in [1, 4, 9, 11, 15, 16] {
+                assert_eq!(
+                    answer(table.socket, NETLINK, 3, other),
+                    REFUSE,
+                    "netlink {other}"
+                );
+            }
+            // Every other family: Unix, raw packets, the kernel's ciphers, a virtual machine's host, and the
+            // ones nobody has thought of.
+            for family in [0, 1, 3, 4, 5, 9, 17, 29, 31, 38, 40, 44, 45, 255, 65_535] {
+                assert_eq!(
+                    answer(table.socket, family, 1, 0),
+                    REFUSE,
+                    "family {family}"
+                );
+            }
+            // A pair is a Unix stream pair or nothing.
+            assert_eq!(answer(table.socketpair, 1, 1, 0), ALLOW);
+            assert_eq!(answer(table.socketpair, 1, 2, 0), REFUSE);
+            assert_eq!(answer(table.socketpair, INTERNET, 1, 0), REFUSE);
+            assert_eq!(answer(table.socketpair, 40, 1, 0), REFUSE);
+            // The keyring, which a run would share with the person it runs for, and four ways into the kernel
+            // that a test has no use for.
+            for number in table.refused {
+                assert_eq!(answer(number, 0, 0, 0), REFUSE, "call {number}");
+            }
+            // Its neighbours go through.
+            for number in table.refused {
+                for near in [number - 1, number + 1] {
+                    if !table.refused.contains(&near)
+                        && near != table.socket
+                        && near != table.socketpair
+                    {
+                        assert_eq!(answer(near, 1, 2, 9), ALLOW, "call {near}");
+                    }
+                }
             }
         }
     }
@@ -269,6 +408,7 @@ mod tests {
                 number: 1,
                 first: 0,
                 second: 0,
+                third: 0,
             };
             assert_eq!(run(&filter, &call), END_THE_PROCESS);
             // 32-bit calls on a 64-bit machine of the same family.
@@ -277,6 +417,7 @@ mod tests {
                 number: 359,
                 first: u64::from(UNIX_FAMILY),
                 second: DATAGRAM,
+                third: 0,
             };
             assert_eq!(run(&filter, &call), END_THE_PROCESS);
         }
@@ -288,6 +429,7 @@ mod tests {
                 number,
                 first: u64::from(UNIX_FAMILY),
                 second: DATAGRAM,
+                third: 0,
             };
             assert_eq!(run(&filter, &call), END_THE_PROCESS, "call {number:#x}");
         }

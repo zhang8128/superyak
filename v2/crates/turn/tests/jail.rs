@@ -475,6 +475,68 @@ fn a_jailed_run_cannot_reach_a_unix_socket_it_can_see() {
     assert_eq!(arrived(), (false, Vec::new()), "something arrived");
 }
 
+/// Things of the kernel's that a private network and private process numbers do not cover, each tried from
+/// inside: the person's keyring, a kind of netlink other than routes, and the kernel's cipher sockets as a
+/// stand-in for every family the jail has not named. And two things a run keeps: netlink for routes, which a
+/// name lookup asks about, and its own loopback.
+#[cfg(target_os = "linux")]
+const BEYOND_THE_NETWORK: &str = r#"import ctypes, platform, socket
+libc = ctypes.CDLL(None, use_errno=True)
+keyctl = {"aarch64": 219, "x86_64": 250}[platform.machine()]
+# Ask which keyring is the session's (operation 0, keyring -3), without making one.
+print("keyring:" + ("reached" if libc.syscall(keyctl, 0, -3, 0) >= 0 else "refused"))
+try:
+    print("key-list:" + ("shown" if open("/proc/keys").read().strip() else "hidden"))
+except OSError:
+    print("key-list:hidden")
+def make(name, *args):
+    try:
+        socket.socket(*args).close()
+        print(name + ":made")
+    except OSError:
+        print(name + ":refused")
+make("netlink-routes", socket.AF_NETLINK, socket.SOCK_RAW, 0)
+make("netlink-device-events", socket.AF_NETLINK, socket.SOCK_RAW, 15)
+make("cipher-socket", socket.AF_ALG, socket.SOCK_SEQPACKET, 0)
+try:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    caller = socket.socket()
+    caller.settimeout(3)
+    caller.connect(listener.getsockname())
+    print("own-loopback:works")
+except OSError as e:
+    print("own-loopback:broken " + str(e))
+"#;
+
+/// The run with no jail is the control: there all of it is reached.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let() {
+    let g = ground();
+    let args = ["-c".to_string(), BEYOND_THE_NETWORK.to_string()];
+    let free = Command::new("/usr/bin/python3")
+        .args(&args)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&free.stdout),
+        "keyring:reached\nkey-list:shown\nnetlink-routes:made\nnetlink-device-events:made\n\
+         cipher-socket:made\nown-loopback:works\n",
+        "control failed: {}",
+        String::from_utf8_lossy(&free.stderr)
+    );
+    let out = run_in(&jail(&g), "/usr/bin/python3", &args);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "keyring:refused\nkey-list:hidden\nnetlink-routes:made\nnetlink-device-events:refused\n\
+         cipher-socket:refused\nown-loopback:works\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn a_jailed_run_cannot_signal_a_process_outside() {
     let g = ground();
