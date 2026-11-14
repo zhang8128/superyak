@@ -357,3 +357,50 @@ fn an_agent_that_changed_nothing_leaves_no_commit() {
     assert!(run.steps.is_empty());
     assert_eq!(sb.head().unwrap(), repo.base);
 }
+
+#[test]
+fn nothing_a_worker_plants_in_its_git_directory_runs_when_the_room_commits() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let marker = |n: u32| repo.scratch(&format!("ran-{n}"));
+    let evil = repo.scratch("evil");
+    // A filter driver, a filesystem monitor, a second config through worktreeConfig, a common directory
+    // elsewhere with its own driver, a stale index lock, and another branch checked out.
+    let body = format!(
+        "#!/bin/sh\ncat > /dev/null\n\
+         git checkout -q -b elsewhere\n\
+         git config filter.evil.clean \"touch '{m1}'; cat\"\n\
+         git config core.fsmonitor \"touch '{m2}'; false\"\n\
+         git config core.repositoryformatversion 1\n\
+         git config extensions.worktreeConfig true\n\
+         printf '[filter \"evil\"]\\n\\tclean = touch {m3}; cat\\n' > .git/config.worktree\n\
+         mkdir -p '{evil}' && printf '[filter \"evil\"]\\n\\tclean = touch {m4}; cat\\n' > '{evil}/config'\n\
+         printf '* filter=evil\\n' > .gitattributes\n\
+         echo changed > a.txt\n\
+         touch .git/index.lock\n\
+         printf '%s\\n' '{evil}' > .git/commondir\n",
+        m1 = marker(1).display(),
+        m2 = marker(2).display(),
+        m3 = marker(3).display(),
+        m4 = marker(4).display(),
+        evil = evil.display(),
+    );
+    let fake = script(&repo, "claude", &body);
+    let run = ClaudeWorker::with_program("opus", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60)
+        .unwrap();
+    assert_eq!(run.exit_code, 0);
+    for n in 1..=4 {
+        assert!(!marker(n).exists(), "the room ran the worker's command {n}");
+    }
+    // The work itself is committed, on the turn's branch.
+    assert_eq!(
+        git(&sb.dir, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "room/i1/1"
+    );
+    assert_eq!(git(&sb.dir, &["show", "room/i1/1:a.txt"]), "changed");
+    assert_eq!(
+        sb.head().unwrap(),
+        git(&sb.dir, &["rev-parse", "room/i1/1"])
+    );
+}

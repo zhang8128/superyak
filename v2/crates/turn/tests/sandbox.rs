@@ -368,3 +368,20 @@ fn destroy_removes_the_directory() {
         "the repository itself is untouched"
     );
 }
+
+#[test]
+fn a_clone_whose_git_directory_was_swapped_is_refused() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let before = repo.refs();
+    // The worker points its clone at the item's own repository.
+    let swap = format!(
+        "mv .git .git-moved && ln -s '{}/.git' .git",
+        repo.path.display()
+    );
+    let (status, _) = sh(&sb, &swap, 30);
+    assert_eq!(status.exit_code, 0);
+    assert!(matches!(sb.head(), Err(TurnError::Refused(_))));
+    assert!(matches!(sb.reclaim(), Err(TurnError::Refused(_))));
+    assert_eq!(repo.refs(), before);
+}

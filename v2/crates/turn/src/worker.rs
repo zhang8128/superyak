@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use room::Step;
 use serde_json::json;
 
+use crate::sandbox::{SAFE_GIT_ENV, SAFE_GIT_FLAGS};
 use crate::transcript::{ClaudeParser, CodexParser};
 use crate::{Sandbox, TurnError, io};
 
@@ -361,22 +362,22 @@ impl Drop for Removed<'_> {
 }
 
 /// Commits whatever an agent left uncommitted in the sandbox, as its work on the turn's branch. Codex's sandbox
-/// keeps `.git` read-only, so a Codex turn cannot commit for itself. git runs as a run of the sandbox, in its own
-/// process group with a limit, with hooks and the filesystem monitor off, so nothing the worker configured in its
-/// clone runs outside a run.
+/// keeps `.git` read-only, so a Codex turn cannot commit for itself. This git runs outside the worker's own
+/// sandbox, so the clone's git directory is reclaimed first (`Sandbox::reclaim`: the room's config, no second
+/// config, no other repository, HEAD on the turn's branch), and git ignores system and global config, hooks, the
+/// filesystem monitor and the user's attributes file. It also runs as a run of the sandbox, in its own process
+/// group with a limit.
 fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError> {
+    sandbox.reclaim()?;
     let git = |args: &[&str], on_line: &mut dyn FnMut(&str)| -> Result<(), TurnError> {
-        let mut argv: Vec<String> = [
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        argv.extend(args.iter().map(|s| s.to_string()));
-        let status = sandbox.run("git", &argv, "", SEAL_SECS, on_line)?;
+        // Through `env`, since a run's environment is the scrubbed one.
+        let mut argv: Vec<String> = SAFE_GIT_ENV
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        argv.push("git".to_string());
+        argv.extend(SAFE_GIT_FLAGS.iter().chain(args).map(|s| s.to_string()));
+        let status = sandbox.run("env", &argv, "", SEAL_SECS, on_line)?;
         if status.exit_code == 0 && !status.timed_out {
             Ok(())
         } else {

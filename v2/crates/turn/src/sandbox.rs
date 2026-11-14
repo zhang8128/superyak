@@ -61,7 +61,29 @@ pub struct Sandbox {
     /// The branch the clone is on, made at the base commit.
     pub branch: String,
     base: String,
+    config: Vec<u8>,
     pid_file: Option<PathBuf>,
+}
+
+/// Removes whatever is at `path` (a file, a link, a directory) without following a link. Nothing there is fine.
+fn clear(path: &Path) -> Result<(), TurnError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => remove_tree(path),
+        Ok(_) => fs::remove_file(path).map_err(io(format!("remove {}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io(format!("look at {}", path.display()))(e)),
+    }
+}
+
+/// Writes a file that must not exist yet, so a link put in its place is never written through.
+fn write_new(path: &Path, content: &[u8]) -> Result<(), TurnError> {
+    let what = || format!("write {}", path.display());
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(io(what()))?;
+    file.write_all(content).map_err(io(what()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,11 +150,15 @@ impl Sandbox {
         }
         git(dir, &["checkout", "-q", "-b", branch, &base])?;
         let dir = fs::canonicalize(dir).map_err(io("find the sandbox"))?;
+        // The room's own copy of the clone's config, put back before the room runs git there after a worker.
+        let config =
+            fs::read(dir.join(".git").join("config")).map_err(io("read the clone's config"))?;
         made.0 = None;
         Ok(Sandbox {
             dir,
             branch: branch.to_string(),
             base,
+            config,
             pid_file: None,
         })
     }
@@ -142,9 +168,53 @@ impl Sandbox {
         &self.base
     }
 
-    /// The commit the sandbox's HEAD is at now.
+    /// The commit the turn's branch is at now, read after `reclaim`.
     pub fn head(&self) -> Result<String, TurnError> {
-        rev_parse(&self.dir, "HEAD")
+        self.reclaim()?;
+        rev_parse(&self.dir, &format!("refs/heads/{}", self.branch))
+    }
+
+    /// Takes the clone's git directory back from the worker, so that git run by the room there (to commit what an
+    /// agent left, to read the branch, to fetch it) runs nothing the worker planted. A worker can name programs in
+    /// its clone's config (a filter driver, a filesystem monitor, a pager), add a second config through
+    /// `config.worktree`, or point git at another repository with `commondir` or by swapping `.git` for a link;
+    /// the room's git runs outside the worker's own sandbox, so any of those would escape it. This refuses a
+    /// `.git`, `objects` or `refs` that is no longer a real directory, removes `commondir`, `config.worktree`,
+    /// alternates and a stale index lock, writes the room's own copy of the config back, and points HEAD at the
+    /// turn's branch again. The room's git also ignores system and global config and runs no hooks.
+    pub fn reclaim(&self) -> Result<(), TurnError> {
+        let git_dir = self.dir.join(".git");
+        for dir in [
+            git_dir.clone(),
+            git_dir.join("objects"),
+            git_dir.join("refs"),
+        ] {
+            if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+                return Err(TurnError::Refused(format!(
+                    "the worker replaced {}",
+                    dir.display()
+                )));
+            }
+        }
+        let info = git_dir.join("objects").join("info");
+        if fs::symlink_metadata(&info).is_ok_and(|m| !m.is_dir()) {
+            clear(&info)?;
+        }
+        clear(&info.join("alternates"))?;
+        for name in [
+            "commondir",
+            "config.worktree",
+            "index.lock",
+            "config",
+            "HEAD",
+        ] {
+            clear(&git_dir.join(name))?;
+        }
+        write_new(&git_dir.join("config"), &self.config)?;
+        write_new(
+            &git_dir.join("HEAD"),
+            format!("ref: refs/heads/{}\n", self.branch).as_bytes(),
+        )
     }
 
     /// From now on, each run writes its process group id to `path` as decimal text as soon as it starts, and
@@ -427,17 +497,29 @@ pub(crate) fn scrubbed(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+/// Flags for every git the room runs: no hooks, no filesystem monitor, no attributes file of the user's.
+pub(crate) const SAFE_GIT_FLAGS: [&str; 6] = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+];
+
+/// And no system or global config, where a driver for an attribute could be named.
+pub(crate) const SAFE_GIT_ENV: [(&str, &str); 2] = [
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+];
+
 /// git with the scrubbed environment, no prompts, no hooks and no filesystem monitor: the turn's own git
 /// commands must not run anything a worker configured in its clone.
 fn git_command() -> Command {
     let mut command = scrubbed("git");
     command
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-        ])
+        .args(SAFE_GIT_FLAGS)
+        .envs(SAFE_GIT_ENV)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
     command
