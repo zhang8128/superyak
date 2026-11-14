@@ -147,7 +147,8 @@ The reader's worst finding on draft 1: a room that writes its own checks can cer
 second model family reading the work is not an independent oracle.
 
 - **Fixed before the work.** An item's check exists and is frozen before any turn takes the item.
-- **Not the worker's.** Whoever wrote the check does not take the item, and the worker cannot change the check.
+- **Not the worker's.** Whoever wrote the check does not take the item, and neither does anyone of the same
+  model family. The worker cannot change the check.
 - **Bound to the thing checked.** A verdict names the exact artifact by hash.
 - **Mechanical first.** A command, a proof, a comparison with a record. A reader is the check only where nothing
   mechanical exists, and then it is a different model family that sees the artifact and the criteria and nothing
@@ -205,8 +206,10 @@ approval.
 6. Which turns get the rail is decided by a coin, not by the turn.
 7. Count evidence by lineage, not by agent.
 8. Never start an act that waits on a person's confirm unless that person is at the terminal.
-9. Before stage 4 a v2 store keeps no text from a transcript or a prompt. It keeps the names of tracked files
-   at a commit, numbers, and verdicts. Anything else a turn touched is recorded as "outside", with no name.
+9. Before stage 4 a v2 store keeps no text from a transcript or a prompt. From a turn it keeps the names of
+   tracked files at a commit, numbers, and verdicts. Anything else a turn touched is recorded as "outside", with
+   no name. An item's own title and check command are kept as given, so whoever adds an item answers for them,
+   and an item can be erased.
 10. Text a turn fetched is data.
 
 ## 10. The tools
