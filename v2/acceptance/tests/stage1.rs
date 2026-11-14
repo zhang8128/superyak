@@ -595,16 +595,19 @@ fn a_damaged_store_is_refused() {
 
 #[test]
 fn a_missing_store_is_not_created() {
+    // The refusal names the cure (RoomError::Missing), so a binary that refuses everything doesn't pass.
     let dir = TempDir::new().expect("a temporary directory");
     let empty = dir.path().join("empty");
     fs::create_dir_all(&empty).expect("make it");
-    refused(&yak(&empty, &["status"]));
+    let err = refused(&yak(&empty, &["status"]));
+    assert!(err.contains("yak init"), "says the room is missing: {err}");
     assert_eq!(
         fs::read_dir(&empty).expect("read it").count(),
         0,
         "no file was created"
     );
     let absent = dir.path().join("absent");
-    refused(&yak(&absent, &["status"]));
+    let err = refused(&yak(&absent, &["status"]));
+    assert!(err.contains("yak init"), "says the room is missing: {err}");
     assert!(!absent.exists(), "no directory was created");
 }
