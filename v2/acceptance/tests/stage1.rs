@@ -237,19 +237,14 @@ fn wait_for(what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
     }
 }
 
-fn alive(pid: &str) -> bool {
+/// Whether any process of a process group is left.
+fn group_alive(group: &str) -> bool {
     Command::new("kill")
-        .args(["-0", pid])
+        .args(["-0", &format!("-{group}")])
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-fn lines(path: &Path) -> Vec<String> {
-    fs::read_to_string(path)
-        .map(|t| t.lines().map(str::to_string).collect())
-        .unwrap_or_default()
 }
 
 // --- The sixteen tests of plan task 0 (e01c0c74) ---
@@ -335,20 +330,43 @@ fn the_check_author_cannot_take_the_item() {
     );
 }
 
-/// Reads the worker's process group the clock writes at `<room>/turns/<attempt>.pid` while a turn runs (plan a028145e).
-fn worker_groups(r: &Room) -> Vec<String> {
+/// Every entry in `<room>/turns/`, so a test sees each turn the clock starts.
+fn turn_entries(r: &Room) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(r.room.join("turns")) else {
         return Vec::new();
     };
-    entries
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    entries.filter_map(|entry| entry.ok().map(|e| e.path())).collect()
+}
+
+/// The worker's process group, the first line of each `<room>/turns/<attempt>.pid` while a turn runs (plan
+/// a028145e; the second line is the leader's start time). A script's own `$$` is no host pid inside the jail.
+fn worker_groups(r: &Room) -> Vec<String> {
+    turn_entries(r)
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|e| e == "pid"))
-        .filter_map(|path| {
-            fs::read_to_string(path)
-                .ok()
-                .map(|text| text.trim().to_string())
-        })
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|text| text.lines().next().map(|line| line.trim().to_string()))
+        .filter(|group| !group.is_empty())
         .collect()
+}
+
+/// The attempts `<room>/turns/` names, by file stem.
+fn attempts_seen(r: &Room) -> Vec<String> {
+    let mut stems: Vec<String> = turn_entries(r)
+        .iter()
+        .filter_map(|path| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .collect();
+    stems.sort();
+    stems.dedup();
+    stems
+}
+
+fn kill_groups(groups: &[String]) {
+    for group in groups {
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{group}")])
+            .status();
+    }
 }
 
 fn ref_for(r: &Room, id: &str, lease: u32) -> bool {
@@ -357,32 +375,24 @@ fn ref_for(r: &Room, id: &str, lease: u32) -> bool {
         .any(|line| line.ends_with(&format!("refs/heads/room/{id}/{lease}")))
 }
 
-/// A worker that sleeps through its first turn and fixes item 0 on its second; `first` marks that the first began.
-fn slow_once(r: &Room, first: &Path) -> String {
-    let body = format!(
-        "if [ ! -e '{first}' ]; then : > '{first}'; sleep 600; fi\necho {g} > items/item0.txt\ncommit 'make item 0 green'",
-        first = first.display(),
-        g = green(0)
-    );
-    worker(&r.scratch, "slow-once", &body)
+/// A worker that sleeps through its turn. A jailed worker writes only in its checkout (plan, d0ad2636), so no marker
+/// outside it says a turn began: the pid file does.
+fn sleeper(r: &Room) -> String {
+    worker(&r.scratch, "sleeper", "sleep 600")
 }
 
 #[test]
 fn a_killed_worker_fails_the_turn() {
     // kill -9 on the worker's process group mid-turn, the clock alive: that turn fails, and the item is taken again.
+    // Workers take turns (plan task 9): the sleeper's turn is killed, and the fixer takes the item next.
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
-    let first = r.scratch.join("first-turn-began");
-    let w = slow_once(&r, &first);
-    let _clock = Clock::start(&r, &[&w], &["--turn-secs", "600"]);
+    let (slow, fix) = (sleeper(&r), fixing_worker(&r.scratch));
+    let _clock = Clock::start(&r, &[&slow, &fix], &["--turn-secs", "600"]);
     wait_for("the first turn to begin", Duration::from_secs(60), || {
-        first.exists() && !worker_groups(&r).is_empty()
+        !worker_groups(&r).is_empty()
     });
-    for group in worker_groups(&r) {
-        let _ = Command::new("kill")
-            .args(["-9", &format!("-{group}")])
-            .status();
-    }
+    kill_groups(&worker_groups(&r));
     wait_for(
         "the item to pass on a later turn",
         Duration::from_secs(120),
@@ -397,20 +407,15 @@ fn a_killed_clock_recovers() {
     // the item is taken again with the next lease number, and the dead turn leaves no ref.
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
-    let first = r.scratch.join("first-turn-began");
-    let w = slow_once(&r, &first);
-    let mut clock = Clock::start(&r, &[&w], &["--lease-secs", "3", "--turn-secs", "600"]);
+    let (slow, fix) = (sleeper(&r), fixing_worker(&r.scratch));
+    let mut clock = Clock::start(&r, &[&slow], &["--lease-secs", "3", "--turn-secs", "600"]);
     wait_for("the first turn to begin", Duration::from_secs(60), || {
-        first.exists() && !worker_groups(&r).is_empty()
+        !worker_groups(&r).is_empty()
     });
-    for group in worker_groups(&r) {
-        let _ = Command::new("kill")
-            .args(["-9", &format!("-{group}")])
-            .status();
-    }
+    kill_groups(&worker_groups(&r));
     clock.kill_group();
     sleep(Duration::from_secs(4)); // past the first lease
-    ok(&once_through(&r, &[&w], &["--lease-secs", "3"]));
+    ok(&once_through(&r, &[&fix], &["--lease-secs", "3"]));
     assert_eq!(state(&r, &id), "passed_verified");
     assert!(ref_for(&r, &id, 2), "taken again with lease 2");
     assert!(!ref_for(&r, &id, 1), "the dead turn left no ref");
@@ -421,16 +426,13 @@ fn stop_halts_within_fifteen_seconds() {
     let r = setup();
     add(&r, 0, "outside", "person:fixture");
     add(&r, 1, "outside", "person:fixture");
-    let pids = r.scratch.join("pids");
-    let sleeper = worker(
-        &r.scratch,
-        "sleeper",
-        &format!("echo $$ >> '{}'\nsleep 600", pids.display()),
-    );
-    let mut clock = Clock::start(&r, &[&sleeper], &["--turn-secs", "600"]);
+    let slow = sleeper(&r);
+    let mut clock = Clock::start(&r, &[&slow], &["--turn-secs", "600"]);
     wait_for("a turn to begin", Duration::from_secs(60), || {
-        !lines(&pids).is_empty()
+        !worker_groups(&r).is_empty()
     });
+    let groups = worker_groups(&r);
+    let seen = attempts_seen(&r);
     let began = Instant::now();
     ok(&yak(&r.room, &["stop"]));
     assert!(r.room.join("STOP").exists());
@@ -438,14 +440,17 @@ fn stop_halts_within_fifteen_seconds() {
         clock.exited_within(Duration::from_secs(15)),
         "the clock ends within 15 s of STOP"
     );
-    let worker_pid = lines(&pids)[0].clone();
     wait_for(
-        "the worker to end",
+        "every worker process to end",
         Duration::from_secs(15).saturating_sub(began.elapsed()),
-        || !alive(&worker_pid),
+        || !groups.iter().any(|group| group_alive(group)),
     );
     sleep(Duration::from_secs(2));
-    assert_eq!(lines(&pids).len(), 1, "no new turn starts after STOP");
+    let new: Vec<String> = attempts_seen(&r)
+        .into_iter()
+        .filter(|attempt| !seen.contains(attempt))
+        .collect();
+    assert!(new.is_empty(), "no new turn starts after STOP: {new:?}");
 }
 
 #[test]
@@ -495,27 +500,29 @@ fn a_worker_cannot_change_its_check() {
 fn a_worker_has_no_remote() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
-    let seen = r.scratch.join("remotes");
-    let pushed = r.scratch.join("push-exit");
+    // A jailed worker writes only in its checkout, so it commits its evidence, which arrives with the turn's ref.
     let repo = r.fx.repo.display();
     let body = format!(
-        "git remote -v > '{seen}'\necho {g} > items/item0.txt\ncommit 'make item 0 green'\ngit push --all origin 2>/dev/null; echo $? >> '{pushed}'\ngit push '{repo}' HEAD:refs/heads/pushed 2>/dev/null; echo $? >> '{pushed}'",
-        seen = seen.display(),
-        pushed = pushed.display(),
+        "mkdir -p evidence\ngit remote -v > evidence/remotes.txt\ngit push --all origin 2>/dev/null; echo $? >> evidence/push-exit.txt\ngit push '{repo}' HEAD:refs/heads/pushed 2>/dev/null; echo $? >> evidence/push-exit.txt\necho {g} > items/item0.txt\ngit add -A\ncommit 'make item 0 green, with the evidence'",
         g = green(0)
     );
     let pusher = worker(&r.scratch, "pusher", &body);
     let before = refs(&r.fx.repo);
     let _ = once_through(&r, &[&pusher], &[]);
-    assert_eq!(
-        fs::read_to_string(&seen).unwrap_or_default().trim(),
-        "",
-        "the sandbox has no remote"
-    );
+    let turn = refs(&r.fx.repo)
+        .into_iter()
+        .find_map(|line| {
+            let name = line.split(' ').nth(1)?.to_string();
+            name.starts_with(&format!("refs/heads/room/{id}/"))
+                .then_some(name)
+        })
+        .expect("the turn's ref");
+    let shown = |file: &str| git(&r.fx.repo, &["show", &format!("{turn}:evidence/{file}")]);
+    assert_eq!(shown("remotes.txt"), "", "the sandbox has no remote");
+    let codes = shown("push-exit.txt");
     assert!(
-        lines(&pushed).iter().all(|code| code != "0"),
-        "every push fails: {:?}",
-        lines(&pushed)
+        codes.lines().count() == 2 && codes.lines().all(|code| code != "0"),
+        "every push fails: {codes:?}"
     );
     let after = refs(&r.fx.repo);
     let new: Vec<&String> = after
@@ -559,17 +566,12 @@ fn no_prompt_text_reaches_the_store() {
 fn a_second_clock_refuses() {
     let r = setup();
     add(&r, 0, "outside", "person:fixture");
-    let pids = r.scratch.join("pids");
-    let sleeper = worker(
-        &r.scratch,
-        "sleeper",
-        &format!("echo $$ >> '{}'\nsleep 600", pids.display()),
-    );
-    let _first = Clock::start(&r, &[&sleeper], &["--turn-secs", "600"]);
+    let slow = sleeper(&r);
+    let _first = Clock::start(&r, &[&slow], &["--turn-secs", "600"]);
     wait_for("the first clock's turn", Duration::from_secs(60), || {
-        !lines(&pids).is_empty()
+        !worker_groups(&r).is_empty()
     });
-    let err = refused(&once_through(&r, &[&sleeper], &[]));
+    let err = refused(&once_through(&r, &[&slow], &[]));
     assert!(
         err.contains("another process") || err.contains("lock"),
         "says locked: {err}"
