@@ -175,6 +175,39 @@ fn a_jailed_run_cannot_read_the_home_of_whoever_runs_the_room() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "");
 }
 
+/// macOS mounts the disk that holds every home again below `/System/Volumes/Data`, so a home has a second
+/// name that starts with `/System`. The run with no jail is the control: it shows the second name works here.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_reach_a_home_or_another_disk_by_its_other_name() {
+    let g = ground();
+    let home = PathBuf::from(std::env::var_os("HOME").expect("this test needs HOME"));
+    let other_name = |path: &Path| {
+        let mut name = std::ffi::OsString::from("/System/Volumes/Data");
+        name.push(path.as_os_str());
+        PathBuf::from(name)
+    };
+    let script = format!(
+        "ls -a {home}; cat {file}; ls /System/Volumes; ls /System/Volumes/Data; echo finished",
+        home = sh_quote(&other_name(&home)),
+        file = sh_quote(&other_name(&g.outside.join("readable"))),
+    );
+    let free = unjailed(&script);
+    assert!(free.contains("CANARY-READABLE"), "control failed: {free}");
+    assert!(
+        free.lines().any(|line| line == "Data") && free.lines().any(|line| line == "Users"),
+        "control failed: {free}"
+    );
+
+    let out = jailed(&jail(&g), &script);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "finished\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn what_is_hidden_stays_hidden_inside_what_is_shown() {
     let g = ground();

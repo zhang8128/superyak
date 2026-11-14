@@ -26,8 +26,13 @@ const LINUX_SYSTEM_DIRS: [&str; 6] = ["/usr", "/bin", "/sbin", "/lib", "/lib64",
 
 /// What a jailed run on macOS can read and run of the system. None of it is a place a person keeps files of
 /// their own. A path that is not there is harmless.
-const MACOS_SYSTEM_DIRS: [&str; 14] = [
-    "/System",
+///
+/// `/System` is named part by part, and never whole: `/System/Volumes` is where the other disks are mounted,
+/// the one that holds every home among them. Of it a run is shown only the system libraries' own disk image.
+const MACOS_SYSTEM_DIRS: [&str; 16] = [
+    "/System/Library",
+    "/System/Cryptexes",
+    "/System/Volumes/Preboot/Cryptexes",
     "/bin",
     "/sbin",
     "/usr/bin",
@@ -537,6 +542,11 @@ mod tests {
         assert_eq!(profile.matches("\"/dev/").count(), 8, "{profile}");
         // Nowhere a person keeps their own files is shown by default.
         for place in [
+            "\"/System\")",
+            "\"/System/Volumes\")",
+            "\"/System/Volumes/Data",
+            "\"/System/Volumes/Preboot\")",
+            "\"/System/Applications",
             "\"/Users",
             "\"/Volumes",
             "\"/private/tmp",
