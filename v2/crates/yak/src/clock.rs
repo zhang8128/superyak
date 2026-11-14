@@ -10,10 +10,6 @@
 //!
 //! The clock holds the room's only writing connection, so nothing else changes the room while a turn runs: what a
 //! turn sees in the room at the start is still true at its end, except for the passing of time.
-#![allow(
-    dead_code,
-    reason = "main.rs also declares this module until task 10 makes the binary use the library's"
-)]
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
