@@ -442,10 +442,22 @@ fn a_jailed_run_cannot_ask_the_system_to_run_something() {
     );
 }
 
+/// Two questions to the desktop's own services that show nothing on the screen: run a one-line script, and
+/// list the running programs. With no jail both are answered, which is the control. The two below them would
+/// act on a person's desktop if they worked, so they are tried only inside the jail.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_jailed_run_cannot_script_other_programs_or_open_things() {
     let g = ground();
+    let script = "/usr/bin/osascript -e 'return 6 * 7'";
+    let list = "/usr/bin/lsappinfo list | head -1";
+    assert_eq!(unjailed(script).trim(), "42", "control failed");
+    assert!(!unjailed(list).trim().is_empty(), "control failed");
+    let out = jailed(&jail(&g), script);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("42"));
+    let out = jailed(&jail(&g), list);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "");
+
     let out = jailed(
         &jail(&g),
         "/usr/bin/osascript -e 'tell application \"Finder\" to get name of startup disk'",
@@ -454,9 +466,10 @@ fn a_jailed_run_cannot_script_other_programs_or_open_things() {
         !out.status.success(),
         "a jailed run scripted another program"
     );
+    fs::write(g.checkout.join("to-open.txt"), "x").unwrap();
     let out = jailed(
         &jail(&g),
-        &format!("/usr/bin/open -g {}/readable", sh_quote(&g.outside)),
+        &format!("/usr/bin/open -g {}/to-open.txt", sh_quote(&g.checkout)),
     );
     assert!(
         !out.status.success(),
@@ -464,11 +477,69 @@ fn a_jailed_run_cannot_script_other_programs_or_open_things() {
     );
 }
 
+/// Gives a command a terminal of its own and prints everything that reaches that terminal. `argv[1:]` is the
+/// command. A program that writes to `/dev/tty` writes to this terminal, so what it wrote is in the output.
+/// It gives up after twenty seconds, so a command that never ends cannot hold a test.
+const UNDER_A_TERMINAL: &str = r#"import os, pty, select, sys, time
+pid, terminal = pty.fork()
+if pid == 0:
+    try:
+        os.execv(sys.argv[1], sys.argv[1:])
+    finally:
+        os._exit(127)
+seen = b""
+end = time.time() + 20
+while time.time() < end:
+    ready, _, _ = select.select([terminal], [], [], 0.2)
+    if terminal in ready:
+        try:
+            data = os.read(terminal, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        seen += data
+    elif os.waitpid(pid, os.WNOHANG)[0] == pid:
+        pid = 0
+        break
+if pid:
+    try:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+sys.stdout.write(seen.decode(errors="replace"))
+"#;
+
+/// What reaches a terminal when `command` runs with that terminal as its own.
+fn seen_on_its_terminal(g: &Ground, command: (&Path, &[String])) -> String {
+    let out = Command::new("/usr/bin/python3")
+        .args(["-c", UNDER_A_TERMINAL])
+        .arg(command.0)
+        .args(command.1)
+        .current_dir(&g.checkout)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", &g.scratch)
+        .env("TMPDIR", &g.scratch)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The command is started from a terminal, as a clock a person started by hand is. With no jail what it writes
+/// to `/dev/tty` reaches that terminal, which is the control: a test with no terminal at all would see the
+/// write fail whatever the jail did.
 #[test]
 fn a_jailed_run_cannot_write_to_the_terminal() {
     let g = ground();
-    let out = jailed(&jail(&g), "echo typed > /dev/tty");
-    assert!(!out.status.success());
+    let write = ["-c".to_string(), "echo MARK-typed > /dev/tty".to_string()];
+    let free = seen_on_its_terminal(&g, (Path::new("/bin/sh"), &write));
+    assert!(free.contains("MARK-typed"), "control failed: {free:?}");
+    let (tool, args) = jail(&g).command("/bin/sh", &write);
+    let jailed = seen_on_its_terminal(&g, (&tool, &args));
+    assert!(!jailed.contains("MARK-typed"), "{jailed:?}");
 }
 
 /// The jail must not break an honest check: a shell pipeline, git, a scripting language making a temporary
@@ -570,6 +641,170 @@ sys.exit(1 if opened or len(paths) < 3 else 0)
         "paths tried, then any that opened or failed for another reason: {} {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A run can change everything inside its two directories and nothing about the directories themselves. If it
+/// could move its checkout away and leave a link in its place, the next run in that sandbox would be jailed
+/// around whatever the link names.
+#[test]
+fn a_jailed_run_cannot_replace_its_checkout_or_its_scratch() {
+    let g = ground();
+    fs::write(g.checkout.join("mine"), "MINE").unwrap();
+    let (c, s, o) = (
+        sh_quote(&g.checkout),
+        sh_quote(&g.scratch),
+        sh_quote(&g.outside),
+    );
+    // The control: what is inside both is the run's to make, move and remove.
+    let out = jailed(
+        &jail(&g),
+        &format!(
+            "mkdir {c}/d && mv {c}/mine {c}/d/mine && mv {c}/d/mine {c}/mine && rmdir {c}/d && echo t > {s}/t && rm {s}/t && echo fine"
+        ),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "fine\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let which = |root: &Path| {
+        let meta = fs::symlink_metadata(root).unwrap();
+        assert!(meta.is_dir(), "{} is no longer a directory", root.display());
+        (meta.dev(), meta.ino())
+    };
+    let before = [which(&g.checkout), which(&g.scratch)];
+    jailed(
+        &jail(&g),
+        &format!(
+            "mv {c} {s}/moved; ln -s {o} {c}; rmdir {s}; ln -s {o} {s}; mv {s} {c}/moved; chmod 000 {c}; true"
+        ),
+    );
+    // Each is still a directory, and the same one. What is inside them is the run's own to move about, and on
+    // Linux `mv` does that when it finds it cannot rename the directory itself.
+    assert_eq!([which(&g.checkout), which(&g.scratch)], before);
+    assert_eq!(
+        fs::read_dir(&g.outside).unwrap().count(),
+        1,
+        "outside changed"
+    );
+    // On macOS the run cannot change its checkout's permissions either. On Linux it can, as it can for any
+    // directory of its own, and the room removes such a tree all the same.
+    let mode = fs::symlink_metadata(&g.checkout)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    if cfg!(target_os = "macos") {
+        assert_ne!(mode, 0, "the checkout's permissions were taken away");
+    }
+    fs::set_permissions(&g.checkout, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn the_whole_machine_cannot_be_a_checkout_or_a_scratch() {
+    let g = ground();
+    assert!(matches!(
+        Jail::new(Path::new("/"), &g.scratch),
+        Err(TurnError::Refused(_))
+    ));
+    assert!(matches!(
+        Jail::new(&g.checkout, Path::new("/")),
+        Err(TurnError::Refused(_))
+    ));
+}
+
+/// What a process says about another one, asked three ways. `argv[1]` is the other process.
+#[cfg(target_os = "macos")]
+const ASK_ABOUT_ANOTHER: &str = r#"import ctypes as c, os, sys
+lib = c.CDLL(None, use_errno=True)
+other = int(sys.argv[1])
+said = []
+# The process table: every process's number and name.
+mib = (c.c_int * 4)(1, 14, 0, 0)
+n = c.c_size_t(0)
+said.append("table:" + ("listed" if lib.sysctl(mib, 4, None, c.byref(n), None, 0) == 0 and n.value else "refused"))
+# Where another process's program is, and where this one's is.
+libproc = c.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+buf = c.create_string_buffer(4096)
+said.append("path-of-other:" + ("told" if libproc.proc_pidpath(other, buf, 4096) > 0 else "refused"))
+said.append("path-of-self:" + ("told" if libproc.proc_pidpath(os.getpid(), buf, 4096) > 0 else "refused"))
+# Another process's arguments and environment.
+mib = (c.c_int * 3)(1, 49, other)
+buf = c.create_string_buffer(262144)
+n = c.c_size_t(len(buf))
+raw = buf.raw[: n.value] if lib.sysctl(mib, 3, buf, c.byref(n), None, 0) == 0 else b""
+said.append("environment-of-other:" + ("read" if b"YAK_JAIL_CANARY=FAKE_ONLY" in raw else "refused"))
+print(" ".join(said))
+"#;
+
+/// A stand-in for some other process of the same person: a sleeper with a made-up variable in its environment.
+#[cfg(target_os = "macos")]
+struct Canary(std::process::Child);
+
+#[cfg(target_os = "macos")]
+impl Canary {
+    fn start() -> Canary {
+        let child = Command::new("/usr/bin/python3")
+            .args(["-c", "import time; time.sleep(60)"])
+            .env("YAK_JAIL_CANARY", "FAKE_ONLY")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        // Long enough for the interpreter to have started, so that what is asked about is that program.
+        std::thread::sleep(Duration::from_millis(500));
+        Canary(child)
+    }
+
+    /// What `ASK_ABOUT_ANOTHER` prints about this process, asked from inside `jail` or with no jail.
+    fn asked(&self, jail: Option<&Jail>) -> String {
+        let args = [
+            "-c".to_string(),
+            ASK_ABOUT_ANOTHER.to_string(),
+            self.0.id().to_string(),
+        ];
+        let out = match jail {
+            Some(jail) => run_in(jail, "/usr/bin/python3", &args),
+            None => Command::new("/usr/bin/python3")
+                .args(&args)
+                .output()
+                .unwrap(),
+        };
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Canary {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The run with no jail is the control: all four questions are answered there.
+///
+/// The fourth, another process's arguments and environment, is where tokens are. On macOS it is answered
+/// through either of two doors: questions about other processes, which "deny by default" does not cover, and a
+/// system setting under `kern.proc`. Shutting one leaves the other open. Measured on macOS 27.0.1: the read
+/// succeeds with every system setting denied, and it succeeds with questions about others denied; it fails
+/// only with both. `the_macos_profile_denies_by_default_and_names_what_it_allows` holds the profile to both.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_ask_about_another_process_or_read_its_environment() {
+    let g = ground();
+    let canary = Canary::start();
+    assert_eq!(
+        canary.asked(None),
+        "table:listed path-of-other:told path-of-self:told environment-of-other:read",
+        "control failed"
+    );
+    assert_eq!(
+        canary.asked(Some(&jail(&g))),
+        "table:refused path-of-other:refused path-of-self:told environment-of-other:refused"
     );
 }
 

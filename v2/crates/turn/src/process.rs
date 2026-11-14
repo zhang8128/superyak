@@ -84,17 +84,15 @@ impl Supervisor {
                 supervisor.learn(&processes);
                 Ok(supervisor)
             }
-            Err(_) if std::env::var("YAK_SUPERVISION").as_deref() == Ok("best-effort") => {
-                Ok(Self {
-                    identity: Identity {
-                        group,
-                        start: "unverified".into(),
-                    },
-                    seen: HashMap::new(),
-                    last_poll: Instant::now(),
-                    best_effort: true,
-                })
-            }
+            Err(_) if crate::sandbox::supervision_is_best_effort() => Ok(Self {
+                identity: Identity {
+                    group,
+                    start: "unverified".into(),
+                },
+                seen: HashMap::new(),
+                last_poll: Instant::now(),
+                best_effort: true,
+            }),
             Err(e) => Err(e),
         }
     }

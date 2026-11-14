@@ -4,16 +4,16 @@
 //! Each run gets its own process group and random environment marker. Supervision records observed
 //! descendants by process identity and confirms their cleanup, including after normal exit.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,6 +56,17 @@ const TURN_EMAIL: &str = "turn@yak.invalid";
 /// The systemd scope outlives the run's own limit by this much, as a backstop (`SCOPE_SLACK` in runs.py).
 const SCOPE_SLACK_SECS: u64 = 30;
 
+/// The shell that starts a run, by its full path: it runs before the jail is entered, in a worker's checkout,
+/// so it is never looked up.
+const BOOTSTRAP_SHELL: &str = "/bin/sh";
+
+/// The search path a run gets when the clock's has no absolute entry.
+const PLAIN_PATH: &str = "/usr/bin:/bin";
+
+/// How long the room's own git may take. It is long, for a large clone; what matters is that it is not for
+/// ever, whatever a worker left in a repository the room reads.
+const ROOM_GIT_SECS: u64 = 600;
+
 const POLL: Duration = Duration::from_millis(50);
 /// After a run ends, lines still in the pipe are handed over until none comes for this long.
 const DRAIN_IDLE: Duration = Duration::from_millis(500);
@@ -69,6 +80,22 @@ pub struct Sandbox {
     config: Vec<u8>,
     pid_file: Option<PathBuf>,
     stop: Arc<AtomicBool>,
+    /// Which directory the clone is: its device and its number there, taken when it was made.
+    id: (u64, u64),
+    /// The same for the scratch directory, once a jailed run has made it.
+    scratch_id: OnceLock<(u64, u64)>,
+}
+
+/// Which directory `path` is: its device and its number on that device. A link is not a directory.
+fn identity(path: &Path) -> Result<(u64, u64), TurnError> {
+    let meta = fs::symlink_metadata(path).map_err(io(format!("look at {}", path.display())))?;
+    if !meta.is_dir() {
+        return Err(TurnError::Refused(format!(
+            "{} is not a directory",
+            path.display()
+        )));
+    }
+    Ok((meta.dev(), meta.ino()))
 }
 
 /// Removes whatever is at `path` (a file, a link, a directory) without following a link. Nothing there is fine.
@@ -160,6 +187,7 @@ impl Sandbox {
         let config =
             fs::read(dir.join(".git").join("config")).map_err(io("read the clone's config"))?;
         made.0 = None;
+        let id = identity(&dir)?;
         Ok(Sandbox {
             dir,
             branch: branch.to_string(),
@@ -167,12 +195,26 @@ impl Sandbox {
             config,
             pid_file: None,
             stop: Arc::new(AtomicBool::new(false)),
+            id,
+            scratch_id: OnceLock::new(),
         })
     }
 
     /// The commit the sandbox was made at, in full.
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// Refuses unless the clone's directory is still the one that was made. A worker that moved it away and
+    /// left a link or another directory at its path would otherwise have the room run, read and write there.
+    fn own(&self) -> Result<(), TurnError> {
+        match identity(&self.dir) {
+            Ok(id) if id == self.id => Ok(()),
+            _ => Err(TurnError::Refused(format!(
+                "the sandbox at {} was replaced, and nothing more is done there",
+                self.dir.display()
+            ))),
+        }
     }
 
     /// The commit the turn's branch is at now, read after `reclaim`.
@@ -184,6 +226,7 @@ impl Sandbox {
     /// Restores the room's git configuration and branch after confirming that all metadata paths are plain.
     /// The room's git ignores system and global config, writes no reflogs and runs no hooks.
     pub fn reclaim(&self) -> Result<(), TurnError> {
+        self.own()?;
         let git_dir = self.dir.join(".git");
         for dir in [
             git_dir.clone(),
@@ -204,6 +247,14 @@ impl Sandbox {
                 return Err(TurnError::Refused(
                     "git metadata must contain no symbolic links".into(),
                 ));
+            }
+            // A named pipe where a ref should be would hold git, which opens a ref to read it, until
+            // somebody wrote to the pipe. Nothing but files and directories belongs here.
+            if !meta.is_dir() && !meta.is_file() {
+                return Err(TurnError::Refused(format!(
+                    "git metadata must hold only files and directories: {} is neither",
+                    path.strip_prefix(&self.dir).unwrap_or(&path).display()
+                )));
             }
             if meta.is_dir() {
                 for entry in fs::read_dir(path).map_err(io("read git metadata"))? {
@@ -264,6 +315,7 @@ impl Sandbox {
     }
 
     pub(crate) fn ordinary_index(&self) -> Result<(), TurnError> {
+        self.own()?;
         let entries = git(&self.dir, &["ls-files", "--stage", "-z"])?;
         if entries
             .split(|&b| b == 0)
@@ -341,8 +393,23 @@ impl Sandbox {
         if !jail::wanted() {
             return self.run(program, args, stdin, limit_secs, on_line);
         }
+        self.own()?;
         let scratch = self.scratch();
-        fs::create_dir_all(&scratch).map_err(io("make the scratch directory"))?;
+        match self.scratch_id.get() {
+            None => {
+                // Made here, and it must not be there already: whatever was would not be the room's.
+                fs::create_dir(&scratch).map_err(io("make the scratch directory"))?;
+                let _ = self.scratch_id.set(identity(&scratch)?);
+            }
+            Some(&id) => {
+                if identity(&scratch).ok() != Some(id) {
+                    return Err(TurnError::Refused(format!(
+                        "the scratch directory at {} was replaced, and nothing more runs with it",
+                        scratch.display()
+                    )));
+                }
+            }
+        }
         let mut jail = jail::for_checkout(&self.dir, &scratch)?;
         // A program named by its path (a script worker's) is shown to the run: that one file, not what is
         // beside it.
@@ -386,6 +453,7 @@ impl Sandbox {
                 "this sandbox was stopped, and nothing more runs in it".into(),
             ));
         }
+        self.own()?;
         let wrapped;
         let (program, args) = match jailed {
             Some((jail, _)) => {
@@ -399,7 +467,7 @@ impl Sandbox {
         let marker = marker()?;
         let (reader, writer) = std::io::pipe().map_err(io("make a pipe"))?;
         // The leader waits on stdin until its identity has been recorded, then exec preserves that identity.
-        let mut command = scrubbed("sh");
+        let mut command = scrubbed(BOOTSTRAP_SHELL);
         command
             .args([
                 "-c",
@@ -682,8 +750,16 @@ fn memory_cap_available() -> bool {
     false
 }
 
-/// A command with only the kept variables of the clock's environment.
-pub(crate) fn scrubbed(program: impl AsRef<std::ffi::OsStr>) -> Command {
+/// Whether the room goes on where it cannot watch a run's processes: only with `YAK_SUPERVISION=best-effort`.
+/// Like `YAK_JAIL=off`, the switch is for tests inside another sandbox, where processes cannot be listed. A
+/// clock that runs model workers refuses to start with it set.
+pub fn supervision_is_best_effort() -> bool {
+    std::env::var("YAK_SUPERVISION").as_deref() == Ok("best-effort")
+}
+
+/// A command with only the kept variables of the clock's environment, and a search path of absolute
+/// entries only.
+pub(crate) fn scrubbed(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
     command.env_clear();
     for name in ENV_KEPT {
@@ -691,7 +767,22 @@ pub(crate) fn scrubbed(program: impl AsRef<std::ffi::OsStr>) -> Command {
             command.env(name, value);
         }
     }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    command.env("PATH", absolute_entries(&path));
     command
+}
+
+/// The entries of a search path that are full paths. A relative or empty entry is looked up in whatever
+/// directory a program starts in, and the room starts programs in a worker's checkout: a file the worker
+/// committed there would be run in place of the room's own shell or git, outside any jail.
+pub(crate) fn absolute_entries(path: &OsStr) -> OsString {
+    let kept: Vec<PathBuf> = std::env::split_paths(path)
+        .filter(|entry| entry.is_absolute())
+        .collect();
+    std::env::join_paths(kept)
+        .ok()
+        .filter(|joined| !joined.is_empty())
+        .unwrap_or_else(|| OsString::from(PLAIN_PATH))
 }
 
 /// Flags for every git the room runs: no hooks, no filesystem monitor, no attributes file of the user's.
@@ -741,12 +832,68 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, TurnError> {
     output(command, &args.join(" "))
 }
 
-fn output(mut command: Command, what: &str) -> Result<Vec<u8>, TurnError> {
-    let out = command.output().map_err(io("start git"))?;
-    if out.status.success() {
-        return Ok(out.stdout);
+fn output(command: Command, what: &str) -> Result<Vec<u8>, TurnError> {
+    output_within(command, what, Duration::from_secs(ROOM_GIT_SECS))
+}
+
+/// Runs `command` for at most `limit` and returns its stdout. One that is still going then is ended, and that
+/// is an error: the room's own git reads repositories a worker has had its hands on, and must not wait on one
+/// for ever.
+fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Vec<u8>, TurnError> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(io("start git"))?;
+    // Each pipe is read on its own thread, so a full one never holds the program up.
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = read(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = read(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + limit;
+    // git usually answers in a few milliseconds, so the first looks come quickly and the later ones less often.
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(pause);
+                pause = (pause * 2).min(POLL);
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // The readers are left to end by themselves: something the program started may hold a pipe.
+                return Err(TurnError::Git(format!(
+                    "{what} did not finish in {} seconds and was ended",
+                    limit.as_secs()
+                )));
+            }
+        }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    if status.success() {
+        return Ok(stdout);
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = stderr.join().unwrap_or_default();
+    let stderr = String::from_utf8_lossy(&stderr);
     let stderr: String = stderr.trim().chars().take(300).collect();
     Err(TurnError::Git(format!("{what} failed: {stderr}")))
 }
@@ -880,6 +1027,46 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_path_keeps_only_its_absolute_entries() {
+        let kept = |path: &str| absolute_entries(OsStr::new(path)).into_string().unwrap();
+        assert_eq!(kept("/usr/bin:/bin"), "/usr/bin:/bin");
+        // An empty entry and `.` both mean the directory a program starts in.
+        assert_eq!(kept(".:/usr/bin:/bin"), "/usr/bin:/bin");
+        assert_eq!(kept(":/usr/bin::/bin:"), "/usr/bin:/bin");
+        assert_eq!(kept("bin:../tools:/opt/x/bin"), "/opt/x/bin");
+        // With nothing left, a run still finds the system's own programs.
+        assert_eq!(kept(""), PLAIN_PATH);
+        assert_eq!(kept(".:bin"), PLAIN_PATH);
+    }
+
+    #[test]
+    fn the_rooms_git_is_ended_when_it_does_not_finish() {
+        let mut slow = Command::new("/bin/sleep");
+        slow.arg("30");
+        let start = Instant::now();
+        let ended = output_within(slow, "a slow read", Duration::from_millis(300));
+        assert!(
+            matches!(&ended, Err(TurnError::Git(why)) if why.contains("did not finish")),
+            "{ended:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(5));
+        // One that finishes in time gives its output, and one that fails says why.
+        let mut quick = Command::new("/bin/sh");
+        quick.args(["-c", "echo out"]);
+        assert_eq!(
+            output_within(quick, "a quick read", Duration::from_secs(5)).unwrap(),
+            b"out\n"
+        );
+        let mut failing = Command::new("/bin/sh");
+        failing.args(["-c", "echo why >&2; exit 3"]);
+        let failed = output_within(failing, "a read", Duration::from_secs(5));
+        assert!(
+            matches!(&failed, Err(TurnError::Git(why)) if why.contains("why")),
+            "{failed:?}"
+        );
+    }
 
     #[test]
     fn the_scope_caps_memory_and_hides_the_bus_from_the_program() {

@@ -368,6 +368,14 @@ impl Drop for Removed<'_> {
 /// config, no other repository, HEAD on the turn's branch), and git ignores system and global config, hooks, the
 /// filesystem monitor and the user's attributes file. It also runs as a run of the sandbox, in its own process
 /// group with a limit.
+/// Whether `line` is an entry of `git status --porcelain`: two status letters, a space, a path. A run's stdout
+/// and stderr come as one stream, so anything else git or the system prints (a warning, say) arrives here too,
+/// and must not be taken for a change.
+fn is_status_entry(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    bytes.len() > 3 && bytes[2] == b' ' && bytes[..2].iter().all(|b| b" MADRCUT?!".contains(b))
+}
+
 fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError> {
     sandbox.reclaim()?;
     sandbox.single_repository()?;
@@ -398,7 +406,7 @@ fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError
             "--untracked-files=all",
             "--ignore-submodules=all",
         ],
-        &mut |line| changed |= !line.is_empty(),
+        &mut |line| changed |= is_status_entry(line),
     )?;
     if !changed {
         return Ok(());
@@ -412,4 +420,39 @@ fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError
         &["commit", "-q", "--no-verify", "-m", &message],
         &mut |_| {},
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_status_entry;
+
+    #[test]
+    fn only_a_status_entry_counts_as_a_change() {
+        for entry in [
+            " M a.txt",
+            "M  a.txt",
+            "?? new file.txt",
+            "A  src/b.rs",
+            "R  old -> new",
+            "UU both.txt",
+            " D gone",
+            "!! ignored",
+            " T mode",
+        ] {
+            assert!(is_status_entry(entry), "{entry:?}");
+        }
+        for other in [
+            "",
+            "M",
+            " M ",
+            "git: warning: confstr() failed with code 5",
+            "warning: could not open directory",
+            "error: something",
+            "fatal: not a git repository",
+            "hint: use git add",
+            "MMa.txt",
+        ] {
+            assert!(!is_status_entry(other), "{other:?}");
+        }
+    }
 }

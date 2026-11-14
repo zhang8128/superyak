@@ -7,6 +7,12 @@
 //! disks are not shown, so nobody has to list what in them is secret. A path can also be hidden inside
 //! something that is shown.
 //!
+//! **Other processes, on macOS.** "Deny by default" does not cover questions about processes there: they are
+//! answered unless denied. And a process's arguments and environment, where tokens are, come out through
+//! either of two doors: those questions, or a system setting under `kern.proc`. The profile shuts both, and
+//! `tests/jail.rs` holds the measurement. On Linux a jailed run's processes are numbered apart and it sees
+//! no other.
+//!
 //! On macOS this is `sandbox-exec` with a profile that denies by default. On Linux it is `bwrap` with only the
 //! system directories and what is named visible, every namespace private, and nothing it started able to
 //! outlive it. With neither tool, `Jail::new` refuses. Nothing here falls back to running unjailed.
@@ -21,15 +27,62 @@ use crate::TurnError;
 const SEATBELT: &str = "/usr/bin/sandbox-exec";
 const BUBBLEWRAP_DIRS: [&str; 3] = ["/usr/bin", "/bin", "/usr/local/bin"];
 
-/// What a jailed run on Linux can see of the system, read-only. A directory that does not exist is left out.
-const LINUX_SYSTEM_DIRS: [&str; 6] = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"];
+/// What a jailed run on Linux can see of the system, read-only: programs, libraries and what they share. Not
+/// all of `/usr`, since a machine's own services keep settings and data under `/usr/local/etc` and
+/// `/usr/local/var`. A directory that does not exist is left out.
+const LINUX_SYSTEM_DIRS: [&str; 17] = [
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/lib",
+    "/usr/lib32",
+    "/usr/lib64",
+    "/usr/libexec",
+    "/usr/share",
+    "/usr/include",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/local/lib",
+    "/usr/local/share",
+    "/usr/local/include",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+];
+
+/// The names in `/etc` that ordinary tools read, and no others: `/etc` is also where a machine's services keep
+/// their settings, and some of those are readable by everyone on it.
+const LINUX_ETC: [&str; 22] = [
+    "/etc/alternatives",
+    "/etc/ca-certificates",
+    "/etc/debian_version",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/localtime",
+    "/etc/login.defs",
+    "/etc/mime.types",
+    "/etc/nsswitch.conf",
+    "/etc/os-release",
+    "/etc/passwd",
+    "/etc/perl",
+    "/etc/protocols",
+    "/etc/python3",
+    "/etc/services",
+    "/etc/shells",
+    "/etc/ssl",
+    "/etc/terminfo",
+    "/etc/timezone",
+];
 
 /// What a jailed run on macOS can read and run of the system. None of it is a place a person keeps files of
 /// their own. A path that is not there is harmless.
 ///
 /// `/System` is named part by part, and never whole: `/System/Volumes` is where the other disks are mounted,
 /// the one that holds every home among them. Of it a run is shown only the system libraries' own disk image.
-const MACOS_SYSTEM_DIRS: [&str; 16] = [
+const MACOS_SYSTEM_DIRS: [&str; 18] = [
     "/System/Library",
     "/System/Cryptexes",
     "/System/Volumes/Preboot/Cryptexes",
@@ -43,7 +96,9 @@ const MACOS_SYSTEM_DIRS: [&str; 16] = [
     "/Library/Apple",
     "/Library/Developer",
     "/Library/Frameworks",
-    "/private/etc",
+    "/private/etc/manpaths.d",
+    "/private/etc/paths.d",
+    "/private/etc/ssl",
     "/private/var/db/timezone",
     "/private/var/select",
 ];
@@ -64,13 +119,53 @@ const MACOS_PACKAGE_PARTS: [&str; 9] = [
 ];
 
 /// Single names a run on macOS reads: the root directory's own list (every program reads it as it starts), the
-/// three links at the root, and the link that says where the developer tools are.
-const MACOS_SYSTEM_FILES: [&str; 5] = [
+/// three links at the root, the link that says where the developer tools are, and the files in `/private/etc`
+/// that ordinary tools read. Not all of `/private/etc`, where services keep their settings too.
+const MACOS_SYSTEM_FILES: [&str; 20] = [
     "/",
     "/etc",
     "/tmp",
     "/var",
     "/private/var/db/xcode_select_link",
+    "/private/etc/bashrc",
+    "/private/etc/group",
+    "/private/etc/hosts",
+    "/private/etc/localtime",
+    "/private/etc/manpaths",
+    "/private/etc/passwd",
+    "/private/etc/paths",
+    "/private/etc/profile",
+    "/private/etc/protocols",
+    "/private/etc/resolv.conf",
+    "/private/etc/services",
+    "/private/etc/shells",
+    "/private/etc/zprofile",
+    "/private/etc/zshenv",
+    "/private/etc/zshrc",
+];
+
+/// The system settings a jailed run on macOS can read: the machine's hardware, and the system's version and
+/// limits. Nothing under `kern.proc`: that is the table of every process of the person, and one of the two
+/// ways to another process's arguments and environment.
+const MACOS_SETTING_GROUPS: [&str; 6] = [
+    "hw.",
+    "kern.os",
+    "machdep.",
+    "security.mac.",
+    "sysctl.",
+    "vm.",
+];
+const MACOS_SETTINGS: [&str; 10] = [
+    "kern.argmax",
+    "kern.boottime",
+    "kern.clockrate",
+    "kern.hostname",
+    "kern.maxfilesperproc",
+    "kern.maxproc",
+    "kern.ngroups",
+    "kern.secure_kernel",
+    "kern.usrstack64",
+    "kern.version",
 ];
 
 /// Places in a home that hold keys, tokens and agent settings. A run is not shown the home at all; these stay
@@ -117,23 +212,35 @@ fn wanted_from(value: Option<&str>) -> bool {
 /// everything the jail is for.
 pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
     let mut jail = Jail::new(checkout, scratch)?;
+    // The jail keeps a home out by knowing where it is. With none it would hide nothing and refuse nothing, so
+    // it does not start.
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .filter(|home| home.is_absolute());
-    if let Some(home) = &home {
-        for name in HOME_SECRETS {
-            jail = jail.hide(&home.join(name))?;
-        }
+        .filter(|home| home.is_absolute())
+        .and_then(|home| home.canonicalize().ok())
+        .filter(|home| home.is_dir())
+        .ok_or_else(|| {
+            TurnError::Refused(
+                "the jail needs HOME to be the full path of a directory that exists: it keeps a home out by \
+                 knowing where it is"
+                    .into(),
+            )
+        })?;
+    for name in HOME_SECRETS {
+        jail = jail.hide(&home.join(name))?;
     }
     for name in crate::sandbox::AGENT_HOMES {
-        if let Some(dir) = std::env::var_os(name).map(PathBuf::from)
-            && dir.is_absolute()
-        {
+        if let Some(dir) = std::env::var_os(name).map(PathBuf::from) {
+            if !dir.is_absolute() {
+                return Err(TurnError::Refused(format!(
+                    "{name} must be a full path for the jail to hide it: it is {}",
+                    dir.display()
+                )));
+            }
             jail = jail.hide(&dir)?;
         }
     }
     if let Some(list) = std::env::var_os("YAK_JAIL_READ") {
-        let real_home = home.as_ref().and_then(|home| home.canonicalize().ok());
         for path in std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()) {
             let refuse = |why: &str| {
                 TurnError::Refused(format!("YAK_JAIL_READ names {}, {why}", path.display()))
@@ -144,10 +251,7 @@ pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> 
             let real = path
                 .canonicalize()
                 .map_err(|_| refuse("which is not there"))?;
-            if real_home
-                .as_ref()
-                .is_some_and(|home| home.starts_with(&real))
-            {
+            if home.starts_with(&real) {
                 return Err(refuse(
                     "which holds the home directory: name the tool's own directory",
                 ));
@@ -215,11 +319,17 @@ impl Jail {
                 "no jail on this machine: it needs sandbox-exec on macOS or bwrap on Linux".into(),
             )
         })?;
+        let (checkout, scratch) = (real_dir(checkout)?, real_dir(scratch)?);
+        if checkout.parent().is_none() || scratch.parent().is_none() {
+            return Err(TurnError::Refused(
+                "a jail whose run may write the whole machine is not a jail".into(),
+            ));
+        }
         Ok(Jail {
             kind,
             tool,
-            checkout: real_dir(checkout)?,
-            scratch: real_dir(scratch)?,
+            checkout,
+            scratch,
             readable: Vec::new(),
             hidden: Vec::new(),
         })
@@ -293,10 +403,11 @@ impl Jail {
         (self.tool.clone(), wrapped)
     }
 
-    /// Deny everything, then allow: making processes, signalling what is in the same jail, reading system
-    /// settings, and reading and running the system's own directories, what is shown, the checkout and the
-    /// scratch directory. It may write in those two and to the null devices. Of the device files it may read
-    /// only the null, zero and random devices and its own open files, so no terminal. It may look up no system
+    /// Deny everything, then allow: making processes, signalling what is in the same jail, reading the named
+    /// system settings, asking about itself, and reading and running the system's own directories, what is
+    /// shown, the checkout and the scratch directory. It may write in those two and to the null devices, and
+    /// may not remove or rename the two directories themselves, or change their permissions. Of the device files it may read only
+    /// the null, zero and random devices and its own open files, so no terminal. It may look up no system
     /// service and make no named semaphore, which would be shared with every process outside.
     ///
     /// Where two rules match, the later one decides. So the order is: what is shown, then what is hidden, then
@@ -328,9 +439,23 @@ impl Jail {
             "(version 1)\n\
              (deny default)\n\
              (allow process-fork)\n\
-             (allow signal (target same-sandbox))\n\
-             (allow sysctl-read)\n",
+             (allow signal (target same-sandbox))\n",
         );
+        let settings: String = MACOS_SETTING_GROUPS
+            .iter()
+            .map(|group| format!(" (sysctl-name-prefix \"{group}\")"))
+            .chain(
+                MACOS_SETTINGS
+                    .iter()
+                    .map(|name| format!(" (sysctl-name \"{name}\")")),
+            )
+            .collect();
+        profile.push_str(&format!("(allow sysctl-read{settings})\n"));
+        // "Deny by default" does not cover questions about processes: they are answered unless denied. A run
+        // may ask about itself, which a program does as it starts. Together with a list of settings that has
+        // nothing under `kern.proc`, this is what keeps another process's arguments and environment unread:
+        // either one alone leaves them readable.
+        profile.push_str("(deny process-info*)\n(allow process-info* (target self))\n");
         profile.push_str(&format!(
             "(allow file-read* process-exec{})\n",
             subpaths(&system)
@@ -363,10 +488,26 @@ impl Jail {
             "(allow file-write*{} (literal \"/dev/null\") (literal \"/dev/zero\"))\n",
             subpaths(&own)
         ));
+        // The two directories themselves stay what they are: not removed, not renamed, and their permissions
+        // not changed. A run that moved its checkout away and left a link at its path would have the next run
+        // in this sandbox jailed around whatever the link names. Only those acts are denied. Denying every
+        // write to the two names also refuses a harmless "make this directory if it is not there", and the
+        // system's own tools then complain on every start.
+        profile.push_str(&format!(
+            "(deny file-write-unlink file-write-mode (literal {}) (literal {}))\n",
+            quoted(&self.checkout),
+            quoted(&self.scratch)
+        ));
         // A program that asks where it is looks at each directory on the way down. It may see that those
         // directories exist, and nothing in them.
         let mut above = std::collections::BTreeSet::new();
-        for path in system.iter().chain(&self.readable).chain(&own) {
+        let files: Vec<PathBuf> = MACOS_SYSTEM_FILES.iter().map(PathBuf::from).collect();
+        for path in system
+            .iter()
+            .chain(&files)
+            .chain(&self.readable)
+            .chain(&own)
+        {
             above.extend(
                 path.ancestors()
                     .skip(1)
@@ -410,11 +551,11 @@ impl Jail {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        for dir in LINUX_SYSTEM_DIRS {
+        for path in LINUX_SYSTEM_DIRS.iter().chain(&LINUX_ETC) {
             args.extend([
                 "--ro-bind-try".to_string(),
-                dir.to_string(),
-                dir.to_string(),
+                path.to_string(),
+                path.to_string(),
             ]);
         }
         args.extend(
@@ -430,6 +571,7 @@ impl Jail {
         let touches_shown = |path: &Path| {
             LINUX_SYSTEM_DIRS
                 .iter()
+                .chain(&LINUX_ETC)
                 .map(Path::new)
                 .chain(self.readable.iter().map(PathBuf::as_path))
                 .any(|shown| path.starts_with(shown) || shown.starts_with(path))
@@ -560,13 +702,14 @@ mod tests {
         let profile = sample(Kind::Seatbelt).seatbelt_profile();
         assert!(profile.starts_with("(version 1)\n(deny default)\n"));
         assert!(!profile.contains("(allow default)"));
-        // Nothing is allowed without a filter except these two. Reading and running always name a place.
+        // Nothing is allowed without a filter except making a process. Reading, running and the system's
+        // settings are always named.
         for line in profile
             .lines()
             .filter(|l| l.starts_with("(allow ") && !l.contains(" ("))
         {
             assert!(
-                ["(allow process-fork)", "(allow sysctl-read)"].contains(&line),
+                line == "(allow process-fork)",
                 "an unfiltered allow that is not on the list: {line}"
             );
         }
@@ -575,6 +718,25 @@ mod tests {
         assert!(!profile.contains("ipc-"));
         assert!(!profile.contains("mach-lookup") && !profile.contains("global-name"));
         assert!(profile.contains("(deny file-read* file-write* (literal \"/dev/tty\"))"));
+        // The table of processes is not among the settings, and a run asks only about itself.
+        assert!(!profile.contains("\"kern.proc"), "{profile}");
+        assert!(profile.contains("(sysctl-name-prefix \"hw.\")"));
+        let ask = profile.find("(deny process-info*)\n").unwrap();
+        assert!(
+            ask < profile
+                .find("(allow process-info* (target self))\n")
+                .unwrap()
+        );
+        // The two directories themselves cannot be removed or replaced, and that rule comes after the one that
+        // lets a run write in them.
+        let write = profile.find("(allow file-write*").unwrap();
+        let keep = profile
+            .find(
+                "(deny file-write-unlink file-write-mode (literal \"/room/checkout\") \
+                 (literal \"/room/scratch\"))\n",
+            )
+            .unwrap();
+        assert!(write < keep);
         // Of the device files, only the five named ones and a run's own open files.
         assert!(!profile.contains("(subpath \"/dev\")"));
         assert_eq!(profile.matches("\"/dev/").count(), 8, "{profile}");
@@ -594,6 +756,8 @@ mod tests {
             "\"/usr\")",
             "\"/opt\")",
             "\"/private\")",
+            "\"/private/etc\")",
+            "/private/etc/sudoers",
             "homebrew/etc",
             "homebrew/var",
             "local/etc",
@@ -661,6 +825,25 @@ mod tests {
         assert!(joined.contains("--cap-drop ALL"));
         assert!(joined.contains("--new-session"));
         assert!(joined.contains("--die-with-parent"));
+        // Not all of `/usr` or `/etc`: programs and libraries, and the files ordinary tools read.
+        for whole in [
+            "/usr /usr",
+            "/etc /etc",
+            "/usr/local /usr/local",
+            "/var",
+            "/opt",
+            "/home",
+            "/root",
+        ] {
+            assert!(
+                !joined.contains(&format!("--ro-bind-try {whole}")),
+                "{whole}"
+            );
+        }
+        assert!(!joined.contains("/usr/local/etc") && !joined.contains("/usr/local/var"));
+        assert!(joined.contains("--ro-bind-try /usr/bin /usr/bin"));
+        assert!(joined.contains("--ro-bind-try /etc/passwd /etc/passwd"));
+        assert!(!joined.contains("/etc/shadow") && !joined.contains("/etc/environment"));
         // The whole machine is never bound, and the usual homes of sockets are empty directories.
         assert!(!joined.contains("--ro-bind / /") && !joined.contains("--bind / /"));
         assert!(joined.contains("--tmpfs /tmp") && joined.contains("--tmpfs /run"));

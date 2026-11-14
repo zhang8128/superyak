@@ -552,3 +552,99 @@ fn a_clone_whose_git_directory_was_swapped_is_refused() {
     assert!(matches!(sb.reclaim(), Err(TurnError::Refused(_))));
     assert_eq!(repo.refs(), before);
 }
+
+/// A worker can leave anything in its clone's `.git`. A named pipe where a ref should be would hold the room's
+/// own git, which opens the ref to read it, for as long as nobody writes to the pipe: for ever.
+#[test]
+fn a_named_pipe_in_the_clones_git_directory_is_refused_and_holds_nothing_up() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let (status, _) = sh(
+        &sb,
+        "ref=$(git symbolic-ref HEAD) && rm -f \".git/$ref\" && mkfifo \".git/$ref\"",
+        30,
+    );
+    assert_eq!(status.exit_code, 0);
+    let start = Instant::now();
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = done.send(sb.head());
+        });
+        let head = wait.recv_timeout(Duration::from_secs(20));
+        // Open both ends of the pipe, which never waits, so a git that did stop on it goes on and a failing run
+        // of this test ends.
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(sb.dir.join(".git/refs/heads/room/i1/1"));
+        let head = head.expect("reading the head was held up by the pipe");
+        assert!(matches!(head, Err(TurnError::Refused(_))), "{head:?}");
+    });
+    assert!(start.elapsed() < Duration::from_secs(20));
+}
+
+/// The sandbox is one directory, the one that was made. If a worker moves it away and leaves a link or another
+/// directory at its path, nothing more runs there and the room's git does not read it.
+#[test]
+fn a_sandbox_whose_directory_was_replaced_is_refused() {
+    for with_a_link in [true, false] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let moved = repo.scratch("moved-away");
+        let other = repo.scratch("somewhere-else");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::rename(&sb.dir, &moved).unwrap();
+        if with_a_link {
+            std::os::unix::fs::symlink(&other, &sb.dir).unwrap();
+        } else {
+            // Another clone at the same path: a directory, and a repository, and not the one that was made.
+            git(&repo.path, &["clone", "-q", ".", sb.dir.to_str().unwrap()]);
+        }
+        let mark = other.join("ran");
+        let touch = format!("touch '{}'; echo ran", mark.display());
+        for run in [Sandbox::run, Sandbox::run_untrusted] {
+            let ran = run(&sb, "sh", &strings(&["-c", &touch]), "", 30, &mut |_| {});
+            assert!(matches!(ran, Err(TurnError::Refused(_))), "{ran:?}");
+        }
+        assert!(!mark.exists());
+        assert!(matches!(sb.head(), Err(TurnError::Refused(_))));
+        assert!(matches!(sb.reclaim(), Err(TurnError::Refused(_))));
+    }
+}
+
+/// The scratch directory of a jailed run is the room's own: made by the room, once, beside the sandbox. A
+/// worker that is not jailed can reach it between runs. Something already at its path, or a link put where it
+/// was, is refused: the next run would be let write wherever the link names.
+#[test]
+fn a_scratch_directory_that_is_not_the_rooms_own_is_refused() {
+    let run = |sb: &Sandbox, script: &str| {
+        sb.run_untrusted("sh", &strings(&["-c", script]), "", 30, &mut |_| {})
+    };
+    let scratch_of = |sb: &Sandbox| {
+        let mut name = sb.dir.file_name().unwrap().to_os_string();
+        name.push(".scratch");
+        sb.dir.with_file_name(name)
+    };
+
+    // Replaced between two runs.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    assert_eq!(run(&sb, "echo one > \"$HOME/made\"").unwrap().exit_code, 0);
+    let scratch = scratch_of(&sb);
+    assert!(scratch.join("made").exists());
+    let elsewhere = repo.scratch("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::rename(&scratch, repo.scratch("moved-scratch")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &scratch).unwrap();
+    let again = run(&sb, "echo two > \"$HOME/made\"");
+    assert!(matches!(again, Err(TurnError::Refused(_))), "{again:?}");
+    assert!(!elsewhere.join("made").exists());
+
+    // There before the first run.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    std::fs::create_dir(scratch_of(&sb)).unwrap();
+    let first = run(&sb, "echo one");
+    assert!(first.is_err(), "{first:?}");
+}

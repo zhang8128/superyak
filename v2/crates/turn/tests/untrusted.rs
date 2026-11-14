@@ -78,9 +78,22 @@ fn a_check_has_no_network() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
-    let spec = spec(format!(
-        "curl -s -m 3 -o /dev/null http://127.0.0.1:{port}/; true"
-    ));
+    let fetch = format!("curl -s -m 3 -o /dev/null http://127.0.0.1:{port}/");
+    // The control: with no jail the same fetch reaches the listener, so curl is here and the listener works.
+    let mut free = std::process::Command::new("/bin/sh")
+        .args(["-c", &fetch])
+        .spawn()
+        .unwrap();
+    let control = reached(&listener);
+    let _ = free.kill();
+    let _ = free.wait();
+    assert!(
+        control,
+        "control failed: an unjailed fetch never reached the listener"
+    );
+    // The check passes only when curl ran and could not connect (its exit code 7). A curl that is missing, or
+    // one that connected, fails the check.
+    let spec = spec(format!("{fetch}; test $? -eq 7"));
     let checks = repo.scratch("checks");
     let frozen = freeze(&repo.path, &repo.base, &spec, &checks).unwrap();
     assert!(
@@ -96,7 +109,7 @@ fn a_check_has_no_network() {
         &repo.scratch("work"),
     )
     .unwrap();
-    assert!(verdict.exit_code == 0);
+    assert_eq!(verdict.exit_code, 0, "curl did not run and fail to connect");
     assert!(!reached(&listener), "the check reached the listener");
 }
 
@@ -195,10 +208,25 @@ fn inner_a_run_under_the_rooms_settings() {
         Some(_) => (script, Vec::new()),
         None => ("sh", common::strings(&["-c", script])),
     };
+    // With `YAK_INNER_PLANT` set, the checkout holds a program named `sh` that leaves a mark at that path and
+    // then runs the real shell: what a worker would commit to be run in place of the room's own.
+    if let Some(mark) = std::env::var_os("YAK_INNER_PLANT") {
+        let shim = sandbox.dir.join("sh");
+        let body = format!(
+            "#!/bin/sh\n/usr/bin/touch '{}'\nexec /bin/sh \"$@\"\n",
+            mark.to_str().unwrap()
+        );
+        fs::write(&shim, body).unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let mut said = Vec::new();
-    match sandbox.run_untrusted(program, &args, "", 30, &mut |line| {
-        said.push(line.to_string())
-    }) {
+    let mut on_line = |line: &str| said.push(line.to_string());
+    // With `YAK_INNER_PLAIN` set the run is the plain one, as a model worker's is.
+    let ran = match std::env::var_os("YAK_INNER_PLAIN") {
+        Some(_) => sandbox.run(program, &args, "", 30, &mut on_line),
+        None => sandbox.run_untrusted(program, &args, "", 30, &mut on_line),
+    };
+    match ran {
         Ok(status) => {
             for line in said {
                 println!("SAID {line}");
@@ -211,6 +239,16 @@ fn inner_a_run_under_the_rooms_settings() {
 
 /// Runs the inner half with `script` and these variables set, and returns what it printed.
 fn under(script: &str, variables: &[(&str, &Path)], jail: bool) -> String {
+    under_without(script, variables, &[], jail)
+}
+
+/// `under`, with these variables taken out of the child's environment as well.
+fn under_without(
+    script: &str,
+    variables: &[(&str, &Path)],
+    without: &[&str],
+    jail: bool,
+) -> String {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
     child
         .args([
@@ -220,6 +258,8 @@ fn under(script: &str, variables: &[(&str, &Path)], jail: bool) -> String {
         ])
         .env("YAK_INNER", script)
         .env_remove("YAK_INNER_PROGRAM")
+        .env_remove("YAK_INNER_PLANT")
+        .env_remove("YAK_INNER_PLAIN")
         .env_remove("YAK_JAIL")
         .env_remove("YAK_JAIL_READ")
         .env_remove("CLAUDE_CONFIG_DIR")
@@ -229,6 +269,9 @@ fn under(script: &str, variables: &[(&str, &Path)], jail: bool) -> String {
     }
     for (name, value) in variables {
         child.env(name, value);
+    }
+    for name in without {
+        child.env_remove(name);
     }
     let out = child.output().unwrap();
     let printed = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -377,4 +420,79 @@ fn a_program_kept_in_a_hidden_place_is_refused_by_name() {
         "{printed}"
     );
     assert!(!printed.contains("TOOL-RAN"), "{printed}");
+}
+
+/// The jail keeps a home out by knowing where it is. With no usable `HOME` it would hide nothing and refuse
+/// nothing, so it does not start. The same goes for an agent's settings directory that is named but cannot
+/// be placed.
+#[test]
+fn a_jail_with_no_usable_home_does_not_start() {
+    let home = home();
+    let file = home.dir.join(".netrc");
+    let missing = home.dir.join("no-such-home");
+    for wrong in [
+        Path::new("relative/home"),
+        file.as_path(),
+        missing.as_path(),
+    ] {
+        let printed = under("echo ran", &[("HOME", wrong)], true);
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("HOME"),
+            "{}: {printed}",
+            wrong.display()
+        );
+        assert!(!printed.contains("SAID ran"), "{printed}");
+    }
+    let printed = under_without("echo ran", &[], &["HOME"], true);
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("HOME"),
+        "unset: {printed}"
+    );
+    for agent in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home.dir), (agent, Path::new("relative/settings"))],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains(agent),
+            "{agent}: {printed}"
+        );
+    }
+    // The control: with a home that is one, the same run goes ahead.
+    let printed = under("echo ran", &[("HOME", &home.dir)], true);
+    assert!(printed.contains("SAID ran"), "{printed}");
+}
+
+/// The room starts a run through a shell of its own, before the jail is entered, in the worker's checkout, and
+/// a plain run (a model worker's) starts its program by name from there too. A search path with a relative
+/// entry would find a program the worker committed to the checkout, and run it in place of the room's shell or
+/// of the worker's own program, outside any jail.
+#[test]
+fn a_program_in_the_checkout_is_never_run_in_place_of_the_one_named() {
+    let home = home();
+    let mark = home.dir.join("the-shim-ran");
+    for path in [
+        ".:/usr/bin:/bin",
+        ":/usr/bin:/bin",
+        "/usr/bin::/bin",
+        "bin:/usr/bin:/bin",
+    ] {
+        for plain in [false, true] {
+            let mut settings: Vec<(&str, &Path)> = vec![
+                ("HOME", &home.dir),
+                ("PATH", Path::new(path)),
+                ("YAK_INNER_PLANT", &mark),
+            ];
+            if plain {
+                settings.push(("YAK_INNER_PLAIN", Path::new("1")));
+            }
+            let printed = under("echo ran", &settings, true);
+            assert!(printed.contains("SAID ran"), "{path}: {printed}");
+            assert!(
+                !mark.exists(),
+                "PATH={path}, plain run {plain}: the checkout's own sh ran outside the jail"
+            );
+        }
+    }
 }
