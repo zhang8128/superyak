@@ -471,15 +471,20 @@ fn the_ceiling_refuses_the_next_turn() {
 
 #[test]
 fn a_worker_cannot_change_its_check() {
+    // The worker makes the right fix and also rewrites the check, so the item can fail only because a commit that
+    // alters a file its check froze is refused (plan, 340df0a8).
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
     let cheat = worker(
         &r.scratch,
         "cheat",
-        "printf 'exit 0\\n' > checks/item0.sh\ncommit 'the check always passes now'",
+        &format!(
+            "echo {} > items/item0.txt\nprintf 'exit 0\\n' > checks/item0.sh\ncommit 'the fix, and a check that always passes'",
+            green(0)
+        ),
     );
     let _ = once_through(&r, &[&cheat], &[]);
-    assert_eq!(state(&r, &id), "failed", "judged by the frozen copy");
+    assert_eq!(state(&r, &id), "failed", "a changed check is refused, though the fix is right");
 }
 
 #[test]

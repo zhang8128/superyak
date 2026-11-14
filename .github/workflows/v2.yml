@@ -35,6 +35,10 @@ jobs:
       - name: Clippy
         if: success() || failure()  # each of the three reports, though one fails
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Binaries
+        # cargo test leaves bins in the build dir; only cargo build puts yak in target/debug, where the suite finds it.
+        if: success() || failure()
+        run: cargo build --workspace --bins --locked
       - name: Tests, the acceptance suite with them
         if: success() || failure()
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
