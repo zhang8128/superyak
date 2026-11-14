@@ -1,0 +1,38 @@
+name: v2 checks
+
+# Stage 1 plan, task 0: fmt, clippy and the tests under v2/, on x86_64 Linux and arm64 macOS, for pushes that touch
+# v2/**. The toolchain is v2/rust-toolchain.toml's (1.100.0, with rustfmt and clippy), installed by the runner's own
+# rustup: no third-party action. CI has the network, so it doesn't use v2/scripts/offline.sh.
+
+on:
+  push:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v2:
+    name: v2 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc --version && cargo --version
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests, the acceptance suite with them
+        run: cargo test --workspace --locked
