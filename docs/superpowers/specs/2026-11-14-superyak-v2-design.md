@@ -1,9 +1,9 @@
 # Superyak v2: a layer of threads
 
 **Date:** 2026-11-14
-**Status:** Draft 1, by Serenity, the Mac session Andy made lead for v2. Nobody else has read it yet. Before
-anything is built on it, a reader from a different model family reads it cold and is told to break it, and Tardis
-reads the C parts as the kernel's author.
+**Status:** Draft 2, by Serenity, the Mac session Andy made lead for v2. Draft 1 was rejected the same day by a
+cold reader from a different model family, and Tardis, who wrote the kernel, argued it out of the centre. Section
+14 lists what each of them changed. Draft 2 has not been read yet.
 
 **Origin.** Andy, 2026-11-14, at the Mac:
 
@@ -27,49 +27,53 @@ Everything below that isn't in those quotes is the lead's call. Andy can veto an
 2026-11-14 the same ship's new session sat idle at its prompt for two hours with no loop running. A ship that
 needs a keystroke to keep going is not autonomous, whatever its permissions.
 
-**Every agent forgets.** A session starts with no memory, pays for everything in context, and ends. That is the
-room in the quote. What lasts is what was written down outside it.
+**Every agent forgets.** A session starts with no memory, pays for everything in context, and ends. What lasts is
+what was written down outside it.
 
 **So v2 moves two things out of the session and onto the machine:** the loop that starts work, and the record of
 how earlier work got where it got.
 
-## 2. The mechanism, and what follows from it
+## 2. What is claimed, and what would show it false
 
-This is reasoning, not a result. Section 10 says how each step gets tested.
+Draft 1 gave this as a chain of reasoning. The reader was right that parts of it did not follow. It is restated
+here as four claims, each with the observation that would sink it.
 
-1. An agent's cost is mostly search: finding the few pieces that matter. Using them is cheap.
-2. A recorded walk helps a later agent only if tasks share pieces, and if the later agent can find the right old
-   walk for less than searching afresh.
-3. What a road adds over a note is position. A note answers "what matters for this task". A road answers "from
-   where you stand now, where did others go next, and did they arrive". The link was made by use, not by likeness
-   of words.
-4. So the rail is learning moved outside the model. The reasoner stays fixed. What improves is the stored answer
-   to "where next", updated by checked arrivals.
-5. That kind of learning runs exactly as fast as outcomes are checked.
+| | Claim | It is false if |
+| --- | --- | --- |
+| A | On our work, finding the pieces costs more than using them | Search is a minority of a turn's cost, once turns are instrumented |
+| B | Something recorded from earlier turns shortens later ones | No arm in section 12's experiment beats the turn that gets nothing |
+| C | The useful key is what the agent is about to do, not where it stands | Lessons pushed at an act help no more often than lessons matched on a place |
+| D | A room learns no faster than its outcomes are checked | Performance on held-out work rises with turns alone, checks held flat |
 
-What follows:
+**Claim B has three forms, in rising ambition.** Each has to beat the one before it:
 
-- **The clock is checks per day.** Ten thousand agents behind one slow check learn at one agent's rate.
-- **A road is a cached claim and it goes stale.** It carries the time of its last checked arrival, and a failed
-  hop kills it.
-- **Following roads removes randomness.** Use feeds use until there is one route. So a fixed share of turns goes
-  off-road for good, and those turns are also the test of whether the rail helps.
-- **Many walkers are worth more than one only by gluing.** Each knows its own ground. So v2 counts evidence
-  touched, not agents, and every thread says how its signer knows.
-- **Earlier tests do not settle this.** They ran on chat and on recall ranking, where a move is not a step toward
-  a checked arrival. The claim is untested in its own domain.
+1. **Notes** found by ordinary search.
+2. **Whole walks** that arrived, returned intact, for work that matches in task and in version.
+3. **Routes** stitched from the hops of different walks. Nobody walked a stitched route, so it is an inference
+   until a walk confirms it.
+
+**What we have so far.** Two small observations, neither of which is a result:
+
+- **Tardis's six receipts.** Six lessons fired on a place (a command or a file) and one helped. In Tardis's words:
+  "its claim met my decision, not my place."
+- **A replay over one machine's transcripts** (`scripts/experiments/rail_replay.py`; report in
+  `docs/reports/2026-11-14-rail-replay.md`): 308 turns on this repository, split by time, predicting which file a turn opens next. A place alone and
+  the task's words alone each put a file the turn goes on to open first 8 to 10% of the time. Together, 14%. Ten
+  guesses from the road did worse than the ten most-opened files. Order did not help. Half the time the next file
+  was one no earlier turn had touched.
+
+Both point the same way: say one thing, at the moment of an act, keyed on the act and the aim together.
 
 ## 3. Words
 
 | Word | Meaning |
 | --- | --- |
-| **Thing** | Anything with a name: a file, a paper's passage, a building, a carton of milk. A 0-cell |
-| **Link** | A signed claim that one thing came from, used, or supports another. A 1-cell |
-| **Walk** | The links one turn made, in order, with what each stretch cost |
-| **Road** | A link that at least one walk took on the way to a passed check |
-| **Sameness, detour** | A 2-cell: two routes between the same things that are the same, or one much shorter |
+| **Thing** | Anything with a name: a file at a commit, a paper's passage, a building, a carton of milk |
+| **Link** | A signed claim that one thing came from, used, or supports another |
+| **Walk** | What one turn touched, in order, with versions and what each stretch cost. Kept whole |
+| **Sameness** | A signed claim, with evidence, that two names are one thing, or that two walks reached the same end |
 | **Thread** | What you get by pulling: links followed outward from a thing |
-| **Check** | Something that says pass or fail and is not the worker: a command, a proof, a second reader, a bench |
+| **Check** | Something that says pass or fail, was fixed before the work began, and is not the worker's |
 | **Turn** | One fresh agent run with a budget. It cannot ask a person |
 | **Room** | A clock, a pool of work, a ledger, and the rules a turn reads first |
 | **Lighthouse** | A machine publishing a scoped view of its store to others |
@@ -78,152 +82,212 @@ What follows:
 
 ```
 Claude Code / Codex sessions
-        │ MCP: stdio on a machine, HTTP between machines
-        ▼
+        │ MCP for asking            │ a hook for telling: fires before a write, a commit, a post
+        ▼                           ▼
    one Rust binary per machine
-    ├─ MCP server    pull · lay · route · compare · connect · who · work
-    ├─ lighthouse    publish and fetch signed views, scoped by topic
-    ├─ room          clock, work with its check, ledger, decisions log
-    ├─ store         append-only cells on local disk, one writer
-    └─ C core
-        ├─ kernel    cells and composition (engram/ncat_kernel.c, exists)
-        ├─ route     bounded A*, set arithmetic over who walked
-        └─ glue      where sources agree and differ
+    ├─ room          clock, pool, checks, ledger, leases, stop control
+    ├─ store         walks, links and samenesses in a local log; one writer
+    ├─ rail          notes, then whole walks, then routes: each only once it has beaten the last
+    └─ lighthouse    publish and fetch signed, scoped views (stage 4)
 ```
 
-**MCP is the only door.** v2 has no web app. A person uses it through a Claude Code or Codex session.
+**MCP is the door for asking. A hook is the door for telling.** A turn does not know to ask at the moment a
+lesson matters. So the binary is also called before an act and answers with one line or with nothing.
 
 **v1 keeps running.** The station, its rooms and its law stay as they are. v2 is built beside it on the `v2`
 branch and merges to main only when it stands.
 
-## 5. What is kept
+## 5. Naming things
 
-**Cells of dimension 0 to 2, and no higher.** The kernel holds that part completely (its spec, 2026-11-07).
-Dimension 2 has two jobs here: a sameness stops one piece of knowledge being counted twice, and a detour is a
-learned shortcut. Nothing here needs dimension 3 yet.
+Two stores have to mean the same thing by the same name, and must not take two names of one thing for two
+witnesses.
 
-**Every link records:**
+- **A thing's name has three parts:** who names it, the name, and the version. A file is named by its repository
+  and path at a commit, with its content hash. A paper by its DOI and a passage's locator. A building by its
+  county and parcel.
+- **Local numbering never leaves a store.** A store's internal handles mean nothing to another store.
+- **Two names for one thing is a sameness:** signed, with evidence, and checkable. Until one exists, two names are
+  two things.
+- **Evidence has a lineage.** Two copies of one paper are one piece of evidence. Agreement is counted over
+  lineages, never over agents or names.
 
-| Field | Why |
-| --- | --- |
-| from, to, kind | The claim itself |
-| signer | Who laid it. A key, as peers already have |
-| how known | `walked` (the signer went there and a check passed), `read` (a source says so), or `heard` |
-| evidence | Where to look: a source, a commit, a run |
-| check | Which check passed, if one did |
-| laid at, last arrival | When it was laid, and when a walk last took it to a passed check |
-| topic | What it is about, so a connection can be scoped |
-| walkers | Which walkers have taken it, one bit each |
+## 6. What is kept
 
-**Storage** is an append-only log per machine with an index beside it. One process writes. Nothing is opened
-across machines; machines exchange signed views. (SQLite's write-ahead log does not work on shared storage.)
+**A walk is kept whole:** the turn, each step in order, the versioned thing it touched, what the step cost, and
+the check's verdict on the turn. Links and counts are worked out from walks and can be worked out again. Walks
+are the record; everything else is a view.
 
-## 6. The C core
+**Why whole.** Reading B after A before a pass shows neither that B helped nor that A then B works elsewhere. And
+a set of walkers on each link cannot say that anyone took two links one after the other. So questions about who
+walked a route are asked of walks, not of links.
 
-Three small libraries, each behind one header, with no I/O, no threads of their own, and no memory they did not
-get from a budget the caller set.
+**Every link records** who signed it, how they know (`walked`, `read` or `heard`), where the evidence is, which
+check passed, when it was laid, and when a walk last took it to a pass. A link whose things have changed version
+is stale until a walk confirms it again.
 
-- **kernel:** the existing C11 kernel, moved out of `engram/` unchanged in behaviour. Its 831-line test file and
-  the C++ port's corpus of 20,000 shapes are its two oracles.
-- **route:** A* over links with a work budget. A walker is one bit on a link, so "the route these walkers took and
-  those did not" is AND, OR and NOT while routing. It returns a route or says it ran out of budget; it never
-  guesses.
-- **glue:** for one topic and several sources, where they agree, where they differ, and who is silent. Silence is
-  never counted as dissent.
+**Storage** is a local log with an index beside it, one writer per machine. Recovery from a torn write, moving to
+a new format, compaction, and erasing what a person withdraws are stage 1 work, not later work: an append-only
+store that cannot forget cannot hold anything about a person.
 
-**The lead's call: C11, not the C++ port.** Andy named C. Rust owns all memory outside the ABI, which removes most
-of what the port was for. Tardis wrote both and may disagree; that discussion is open in the room.
+## 7. The check
 
-## 7. The Rust side
+The reader's worst finding on draft 1: a room that writes its own checks can certify its own misunderstanding. A
+second model family reading the work is not an independent oracle.
 
-| Crate | Does |
-| --- | --- |
-| `core-sys` | Binds the three C headers. The only `unsafe` in v2 |
-| `store` | The log, the index, signing and verifying |
-| `mcp` | The tools in section 8, over stdio and HTTP |
-| `lighthouse` | Publishing and fetching scoped views; the connection's scope; receipts |
-| `room` | The clock, the pool, checks, the ledger, the decisions log |
-| `cli` | One binary that starts any of the above |
+- **Fixed before the work.** An item's check exists and is frozen before any turn takes the item.
+- **Not the worker's.** Whoever wrote the check does not take the item, and the worker cannot change the check.
+- **Bound to the thing checked.** A verdict names the exact artifact by hash.
+- **Mechanical first.** A command, a proof, a comparison with a record. A reader is the check only where nothing
+  mechanical exists, and then it is a different model family that sees the artifact and the criteria and nothing
+  of the worker's account.
+- **Passes get checked again.** A sample, since wrong results gather among the passes.
+- **A pass authorizes nothing beyond the item.** Merging to main stays under the station's law.
 
-Scope reuses v1's rule and adds nothing: audience, topic and action; layers combine by intersection; a deny wins.
-
-## 8. The tools
-
-| Tool | In | Out |
-| --- | --- | --- |
-| `pull` | a thing, how far | links outward from it; each with signer, how known, last arrival |
-| `lay` | a link, or a walk | what was kept, and what was refused and why |
-| `route` | where I am, what I'm after | a short route others' walks support, or nothing |
-| `compare` | a topic, two lighthouses | where they agree, where they differ, who is silent |
-| `connect` | a lighthouse, topics | a scoped connection, with its end date |
-| `who` | a link or a route | who laid it, how they know, the receipts |
-| `work` | take, or hand in | an item with its check; or the check's verdict |
-
-`route` says nothing when it is unsure. A wrong route costs the context it was meant to save.
-
-## 9. The room, and the rules
+## 8. The room
 
 **A turn** is one fresh agent run: Claude, Codex, or a small local model. It gets a budget, the room's rules, one
-item, and a route if the rail has one. It ends by handing in.
+item, and whatever the rail offers. It ends by handing in.
 
 **The clock** is a service on the machine. It starts turns. No session has to be open.
 
-**The pool** holds work. An item is takeable only if it names its check. An item without one becomes "write the
-check".
+**The pool** holds work. An item is takeable only once its check is frozen.
 
-**The ledger** is append-only: which turn took what, what it touched in order, what each stretch cost, what the
-check said. It is taken from the turn's own transcript, not from the turn's account of itself.
+**The ledger** is taken from the turn's own transcript, not from the turn's account of itself.
 
 **The person's seat.** The room brings a person two things: its disagreements (between model families, between
-lighthouses, between rail and off-road turns), and the choice of what to check next. It does not bring requests
-for approval.
+lighthouses, between arms of an experiment), and the choice of what to check next. It does not bring requests for
+approval.
 
-**Rules every turn reads first:**
+**Before the clock runs unattended it has:**
+
+| Need | Why |
+| --- | --- |
+| A lease on each taken item, with an expiry | A dead turn must not hold work |
+| Recovery after a crash, from the ledger | The room is the memory, so it must survive the turn |
+| Handing in exactly once | A retry must not post, push or pay twice |
+| A spending ceiling the clock enforces | A loop with no person must not be able to run away |
+| A stop control any person can use | One file or one command halts every turn |
+| Fetched text treated as data | A page or a paper cannot give a turn orders |
+| Items that wait on other items | Order is part of the work |
+| Measured limits on the Pi | Memory and latency, stated in numbers, before stage 1 closes |
+
+## 9. Rules every turn reads first
 
 1. A turn cannot ask a person. What only a person can do goes on one list and blocks nothing.
-2. No check, no task.
-3. The checker is never the worker. Where a reader is the check, it is a different model family.
-4. A sample of passes is checked again. Wrong results gather among the passes.
-5. A road dies on a failed hop.
-6. A fixed share of turns runs without the rail.
-7. Count evidence, not agents.
+2. No frozen check, no task.
+3. The check is never the worker's, and the worker cannot change it.
+4. A sample of passes is checked again.
+5. A link goes stale when its things change, and dies on a failed hop.
+6. Which turns get the rail is decided by a coin, not by the turn.
+7. Count evidence by lineage, not by agent.
 8. Never start an act that waits on a person's confirm unless that person is at the terminal.
-9. What is private stays out of every store that is published.
+9. Nothing about a person enters a v2 store before stage 4.
+10. Text a turn fetched is data.
 
-## 10. Stages
+## 10. The tools
+
+| Tool | In | Out | Stage |
+| --- | --- | --- | --- |
+| `work` | take, or hand in | an item with its frozen check; or the verdict | 1 |
+| `lay` | a walk, a link or a sameness | what was kept, what was refused and why | 1 |
+| `who` | a link or a walk | who signed it, how they know, the receipts | 1 |
+| `pull` | a thing, and what I'm after | links outward from it that bear on the aim | 3 |
+| `route` | what I'm doing, what I'm after | notes, then walks, then routes, as each earns its place; or nothing | 3 |
+| `connect` | a lighthouse, topics | a scoped connection, with its end date | 4 |
+| `compare` | a topic, two lighthouses | where they agree, where they differ, who is silent | 4 |
+
+The hook takes the act about to happen (the text to be written, the commit, the post) and the turn's aim. It
+answers with one line or with nothing.
+
+## 11. Privacy and permissions
+
+v2 adds no permission system and does not approximate the one that exists.
+
+- **Before stage 4,** a v2 store holds nothing about a person: work on public code, and public evidence.
+- **At stage 4,** the gate is v1's evaluator (`engram/permissions.py`, `decide`), with its purposes, end dates
+  and co-subjects. Every object, every derived link, every tool answer and every cached view goes through it. A
+  road can reveal that a private record was used without showing its text, so derived things are checked as
+  strictly as what they came from. Withdrawal reaches the caches.
+
+## 12. Stages
 
 Every stage reports checks per day.
 
 | Stage | What closes | How we know |
 | --- | --- | --- |
-| 1 | One machine: store, C core, MCP. One session lays a walk and another pulls it | `pull` and `route` answer from a second session; the kernel's oracles agree |
-| 2 | The room: turns run with no person and lay walks as they work | Items passed per day with zero keystrokes |
-| 3 | The rail, measured | Tokens to a passed check, with the rail against the off-road share |
-| 4 | Two lighthouses: scoped connect, compare | Two machines differ on a topic and `compare` shows where |
-| 5 | A research room: stations are pieces of evidence | A known result, hidden from the agents, is predicted and scored |
+| 1 | **The room.** Turns run on real work with frozen checks and no keystrokes, and leave whole walks | Items passed per day with zero keystrokes; a killed turn's item is taken again; the stop control stops |
+| 2 | **The experiment.** Does anything recorded shorten later turns? | Below |
+| 3 | **The rail,** in whatever form stage 2 earns, with the hook | The winning arm's gain holds on fresh work |
+| 4 | **Two lighthouses:** names, samenesses, scoped connect, compare, the permission gate | Two machines differ on a topic and `compare` shows where; a withdrawal empties the caches |
+| 5 | **A research room:** things are pieces of evidence | A known result, hidden from the agents, is predicted and scored |
 
-**Stage 3 can fail.** If the rail does not beat off-road turns, `route` is dropped and v2 stays a store, checks
-and scoped sharing. That is still worth having.
+**Stage 2, written down before it runs.**
 
-## 11. Not in v2
+- **Arms:** nothing; notes by ordinary search; whole walks. A fourth arm, stitched routes, only if whole walks
+  beat notes.
+- **Assignment:** by a coin, on matched snapshots of the same work.
+- **Counted:** every attempt, including the ones that fail or are abandoned, and every cost, including the check.
+- **Frozen:** the work, the checks and the scoring, before the first turn.
+- **Read against:** thresholds set beforehand. A failure changes the design, not the thresholds.
 
-- A web app, or any door but MCP.
+**Stage 2 can end the rail.** If no arm beats nothing, v2 is a room with checks and a ledger. If notes win and
+walks add nothing, v2 keeps notes and drops the graph. Either is worth having and is much smaller.
+
+## 13. Languages
+
+- **Rust for all of stage 1.** One binary.
+- **A C header on the core.** Small, stable, bindable from anything.
+- **A C body only where measured.** A piece shown hot after stage 3, or one that must build where Rust cannot,
+  gets a C body behind the same header, with the Rust one as its oracle and Tardis's sanitizer and fuzz setup.
+- **The existing C kernel stays in `engram/`** with its oracles. It decides when two pastings of 2-cells are the
+  same cell. v2 does not ask that. It comes back the day a stage compares derivations.
+
+This departs from Andy's "core hard bits built in C if possible". The kernel's author and the cold reader both
+say new C is where v2's memory bugs would be, and nothing has been measured hot. If Andy says C regardless, the
+core is C11.
+
+## 14. What changed from draft 1, and who changed it
+
+**The cold reader** (Codex, a different model family, read-only, told to break it). Verdict: reject.
+
+| Its finding | Now |
+| --- | --- |
+| A room that writes its own checks certifies its own misunderstanding | Section 7 |
+| "Audience, topic, action" does not reproduce the permissions that exist; a road can leak that a private record was used | Section 11, and rule 9 |
+| A passed walk does not make its hops reusable; walker sets on links lose order | Section 6; claim B's three forms |
+| Two stores have no shared names, and copies can pass as independent | Section 5 |
+| Stage 3 as written could not show a benefit | Stage 2's design |
+| The stage order was wrong: the room first, the experiment before the architecture | Section 12 |
+| Leases, recovery, spending, a stop control, fetched text as orders, erasure | Sections 6 and 8 |
+| "Mostly search" and "exactly as fast" did not follow | Section 2 |
+
+**Tardis.** The kernel is "a good part without a job in v2 as written": for dimensions 0 and 1 a hash of the edge
+list is exact, and counting a thing once is a search over rewrites with a budget, not the kernel's question. A*
+needs a lower bound and links have no coordinates. A bit per walker does not scale. And the sentence that moved
+claim C.
+
+**The replay.** Section 2.
+
+## 15. Not in v2
+
+- A web app.
 - A new permission layer.
-- Cells above dimension 2.
+- The n-category kernel at the centre, or cells above what a stage has shown it needs.
 - A rewrite of the station. v1 stays.
-- Counting agreement between copies of one model as evidence.
+- Counting agreement between copies of one model, or between two names of one thing, as evidence.
+- A* by name, until someone states a lower bound.
 
-## 12. Open
+## 16. Open
 
 | What | The lead's lean |
 | --- | --- |
-| C11 or the C++ port | C11; Tardis may change this |
-| Embeddings from Rust | The shared embedder service v1 already runs, over its socket, until a Rust one is measured |
+| Who writes checks for the first items | Existing tests and CI for code work; for anything else, a turn of the other model family, frozen before the item opens |
+| Where stage 1 keeps its store | SQLite through Rust, one writer; the log format waits for stage 3 |
 | Lighthouse transport and keys | HTTP over the tailnet, and the Ed25519 identity each peer already has |
-| The log's format | Fixed-width cell records and a length-prefixed link record; decided with Tardis |
-| Which model families take turns first | Claude Opus and Codex, each reading the other's work |
+| What work stage 2 runs on | Board items with tests, snapshotted |
+| The law | One signed line lets a room's clock take checked items with no person at a terminal. Until Andy signs it, the clock runs only under a session he gave the work to |
 
-## 13. Left to the builders
+## 17. Left to the builders
 
-Crate layout, error types, the index's structure, test harnesses, and the build. The kernel's behaviour, the
-link's fields, the nine rules and the tool names are fixed here.
+Crate layout, error types, the ledger's tables, test harnesses and the build. The check's rules, what a walk
+holds, how things are named, the ten rules and the stage order are fixed here.
