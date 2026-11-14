@@ -152,12 +152,9 @@ fn status_counts_only_verified_passes_toward_checks_per_day() {
         let lease = r.take("codex:sol", 100).unwrap().unwrap();
         let v = verdict(passed);
         r.hand_in(&lease, &v.commit, 101).unwrap();
-        r.record_verdict(&id, lease.lease_no, &v).unwrap();
+        r.record_verdict(&id, lease.lease_no, &v, 1000).unwrap();
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = 1010;
     let s = r.status(now).unwrap();
     assert_eq!(s.verified_passes_last_day, 1);
     assert_eq!(s.counts[&ItemState::PassedVerified], 1);

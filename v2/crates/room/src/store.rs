@@ -3,7 +3,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{Room, RoomError, limits};
+use crate::{ItemId, ItemState, Room, RoomError, item::item_view, limits};
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -149,6 +149,38 @@ impl Room {
     /// The room-owned checks, turn directories and stop file live below this path.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Remove an idle item and its history, overwriting deleted content and truncating the WAL.
+    /// A checkpoint error can occur after the deletion commits; it must not be treated as erasure.
+    pub fn erase_item(&mut self, id: &ItemId) -> Result<(), RoomError> {
+        let tx = self.conn.transaction().map_err(db)?;
+        let view = item_view(&tx, id)?;
+        if matches!(view.state, ItemState::Leased | ItemState::Checking) {
+            return Err(RoomError::Refused("a running item cannot be erased".into()));
+        }
+        tx.pragma_update(None, "secure_delete", true).map_err(db)?;
+        for sql in [
+            "DELETE FROM steps WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
+            "DELETE FROM verdicts WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
+            "DELETE FROM attempts WHERE item=?1",
+            "DELETE FROM checks WHERE item=?1",
+            "DELETE FROM disagreements WHERE item=?1",
+            "DELETE FROM items WHERE id=?1",
+        ] {
+            tx.execute(sql, [&id.0]).map_err(db)?;
+        }
+        tx.commit().map_err(db)?;
+        let busy: u32 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .map_err(db)?;
+        if busy != 0 {
+            return Err(RoomError::Db(
+                "item deleted, but a busy WAL checkpoint prevented complete erasure".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

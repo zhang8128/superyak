@@ -124,7 +124,7 @@ fn three_failed_attempts_abandon_the_item() {
             ItemState::Failed
         };
         assert_eq!(
-            r.record_verdict(&id, lease.lease_no, &verdict(false))
+            r.record_verdict(&id, lease.lease_no, &verdict(false), 111)
                 .unwrap(),
             want
         );
@@ -163,19 +163,19 @@ fn verdict_is_bound_to_the_current_submission_and_releases_dependencies() {
     let b = r.add_item(child).unwrap();
     r.record_frozen(&b, frozen()).unwrap();
     let lease = r.take("codex:sol", 100).unwrap().unwrap();
-    assert!(r.record_verdict(&a, 1, &verdict(true)).is_err());
+    assert!(r.record_verdict(&a, 1, &verdict(true), 100).is_err());
     r.hand_in(&lease, &verdict(true).commit, 101).unwrap();
     let wrong = Verdict {
         commit: "5".repeat(40),
         ..verdict(true)
     };
-    assert!(r.record_verdict(&a, 1, &wrong).is_err());
+    assert!(r.record_verdict(&a, 1, &wrong, 102).is_err());
     assert_eq!(
-        r.record_verdict(&a, 1, &verdict(true)).unwrap(),
+        r.record_verdict(&a, 1, &verdict(true), 102).unwrap(),
         ItemState::PassedVerified
     );
     assert_eq!(r.item(&b).unwrap().state, ItemState::Open);
-    assert!(r.record_verdict(&a, 1, &verdict(false)).is_err());
+    assert!(r.record_verdict(&a, 1, &verdict(false), 103).is_err());
     assert_eq!(r.item(&a).unwrap().state, ItemState::PassedVerified);
 }
 
@@ -190,7 +190,7 @@ fn expired_checking_attempts_abandon_after_three_and_refuse_old_verdicts() {
         r.hand_in(&lease, &verdict(true).commit, now + 1).unwrap();
         assert_eq!(r.expire_due(now + LEASE_SECS).unwrap(), vec![id.clone()]);
         assert!(
-            r.record_verdict(&id, lease.lease_no, &verdict(true))
+            r.record_verdict(&id, lease.lease_no, &verdict(true), now + LEASE_SECS)
                 .is_err()
         );
     }
@@ -210,7 +210,7 @@ fn an_unchanged_artifact_cannot_pass() {
     };
     r.hand_in(&lease, &unchanged.commit, 101).unwrap();
     assert_eq!(
-        r.record_verdict(&id, 1, &unchanged).unwrap(),
+        r.record_verdict(&id, 1, &unchanged, 102).unwrap(),
         ItemState::Failed
     );
 }
@@ -238,13 +238,13 @@ fn artifact_metadata_cannot_carry_free_text() {
         },
     ] {
         assert!(matches!(
-            r.record_verdict(&id, 1, &v),
+            r.record_verdict(&id, 1, &v, 103),
             Err(RoomError::Refused(_))
         ));
     }
     assert_eq!(r.item(&id).unwrap().state, ItemState::Checking);
     assert_eq!(
-        r.record_verdict(&id, 1, &verdict(true)).unwrap(),
+        r.record_verdict(&id, 1, &verdict(true), 103).unwrap(),
         ItemState::PassedVerified
     );
 }

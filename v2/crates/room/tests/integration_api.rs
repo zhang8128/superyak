@@ -77,7 +77,7 @@ fn a_recheck_difference_demotes_and_is_listed_once() {
     let lease = r.take("codex:sol", 100).unwrap().unwrap();
     let v = verdict(true);
     r.hand_in(&lease, &v.commit, 101).unwrap();
-    r.record_verdict(&id, 1, &v).unwrap();
+    r.record_verdict(&id, 1, &v, 102).unwrap();
     assert_eq!(
         r.record_recheck(&id, 1, &v).unwrap(),
         ItemState::PassedVerified
@@ -104,14 +104,15 @@ fn a_recheck_difference_demotes_and_is_listed_once() {
         ItemState::PassedUnverified
     );
     assert_eq!(r.item(&child).unwrap().state, ItemState::Blocked);
-    assert_eq!(
-        r.record_recheck(&id, 1, &verdict(false)).unwrap(),
-        ItemState::PassedUnverified
-    );
-    assert_eq!(
-        r.record_recheck(&id, 1, &v).unwrap(),
-        ItemState::PassedUnverified
-    );
+    assert!(matches!(
+        r.record_recheck(&id, 1, &verdict(false)),
+        Err(RoomError::Refused(_))
+    ));
+    assert!(matches!(
+        r.record_recheck(&id, 1, &v),
+        Err(RoomError::Refused(_))
+    ));
+    assert_eq!(r.item(&id).unwrap().state, ItemState::PassedUnverified);
     let ds = r.disagreements().unwrap();
     assert_eq!(ds.len(), 1);
     assert_eq!(ds[0].kind, DisagreementKind::RecheckDiffers);
@@ -161,6 +162,6 @@ fn current_lease_recovers_attempt_identity_and_renewed_expiry() {
             ..lease
         })
     );
-    r.record_verdict(&id, 1, &verdict(true)).unwrap();
+    r.record_verdict(&id, 1, &verdict(true), 502).unwrap();
     assert_eq!(r.current_lease(&id).unwrap(), None);
 }
