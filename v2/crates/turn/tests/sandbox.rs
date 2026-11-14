@@ -5,7 +5,7 @@ mod common;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use common::{Repo, git, group_alive, pid_alive, strings, wait_until};
+use common::{EndGroupOnDrop, EndOnDrop, Repo, git, group_alive, pid_alive, strings, wait_until};
 use room::limits::TERM_GRACE_SECS;
 use turn::sandbox::MAX_LINE_BYTES;
 use turn::{Sandbox, TurnError};
@@ -164,8 +164,18 @@ fn a_run_past_its_limit_is_ended_with_its_children() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
     let start = Instant::now();
-    // The plan's `sleep 600 & sleep 600`, telling us the group (the shell's own id) and the background job.
-    let (status, lines) = sh(&sb, "echo $$; sleep 600 & echo $!; sleep 600", 1);
+    let (status, lines) = sh(
+        &sb,
+        "echo $$; sleep 600 & echo $!; perl -MPOSIX -e '$|=1; setsid(); print \"DETACHED=$$\\n\"; sleep 600' & sleep 600",
+        1,
+    );
+    let detached: u32 = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("DETACHED="))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let _cleanup = EndOnDrop(detached);
     assert!(status.timed_out);
     assert_ne!(status.exit_code, 0);
     let group: u32 = lines[0].parse().unwrap();
@@ -176,7 +186,9 @@ fn a_run_past_its_limit_is_ended_with_its_children() {
         "run returned after {:?}",
         start.elapsed()
     );
-    assert!(wait_until(bound, || !group_alive(group) && !pid_alive(background)));
+    assert!(wait_until(bound, || !group_alive(group)
+        && !pid_alive(background)
+        && !pid_alive(detached)));
     // These processes go at SIGTERM, so the run did not sit out the grace before a SIGKILL.
     assert!(
         start.elapsed() < Duration::from_secs(u64::from(TERM_GRACE_SECS)),
@@ -336,7 +348,10 @@ fn the_pid_file_holds_the_running_group_and_is_gone_after() {
             &mut |l| {
                 let text =
                     std::fs::read_to_string(&pid_file).expect("the pid file exists during the run");
-                let group: u32 = text.parse().expect("decimal text");
+                let fields: Vec<_> = text.lines().collect();
+                assert_eq!(fields.len(), 2);
+                let group: u32 = fields[0].parse().expect("decimal group");
+                assert!(!fields[1].is_empty());
                 seen = Some((l.parse::<u32>().unwrap(), group, group_alive(group)));
             },
         )
@@ -346,6 +361,122 @@ fn the_pid_file_holds_the_running_group_and_is_gone_after() {
     assert_eq!(group, shell, "the file names the run's own process group");
     assert!(alive);
     assert!(!pid_file.exists());
+}
+
+#[test]
+fn stale_process_identity_is_never_signalled() {
+    use std::os::unix::process::CommandExt;
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let mut child = Command::new("sleep")
+        .arg("600")
+        .env("YAK_TURN", "0".repeat(32))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let path = repo.scratch("stale.pid");
+    std::fs::write(&path, format!("{}\nnot-the-start-time\n", child.id())).unwrap();
+    let result = Sandbox::end_stale(&path);
+    let alive = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(!result.unwrap());
+    assert!(alive);
+}
+
+#[test]
+fn a_stored_identity_can_end_the_run_and_its_detached_children() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let mut sb = sandbox(&repo);
+    let pid_file = repo.scratch("run.pid");
+    sb.set_pid_file(pid_file.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let run = std::thread::spawn(move || {
+        sb.run(
+            "sh",
+            &strings(&[
+                "-c",
+                "perl -MPOSIX -e '$|=1; setsid(); print \"$$\\n\"; sleep 600' & sleep 600",
+            ]),
+            "",
+            30,
+            &mut |line| {
+                tx.send(line.to_owned()).unwrap();
+            },
+        )
+    });
+    let line = rx.recv_timeout(Duration::from_secs(5));
+    let ended = if line.is_ok() {
+        Sandbox::end_stale(&pid_file)
+    } else {
+        Ok(false)
+    };
+    let result = run.join().unwrap();
+    let pid: u32 = line.unwrap().parse().unwrap();
+    let _cleanup = EndOnDrop(pid);
+    assert!(ended.unwrap());
+    assert!(!result.unwrap().timed_out);
+    assert!(wait_until(Instant::now() + Duration::from_secs(2), || {
+        !pid_alive(pid)
+    }));
+    assert!(!pid_file.exists());
+    assert!(!Sandbox::end_stale(&pid_file).unwrap());
+}
+
+#[test]
+fn every_run_gets_its_own_marker() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let (_, first) = sh(&sb, "printf '%s\\n' \"$YAK_TURN\"", 30);
+    let (_, second) = sh(&sb, "printf '%s\\n' \"$YAK_TURN\"", 30);
+    assert_eq!(first[0].len(), 32);
+    assert!(first[0].bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_ne!(first, second);
+}
+
+#[test]
+fn an_unrelated_process_is_untouched_by_supervision() {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let mut canary = None;
+    let result = sb.run(
+        "sh",
+        &strings(&["-c", "echo \"$YAK_TURN\"; sleep 1"]),
+        "",
+        30,
+        &mut |marker| {
+            canary = Some(EndGroupOnDrop(
+                Command::new("sh")
+                    .args(["-c", "sleep 600 & wait", &format!("YAK_TURN={marker}")])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                    .unwrap(),
+            ));
+        },
+    );
+    assert_eq!(result.unwrap().exit_code, 0);
+    assert!(canary.as_mut().unwrap().0.try_wait().unwrap().is_none());
+}
+
+#[test]
+fn a_finished_run_ends_its_detached_children() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let (status, lines) = sh(
+        &sb,
+        "perl -MPOSIX -e '$|=1; setsid(); print \"$$\\n\"; sleep 600' & sleep 1",
+        30,
+    );
+    let pid = lines[0].parse().unwrap();
+    let _cleanup = EndOnDrop(pid);
+    assert_eq!(status.exit_code, 0);
+    assert!(wait_until(Instant::now() + Duration::from_secs(2), || {
+        !pid_alive(pid)
+    }));
 }
 
 #[test]

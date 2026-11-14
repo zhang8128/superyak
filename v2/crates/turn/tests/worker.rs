@@ -404,3 +404,129 @@ fn nothing_a_worker_plants_in_its_git_directory_runs_when_the_room_commits() {
         git(&sb.dir, &["rev-parse", "room/i1/1"])
     );
 }
+
+#[test]
+fn the_room_requires_plain_git_metadata_at_every_depth() {
+    for name in [
+        "logs/HEAD",
+        "refs/heads/deep/canary",
+        "objects/info/deep/canary",
+    ] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let canary = repo.scratch("canary");
+        std::fs::write(&canary, "untouched\n").unwrap();
+        let link = sb.dir.join(".git").join(name);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if link.exists() {
+            std::fs::remove_file(&link).unwrap();
+        }
+        std::os::unix::fs::symlink(&canary, &link).unwrap();
+        let fake = script(
+            &repo,
+            "worker",
+            "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
+        );
+        let result =
+            CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+        let intact = read(&canary) == "untouched\n";
+        assert!(intact, "canary changed for {name}");
+        assert!(
+            matches!(result, Err(TurnError::Refused(_))),
+            "{name}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn the_room_accepts_only_a_single_repository_tree() {
+    for git_file in [false, true] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let nested = sb.dir.join("nested/deep");
+        std::fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "-q"]);
+        std::fs::write(nested.join(".gitattributes"), "* filter=canary\n").unwrap();
+        std::fs::write(nested.join("file"), "base\n").unwrap();
+        git(&nested, &["add", "."]);
+        git(&nested, &["commit", "-qm", "fixture"]);
+        let nested_head = git(&nested, &["rev-parse", "HEAD"]);
+        git(
+            &sb.dir,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{nested_head},nested/deep"),
+            ],
+        );
+        let marker = repo.scratch("marker");
+        git(
+            &nested,
+            &[
+                "config",
+                "filter.canary.clean",
+                &format!("touch '{}'; cat", marker.display()),
+            ],
+        );
+        std::fs::write(nested.join("file"), "changed\n").unwrap();
+        if git_file {
+            let metadata = repo.scratch("nested-metadata");
+            std::fs::rename(nested.join(".git"), &metadata).unwrap();
+            std::fs::write(
+                nested.join(".git"),
+                format!("gitdir: {}\n", metadata.display()),
+            )
+            .unwrap();
+        }
+        let fake = script(
+            &repo,
+            "worker",
+            "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
+        );
+        let result =
+            CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+        assert!(!marker.exists(), "the marker stays unwritten");
+        assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
+    }
+}
+
+#[test]
+fn the_room_requires_an_index_without_gitlinks() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    git(
+        &sb.dir,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{},nested", repo.base),
+        ],
+    );
+    let fake = script(&repo, "worker", "#!/bin/sh\ncat >/dev/null\n");
+    let result =
+        CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+    assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
+}
+
+#[test]
+fn room_commits_leave_no_reflogs() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let head = sb.dir.join(".git/logs/HEAD");
+    let branch = sb.dir.join(".git/logs/refs/heads/room/i1/1");
+    std::fs::create_dir_all(branch.parent().unwrap()).unwrap();
+    std::fs::write(&head, "fixture\n").unwrap();
+    std::fs::write(&branch, "fixture\n").unwrap();
+    let fake = script(
+        &repo,
+        "worker",
+        "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
+    );
+    CodexWorker::with_program("test", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 30)
+        .unwrap();
+    assert!(!head.exists());
+    assert!(!branch.exists());
+}

@@ -3,6 +3,9 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
+use std::time::{Duration, Instant};
+
+use room::limits::TERM_GRACE_SECS;
 
 use common::{Repo, git};
 use room::{CheckOrigin, CheckSpec};
@@ -10,7 +13,7 @@ use sha2::{Digest, Sha256};
 use turn::TurnError;
 use turn::check::{freeze, run_check};
 
-/// The check passes when its file is missing, so only a frozen copy can make a commit that deleted it fail.
+/// The check reads the fixture when present.
 const COMMAND: &str = "if [ -f check.sh ]; then sh check.sh; fi";
 
 fn hex(bytes: &[u8]) -> String {
@@ -51,20 +54,17 @@ impl Item {
             written_by: "person:test".to_string(),
         }
     }
-
-    /// A commit from base that makes `change`, on its own branch.
-    fn commit(&self, branch: &str, change: impl FnOnce(&Repo)) -> String {
-        self.repo.branch_commit(branch, &self.repo.base, change)
-    }
 }
 
 #[test]
 fn freeze_reports_red_on_base_and_on_each_wrong_artifact() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
-    let frozen = freeze(&item.repo.path, &item.repo.base, &item.spec(), &checks).unwrap();
+    let mut spec = item.spec();
+    spec.wrong_artifacts.push(item.fix.clone());
+    let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
     assert!(frozen.red_on_base);
-    assert_eq!(frozen.red_on_wrong, [true]);
+    assert_eq!(frozen.red_on_wrong, [true, false]);
     let copy = checks.join(&frozen.check_hash).join("check.sh");
     assert_eq!(
         std::fs::read_to_string(copy).unwrap(),
@@ -103,6 +103,9 @@ fn the_same_spec_freezes_to_the_same_hash() {
     let item = Item::new();
     item.repo.write("other.txt", "x\n");
     let base = item.repo.commit("two check files");
+    item.repo.write("check.sh", "exit 23\n");
+    let head = item.repo.commit("later check");
+    assert_ne!(head, base);
     let mut spec = item.spec();
     spec.files = vec!["other.txt".to_string(), "check.sh".to_string()];
     let first = freeze(&item.repo.path, &base, &spec, &item.repo.scratch("c1")).unwrap();
@@ -127,12 +130,17 @@ fn the_same_spec_freezes_to_the_same_hash() {
 }
 
 #[test]
-fn a_commit_that_rewrote_the_check_file_is_judged_by_the_frozen_copy() {
+fn a_commit_that_rewrote_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
-    let spec = item.spec();
+    let mut spec = item.spec();
+    let marker = item.repo.scratch("check-ran");
+    spec.command = format!("touch '{}'; {COMMAND}", marker.display());
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
-    let cheat = item.commit("cheat", |r| r.write("check.sh", "exit 0\n"));
+    std::fs::remove_file(&marker).unwrap();
+    let cheat = item.repo.branch_commit("changed-check", &item.fix, |r| {
+        r.write("check.sh", "exit 0\n")
+    });
     let work = item.repo.scratch("work");
     let verdict = run_check(
         &item.repo.path,
@@ -144,16 +152,24 @@ fn a_commit_that_rewrote_the_check_file_is_judged_by_the_frozen_copy() {
     )
     .unwrap();
     assert!(!verdict.passed);
+    assert_eq!(verdict.exit_code, 125);
+    assert!(!verdict.timed_out);
+    assert!(!marker.exists(), "the check was not run");
     assert_eq!(item.repo.scratch("work").read_dir().unwrap().count(), 0);
 }
 
 #[test]
-fn a_commit_that_deleted_the_check_file_is_judged_by_the_frozen_copy() {
+fn a_commit_that_deleted_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
-    let spec = item.spec();
+    let mut spec = item.spec();
+    let marker = item.repo.scratch("check-ran");
+    spec.command = format!("touch '{}'; {COMMAND}", marker.display());
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
-    let gone = item.commit("gone", |r| r.remove("check.sh"));
+    std::fs::remove_file(&marker).unwrap();
+    let gone = item
+        .repo
+        .branch_commit("gone", &item.fix, |r| r.remove("check.sh"));
     let work = item.repo.scratch("work");
     let verdict = run_check(
         &item.repo.path,
@@ -165,6 +181,43 @@ fn a_commit_that_deleted_the_check_file_is_judged_by_the_frozen_copy() {
     )
     .unwrap();
     assert!(!verdict.passed);
+    assert_eq!(verdict.exit_code, 125);
+    assert!(!verdict.timed_out);
+    assert!(!marker.exists(), "the check was not run");
+}
+
+#[test]
+fn a_check_path_must_keep_its_frozen_type() {
+    for directory in [false, true] {
+        let item = Item::new();
+        let checks = item.repo.scratch("checks");
+        let marker = item.repo.scratch("check-ran");
+        let mut spec = item.spec();
+        spec.command = format!("touch '{}'; {COMMAND}", marker.display());
+        let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        let commit = item.repo.branch_commit("typed-check", &item.fix, |r| {
+            r.remove("check.sh");
+            if directory {
+                r.write("check.sh/inside", "fixture\n");
+            } else {
+                std::os::unix::fs::symlink("src/a.txt", r.path.join("check.sh")).unwrap();
+            }
+        });
+        let v = run_check(
+            &item.repo.path,
+            &commit,
+            &spec,
+            &frozen.check_hash,
+            &checks,
+            &item.repo.scratch("work"),
+        )
+        .unwrap();
+        assert!(!v.passed);
+        assert_eq!(v.exit_code, 125);
+        assert!(!v.timed_out);
+        assert!(!marker.exists());
+    }
 }
 
 #[test]
@@ -220,7 +273,7 @@ fn the_frozen_copy_keeps_its_mode() {
     };
     let checks = repo.scratch("checks");
     let frozen = freeze(&repo.path, &base, &spec, &checks).unwrap();
-    // A fix that also takes the check's execute bit away still runs the check as it was frozen.
+    // Frozen executable modes are preserved and required in the artifact.
     let fix = repo.branch_commit("fix", &base, |r| {
         r.write("a.txt", "fixed\n");
         std::fs::set_permissions(
@@ -238,7 +291,16 @@ fn the_frozen_copy_keeps_its_mode() {
         &repo.scratch("work"),
     )
     .unwrap();
-    assert!(verdict.passed, "{verdict:?}");
+    assert!(!verdict.passed, "{verdict:?}");
+    assert_eq!(verdict.exit_code, 125);
+    assert_eq!(
+        std::fs::metadata(checks.join(&frozen.check_hash).join("check.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0o111
+    );
 }
 
 #[test]
@@ -251,6 +313,7 @@ fn a_check_that_never_ends_times_out() {
     spec.timeout_secs = 1;
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
     assert!(frozen.red_on_base, "a timed-out check is red");
+    let start = Instant::now();
     let verdict = run_check(
         &item.repo.path,
         &item.fix,
@@ -262,6 +325,11 @@ fn a_check_that_never_ends_times_out() {
     .unwrap();
     assert!(verdict.timed_out);
     assert!(!verdict.passed);
+    assert!(
+        start.elapsed() < Duration::from_secs(u64::from(spec.timeout_secs + TERM_GRACE_SECS) + 5),
+        "{:?}",
+        start.elapsed()
+    );
 }
 
 #[test]

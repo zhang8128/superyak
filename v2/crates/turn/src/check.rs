@@ -1,6 +1,6 @@
 //! The frozen check (spec section 7). A check is frozen from the item's base commit before any turn takes the
-//! item, and every verdict is reached with those frozen copies written over whatever the commit has in their
-//! place, so a worker that rewrote, deleted or redirected a check's file is judged by the check as it was.
+//! item. An artifact must preserve the frozen paths' contents and types. Frozen copies are restored before
+//! judging, and a differing artifact receives a failing verdict without running the command.
 
 use std::fs;
 use std::io::Write;
@@ -112,8 +112,28 @@ fn judge(
     files: &[CheckFile],
     check_hash: &str,
 ) -> Result<Verdict, TurnError> {
+    let mut unchanged = true;
+    for file in files {
+        match read_at(&sandbox.dir, sandbox.base(), &file.path) {
+            Ok(actual) => {
+                unchanged &= actual.content == file.content && actual.executable == file.executable
+            }
+            Err(TurnError::Refused(_)) => unchanged = false,
+            Err(e) => return Err(e),
+        }
+    }
     for file in files {
         place(&sandbox.dir, file)?;
+    }
+    if !unchanged {
+        return Ok(Verdict {
+            passed: false,
+            exit_code: 125,
+            timed_out: false,
+            commit: sandbox.base().to_string(),
+            check_hash: check_hash.to_string(),
+            output_sha256: hex(&Sha256::digest([])),
+        });
     }
     let mut output = Sha256::new();
     let args = ["-c".to_string(), spec.command.clone()];

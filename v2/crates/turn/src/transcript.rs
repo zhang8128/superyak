@@ -17,6 +17,9 @@ use crate::sandbox::git;
 /// How deep `sh -c '...'` is unwrapped inside a shell command.
 const SHELL_DEPTH: u32 = 3;
 
+/// Maximum steps retained from one turn. Later calls are counted without retaining their data.
+pub const MAX_STEPS: usize = 100_000;
+
 /// The Claude stream's steps (`claude -p --output-format stream-json --verbose`).
 pub fn claude_steps(lines: impl Iterator<Item = String>, sandbox: &Sandbox) -> Vec<Step> {
     let mut parser = ClaudeParser::new(sandbox);
@@ -242,12 +245,33 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// The steps found so far.
-struct Steps(Vec<Step>);
+#[derive(Default)]
+struct Steps {
+    items: Vec<Step>,
+    total: u64,
+}
 
 impl Steps {
-    fn push(&mut self, tool: Tool, target: Target, tokens: (Option<u32>, Option<u32>)) -> usize {
-        let index = self.0.len();
-        self.0.push(Step {
+    fn full(&self) -> bool {
+        self.items.len() >= MAX_STEPS
+    }
+
+    fn count(&mut self, count: usize) {
+        self.total = self.total.saturating_add(count as u64);
+    }
+
+    fn push(
+        &mut self,
+        tool: Tool,
+        target: Target,
+        tokens: (Option<u32>, Option<u32>),
+    ) -> Option<usize> {
+        self.count(1);
+        if self.full() {
+            return None;
+        }
+        let index = self.items.len();
+        self.items.push(Step {
             seq: clamp(index as u64),
             tool,
             target,
@@ -256,7 +280,7 @@ impl Steps {
             tokens_in: tokens.0,
             tokens_out: tokens.1,
         });
-        index
+        Some(index)
     }
 }
 
@@ -273,7 +297,7 @@ impl ClaudeParser {
     pub fn new(sandbox: &Sandbox) -> ClaudeParser {
         ClaudeParser {
             tracked: Tracked::of(sandbox),
-            steps: Steps(Vec::new()),
+            steps: Steps::default(),
             waiting: HashMap::new(),
             counted: HashSet::new(),
         }
@@ -295,8 +319,13 @@ impl ClaudeParser {
         }
     }
 
+    /// Number of observed tool calls, including calls beyond the retained-step limit.
+    pub fn total_steps(&self) -> u64 {
+        self.steps.total
+    }
+
     pub fn finish(self) -> Vec<Step> {
-        self.steps.0
+        self.steps.items
     }
 
     fn calls(&mut self, message: &Value) {
@@ -308,6 +337,10 @@ impl ClaudeParser {
             .iter()
             .filter(|b| text(b, "type") == Some("tool_use"))
         {
+            if self.steps.full() {
+                self.steps.count(1);
+                continue;
+            }
             let input = block.get("input").unwrap_or(&Value::Null);
             let (tool, target) =
                 claude_call(text(block, "name").unwrap_or(""), input, &self.tracked);
@@ -318,7 +351,7 @@ impl ClaudeParser {
             };
             first = false;
             let index = self.steps.push(tool, target, cost);
-            if let Some(id) = text(block, "id") {
+            if let (Some(id), Some(index)) = (text(block, "id"), index) {
                 self.waiting
                     .entry(id.to_string())
                     .or_default()
@@ -370,7 +403,7 @@ impl ClaudeParser {
                 self.waiting.remove(id);
             }
             if let Some(index) = index {
-                self.steps.0[index].ok =
+                self.steps.items[index].ok =
                     block.get("is_error").and_then(Value::as_bool) != Some(true);
             }
         }
@@ -410,7 +443,7 @@ impl CodexParser {
     pub fn new(sandbox: &Sandbox) -> CodexParser {
         CodexParser {
             tracked: Tracked::of(sandbox),
-            steps: Steps(Vec::new()),
+            steps: Steps::default(),
             open: HashMap::new(),
             closed: HashSet::new(),
         }
@@ -433,12 +466,28 @@ impl CodexParser {
         if matches!(what, "agent_message" | "reasoning" | "todo_list" | "error") {
             return;
         }
-        let Some(id) = text(item, "id").map(str::to_string) else {
+        let id = text(item, "id");
+        if self.steps.full()
+            && id.is_none_or(|id| !self.open.contains_key(id) && !self.closed.contains(id))
+        {
+            if kind == "completed" {
+                let count = if what == "file_change" {
+                    item.get("changes")
+                        .and_then(Value::as_array)
+                        .map_or(1, |v| v.len().max(1))
+                } else {
+                    1
+                };
+                self.steps.count(count);
+            }
+            return;
+        }
+        let Some(id) = id.map(str::to_string) else {
             // An item with no id cannot be told from the next one: each such event is its own step.
             let indices = self.start(what, item);
             let ok = kind == "completed" && codex_ok(what, item);
             for index in indices {
-                self.steps.0[index].ok = ok;
+                self.steps.items[index].ok = ok;
             }
             return;
         };
@@ -456,15 +505,20 @@ impl CodexParser {
         if kind == "completed" {
             let ok = codex_ok(what, item);
             for index in indices {
-                self.steps.0[index].ok = ok;
+                self.steps.items[index].ok = ok;
             }
             self.open.remove(&id);
             self.closed.insert(id);
         }
     }
 
+    /// Retained calls plus completed steps observed after the retained-step limit.
+    pub fn total_steps(&self) -> u64 {
+        self.steps.total
+    }
+
     pub fn finish(self) -> Vec<Step> {
-        self.steps.0
+        self.steps.items
     }
 
     fn start(&mut self, what: &str, item: &Value) -> Vec<usize> {
@@ -483,7 +537,10 @@ impl CodexParser {
                     }
                     _ => Target::Outside,
                 };
-                vec![self.steps.push(Tool::Shell, target, none)]
+                self.steps
+                    .push(Tool::Shell, target, none)
+                    .into_iter()
+                    .collect()
             }
             "file_change" => {
                 let changes = item
@@ -492,11 +549,15 @@ impl CodexParser {
                     .cloned()
                     .unwrap_or_default();
                 if changes.is_empty() {
-                    return vec![self.steps.push(Tool::Edit, Target::Outside, none)];
+                    return self
+                        .steps
+                        .push(Tool::Edit, Target::Outside, none)
+                        .into_iter()
+                        .collect();
                 }
                 changes
                     .iter()
-                    .map(|change| {
+                    .filter_map(|change| {
                         let tool = if text(change, "kind") == Some("add") {
                             Tool::Write
                         } else {
@@ -508,8 +569,16 @@ impl CodexParser {
                     })
                     .collect()
             }
-            "web_search" => vec![self.steps.push(Tool::Search, Target::Outside, none)],
-            _ => vec![self.steps.push(Tool::Other, Target::Outside, none)],
+            "web_search" => self
+                .steps
+                .push(Tool::Search, Target::Outside, none)
+                .into_iter()
+                .collect(),
+            _ => self
+                .steps
+                .push(Tool::Other, Target::Outside, none)
+                .into_iter()
+                .collect(),
         }
     }
 }

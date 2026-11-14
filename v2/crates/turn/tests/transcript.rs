@@ -7,7 +7,8 @@ use std::process::Command;
 use common::{Repo, git};
 use room::{Step, Target, Tool};
 use turn::Sandbox;
-use turn::transcript::{claude_steps, codex_steps};
+use turn::sandbox::MAX_LINE_BYTES;
+use turn::transcript::{ClaudeParser, CodexParser, claude_steps, codex_steps};
 
 /// A repository holding `a.txt`, `b.txt` and `src/a.txt`, and a sandbox of it.
 fn sandbox() -> (Repo, Sandbox) {
@@ -374,13 +375,48 @@ fn odd_lines_are_passed_over_without_a_panic() {
     );
 }
 
+#[test]
+fn parsers_retain_at_most_one_hundred_thousand_steps_and_keep_counting() {
+    let (_repo, sb) = sandbox();
+    let mut claude = ClaudeParser::new(&sb);
+    let mut codex = CodexParser::new(&sb);
+    for n in 0..100_005 {
+        claude.line(&format!(r#"{{"type":"assistant","message":{{"id":"m{n}","content":[{{"type":"tool_use","id":"t{n}","name":"Read","input":{{"file_path":"a.txt"}}}}]}}}}"#));
+        codex.line(&format!(r#"{{"type":"item.completed","item":{{"id":"i{n}","type":"command_execution","command":"cat a.txt","status":"completed","exit_code":0}}}}"#));
+    }
+    for n in [0, 99_999] {
+        claude.line(&format!(r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t{n}"}}]}}}}"#));
+    }
+    codex.line(r#"{"type":"item.started","item":{"id":"last","type":"command_execution","command":"cat a.txt"}}"#);
+    codex.line(r#"{"type":"item.completed","item":{"id":"last","type":"command_execution","command":"cat a.txt","status":"completed","exit_code":0}}"#);
+    codex.line(r#"{"type":"item.completed","item":{"id":"i0","type":"command_execution","status":"completed","exit_code":0}}"#);
+    assert_eq!(claude.total_steps(), 100_005);
+    assert_eq!(codex.total_steps(), 100_006);
+    let claude = claude.finish();
+    let codex = codex.finish();
+    assert_eq!(claude.len(), 100_000);
+    assert_eq!(codex.len(), 100_000);
+    assert!(claude[0].ok && claude[99_999].ok);
+    assert!(codex.iter().all(|step| step.ok));
+    assert_eq!(claude.last().unwrap().seq, 99_999);
+    assert_eq!(codex.last().unwrap().seq, 99_999);
+}
+
 // --- Memory --------------------------------------------------------------------------------------------------
 
 const MB: u64 = 1 << 20;
 
 /// Runs `rss_probe` in a child process over a generated stream of about `bytes` and returns its peak memory.
 fn peak_of_a_parse(bytes: u64) -> u64 {
-    let out = Command::new(std::env::current_exe().unwrap())
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("/usr/bin/time");
+        command.arg("-l").arg(std::env::current_exe().unwrap());
+        command
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    let out = command
         .args([
             "rss_probe",
             "--exact",
@@ -397,6 +433,18 @@ fn peak_of_a_parse(bytes: u64) -> u64 {
         "the probe failed: {stdout}{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    #[cfg(target_os = "macos")]
+    return String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .find(|line| line.contains("maximum resident set size"))
+        .and_then(|line| line.split_whitespace().next()?.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "time gave no peak: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    #[cfg(not(target_os = "macos"))]
     stdout
         .lines()
         // The harness may print the test's name on the same line.
@@ -427,37 +475,57 @@ fn rss_probe() {
         return;
     };
     let (_repo, sb) = sandbox();
-    let file = sb.dir.join("src/a.txt");
-    let file = file.to_str().unwrap().to_string();
-    // Pairs of a call and its result, made one at a time as the parser asks for them: the stream itself is never
-    // in memory either.
-    let filler = "x".repeat(16 << 10);
-    let mut made = 0u64;
-    let mut n = 0u64;
-    let lines = std::iter::from_fn(|| {
-        if made >= bytes {
-            return None;
+    let generator = r#"
+        my $bytes = shift;
+        my $made = 0;
+        $| = 1;
+        if ($bytes >= 64*1024*1024) {
+            my $chunk = "x" x (64*1024);
+            for (1..1024) { print $chunk; }
+            print "\n";
+            $made += 64*1024*1024 + 1;
         }
-        let i = n / 2;
-        let line = if n.is_multiple_of(2) {
-            format!(
-                r#"{{"type":"assistant","message":{{"id":"msg_{i}","content":[{{"type":"tool_use","id":"toolu_{i}","name":"Read","input":{{"file_path":"{file}"}}}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
-            )
-        } else {
-            format!(
-                r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_{i}","content":"{filler}"}}]}}}}"#
-            )
-        };
-        n += 1;
-        made += line.len() as u64 + 1;
-        Some(line)
-    });
-    let steps = claude_steps(lines, &sb);
-    assert_eq!(steps.len() as u64, n.div_ceil(2));
+        my $filler = "x" x (16*1024);
+        my $n = 0;
+        while ($made < $bytes) {
+            my $call = '{"type":"assistant","message":{"id":"m'.$n.'","content":[{"type":"tool_use","id":"t'.$n.'","name":"Read","input":{"file_path":"src/a.txt"}}]}}';
+            my $result = '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t'.$n.'","content":"'.$filler.'"}]}}';
+            print $call, "\n", $result, "\n";
+            $made += length($call) + length($result) + 2;
+            $n++;
+        }
+        print "STREAM_PAIRS=$n\n";
+    "#;
+    let mut parser = ClaudeParser::new(&sb);
+    let mut pairs = None;
+    let mut longest = 0;
+    let status = sb
+        .run(
+            "perl",
+            &["-e".into(), generator.into(), bytes.to_string()],
+            "",
+            60,
+            &mut |line| {
+                longest = longest.max(line.len());
+                if let Some(n) = line.strip_prefix("STREAM_PAIRS=") {
+                    pairs = Some(n.parse::<usize>().unwrap());
+                }
+                parser.line(line);
+            },
+        )
+        .unwrap();
+    assert_eq!(status.exit_code, 0);
+    assert!(!status.timed_out);
+    assert_eq!(parser.finish().len(), pairs.unwrap());
+    if bytes >= 64 * MB {
+        assert_eq!(longest, MAX_LINE_BYTES);
+    }
+    #[cfg(not(target_os = "macos"))]
     println!("PEAK_BYTES={}", own_peak());
 }
 
 /// This process's peak memory, from the kernel's own count.
+#[cfg(not(target_os = "macos"))]
 fn own_peak() -> u64 {
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         let kb = status
@@ -467,24 +535,5 @@ fn own_peak() -> u64 {
             .expect("VmHWM in /proc/self/status");
         return kb * 1024;
     }
-    // macOS: vmmap reports the peak physical footprint of a process.
-    let out = Command::new("vmmap")
-        .args(["--summary", &std::process::id().to_string()])
-        .output()
-        .expect("vmmap runs");
-    let text = String::from_utf8_lossy(&out.stdout);
-    let value = text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("Physical footprint (peak):"))
-        .map(str::trim)
-        .unwrap_or_else(|| panic!("vmmap gave no peak: {text}"));
-    let (number, unit) = value.split_at(value.len() - 1);
-    let number: f64 = number.parse().unwrap();
-    let scale = match unit {
-        "K" => 1u64 << 10,
-        "M" => 1 << 20,
-        "G" => 1 << 30,
-        _ => panic!("unknown unit in {value:?}"),
-    };
-    (number * scale as f64) as u64
+    panic!("no kernel peak memory counter");
 }

@@ -113,6 +113,25 @@ impl Room {
         Ok(())
     }
 
+    /// Ends a current attempt without a verdict or an item retry charge. Its daily turn remains spent and
+    /// its lease number remains part of the item's history.
+    pub fn release(&mut self, lease: &Lease, now: Ts) -> Result<(), RoomError> {
+        let tx = self.conn.transaction().map_err(db)?;
+        let active = validate_lease(&tx, lease, now)?;
+        tx.execute(
+            "UPDATE attempts SET state='released' WHERE id=?1",
+            [&active.id],
+        )
+        .map_err(db)?;
+        tx.execute(
+            "UPDATE items SET state='open',attempts=attempts-1 WHERE id=?1",
+            [&lease.item.0],
+        )
+        .map_err(db)?;
+        tx.commit().map_err(db)?;
+        Ok(())
+    }
+
     pub fn record_verdict(
         &mut self,
         item: &ItemId,
