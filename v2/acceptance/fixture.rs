@@ -38,7 +38,14 @@ pub fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"])
+        .args([
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -46,8 +53,15 @@ pub fn git(repo: &Path, args: &[&str]) -> String {
         .env("GIT_COMMITTER_DATE", "2026-11-14T00:00:00Z")
         .output()
         .expect("git runs");
-    assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).expect("git prints UTF-8").trim().to_string()
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .expect("git prints UTF-8")
+        .trim()
+        .to_string()
 }
 
 fn write(path: &Path, text: &str) {
@@ -83,9 +97,20 @@ pub fn build(dir: &Path) -> Fixture {
     let mut items = Vec::new();
     for n in 0..ITEMS {
         let file = format!("items/item{n}.txt");
-        let fix_commit = commit_on_branch(&repo, &base_commit, &format!("fix-{n}"), &file, &format!("{}\n", green(n)));
-        let wrong_commit =
-            commit_on_branch(&repo, &base_commit, &format!("wrong-{n}"), &file, &format!("{}-not\n", green(n)));
+        let fix_commit = commit_on_branch(
+            &repo,
+            &base_commit,
+            &format!("fix-{n}"),
+            &file,
+            &format!("{}\n", green(n)),
+        );
+        let wrong_commit = commit_on_branch(
+            &repo,
+            &base_commit,
+            &format!("wrong-{n}"),
+            &file,
+            &format!("{}-not\n", green(n)),
+        );
         items.push(FixtureItem {
             title: format!("Make item {n} green"),
             check_file: format!("checks/item{n}.sh"),
@@ -96,7 +121,11 @@ pub fn build(dir: &Path) -> Fixture {
         });
     }
     git(&repo, &["checkout", "-q", "main"]);
-    Fixture { repo, base_commit, items }
+    Fixture {
+        repo,
+        base_commit,
+        items,
+    }
 }
 
 fn commit_on_branch(repo: &Path, base: &str, branch: &str, file: &str, text: &str) -> String {
@@ -108,8 +137,10 @@ fn commit_on_branch(repo: &Path, base: &str, branch: &str, file: &str, text: &st
 
 /// Every ref in `repo`, one `<sha> <name>` per line, sorted.
 pub fn refs(repo: &Path) -> Vec<String> {
-    let mut lines: Vec<String> =
-        git(repo, &["for-each-ref", "--format=%(objectname) %(refname)"]).lines().map(str::to_string).collect();
+    let mut lines: Vec<String> = git(repo, &["for-each-ref", "--format=%(objectname) %(refname)"])
+        .lines()
+        .map(str::to_string)
+        .collect();
     lines.sort();
     lines
 }
@@ -125,13 +156,20 @@ pub fn worker(dir: &Path, name: &str, body: &str) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make the worker executable");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("make the worker executable");
     }
     format!("script:{}", path.display())
 }
 
 /// A worker that makes every item green and commits, whichever item it was given.
 pub fn fixing_worker(dir: &Path) -> String {
-    let lines: Vec<String> = (0..ITEMS).map(|n| format!("echo {} > items/item{n}.txt", green(n))).collect();
-    worker(dir, "fix-all", &format!("{}\ncommit 'make every item green'", lines.join("\n")))
+    let lines: Vec<String> = (0..ITEMS)
+        .map(|n| format!("echo {} > items/item{n}.txt", green(n)))
+        .collect();
+    worker(
+        dir,
+        "fix-all",
+        &format!("{}\ncommit 'make every item green'", lines.join("\n")),
+    )
 }

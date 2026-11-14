@@ -35,30 +35,55 @@ fn yak_bin() -> PathBuf {
         return PathBuf::from(path);
     }
     let me = std::env::current_exe().expect("this test's path");
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("target");
     let found = me
         .ancestors()
         .skip(1)
         .map(|dir| dir.join(&name))
         .chain(["debug", "release"].map(|profile| workspace.join(profile).join(&name)))
         .find(|path| path.is_file());
-    found.unwrap_or_else(|| panic!("no {name} beside {}: run `cargo build -p yak` first", me.display()))
+    found.unwrap_or_else(|| {
+        panic!(
+            "no {name} beside {}: run `cargo build -p yak` first",
+            me.display()
+        )
+    })
 }
 
 /// `yak ARGS --room ROOM`, with stdin closed: nothing in stage 1 may wait on a keystroke.
 fn yak(room: &Path, args: &[&str]) -> Output {
-    Command::new(yak_bin()).args(args).arg("--room").arg(room).stdin(Stdio::null()).output().expect("yak runs")
+    Command::new(yak_bin())
+        .args(args)
+        .arg("--room")
+        .arg(room)
+        .stdin(Stdio::null())
+        .output()
+        .expect("yak runs")
 }
 
 fn ok(out: &Output) -> String {
-    assert!(out.status.success(), "yak failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "yak failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn refused(out: &Output) -> String {
-    assert!(!out.status.success(), "yak should have refused, and printed: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        !out.status.success(),
+        "yak should have refused, and printed: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
     let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    assert_eq!(err.lines().count(), 1, "a refusal is one line on stderr: {err:?}");
+    assert_eq!(
+        err.lines().count(),
+        1,
+        "a refusal is one line on stderr: {err:?}"
+    );
     err
 }
 
@@ -69,7 +94,12 @@ fn setup() -> Room {
     let scratch = dir.path().join("scratch");
     fs::create_dir_all(&scratch).expect("make scratch");
     ok(&yak(&room, &["init"]));
-    Room { _dir: dir, room, scratch, fx }
+    Room {
+        _dir: dir,
+        room,
+        scratch,
+        fx,
+    }
 }
 
 /// Adds item `n` with its own check, its wrong commit, and the given origin and author. Returns the printed id.
@@ -83,25 +113,50 @@ fn add_with_check(r: &Room, n: usize, check: &str, origin: &str, by: &str) -> St
     let id = ok(&yak(
         &r.room,
         &[
-            "item", "add", "--title", &item.title, "--repo", repo, "--base", &r.fx.base_commit, "--check", check,
-            "--file", &item.check_file, "--wrong", &item.wrong_commit, "--origin", origin, "--by", by,
+            "item",
+            "add",
+            "--title",
+            &item.title,
+            "--repo",
+            repo,
+            "--base",
+            &r.fx.base_commit,
+            "--check",
+            check,
+            "--file",
+            &item.check_file,
+            "--wrong",
+            &item.wrong_commit,
+            "--origin",
+            origin,
+            "--by",
+            by,
         ],
     ));
-    assert!(id.len() == 13 && id.starts_with('i') && id[1..].chars().all(|c| c.is_ascii_hexdigit()), "an item id: {id:?}");
+    assert!(
+        id.len() == 13 && id.starts_with('i') && id[1..].chars().all(|c| c.is_ascii_hexdigit()),
+        "an item id: {id:?}"
+    );
     id
 }
 
 /// The string value of `key` in a flat JSON object, by hand, so this crate needs no JSON parser.
 fn json_str(text: &str, key: &str) -> Option<String> {
     let at = text.find(&format!("\"{key}\""))? + key.len() + 2;
-    let rest = text[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let rest = text[at..]
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
     Some(rest[..rest.find('"')?].to_string())
 }
 
 fn json_num(text: &str, key: &str) -> Option<i64> {
     let at = text.find(&format!("\"{key}\""))? + key.len() + 2;
     let rest = text[at..].trim_start().strip_prefix(':')?.trim_start();
-    let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -112,7 +167,15 @@ fn state(r: &Room, id: &str) -> String {
 
 /// `yak clock run --once-through` with these workers and short limits, stdin closed, to its end.
 fn once_through(r: &Room, workers: &[&str], extra: &[&str]) -> Output {
-    let mut args = vec!["clock", "run", "--once-through", "--lease-secs", "30", "--turn-secs", "60"];
+    let mut args = vec![
+        "clock",
+        "run",
+        "--once-through",
+        "--lease-secs",
+        "30",
+        "--turn-secs",
+        "60",
+    ];
     for w in workers {
         args.extend(["--worker", *w]);
     }
@@ -131,13 +194,20 @@ impl Clock {
         for w in workers {
             cmd.args(["--worker", *w]);
         }
-        cmd.args(extra).arg("--room").arg(&r.room).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.args(extra)
+            .arg("--room")
+            .arg(&r.room)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         cmd.process_group(0);
         Clock(cmd.spawn().expect("the clock starts"))
     }
 
     fn kill_group(&mut self) {
-        let _ = Command::new("kill").args(["-9", &format!("-{}", self.0.id())]).status();
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{}", self.0.id())])
+            .status();
         let _ = self.0.wait();
     }
 
@@ -168,11 +238,18 @@ fn wait_for(what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
 }
 
 fn alive(pid: &str) -> bool {
-    Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn lines(path: &Path) -> Vec<String> {
-    fs::read_to_string(path).map(|t| t.lines().map(str::to_string).collect()).unwrap_or_default()
+    fs::read_to_string(path)
+        .map(|t| t.lines().map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 // --- The sixteen tests of plan task 0 (e01c0c74) ---
@@ -180,7 +257,9 @@ fn lines(path: &Path) -> Vec<String> {
 #[test]
 fn five_items_pass_with_no_keystrokes() {
     let r = setup();
-    let ids: Vec<String> = (0..5).map(|n| add(&r, n, "outside", "person:fixture")).collect();
+    let ids: Vec<String> = (0..5)
+        .map(|n| add(&r, n, "outside", "person:fixture"))
+        .collect();
     let fix = fixing_worker(&r.scratch);
     ok(&once_through(&r, &[&fix], &[]));
     for id in &ids {
@@ -201,7 +280,14 @@ fn unchanged_tree_does_not_pass() {
 fn a_wrong_artifact_fails() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
-    let wrong = worker(&r.scratch, "wrong", &format!("echo {}-not > items/item0.txt\ncommit 'the wrong artifact'", green(0)));
+    let wrong = worker(
+        &r.scratch,
+        "wrong",
+        &format!(
+            "echo {}-not > items/item0.txt\ncommit 'the wrong artifact'",
+            green(0)
+        ),
+    );
     let _ = once_through(&r, &[&wrong], &[]);
     assert_eq!(state(&r, &id), "failed");
 }
@@ -214,7 +300,10 @@ fn a_weak_check_never_opens() {
     let _ = once_through(&r, &[&fix], &[]);
     assert_eq!(state(&r, &id), "draft");
     let listed = ok(&yak(&r.room, &["disagreements", "--json"]));
-    assert!(listed.contains("weak_check") && listed.contains(&id), "a WeakCheck disagreement for {id}: {listed}");
+    assert!(
+        listed.contains("weak_check") && listed.contains(&id),
+        "a WeakCheck disagreement for {id}: {listed}"
+    );
 }
 
 #[test]
@@ -233,22 +322,39 @@ fn the_check_author_cannot_take_the_item() {
     let fix = fixing_worker(&r.scratch);
     let id = add(&r, 0, "outside", "script:a");
     let _ = once_through(&r, &[&fix], &[]);
-    assert_eq!(state(&r, &id), "open", "never leased to its own check's author");
-    assert!(!refs(&r.fx.repo).iter().any(|line| line.contains(&format!("refs/heads/room/{id}/"))), "no turn ran");
+    assert_eq!(
+        state(&r, &id),
+        "open",
+        "never leased to its own check's author"
+    );
+    assert!(
+        !refs(&r.fx.repo)
+            .iter()
+            .any(|line| line.contains(&format!("refs/heads/room/{id}/"))),
+        "no turn ran"
+    );
 }
 
 /// Reads the worker's process group the clock writes at `<room>/turns/<attempt>.pid` while a turn runs (plan a028145e).
 fn worker_groups(r: &Room) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(r.room.join("turns")) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(r.room.join("turns")) else {
+        return Vec::new();
+    };
     entries
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().is_some_and(|e| e == "pid"))
-        .filter_map(|path| fs::read_to_string(path).ok().map(|text| text.trim().to_string()))
+        .filter_map(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .map(|text| text.trim().to_string())
+        })
         .collect()
 }
 
 fn ref_for(r: &Room, id: &str, lease: u32) -> bool {
-    refs(&r.fx.repo).iter().any(|line| line.ends_with(&format!("refs/heads/room/{id}/{lease}")))
+    refs(&r.fx.repo)
+        .iter()
+        .any(|line| line.ends_with(&format!("refs/heads/room/{id}/{lease}")))
 }
 
 /// A worker that sleeps through its first turn and fixes item 0 on its second; `first` marks that the first began.
@@ -269,11 +375,19 @@ fn a_killed_worker_fails_the_turn() {
     let first = r.scratch.join("first-turn-began");
     let w = slow_once(&r, &first);
     let _clock = Clock::start(&r, &[&w], &["--turn-secs", "600"]);
-    wait_for("the first turn to begin", Duration::from_secs(60), || first.exists() && !worker_groups(&r).is_empty());
+    wait_for("the first turn to begin", Duration::from_secs(60), || {
+        first.exists() && !worker_groups(&r).is_empty()
+    });
     for group in worker_groups(&r) {
-        let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{group}")])
+            .status();
     }
-    wait_for("the item to pass on a later turn", Duration::from_secs(120), || state(&r, &id) == "passed_verified");
+    wait_for(
+        "the item to pass on a later turn",
+        Duration::from_secs(120),
+        || state(&r, &id) == "passed_verified",
+    );
     assert!(ref_for(&r, &id, 2), "taken again, as lease 2");
 }
 
@@ -286,9 +400,13 @@ fn a_killed_clock_recovers() {
     let first = r.scratch.join("first-turn-began");
     let w = slow_once(&r, &first);
     let mut clock = Clock::start(&r, &[&w], &["--lease-secs", "3", "--turn-secs", "600"]);
-    wait_for("the first turn to begin", Duration::from_secs(60), || first.exists() && !worker_groups(&r).is_empty());
+    wait_for("the first turn to begin", Duration::from_secs(60), || {
+        first.exists() && !worker_groups(&r).is_empty()
+    });
     for group in worker_groups(&r) {
-        let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{group}")])
+            .status();
     }
     clock.kill_group();
     sleep(Duration::from_secs(4)); // past the first lease
@@ -304,15 +422,28 @@ fn stop_halts_within_fifteen_seconds() {
     add(&r, 0, "outside", "person:fixture");
     add(&r, 1, "outside", "person:fixture");
     let pids = r.scratch.join("pids");
-    let sleeper = worker(&r.scratch, "sleeper", &format!("echo $$ >> '{}'\nsleep 600", pids.display()));
+    let sleeper = worker(
+        &r.scratch,
+        "sleeper",
+        &format!("echo $$ >> '{}'\nsleep 600", pids.display()),
+    );
     let mut clock = Clock::start(&r, &[&sleeper], &["--turn-secs", "600"]);
-    wait_for("a turn to begin", Duration::from_secs(60), || !lines(&pids).is_empty());
+    wait_for("a turn to begin", Duration::from_secs(60), || {
+        !lines(&pids).is_empty()
+    });
     let began = Instant::now();
     ok(&yak(&r.room, &["stop"]));
     assert!(r.room.join("STOP").exists());
-    assert!(clock.exited_within(Duration::from_secs(15)), "the clock ends within 15 s of STOP");
+    assert!(
+        clock.exited_within(Duration::from_secs(15)),
+        "the clock ends within 15 s of STOP"
+    );
     let worker_pid = lines(&pids)[0].clone();
-    wait_for("the worker to end", Duration::from_secs(15).saturating_sub(began.elapsed()), || !alive(&worker_pid));
+    wait_for(
+        "the worker to end",
+        Duration::from_secs(15).saturating_sub(began.elapsed()),
+        || !alive(&worker_pid),
+    );
     sleep(Duration::from_secs(2));
     assert_eq!(lines(&pids).len(), 1, "no new turn starts after STOP");
 }
@@ -325,8 +456,15 @@ fn the_ceiling_refuses_the_next_turn() {
     }
     let idle = worker(&r.scratch, "idle", "exit 0");
     let out = once_through(&r, &[&idle], &["--daily-turns", "2"]);
-    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(said.contains("daily ceiling"), "the refusal says so: {said}");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("daily ceiling"),
+        "the refusal says so: {said}"
+    );
     let status = ok(&yak(&r.room, &["status", "--json"]));
     assert_eq!(json_num(&status, "turns_today"), Some(2), "{status}");
 }
@@ -335,7 +473,11 @@ fn the_ceiling_refuses_the_next_turn() {
 fn a_worker_cannot_change_its_check() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
-    let cheat = worker(&r.scratch, "cheat", "printf 'exit 0\\n' > checks/item0.sh\ncommit 'the check always passes now'");
+    let cheat = worker(
+        &r.scratch,
+        "cheat",
+        "printf 'exit 0\\n' > checks/item0.sh\ncommit 'the check always passes now'",
+    );
     let _ = once_through(&r, &[&cheat], &[]);
     assert_eq!(state(&r, &id), "failed", "judged by the frozen copy");
 }
@@ -356,12 +498,31 @@ fn a_worker_has_no_remote() {
     let pusher = worker(&r.scratch, "pusher", &body);
     let before = refs(&r.fx.repo);
     let _ = once_through(&r, &[&pusher], &[]);
-    assert_eq!(fs::read_to_string(&seen).unwrap_or_default().trim(), "", "the sandbox has no remote");
-    assert!(lines(&pushed).iter().all(|code| code != "0"), "every push fails: {:?}", lines(&pushed));
+    assert_eq!(
+        fs::read_to_string(&seen).unwrap_or_default().trim(),
+        "",
+        "the sandbox has no remote"
+    );
+    assert!(
+        lines(&pushed).iter().all(|code| code != "0"),
+        "every push fails: {:?}",
+        lines(&pushed)
+    );
     let after = refs(&r.fx.repo);
-    let new: Vec<&String> = after.iter().filter(|line| !before.contains(*line)).collect();
-    assert!(new.iter().all(|line| line.contains(&format!("refs/heads/room/{id}/"))), "only the clock's ref: {new:?}");
-    assert_eq!(git(&r.fx.repo, &["remote"]), "", "the item's repository gained no remote");
+    let new: Vec<&String> = after
+        .iter()
+        .filter(|line| !before.contains(*line))
+        .collect();
+    assert!(
+        new.iter()
+            .all(|line| line.contains(&format!("refs/heads/room/{id}/"))),
+        "only the clock's ref: {new:?}"
+    );
+    assert_eq!(
+        git(&r.fx.repo, &["remote"]),
+        "",
+        "the item's repository gained no remote"
+    );
 }
 
 #[test]
@@ -377,7 +538,10 @@ fn no_prompt_text_reaches_the_store() {
     for name in ["room.sqlite3", "room.sqlite3-wal"] {
         let path = r.room.join(name);
         if let Ok(bytes) = fs::read(&path) {
-            assert!(!bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()), "{name} holds the marker");
+            assert!(
+                !bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+                "{name} holds the marker"
+            );
         }
     }
 }
@@ -387,11 +551,20 @@ fn a_second_clock_refuses() {
     let r = setup();
     add(&r, 0, "outside", "person:fixture");
     let pids = r.scratch.join("pids");
-    let sleeper = worker(&r.scratch, "sleeper", &format!("echo $$ >> '{}'\nsleep 600", pids.display()));
+    let sleeper = worker(
+        &r.scratch,
+        "sleeper",
+        &format!("echo $$ >> '{}'\nsleep 600", pids.display()),
+    );
     let _first = Clock::start(&r, &[&sleeper], &["--turn-secs", "600"]);
-    wait_for("the first clock's turn", Duration::from_secs(60), || !lines(&pids).is_empty());
+    wait_for("the first clock's turn", Duration::from_secs(60), || {
+        !lines(&pids).is_empty()
+    });
     let err = refused(&once_through(&r, &[&sleeper], &[]));
-    assert!(err.contains("another process") || err.contains("lock"), "says locked: {err}");
+    assert!(
+        err.contains("another process") || err.contains("lock"),
+        "says locked: {err}"
+    );
 }
 
 #[test]
@@ -404,7 +577,11 @@ fn a_damaged_store_is_refused() {
     let before = fs::read(&store).expect("the truncated store");
     let err = refused(&yak(&r.room, &["status"]));
     assert!(err.contains("damaged"), "says damaged: {err}");
-    assert_eq!(fs::read(&store).expect("the store after"), before, "its bytes are unchanged");
+    assert_eq!(
+        fs::read(&store).expect("the store after"),
+        before,
+        "its bytes are unchanged"
+    );
 }
 
 #[test]
@@ -413,7 +590,11 @@ fn a_missing_store_is_not_created() {
     let empty = dir.path().join("empty");
     fs::create_dir_all(&empty).expect("make it");
     refused(&yak(&empty, &["status"]));
-    assert_eq!(fs::read_dir(&empty).expect("read it").count(), 0, "no file was created");
+    assert_eq!(
+        fs::read_dir(&empty).expect("read it").count(),
+        0,
+        "no file was created"
+    );
     let absent = dir.path().join("absent");
     refused(&yak(&absent, &["status"]));
     assert!(!absent.exists(), "no directory was created");
