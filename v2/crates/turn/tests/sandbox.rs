@@ -648,3 +648,192 @@ fn a_scratch_directory_that_is_not_the_rooms_own_is_refused() {
     let first = run(&sb, "echo one");
     assert!(first.is_err(), "{first:?}");
 }
+
+/// The inner half of the test below, and nothing by itself: a run that never ends, in a process the outer half
+/// then kills, as a clock dies. Its repository and sandbox are in the outer half's directory, since this process
+/// never gets to clean up.
+#[test]
+fn inner_a_run_its_clock_abandons() {
+    let Some(dir) = std::env::var_os("YAK_INNER_ABANDON") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let repo = dir.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "hello\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let mut sb = Sandbox::create(&repo, &base, &dir.join("sandbox"), "room/i1/1").unwrap();
+    sb.set_pid_file(dir.join("run.pid"));
+    // A child that is seen as the run's own for two seconds, then leaves its group and its session.
+    let script = "perl -MPOSIX -e 'sleep 2; setsid(); sleep 600' & sleep 600";
+    let _ = sb.run("sh", &strings(&["-c", script]), "", 600, &mut |_| {});
+}
+
+/// Every process a run's record names: the group on its first line, then the first word of each line after the
+/// second.
+fn named_in(record: &std::path::Path) -> Vec<u32> {
+    let text = std::fs::read_to_string(record).unwrap_or_default();
+    let mut lines = text.lines();
+    let leader = lines.next().and_then(|line| line.parse().ok());
+    lines.next();
+    leader
+        .into_iter()
+        .chain(lines.filter_map(|line| line.split(' ').next()?.parse().ok()))
+        .collect()
+}
+
+/// The stand-in clock and whatever its run started, ended when a test is done with them, also when it fails
+/// part of the way through.
+struct Abandoned {
+    clock: std::process::Child,
+    record: std::path::PathBuf,
+    seen: Vec<u32>,
+}
+
+impl Drop for Abandoned {
+    fn drop(&mut self) {
+        let _ = self.clock.kill();
+        let _ = self.clock.wait();
+        let mut processes = named_in(&self.record);
+        processes.extend(&self.seen);
+        // Their children first, found by asking and not from the record: this must clean up also when the
+        // record is what a failing test found wrong.
+        let children: Vec<u32> = processes
+            .iter()
+            .flat_map(|pid| {
+                let out = Command::new("pgrep")
+                    .args(["-P", &pid.to_string()])
+                    .output();
+                String::from_utf8_lossy(&out.map(|o| o.stdout).unwrap_or_default())
+                    .lines()
+                    .filter_map(|line| line.trim().parse().ok())
+                    .collect::<Vec<u32>>()
+            })
+            .collect();
+        for pid in children.iter().chain(&processes) {
+            for target in [format!("-{pid}"), pid.to_string()] {
+                let _ = Command::new("kill")
+                    .args(["-9", "--", &target])
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+        }
+    }
+}
+
+/// A clock that dies takes its memory with it, and its run goes on with nothing to end it. What is left is the
+/// run's record. From it a later clock ends the leader and every process the run was seen to start: also one
+/// that has since left the group, and also when the leader itself is already gone.
+#[test]
+fn a_run_whose_clock_died_is_ended_from_its_record() {
+    for leader_already_gone in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        let record = dir.join("run.pid");
+        let clock = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "inner_a_run_its_clock_abandons", "--nocapture"])
+            .env("YAK_INNER_ABANDON", &dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut left = Abandoned {
+            clock,
+            record: record.clone(),
+            seen: Vec::new(),
+        };
+        let named = || named_in(&record);
+        // The leader, the child that will leave, and the sleeper the shell waits on.
+        assert!(
+            wait_until(Instant::now() + Duration::from_secs(30), || named().len()
+                >= 3),
+            "the record never named the run's children: {:?}",
+            named()
+        );
+        // Past the two seconds, so the child has left the group it was seen in.
+        std::thread::sleep(Duration::from_secs(3));
+        let processes = named();
+        let leader = processes[0];
+        left.seen = processes.clone();
+
+        left.clock.kill().unwrap();
+        left.clock.wait().unwrap();
+        // The control: the clock is gone and its run is not.
+        assert!(
+            processes.iter().all(|pid| pid_alive(*pid)),
+            "the run did not outlive its clock: {processes:?}"
+        );
+        if leader_already_gone {
+            Command::new("kill")
+                .args(["-9", "--", &leader.to_string()])
+                .status()
+                .unwrap();
+            assert!(wait_until(Instant::now() + Duration::from_secs(5), || {
+                !pid_alive(leader)
+            }));
+            assert!(processes[1..].iter().any(|pid| pid_alive(*pid)));
+        }
+
+        assert!(Sandbox::end_stale(&record).unwrap(), "nothing was ended");
+        assert!(
+            wait_until(Instant::now() + Duration::from_secs(5), || processes
+                .iter()
+                .all(|pid| !pid_alive(*pid))),
+            "left running: {:?}",
+            processes
+                .iter()
+                .filter(|pid| pid_alive(**pid))
+                .collect::<Vec<_>>()
+        );
+        assert!(!record.exists(), "the record was kept");
+    }
+}
+
+/// A check is a run too. While it runs its record is beside its work directory, where a later clock would find
+/// it, and it is gone when the check has ended.
+#[test]
+fn a_running_check_has_a_record_beside_its_work_directory() {
+    use room::{CheckOrigin, CheckSpec};
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let spec = CheckSpec {
+        command: "sleep 3".to_string(),
+        files: vec![],
+        timeout_secs: 30,
+        origin: CheckOrigin::Outside,
+        wrong_artifacts: vec![],
+        written_by: "person:test".into(),
+    };
+    let checks = repo.scratch("checks");
+    let frozen = turn::check::freeze(&repo.path, &repo.base, &spec, &checks).unwrap();
+    let work = repo.scratch("a1.check");
+    let record = repo.scratch("a1.check.pid");
+    let seen = std::thread::scope(|scope| {
+        let check = scope.spawn(|| {
+            turn::check::run_check(
+                &repo.path,
+                &repo.base,
+                &spec,
+                &frozen.check_hash,
+                &checks,
+                &work,
+            )
+        });
+        let mut group = None;
+        wait_until(Instant::now() + Duration::from_secs(20), || {
+            group = std::fs::read_to_string(&record)
+                .ok()
+                .and_then(|text| text.lines().next()?.parse::<u32>().ok());
+            group.is_some()
+        });
+        let alive = group.is_some_and(group_alive);
+        check.join().unwrap().unwrap();
+        (group, alive)
+    });
+    assert!(seen.0.is_some(), "the check wrote no record");
+    assert!(seen.1, "the record named no running group");
+    assert!(!record.exists(), "the record outlived the check");
+}

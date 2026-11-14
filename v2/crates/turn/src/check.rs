@@ -98,7 +98,12 @@ pub fn run_check(
         )));
     }
     fs::create_dir_all(work).map_err(io("make the check's work directory"))?;
-    let sandbox = Sandbox::create(repo, commit, &fresh_path(work, "check"), "check")?;
+    let mut sandbox = Sandbox::create(repo, commit, &fresh_path(work, "check"), "check")?;
+    // A check is a run like a worker's, and can be left going by a clock that dies. Its record is beside its
+    // work directory, where the next clock looks.
+    let mut record = work.file_name().unwrap_or_default().to_os_string();
+    record.push(".pid");
+    sandbox.set_pid_file(work.with_file_name(record));
     let result = judge(&sandbox, spec, &files, check_hash);
     let removed = sandbox.destroy();
     let verdict = result?;

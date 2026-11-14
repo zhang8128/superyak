@@ -342,8 +342,10 @@ impl Sandbox {
         self.pid_file = Some(path);
     }
 
-    /// Recovers a run after a clock restart, confirming the stored leader identity before signalling its
-    /// observed descendants. An absent or changed leader identity results in no signals.
+    /// Ends a run a dead clock left, from its pid file: the leader and every process the run was seen to start,
+    /// each only if it is still the process the file describes. Returns whether anything was ended. With
+    /// nothing of the run left, nothing is signalled. The file is removed once the run is known to be gone,
+    /// and kept if it could not be ended.
     pub fn end_stale(pid_file: &Path) -> Result<bool, TurnError> {
         let Some(identity) = Identity::read(pid_file)? else {
             return Ok(false);
@@ -501,7 +503,7 @@ impl Sandbox {
                 return Err(e);
             }
         };
-        let mut pid_file = match PidFile::write(self.pid_file.as_deref(), &supervisor.identity) {
+        let mut pid_file = match PidFile::write(self.pid_file.as_deref(), &supervisor.record()) {
             Ok(file) => file,
             Err(e) => {
                 end_group(&mut child, group);
@@ -521,7 +523,13 @@ impl Sandbox {
         let deadline = Instant::now() + Duration::from_secs(u64::from(limit_secs));
         let mut timed_out = false;
         let status = loop {
-            if let Err(e) = supervisor.poll() {
+            // A process seen for the first time goes into the record at once: after a crash the record is
+            // what a later clock ends this run by.
+            let seen = supervisor.poll().and_then(|grew| match grew {
+                true => pid_file.update(&supervisor.record()),
+                false => Ok(()),
+            });
+            if let Err(e) = seen {
                 end_group(&mut child, group);
                 if supervisor.end().is_ok() {
                     pid_file.remove();
@@ -633,13 +641,27 @@ impl PidFile {
         let Some(path) = path else {
             return Ok(PidFile(None));
         };
-        // Written whole and then renamed, so a reader never sees half a number.
+        let file = PidFile(Some(path.to_path_buf()));
+        file.put(identity)?;
+        Ok(file)
+    }
+
+    /// Writes the record anew, when the run has been seen to start another process.
+    fn update(&self, identity: &Identity) -> Result<(), TurnError> {
+        self.put(identity)
+    }
+
+    /// Written whole and then renamed, so a reader never sees half a record.
+    fn put(&self, identity: &Identity) -> Result<(), TurnError> {
+        let Some(path) = &self.0 else {
+            return Ok(());
+        };
         let mut partial = path.as_os_str().to_owned();
         partial.push(".partial");
         let partial = PathBuf::from(partial);
+        clear(&partial)?;
         write_new(&partial, identity.text().as_bytes())?;
-        fs::rename(&partial, path).map_err(io("write the pid file"))?;
-        Ok(PidFile(Some(path.to_path_buf())))
+        fs::rename(&partial, path).map_err(io("write the pid file"))
     }
 
     fn remove(&mut self) {
