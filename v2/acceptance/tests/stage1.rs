@@ -26,14 +26,23 @@ struct Room {
     fx: Fixture,
 }
 
-/// The `yak` binary `cargo test --workspace` built beside this test's own binary (target/<profile>/yak): another
-/// package's binary, which CARGO_BIN_EXE_ doesn't name.
+/// The `yak` binary that `cargo test --workspace` built: another package's, which CARGO_BIN_EXE_ doesn't name. It's
+/// in an ancestor of this test's own binary (target/<profile>/, whether the test sits in deps/ or, since Cargo's
+/// build-dir change, in build/<crate>/<hash>/out/), else in the workspace's own target/. YAK_BIN overrides both.
 fn yak_bin() -> PathBuf {
+    let name = format!("yak{}", std::env::consts::EXE_SUFFIX);
+    if let Some(path) = std::env::var_os("YAK_BIN") {
+        return PathBuf::from(path);
+    }
     let me = std::env::current_exe().expect("this test's path");
-    let profile = me.parent().and_then(Path::parent).expect("target/<profile>/deps/<test>");
-    let yak = profile.join(format!("yak{}", std::env::consts::EXE_SUFFIX));
-    assert!(yak.exists(), "no yak binary at {}: run `cargo build -p yak` first", yak.display());
-    yak
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target");
+    let found = me
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&name))
+        .chain(["debug", "release"].map(|profile| workspace.join(profile).join(&name)))
+        .find(|path| path.is_file());
+    found.unwrap_or_else(|| panic!("no {name} beside {}: run `cargo build -p yak` first", me.display()))
 }
 
 /// `yak ARGS --room ROOM`, with stdin closed: nothing in stage 1 may wait on a keystroke.
@@ -166,7 +175,7 @@ fn lines(path: &Path) -> Vec<String> {
     fs::read_to_string(path).map(|t| t.lines().map(str::to_string).collect()).unwrap_or_default()
 }
 
-// --- The fifteen tests of plan task 0 ---
+// --- The sixteen tests of plan task 0 (e01c0c74) ---
 
 #[test]
 fn five_items_pass_with_no_keystrokes() {
@@ -219,56 +228,74 @@ fn a_model_written_check_is_unverified() {
 
 #[test]
 fn the_check_author_cannot_take_the_item() {
+    // By family (spec rule 3, plan e01c0c74): a check written by script:a is never leased to a script: worker.
     let r = setup();
     let fix = fixing_worker(&r.scratch);
-    let id = add(&r, 0, "outside", &fix); // written by the only worker there is
+    let id = add(&r, 0, "outside", "script:a");
     let _ = once_through(&r, &[&fix], &[]);
     assert_eq!(state(&r, &id), "open", "never leased to its own check's author");
     assert!(!refs(&r.fx.repo).iter().any(|line| line.contains(&format!("refs/heads/room/{id}/"))), "no turn ran");
 }
 
-#[test]
-fn a_killed_turn_is_taken_again() {
-    // Review focus 1: the clock dies mid-turn (kill -9 on its process group, the worker with it). On restart the item
-    // is taken again with the next lease number, and the dead turn leaves no ref.
-    let r = setup();
-    let id = add(&r, 0, "outside", "person:fixture");
-    let pids = r.scratch.join("pids");
-    let first = r.scratch.join("first-turn-began");
+/// Reads the worker's process group the clock writes at `<room>/turns/<attempt>.pid` while a turn runs (plan a028145e).
+fn worker_groups(r: &Room) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(r.room.join("turns")) else { return Vec::new() };
+    entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.extension().is_some_and(|e| e == "pid"))
+        .filter_map(|path| fs::read_to_string(path).ok().map(|text| text.trim().to_string()))
+        .collect()
+}
+
+fn ref_for(r: &Room, id: &str, lease: u32) -> bool {
+    refs(&r.fx.repo).iter().any(|line| line.ends_with(&format!("refs/heads/room/{id}/{lease}")))
+}
+
+/// A worker that sleeps through its first turn and fixes item 0 on its second; `first` marks that the first began.
+fn slow_once(r: &Room, first: &Path) -> String {
     let body = format!(
-        "echo $$ >> '{pids}'\nif [ ! -e '{first}' ]; then : > '{first}'; sleep 600; fi\necho {g} > items/item0.txt\ncommit 'make item 0 green'",
-        pids = pids.display(),
+        "if [ ! -e '{first}' ]; then : > '{first}'; sleep 600; fi\necho {g} > items/item0.txt\ncommit 'make item 0 green'",
         first = first.display(),
         g = green(0)
     );
-    let slow_once = worker(&r.scratch, "slow-once", &body);
-    let mut clock = Clock::start(&r, &[&slow_once], &["--lease-secs", "3", "--turn-secs", "600"]);
-    wait_for("the first turn to begin", Duration::from_secs(60), || first.exists());
-    // Power loss takes the worker too: its process group is in <room>/turns/<attempt>.pid (plan a028145e).
-    for entry in fs::read_dir(r.room.join("turns")).expect("the room's turns") {
-        let path = entry.expect("an entry").path();
-        if path.extension().is_some_and(|e| e == "pid") {
-            let group = fs::read_to_string(&path).expect("a pid file").trim().to_string();
-            let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
-        }
-    }
-    clock.kill_group();
-    sleep(Duration::from_secs(4)); // past the first lease
-    ok(&once_through(&r, &[&slow_once], &["--lease-secs", "3"]));
-    assert_eq!(state(&r, &id), "passed_verified");
-    let room_refs: Vec<String> =
-        refs(&r.fx.repo).into_iter().filter(|line| line.contains(&format!("refs/heads/room/{id}/"))).collect();
-    assert_eq!(room_refs.len(), 1, "{room_refs:?}");
-    assert!(room_refs[0].ends_with(&format!("refs/heads/room/{id}/2")), "taken again with lease 2: {room_refs:?}");
+    worker(&r.scratch, "slow-once", &body)
 }
 
 #[test]
-fn a_late_hand_in_is_refused() {
-    // The plan's row: "The first worker's hand-in after lease 2 began exits non-zero and says stale." Stage 1's CLI
-    // (task 10) has no hand-in command, and one clock runs its turns in order, so lease 2 cannot begin while lease
-    // 1's worker is alive, and a second clock refuses. This test waits on the lead's answer to how a late hand-in is
-    // made from outside (all hands cf27851f). It fails until then, so stage 1 cannot close on it unanswered.
-    panic!("contract question open: how does a black-box test hand in late? (stage 1 plan, task 0)");
+fn a_killed_worker_fails_the_turn() {
+    // kill -9 on the worker's process group mid-turn, the clock alive: that turn fails, and the item is taken again.
+    let r = setup();
+    let id = add(&r, 0, "outside", "person:fixture");
+    let first = r.scratch.join("first-turn-began");
+    let w = slow_once(&r, &first);
+    let _clock = Clock::start(&r, &[&w], &["--turn-secs", "600"]);
+    wait_for("the first turn to begin", Duration::from_secs(60), || first.exists() && !worker_groups(&r).is_empty());
+    for group in worker_groups(&r) {
+        let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
+    }
+    wait_for("the item to pass on a later turn", Duration::from_secs(120), || state(&r, &id) == "passed_verified");
+    assert!(ref_for(&r, &id, 2), "taken again, as lease 2");
+}
+
+#[test]
+fn a_killed_clock_recovers() {
+    // Review focus 1: the clock dies mid-turn (power loss: kill -9 on its process group and the worker's). On restart
+    // the item is taken again with the next lease number, and the dead turn leaves no ref.
+    let r = setup();
+    let id = add(&r, 0, "outside", "person:fixture");
+    let first = r.scratch.join("first-turn-began");
+    let w = slow_once(&r, &first);
+    let mut clock = Clock::start(&r, &[&w], &["--lease-secs", "3", "--turn-secs", "600"]);
+    wait_for("the first turn to begin", Duration::from_secs(60), || first.exists() && !worker_groups(&r).is_empty());
+    for group in worker_groups(&r) {
+        let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
+    }
+    clock.kill_group();
+    sleep(Duration::from_secs(4)); // past the first lease
+    ok(&once_through(&r, &[&w], &["--lease-secs", "3"]));
+    assert_eq!(state(&r, &id), "passed_verified");
+    assert!(ref_for(&r, &id, 2), "taken again with lease 2");
+    assert!(!ref_for(&r, &id, 1), "the dead turn left no ref");
 }
 
 #[test]
@@ -365,6 +392,19 @@ fn a_second_clock_refuses() {
     wait_for("the first clock's turn", Duration::from_secs(60), || !lines(&pids).is_empty());
     let err = refused(&once_through(&r, &[&sleeper], &[]));
     assert!(err.contains("another process") || err.contains("lock"), "says locked: {err}");
+}
+
+#[test]
+fn a_damaged_store_is_refused() {
+    // Review focus 5: a damaged store is refused with a message, never replaced by an empty one.
+    let r = setup();
+    let store = r.room.join("room.sqlite3");
+    let whole = fs::read(&store).expect("the store");
+    fs::write(&store, &whole[..whole.len() / 2]).expect("truncate it");
+    let before = fs::read(&store).expect("the truncated store");
+    let err = refused(&yak(&r.room, &["status"]));
+    assert!(err.contains("damaged"), "says damaged: {err}");
+    assert_eq!(fs::read(&store).expect("the store after"), before, "its bytes are unchanged");
 }
 
 #[test]
