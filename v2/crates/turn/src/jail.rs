@@ -286,7 +286,13 @@ pub struct Jail {
     scratch: PathBuf,
     readable: Vec<PathBuf>,
     hidden: Vec<Hidden>,
+    /// On Linux, the file that holds the system-call filter (`crate::filter`), beside the scratch directory
+    /// and so outside everything a jailed run sees.
+    filter: Option<PathBuf>,
 }
+
+/// The descriptor a Linux jail's filter is passed to `bwrap` on.
+const FILTER_DESCRIPTOR: &str = "9";
 
 /// Something hidden, and whether it is a directory: the Linux form covers a directory and a file differently.
 #[derive(Debug, Clone)]
@@ -325,6 +331,24 @@ impl Jail {
                 "a jail whose run may write the whole machine is not a jail".into(),
             ));
         }
+        // Written afresh for every jail: a run starts with the filter the room wrote for it, whatever was
+        // at that path before.
+        let filter = match kind {
+            Kind::Seatbelt => None,
+            Kind::Bubblewrap => {
+                let machine = crate::filter::this_machine().ok_or_else(|| {
+                    TurnError::Refused(
+                        "no jail on this kind of machine: its system calls are not known here"
+                            .into(),
+                    )
+                })?;
+                let mut name = scratch.file_name().unwrap_or_default().to_os_string();
+                name.push(".filter");
+                let path = scratch.with_file_name(name);
+                write_afresh(&path, &crate::filter::socket_filter(machine))?;
+                Some(path)
+            }
+        };
         Ok(Jail {
             kind,
             tool,
@@ -332,6 +356,7 @@ impl Jail {
             scratch,
             readable: Vec::new(),
             hidden: Vec::new(),
+            filter,
         })
     }
 
@@ -400,7 +425,21 @@ impl Jail {
         };
         wrapped.push(program.to_string());
         wrapped.extend(args.iter().cloned());
-        (self.tool.clone(), wrapped)
+        match &self.filter {
+            None => (self.tool.clone(), wrapped),
+            // The filter reaches `bwrap` as an open file. A shell opens it and then becomes `bwrap`: the
+            // filter's path is the shell's own name here, and everything after it is the command.
+            Some(filter) => {
+                let mut through_a_shell = vec![
+                    "-c".to_string(),
+                    format!("exec \"$@\" {FILTER_DESCRIPTOR}<\"$0\""),
+                    text(filter),
+                    text(&self.tool),
+                ];
+                through_a_shell.extend(wrapped);
+                (PathBuf::from("/bin/sh"), through_a_shell)
+            }
+        }
     }
 
     /// Deny everything, then allow: making processes, signalling what is in the same jail, reading the named
@@ -551,6 +590,9 @@ impl Jail {
         .iter()
         .map(|s| s.to_string())
         .collect();
+        if self.filter.is_some() {
+            args.extend(["--seccomp".to_string(), FILTER_DESCRIPTOR.to_string()]);
+        }
         for path in LINUX_SYSTEM_DIRS.iter().chain(&LINUX_ETC) {
             args.extend([
                 "--ro-bind-try".to_string(),
@@ -593,6 +635,30 @@ impl Jail {
         }
         args
     }
+}
+
+/// Writes `bytes` to a new file at `path`, after removing a file or a link that was there. A directory there is
+/// refused. The file is never written through something already at the path.
+fn write_afresh(path: &Path, bytes: &[u8]) -> Result<(), TurnError> {
+    use std::io::Write;
+    let what = |e: std::io::Error| TurnError::Io(format!("write {}: {e}", path.display()));
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            return Err(TurnError::Refused(format!(
+                "{} is a directory, where the jail's filter belongs",
+                path.display()
+            )));
+        }
+        Ok(_) => std::fs::remove_file(path).map_err(what)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(what(e)),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(what)
 }
 
 /// The real, absolute form of an existing directory, refused if it cannot be written safely into a jail's rules.
@@ -680,6 +746,10 @@ mod tests {
                     dir: false,
                 },
             ],
+            filter: match kind {
+                Kind::Seatbelt => None,
+                Kind::Bubblewrap => Some(PathBuf::from("/room/scratch.filter")),
+            },
         }
     }
 
@@ -822,6 +892,25 @@ mod tests {
         let args = sample(Kind::Bubblewrap).bubblewrap_args();
         let joined = args.join(" ");
         assert!(joined.contains("--unshare-all"));
+        // The system-call filter is on, and reaches bwrap through a shell that opens it first.
+        assert!(joined.contains("--seccomp 9"));
+        let jail = sample(Kind::Bubblewrap);
+        let (program, argv) = jail.command("true", &[]);
+        assert_eq!(program, PathBuf::from("/bin/sh"));
+        assert_eq!(
+            argv[..4],
+            [
+                "-c",
+                "exec \"$@\" 9<\"$0\"",
+                "/room/scratch.filter",
+                "/jail-tool"
+            ]
+        );
+        assert_eq!(argv[argv.len() - 2..], ["--", "true"]);
+        // The macOS form needs none.
+        let (program, argv) = sample(Kind::Seatbelt).command("true", &[]);
+        assert_eq!(program, PathBuf::from("/jail-tool"));
+        assert_eq!(argv[0], "-p");
         assert!(joined.contains("--cap-drop ALL"));
         assert!(joined.contains("--new-session"));
         assert!(joined.contains("--die-with-parent"));

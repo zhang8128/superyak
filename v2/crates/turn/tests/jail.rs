@@ -377,6 +377,104 @@ fn a_jailed_run_has_no_network() {
     assert!(!accepted(&listener), "a jailed fetch reached the listener");
 }
 
+/// Three ways to send to a Unix socket that some program outside is listening on. `argv[1]` is a stream
+/// socket's path and `argv[2]` a datagram socket's. The third way starts from a pair of joined datagram ends,
+/// which is no socket to anywhere until one end is told an address.
+const SEND_TO_UNIX_SOCKETS: &str = r#"import socket, sys
+def attempt(name, send):
+    try:
+        send()
+        print(name + ":sent")
+    except OSError as e:
+        print(name + ":refused")
+def stream():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(sys.argv[1])
+    s.sendall(b"STREAM")
+def datagram():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    s.sendto(b"DATAGRAM", sys.argv[2])
+def from_a_pair():
+    a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    a.sendto(b"PAIR", sys.argv[2])
+attempt("stream", stream)
+attempt("datagram", datagram)
+attempt("pair", from_a_pair)
+# A pair of joined stream ends reaches nothing but itself, and programs use one to talk to their children.
+a, b = socket.socketpair()
+a.sendall(b"x")
+print("own-pair:" + ("works" if b.recv(1) == b"x" else "broken"))
+"#;
+
+/// A Unix socket is a file. On Linux a jailed run has a network of its own, and that does not keep it from a
+/// socket file it can see: the checkout here, or a tool directory named for it where some service of the
+/// machine listens. The run with no jail is the control: all three sends arrive.
+#[test]
+fn a_jailed_run_cannot_reach_a_unix_socket_it_can_see() {
+    use std::os::unix::net::{UnixDatagram, UnixListener};
+    let g = ground();
+    let (stream_at, datagram_at) = (g.checkout.join("s.sock"), g.checkout.join("d.sock"));
+    let listener = UnixListener::bind(&stream_at).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let datagrams = UnixDatagram::bind(&datagram_at).unwrap();
+    datagrams
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .unwrap();
+    // What arrived: whether a stream connection was made, and each datagram received.
+    let arrived = || {
+        let end = Instant::now() + Duration::from_millis(300);
+        let mut connected = false;
+        while Instant::now() < end && !connected {
+            connected = listener.accept().is_ok();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut got = Vec::new();
+        let mut buffer = [0u8; 16];
+        while let Ok(n) = datagrams.recv(&mut buffer) {
+            got.push(String::from_utf8_lossy(&buffer[..n]).into_owned());
+        }
+        got.sort();
+        (connected, got)
+    };
+    let args = [
+        "-c".to_string(),
+        SEND_TO_UNIX_SOCKETS.to_string(),
+        stream_at.to_str().unwrap().to_string(),
+        datagram_at.to_str().unwrap().to_string(),
+    ];
+
+    // Sending from one end of a joined pair to some other address is something Linux allows and macOS does
+    // not, jail or no jail. So without a jail it arrives on Linux only.
+    let pair_goes = cfg!(target_os = "linux");
+    let free = Command::new("/usr/bin/python3")
+        .args(&args)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&free.stdout),
+        format!(
+            "stream:sent\ndatagram:sent\npair:{}\nown-pair:works\n",
+            if pair_goes { "sent" } else { "refused" }
+        ),
+        "control failed: {}",
+        String::from_utf8_lossy(&free.stderr)
+    );
+    let mut sent = vec!["DATAGRAM".to_string()];
+    if pair_goes {
+        sent.push("PAIR".to_string());
+    }
+    assert_eq!(arrived(), (true, sent), "control failed");
+
+    let out = run_in(&jail(&g), "/usr/bin/python3", &args);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "stream:refused\ndatagram:refused\npair:refused\nown-pair:works\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(arrived(), (false, Vec::new()), "something arrived");
+}
+
 #[test]
 fn a_jailed_run_cannot_signal_a_process_outside() {
     let g = ground();

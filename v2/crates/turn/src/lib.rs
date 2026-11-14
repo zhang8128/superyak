@@ -4,6 +4,7 @@
 //! is kept as text: its event stream becomes `Step`s, which have no free-text field (spec rule 9).
 
 pub mod check;
+mod filter;
 pub mod jail;
 mod process;
 pub mod sandbox;

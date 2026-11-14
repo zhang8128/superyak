@@ -576,6 +576,10 @@ impl Sandbox {
         if fs::symlink_metadata(&scratch).is_ok() {
             remove_tree(&scratch)?;
         }
+        // The Linux jail's filter file, beside the scratch directory.
+        let mut filter = scratch.into_os_string();
+        filter.push(".filter");
+        clear(Path::new(&filter))?;
         remove_tree(&self.dir)
     }
 }
