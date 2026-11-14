@@ -200,6 +200,130 @@ fn a_jailed_run_cannot_signal_a_process_outside() {
     );
 }
 
+/// Asks the system's launcher to run a program for it. The run without the jail is the control: it shows
+/// that route exists on this machine, so the jailed failure means the jail.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_ask_the_system_to_run_something() {
+    let g = ground();
+    let label = |n: &str| format!("yak.jail.test.{}.{n}", std::process::id());
+    let submit = |label: &str, canary: &Path| {
+        format!(
+            "/bin/launchctl submit -l {label} -- /usr/bin/touch {}",
+            sh_quote(canary)
+        )
+    };
+    let appears = |canary: &Path| {
+        let end = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < end {
+            if canary.exists() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    let remove = |label: &str| {
+        let _ = Command::new("/bin/launchctl")
+            .args(["remove", label])
+            .output();
+    };
+
+    let free = g.outside.join("made-without-the-jail");
+    let _ = Command::new("/bin/sh")
+        .args(["-c", &submit(&label("free"), &free)])
+        .output();
+    let control = appears(&free);
+    remove(&label("free"));
+    assert!(
+        control,
+        "control failed: without the jail the launcher did not run the program"
+    );
+
+    let canary = g.outside.join("made-from-the-jail");
+    let _ = jailed(&jail(&g), &submit(&label("jailed"), &canary));
+    let escaped = appears(&canary);
+    remove(&label("jailed"));
+    assert!(
+        !escaped,
+        "a jailed run had the system run a program outside the jail"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_script_other_programs_or_open_things() {
+    let g = ground();
+    let out = jailed(
+        &jail(&g),
+        "/usr/bin/osascript -e 'tell application \"Finder\" to get name of startup disk'",
+    );
+    assert!(
+        !out.status.success(),
+        "a jailed run scripted another program"
+    );
+    let out = jailed(
+        &jail(&g),
+        &format!("/usr/bin/open -g {}/readable", sh_quote(&g.outside)),
+    );
+    assert!(
+        !out.status.success(),
+        "a jailed run opened a file with the desktop"
+    );
+}
+
+#[test]
+fn a_jailed_run_cannot_write_to_the_terminal() {
+    let g = ground();
+    let out = jailed(&jail(&g), "echo typed > /dev/tty");
+    assert!(!out.status.success());
+}
+
+/// The jail must not break an honest check: a shell pipeline, git, a scripting language making a temporary
+/// file and a semaphore, the machine's processor count, and the user's name, with the scratch directory as home
+/// and as the place for temporary files. Each thing the jail allows beyond reading and writing is used here, so
+/// taking one away fails this test.
+#[test]
+fn honest_tools_still_run_in_the_jail() {
+    let g = ground();
+    let jail = jail(&g);
+    let script = format!(
+        "cd {checkout} && ls /usr/bin | head -1 > /dev/null && \
+         git init -q . && git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m one && \
+         git log --oneline | wc -l | tr -d ' ' > count && \
+         python3 -c 'import tempfile; f = tempfile.NamedTemporaryFile(); f.write(b\"x\"); f.flush(); print(\"made\")' && \
+         python3 -c 'import multiprocessing; multiprocessing.Semaphore(1); print(\"counted\")' && \
+         test \"$(getconf _NPROCESSORS_ONLN)\" -ge 1 && \
+         test -n \"$(id -un)\"",
+        checkout = sh_quote(&g.checkout)
+    );
+    let (program, args) = jail.command("/bin/sh", &["-c".to_string(), script]);
+    let out = Command::new(program)
+        .args(args)
+        .env_clear()
+        .env(
+            "PATH",
+            "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
+        )
+        .env("HOME", &g.scratch)
+        .env("TMPDIR", &g.scratch)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stdout: {} stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(g.checkout.join("count")).unwrap().trim(),
+        "1"
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("made") && said.contains("counted"), "{said}");
+}
+
 #[test]
 fn the_jail_passes_the_exit_code_through() {
     let g = ground();
