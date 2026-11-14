@@ -79,6 +79,14 @@ pub enum ClockError {
     },
     #[error("git: {0}")]
     Git(String),
+    #[error(
+        "{switch} is set, and with it the clock runs no model worker: {worker} is one. A model writes code that \
+         the room then runs, and this switch turns off what holds that code"
+    )]
+    Unprotected {
+        switch: &'static str,
+        worker: String,
+    },
     #[error("{0}")]
     Io(String),
 }
@@ -182,6 +190,12 @@ pub fn run_with(
     if workers.is_empty() {
         return Err(ClockError::NoWorkers);
     }
+    // First of all, and here, so that no caller of the clock can leave it out.
+    protected(
+        workers,
+        turn::jail::wanted(),
+        !turn::sandbox::supervision_is_best_effort(),
+    )?;
     // A worker that cannot be named, or whose program is not there, would fail every item it took until each was
     // abandoned; it is refused before any is taken.
     for name in workers {
@@ -233,6 +247,24 @@ pub fn run_with(
             }
         }
         clock.sleep(clock.poll);
+    }
+}
+
+/// Refuses a model worker when the jail or the watch on a run's processes is switched off. A worker that is not
+/// `script:` is a model: it writes code, and the room then runs that code in a check. The two switches exist for
+/// tests that run inside another sandbox, with script workers.
+fn protected(workers: &[String], jailed: bool, watched: bool) -> Result<(), ClockError> {
+    let switch = match (jailed, watched) {
+        (true, true) => return Ok(()),
+        (false, _) => "YAK_JAIL=off",
+        (true, false) => "YAK_SUPERVISION=best-effort",
+    };
+    match workers.iter().find(|name| !name.starts_with("script:")) {
+        None => Ok(()),
+        Some(worker) => Err(ClockError::Unprotected {
+            switch,
+            worker: worker.clone(),
+        }),
     }
 }
 
@@ -961,6 +993,30 @@ mod tests {
         fs::create_dir(&folder).unwrap();
         assert!(!is_pid_file(&folder));
         assert!(!is_pid_file(&dir.path().join("missing.pid")));
+    }
+
+    #[test]
+    fn a_model_worker_needs_both_protections_and_a_script_worker_neither() {
+        let names =
+            |workers: &[&str]| -> Vec<String> { workers.iter().map(|w| w.to_string()).collect() };
+        let models = names(&["script:/x", "codex:gpt-6.1-sol"]);
+        let scripts = names(&["script:/x", "script:/y"]);
+        assert!(protected(&models, true, true).is_ok());
+        for (jailed, watched, switch) in [
+            (false, true, "YAK_JAIL=off"),
+            (true, false, "YAK_SUPERVISION=best-effort"),
+            (false, false, "YAK_JAIL=off"),
+        ] {
+            assert!(protected(&scripts, jailed, watched).is_ok());
+            let refused = protected(&models, jailed, watched);
+            assert!(
+                matches!(&refused, Err(ClockError::Unprotected { switch: s, worker })
+                    if *s == switch && worker == "codex:gpt-6.1-sol"),
+                "{refused:?}"
+            );
+        }
+        // A name that is not a script is treated as a model, whatever it says.
+        assert!(protected(&names(&["scripts:/x"]), false, true).is_err());
     }
 
     #[test]

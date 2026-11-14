@@ -762,3 +762,85 @@ fn a_worker_that_cannot_run_is_refused_before_any_turn() {
     assert_eq!(world.room.turns_today(now()).unwrap(), 0);
     assert_eq!(state(&world, 0), ItemState::Draft);
 }
+
+/// The inner half of the test below, and nothing by itself. The room's switches are read from the environment,
+/// and a test cannot change its own, so the outer half runs this one again in a child whose environment it chose.
+#[test]
+fn inner_a_clock_under_the_rooms_switches() {
+    let Some(workers) = std::env::var_os("YAK_INNER_WORKERS") else {
+        return;
+    };
+    let mut world = World::new(1);
+    let fix = world.script("fix.sh", FIX);
+    let workers: Vec<String> = workers
+        .to_str()
+        .unwrap()
+        .split(',')
+        .map(|name| {
+            if name == "FIX" {
+                fix.clone()
+            } else {
+                name.to_string()
+            }
+        })
+        .collect();
+    let workers: Vec<&str> = workers.iter().map(String::as_str).collect();
+    let (result, events) = world.run(&workers, Mode::OnceThrough, NEVER, TURN_SECS);
+    match result {
+        Ok(()) => println!("RAN {} turn(s)", started(&events).len()),
+        Err(e) => println!("REFUSED {e}"),
+    }
+}
+
+/// With the jail or the watch on processes switched off, the clock runs script workers and no model: a model
+/// writes code that the room then runs, and those two switches are what holds that code.
+///
+/// The search path here has no `claude` or `codex` on it. So where the switches allow a model, the clock stops
+/// at the next thing it checks, that the program is there, and no model is started by this test whatever the
+/// clock does.
+#[test]
+fn with_a_protection_switched_off_the_clock_runs_no_model_worker() {
+    let under = |workers: &str, switches: &[(&str, &str)]| {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "inner_a_clock_under_the_rooms_switches",
+                "--nocapture",
+            ])
+            .env("YAK_INNER_WORKERS", workers)
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env_remove("YAK_JAIL")
+            .env_remove("YAK_SUPERVISION");
+        for (name, value) in switches {
+            child.env(name, value);
+        }
+        let out = child.output().unwrap();
+        let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            printed.contains("RAN ") || printed.contains("REFUSED "),
+            "the inner run did not report: {printed} {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        printed
+    };
+    for (switch, value) in [("YAK_JAIL", "off"), ("YAK_SUPERVISION", "best-effort")] {
+        for workers in ["claude:opus", "FIX,codex:gpt-6.1-sol"] {
+            let printed = under(workers, &[(switch, value)]);
+            assert!(
+                printed.contains("REFUSED ") && printed.contains(switch),
+                "{switch} with {workers}: {printed}"
+            );
+        }
+        // Script workers alone still run with it off: that is what the switch is for.
+        let printed = under("FIX", &[(switch, value)]);
+        assert!(printed.contains("RAN 1 turn"), "{switch}: {printed}");
+    }
+    // The control: with neither switch set, the refusal is the next check's, and names neither.
+    let printed = under("claude:opus", &[]);
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("not an executable program"),
+        "{printed}"
+    );
+    assert!(!printed.contains("YAK_"), "{printed}");
+}
