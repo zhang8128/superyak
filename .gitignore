@@ -20,3 +20,4 @@ coverage/
 v2/target/
 v2/vendor/
 v2/.cargo/
+v2/.cargo-home/
