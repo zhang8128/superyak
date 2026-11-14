@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CheckOrigin, CheckSpec, Frozen, ItemId, ItemState, NewItem, Room, RoomError, Verdict, store::db,
+    CheckOrigin, CheckSpec, Frozen, ItemId, ItemState, NewItem, Room, RoomError, Verdict,
+    store::db, types::family,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,7 +175,7 @@ pub fn classify(check: &CheckSpec, frozen: &Frozen, verdict: &Verdict, worker: &
     if matches!(
         check.origin,
         CheckOrigin::Outside | CheckOrigin::ObservedFailure
-    ) && check.written_by != worker
+    ) && family(&check.written_by) != family(worker)
         && frozen.red_on_base
         && !check.wrong_artifacts.is_empty()
         && frozen.red_on_wrong.len() == check.wrong_artifacts.len()

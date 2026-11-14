@@ -6,7 +6,8 @@ use room::{limits::LEASE_SECS, *};
 fn finish(r: &mut Room, lease: &Lease, now: Ts) {
     let v = verdict(true);
     r.hand_in(lease, &v.commit, now).unwrap();
-    r.record_verdict(&lease.item, lease.lease_no, &v).unwrap();
+    r.record_verdict(&lease.item, lease.lease_no, &v, now)
+        .unwrap();
 }
 
 #[test]
@@ -65,7 +66,8 @@ fn only_one_turn_runs_at_a_time_by_default() {
     r.hand_in(&lease, &verdict(true).commit, 101).unwrap();
     assert!(r.take("claude:opus", 102).unwrap().is_none());
     assert_eq!(r.turns_today(102).unwrap(), 1);
-    r.record_verdict(&lease.item, 1, &verdict(true)).unwrap();
+    r.record_verdict(&lease.item, 1, &verdict(true), 102)
+        .unwrap();
     assert!(r.take("claude:opus", 103).unwrap().is_some());
 }
 

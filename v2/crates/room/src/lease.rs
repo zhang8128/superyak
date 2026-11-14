@@ -5,6 +5,7 @@ use crate::{
     item::{classify, dependencies_ready, hex_hash, item_view, key, new_id, parse},
     limits,
     store::db,
+    types::family,
 };
 
 impl Room {
@@ -37,7 +38,7 @@ impl Room {
                     r.get(0)
                 })
                 .map_err(db)?;
-            if view.written_by == worker
+            if family(&view.written_by) == family(worker)
                 || frozen.is_none()
                 || !dependencies_ready(&tx, &view.after)?
             {
@@ -73,11 +74,6 @@ impl Room {
     pub fn renew(&mut self, lease: &Lease, now: Ts) -> Result<Ts, RoomError> {
         let tx = self.conn.transaction().map_err(db)?;
         let active = validate_lease(&tx, lease, now)?;
-        if active.state != "leased" {
-            return Err(RoomError::NotTakeable(
-                "only a running turn may renew".into(),
-            ));
-        }
         let expires = expiry(now, self.lease_secs)?.max(active.expires);
         tx.execute(
             "UPDATE attempts SET expires=?1 WHERE id=?2",
@@ -122,6 +118,7 @@ impl Room {
         item: &ItemId,
         lease_no: u32,
         v: &Verdict,
+        now: Ts,
     ) -> Result<ItemState, RoomError> {
         if !hex_hash(&v.commit, &[40, 64])
             || !hex_hash(&v.check_hash, &[64])
@@ -162,8 +159,8 @@ impl Room {
             state = ItemState::Abandoned;
             abandoned(&tx, item)?;
         }
-        tx.execute("INSERT INTO verdicts (attempt,passed,exit_code,timed_out,artifact,check_hash,output_sha256,recorded) VALUES (?1,?2,?3,?4,?5,?6,?7,unixepoch())",
-            (&active.id, v.passed, v.exit_code, v.timed_out, &v.commit, &v.check_hash, &v.output_sha256)).map_err(db)?;
+        tx.execute("INSERT INTO verdicts (attempt,passed,exit_code,timed_out,artifact,check_hash,output_sha256,recorded) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            (&active.id, v.passed, v.exit_code, v.timed_out, &v.commit, &v.check_hash, &v.output_sha256, now)).map_err(db)?;
         tx.execute(
             "UPDATE attempts SET state='finished' WHERE id=?1",
             [&active.id],
@@ -194,6 +191,11 @@ impl Room {
                 lease_no,
                 current: view.lease_no,
             });
+        }
+        if view.state != ItemState::PassedVerified {
+            return Err(RoomError::Refused(
+                "only a verified pass may be rechecked".into(),
+            ));
         }
         let active = attempt(&tx, item, lease_no)?;
         let (passed, artifact, check_hash): (bool, String, String) = tx
