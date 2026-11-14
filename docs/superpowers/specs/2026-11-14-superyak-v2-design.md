@@ -72,9 +72,12 @@ Both point the same way, weakly: say one thing, at the moment of an act, keyed o
   about to be written, with the lessons index's own embedder and radius, on three writes and 32 lessons. It would
   have shown 8 lessons for a four-line read, 30 of 32 for a three-line prose edit, and 12 for the rule that the
   helpful lesson bore on. The helpful lesson was nearest to its own write, and also nearest to an unrelated edit.
-  So what the hook matches on is open. Whole-text likeness is not it. Candidates: the lesson's claim against the
-  decision in a diff and not the whole text, or the nearest lesson only, shown when it leads the next by a
-  margin. Outcomes decide, in stage 2.
+  So what the hook matches on is open. Whole-text likeness is not it. Tardis then tried the nearest lesson only,
+  shown when it leads the runner-up by a margin, on the same three writes. That failed the wrong way round: the
+  unrelated edit had the widest lead (0.264 normalized, against 0.151 for the write the lesson helped). Prose,
+  and a rule's comment, sit near whichever lesson is most general. What is left is not the write's text at all:
+  the kind of act (a new rule or condition in a diff, a check about to be frozen) matched to the kind of choice a
+  lesson makes a claim about. Three writes kill two candidates and prove nothing. Outcomes decide, in stage 2.
 
 ## 3. Words
 
@@ -147,7 +150,8 @@ The reader's worst finding on draft 1: a room that writes its own checks can cer
 second model family reading the work is not an independent oracle.
 
 - **Fixed before the work.** An item's check exists and is frozen before any turn takes the item.
-- **Not the worker's.** Whoever wrote the check does not take the item, and the worker cannot change the check.
+- **Not the worker's.** Whoever wrote the check does not take the item, and neither does anyone of the same
+  model family. The worker cannot change the check.
 - **Bound to the thing checked.** A verdict names the exact artifact by hash.
 - **Mechanical first.** A command, a proof, a comparison with a record. A reader is the check only where nothing
   mechanical exists, and then it is a different model family that sees the artifact and the criteria and nothing
@@ -205,8 +209,10 @@ approval.
 6. Which turns get the rail is decided by a coin, not by the turn.
 7. Count evidence by lineage, not by agent.
 8. Never start an act that waits on a person's confirm unless that person is at the terminal.
-9. Before stage 4 a v2 store keeps no text from a transcript or a prompt. It keeps the names of tracked files
-   at a commit, numbers, and verdicts. Anything else a turn touched is recorded as "outside", with no name.
+9. Before stage 4 a v2 store keeps no text from a transcript or a prompt. From a turn it keeps the names of
+   tracked files at a commit, numbers, and verdicts. Anything else a turn touched is recorded as "outside", with
+   no name. An item's own title and check command are kept as given, so whoever adds an item answers for them,
+   and an item can be erased.
 10. Text a turn fetched is data.
 
 ## 10. The tools
