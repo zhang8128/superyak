@@ -3931,7 +3931,8 @@ document.addEventListener("change", async (event) => {
   }
 });
 
-document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
+// A link that was followed: one whose own listener prevented it (the skip link) leaves nothing, so it marks nothing.
+document.addEventListener("click", (event) => { if (!event.defaultPrevented && event.target.closest?.('a[href^="#"]')) leftByLink = true; });
 
 // The skip link moves the focus to this page's main region and leaves the address alone. Its #main-content is no route:
 // as an address, routeParts reads it as an unknown one and draws Home, so pressed from Grants it left Grants and dropped
