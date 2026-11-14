@@ -205,13 +205,16 @@ approval.
 
 | Tool | In | Out | Stage |
 | --- | --- | --- | --- |
-| `work` | take, or hand in | an item with its frozen check; or the verdict | 1 |
-| `lay` | a walk, a link or a sameness | what was kept, what was refused and why | 1 |
-| `who` | a link or a walk | who signed it, how they know, the receipts | 1 |
+| `room_status`, `item_list`, `item_show`, `disagreements` | nothing, or an item's id | the room as it stands; read-only | 1 |
+| `lay` | a walk, a link or a sameness | what was kept, what was refused and why | 3 |
+| `who` | a link or a walk | who signed it, how they know, the receipts | 3 |
 | `pull` | a thing, and what I'm after | links outward from it that bear on the aim | 3 |
 | `route` | what I'm doing, what I'm after | notes, then walks, then routes, as each earns its place; or nothing | 3 |
 | `connect` | a lighthouse, topics | a scoped connection, with its end date | 4 |
 | `compare` | a topic, two lighthouses | where they agree, where they differ, who is silent | 4 |
+
+In stage 1 the clock takes items and hands them in itself, so no tool writes to the room. Plan:
+`docs/superpowers/plans/2026-11-14-v2-stage-1-room.md`.
 
 The hook takes the act about to happen (the text to be written, the commit, the post) and the turn's aim. It
 answers with one line or with nothing.
