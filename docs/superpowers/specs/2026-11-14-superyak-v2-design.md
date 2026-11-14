@@ -1,9 +1,11 @@
 # Superyak v2: a layer of threads
 
 **Date:** 2026-11-14
-**Status:** Draft 2, by Serenity, the Mac session Andy made lead for v2. Draft 1 was rejected the same day by a
-cold reader from a different model family, and Tardis, who wrote the kernel, argued it out of the centre. Section
-14 lists what each of them changed. Draft 2 has not been read yet.
+**Status:** Draft 3, by Serenity, the Mac session Andy made lead for v2. Two cold readers from a different model
+family rejected drafts 1 and 2 the same day, and Tardis, who wrote the kernel, argued it out of the centre.
+Section 14 lists what each changed. Draft 3 is not being sent for a third whole read: its remaining risk is an
+unattended clock, and section 8 now gives a turn no effect outside its own sandbox. The stage 1 plan carries the
+contracts the second reader said builders lack.
 
 **Origin.** Andy, 2026-11-14, at the Mac:
 
@@ -57,12 +59,14 @@ here as four claims, each with the observation that would sink it.
 - **Tardis's six receipts.** Six lessons fired on a place (a command or a file) and one helped. In Tardis's words:
   "its claim met my decision, not my place."
 - **A replay over one machine's transcripts** (`scripts/experiments/rail_replay.py`; report in
-  `docs/reports/2026-11-14-rail-replay.md`): 308 turns on this repository, split by time, predicting which file a turn opens next. A place alone and
-  the task's words alone each put a file the turn goes on to open first 8 to 10% of the time. Together, 14%. Ten
-  guesses from the road did worse than the ten most-opened files. Order did not help. Half the time the next file
-  was one no earlier turn had touched.
+  `docs/reports/2026-11-14-rail-replay.md`): 308 turns on this repository, split by time, predicting which file a
+  turn opens next. From a place alone, the first guess was a file the turn went on to open 8% of the time. From
+  the task's words alone, 1% with timer turns in and 8% with them out. From both, 14% in both runs. The road's ten
+  ranked guesses did worse than the ten most-opened files. Order did not help. Half the time the next file was
+  one no earlier turn had touched. The script counts a file named in a shell command as opened, whatever the
+  command did, so these are rough.
 
-Both point the same way: say one thing, at the moment of an act, keyed on the act and the aim together.
+Both point the same way, weakly: say one thing, at the moment of an act, keyed on the act and the aim together.
 
 ## 3. Words
 
@@ -143,6 +147,15 @@ second model family reading the work is not an independent oracle.
 - **Passes get checked again.** A sample, since wrong results gather among the passes.
 - **A pass authorizes nothing beyond the item.** Merging to main stays under the station's law.
 
+**Two kinds of pass.** The second reader showed the lines above are not enough: an item asks for a new flag, the
+code is left unchanged, and the frozen existing suite passes. So:
+
+- **Verified:** the check came from outside the room or reproduces a failure someone observed, it fails on the
+  tree as it stood before the work, and it fails on at least one wrong artifact named beforehand. Only a verified
+  pass counts toward checks per day, and only a verified pass makes a walk an arrival.
+- **Unverified:** everything else, including any pass a model judged. It is recorded as that, and nothing learns
+  from it.
+
 ## 8. The room
 
 **A turn** is one fresh agent run: Claude, Codex, or a small local model. It gets a budget, the room's rules, one
@@ -164,7 +177,10 @@ approval.
 | --- | --- |
 | A lease on each taken item, with an expiry | A dead turn must not hold work |
 | Recovery after a crash, from the ledger | The room is the memory, so it must survive the turn |
-| Handing in exactly once | A retry must not post, push or pay twice |
+| A turn has no effect outside its sandbox | Its only output is a commit on its own branch. It cannot post, push or pay |
+| The room performs effects, each with a key | A post or a push carries a key its destination dedupes on, so a retry lands once |
+| A lease has a number, checked at hand-in | A turn whose lease expired cannot hand in after its replacement started |
+| An "outcome unknown" state | When an effect was sent and no answer came back, the room reconciles before it retries |
 | A spending ceiling the clock enforces | A loop with no person must not be able to run away |
 | A stop control any person can use | One file or one command halts every turn |
 | Fetched text treated as data | A page or a paper cannot give a turn orders |
@@ -181,7 +197,8 @@ approval.
 6. Which turns get the rail is decided by a coin, not by the turn.
 7. Count evidence by lineage, not by agent.
 8. Never start an act that waits on a person's confirm unless that person is at the terminal.
-9. Nothing about a person enters a v2 store before stage 4.
+9. Before stage 4 a v2 store keeps no text from a transcript or a prompt. It keeps the names of tracked files
+   at a commit, numbers, and verdicts. Anything else a turn touched is recorded as "outside", with no name.
 10. Text a turn fetched is data.
 
 ## 10. The tools
@@ -203,7 +220,9 @@ answers with one line or with nothing.
 
 v2 adds no permission system and does not approximate the one that exists.
 
-- **Before stage 4,** a v2 store holds nothing about a person: work on public code, and public evidence.
+- **Before stage 4,** rule 9 is the admission rule, and the store's writer enforces it: no text from a
+  transcript or a prompt, only tracked-file names at a commit, numbers and verdicts. "Public" is not the test. A
+  public page can name a person, and this repository's own documents do.
 - **At stage 4,** the gate is v1's evaluator (`engram/permissions.py`, `decide`), with its purposes, end dates
   and co-subjects. Every object, every derived link, every tool answer and every cached view goes through it. A
   road can reveal that a private record was used without showing its text, so derived things are checked as
@@ -229,6 +248,13 @@ Every stage reports checks per day.
 - **Counted:** every attempt, including the ones that fail or are abandoned, and every cost, including the check.
 - **Frozen:** the work, the checks and the scoring, before the first turn.
 - **Read against:** thresholds set beforehand. A failure changes the design, not the thresholds.
+- **No answers in the corpus.** What an arm may retrieve is frozen separately from the work being scored. A
+  scored item, and every other attempt at it, is kept out, or a later arm is handed the answer and it looks like
+  experience.
+- **Written down first:** how many items, the one outcome that decides it, the smallest gain worth having, how
+  uncertainty is worked out, and when to stop.
+- **Stitched routes get fresh work.** Testing them on the items that picked whole walks would be choosing the
+  winner twice.
 
 **Stage 2 can end the rail.** If no arm beats nothing, v2 is a room with checks and a ledger. If notes win and
 walks add nothing, v2 keeps notes and drops the graph. Either is worth having and is much smaller.
@@ -261,6 +287,17 @@ core is C11.
 | Leases, recovery, spending, a stop control, fetched text as orders, erasure | Sections 6 and 8 |
 | "Mostly search" and "exactly as fast" did not follow | Section 2 |
 
+**The second cold reader** (the same setup, on draft 2). Verdict: reject.
+
+| Its finding | Now |
+| --- | --- |
+| The oracle problem survives: a frozen existing suite passes unchanged code | Section 7, "Two kinds of pass" |
+| Handing in once is not acting once | Section 8: a turn has no outside effect; the room acts, with keys and a numbered lease |
+| "Public" is not "nothing about a person" | Rule 9 and section 11 |
+| A scored item's sibling attempts leak the answer; no sample size or stopping rule | Stage 2's last three lines |
+| Builders lack item, lease and hand-in contracts, an isolation boundary, budget amounts and a recording contract | The stage 1 plan, written before any builder starts |
+| The replay report claimed more than its script measures | The report is corrected; section 2 restated |
+
 **Tardis.** The kernel is "a good part without a job in v2 as written": for dimensions 0 and 1 a hash of the edge
 list is exact, and counting a thing once is a search over rewrites with a budget, not the kernel's question. A*
 needs a lower bound and links have no coordinates. A bit per walker does not scale. And the sentence that moved
@@ -282,7 +319,7 @@ claim C.
 | What | The lead's lean |
 | --- | --- |
 | Who writes checks for the first items | Existing tests and CI for code work; for anything else, a turn of the other model family, frozen before the item opens |
-| Where stage 1 keeps its store | SQLite through Rust, one writer; the log format waits for stage 3 |
+| Where stage 1 keeps its store | SQLite through Rust, one writer, write-ahead log on local disk. That gives recovery after a crash, a schema version to move from, and deletion. A purpose-built log waits for stage 3 |
 | Lighthouse transport and keys | HTTP over the tailnet, and the Ed25519 identity each peer already has |
 | What work stage 2 runs on | Board items with tests, snapshotted |
 | The law | One signed line lets a room's clock take checked items with no person at a terminal. Until Andy signs it, the clock runs only under a session he gave the work to |

@@ -10,7 +10,8 @@ first instrument on a small sample, and nothing here is a result.
 - **Unit:** a turn, meaning what the agent touched between one prompt and the next. A ship's session runs for
   days and holds many tasks, so a whole session is not one walk.
 - **A walk:** the repo files a turn read, edited, or named in a shell command, in order. Most reading in these
-  sessions happens in the shell: 7,102 shell calls against 2,393 file-tool calls.
+  sessions happens in the shell: 7,102 shell calls against 2,393 file-tool calls. (That count came from a separate
+  one-off tally, not from this script.)
 - **Sample:** 232 transcripts gave 745 turns that touched a repo file, and 308 that touched three or more.
 - **Split:** by time. The earlier 215 turns lay the roads; the later 93 are scored.
 - **Question at each step:** which file does this turn open next that it has not opened yet?
@@ -45,9 +46,14 @@ leaves 240 scored steps.
 
 ## What it suggests
 
-1. **Place and aim add.** Alone, each puts a useful file first 8 to 10% of the time. Together, 14%, in both runs.
-2. **A road is worth its first hop or nothing.** Ten guesses from the road did worse than the ten most-opened
-   files.
+Corrected on 2026-11-14 after a cold reader checked this report against its script. The first version said place
+and aim each scored 8 to 10% alone. That was wrong for the prompt on the full sample.
+
+1. **Place and aim add, for the first guess.** On the looser target the road alone was right first 8.4% of the
+   time, and 7.9% with timer turns out. The prompt alone was 1.1%, and 7.9% with timer turns out. Together they
+   were 13.6% and 14.2%.
+2. **The road's ten ranked guesses did worse than the ten most-opened files** (23.9% against 34.5%). These are
+   ranked candidates, not hops anyone walked, so this says nothing about routes.
 3. **Order did not help.** Files used together in any order matched or beat the directed road.
 4. **Half the next steps are new ground.** No record of earlier turns can point at a place nobody has been.
 
@@ -56,7 +62,10 @@ leaves 240 scored steps.
 - One repository, one owner, about 300 turns. The gaps between the better predictors are a handful of hits.
 - A file is a coarse place. A function or a line would be a different test.
 - Nothing here knows whether a turn arrived. No check's verdict is in the data.
-- "Opens next" is not "was helped by". A file can be opened and be useless.
+- "Opens next" is not "was helped by". A file can be opened and be useless. Nothing here measures usefulness or
+  work saved.
+- A file named in a shell command counts as opened, whatever the command did. Printing a filename makes a step.
+  An absolute path in a shell command, or a path after a change of directory, can be missed.
 - The prompt is a poor stand-in for an aim, and timer prompts are no stand-in at all.
 
 The spec's stage 2 is the test this is not: arms assigned by a coin, every attempt and cost counted, checks
