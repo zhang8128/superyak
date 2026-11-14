@@ -505,6 +505,7 @@ its own sessions' queries; nothing is asked of another peer. The command is
   Ops for each add, and one for the ships a hold takes out. Removing a member, and adding back one Andy removed, stay his.
 - `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
 - `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
+- `lay` (`make lessons-lay SHIP=… FILE=…`): the same checks, then the post laid in the lessons room as that ship, through the room's send path. Its client id comes from the lesson's own id, so laying it again posts nothing new.
 - `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts
   to retract it.
 - `index` (run every minute by the timer `make lessons-units` installs): writes `lessons-index.bin` in the data directory.

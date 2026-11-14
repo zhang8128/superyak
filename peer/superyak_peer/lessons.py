@@ -2270,6 +2270,28 @@ def _check(store, args):
     return f"ok: a {got['kind']}, lesson {got['short']}"
 
 
+@verb('lay', "Lay one lesson or retraction in the lessons room as this peer's ship: every check this peer's door runs, "
+      'then the room\'s send path; the post on stdin', ('--ship', {'required': True}))
+def _lay(store, args):
+    """Lay a lesson as the ship named here, on the origin or on any peer that records the room: check_lesson's checks,
+    then send_message to the chain's current room, which on a peer other than the origin goes out as a reply that the
+    origin's door checks again. The client id is the lesson's own digest, so a second lay of the same post in the same
+    room is a replay that posts nothing, and copies across rooms collapse by lesson id (section 4)."""
+    with store.transaction() as db:
+        actor = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.ship,)).fetchone()
+    if actor is None:
+        raise Problem(404, f'No account named {args.ship} on this peer')
+    body = sys.stdin.buffer.read(BODY_BYTES + 1).decode('utf-8')  # bytes: a \r stays, and the door refuses it (a person too)
+    got = store.check_lesson(actor['id'], body)
+    client = ('lay-retract-' if got['kind'] == 'retraction' else 'lay-') + got['lesson_id'].partition(':')[2][:32]
+    sent = store.send_message(actor['id'], got['room'], client, body)
+    if 'state' not in sent:  # the origin's own room: the post is in it now, or was already
+        return f"{'already laid' if sent.get('replayed') else 'laid'}: a {got['kind']}, lesson {got['short']}"
+    # Another peer's: a first lay and a repeat while it waits both read as pending, so this says only what is known.
+    return (f"handed to delivery: a {got['kind']}, lesson {got['short']}, {sent['state']}; the origin's door checks it "
+            'again when it arrives')
+
+
 @verb('index', 'Section 4: one index run (the timer runs it every 60 s)', ('--runtime-config', {'type': Path}))
 def _index(store, args):
     return json.dumps(store.lessons_index(embedder_socket(args.runtime_config)))
