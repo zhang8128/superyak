@@ -504,3 +504,99 @@ fn a_program_in_the_checkout_is_never_run_in_place_of_the_one_named() {
         }
     }
 }
+
+/// A named directory that is a link is the directory it leads to. The home's `.cargo` may be a link to
+/// somewhere else, and a credentials file made there later is the same file `~/.cargo/credentials.toml` names.
+/// So the jail refuses the link as it would the directory, and refuses its target named directly as well.
+#[test]
+fn a_named_link_to_a_directory_that_could_hold_a_secret_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let elsewhere = root.join("tools-cargo");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(elsewhere.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, home.join(".cargo")).unwrap();
+    for named in [home.join(".cargo"), elsewhere.clone()] {
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{}: {printed}",
+            named.display()
+        );
+    }
+    // The tool's own directory inside it can be named, by either road.
+    for named in [home.join(".cargo/bin"), elsewhere.join("bin")] {
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+            true,
+        );
+        assert!(
+            printed.contains("SAID ran"),
+            "{}: {printed}",
+            named.display()
+        );
+    }
+    // A link further in. `~/.local` is a directory, and `share` inside it is a link to somewhere else: the name
+    // `~/.local/share` is still a name inside `~/.local`, and what is put there once the link is gone would be
+    // shown.
+    let further = root.join("share-elsewhere");
+    fs::create_dir_all(&further).unwrap();
+    fs::create_dir_all(home.join(".local")).unwrap();
+    std::os::unix::fs::symlink(&further, home.join(".local/share")).unwrap();
+    let named = home.join(".local");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+        true,
+    );
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("would also show"),
+        "a link further in: {printed}"
+    );
+}
+
+/// Two links in a row. `~/.local` leads to one place, and `share` in that place leads to a third. Neither the
+/// name as written nor the place both links lead to is inside the first place; the name with only the first
+/// link followed is. Naming the first place is refused, by either road.
+#[test]
+fn a_secrets_place_is_known_through_each_link_on_the_way_to_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (home, first, third) = (
+        root.join("home"),
+        root.join("local-elsewhere"),
+        root.join("share-elsewhere"),
+    );
+    for dir in [&home, &first, &third] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::create_dir_all(first.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&first, home.join(".local")).unwrap();
+    std::os::unix::fs::symlink(&third, first.join("share")).unwrap();
+    for named in [home.join(".local"), first.clone()] {
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{}: {printed}",
+            named.display()
+        );
+    }
+    // The control: a directory beside the link can be named.
+    let named = first.join("bin");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+}

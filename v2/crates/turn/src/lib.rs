@@ -27,6 +27,20 @@ pub enum TurnError {
     Refused(String),
     #[error("unknown worker {0:?}: a worker is script:<path>, claude:<model> or codex:<model>")]
     UnknownWorker(String),
+    /// A run could not be confirmed ended: something it started may still be going. Its record is kept. Whoever
+    /// gets this removes nothing of that run and goes on with nothing else, since the record and the run's
+    /// directories are what a person needs to find it and end it.
+    #[error("a run could not be confirmed ended ({why}); its record, {record}, is kept")]
+    Unended { record: String, why: String },
+    /// What was found where a sandbox or its scratch directory should be was not what the room made there. It
+    /// was left as it is; these are the paths.
+    #[error("not removed, because it is not what the room made there: {}", listed(.0))]
+    Left(Vec<std::path::PathBuf>),
+}
+
+fn listed(paths: &[std::path::PathBuf]) -> String {
+    let names: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+    names.join(", ")
 }
 
 /// Maps an `io::Error` to a `TurnError::Io` that says what was being done.

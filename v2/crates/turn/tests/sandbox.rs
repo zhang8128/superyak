@@ -849,7 +849,7 @@ fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
     std::fs::rename(&at, repo.scratch("moved-away")).unwrap();
     std::fs::create_dir(&at).unwrap();
     std::fs::write(at.join("canary"), "KEEP").unwrap();
-    assert!(matches!(sb.destroy(), Err(TurnError::Refused(_))));
+    assert!(matches!(sb.destroy(), Err(TurnError::Left(_))));
     assert_eq!(std::fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
 
     // The scratch directory replaced by another directory; the clone is still the room's and goes.
@@ -866,7 +866,7 @@ fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
     std::fs::create_dir(&scratch).unwrap();
     std::fs::write(scratch.join("canary"), "KEEP").unwrap();
     let clone = sb.dir.clone();
-    assert!(matches!(sb.destroy(), Err(TurnError::Refused(_))));
+    assert!(matches!(sb.destroy(), Err(TurnError::Left(_))));
     assert_eq!(
         std::fs::read_to_string(scratch.join("canary")).unwrap(),
         "KEEP"
@@ -884,9 +884,15 @@ fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
     let scratch = sb.dir.with_file_name(name);
     std::fs::create_dir(&scratch).unwrap();
     std::fs::write(scratch.join("canary"), "KEEP").unwrap();
-    let _ = sb.destroy();
+    let clone = sb.dir.clone();
+    // It is left, and the room says so: whoever tidies after it must know not to remove it either.
+    assert!(matches!(sb.destroy(), Err(TurnError::Left(_))));
     assert_eq!(
         std::fs::read_to_string(scratch.join("canary")).unwrap(),
         "KEEP"
+    );
+    assert!(
+        !clone.exists(),
+        "the clone, which was the room's, is still there"
     );
 }

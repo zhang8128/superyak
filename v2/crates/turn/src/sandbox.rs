@@ -65,7 +65,7 @@ const PLAIN_PATH: &str = "/usr/bin:/bin";
 
 /// How long the room's own git may take. It is long, for a large clone; what matters is that it is not for
 /// ever, whatever a worker left in a repository the room reads.
-const ROOM_GIT_SECS: u64 = 600;
+pub const ROOM_GIT_SECS: u64 = 600;
 
 const POLL: Duration = Duration::from_millis(50);
 /// After a run ends, lines still in the pipe are handed over until none comes for this long.
@@ -531,9 +531,7 @@ impl Sandbox {
             });
             if let Err(e) = seen {
                 end_group(&mut child, group);
-                if supervisor.end().is_ok() {
-                    pid_file.remove();
-                }
+                self.confirm_ended(&mut supervisor, &mut pid_file)?;
                 return Err(e);
             }
             let now = Instant::now();
@@ -559,9 +557,7 @@ impl Sandbox {
                 Ok(None) => {}
                 Err(e) => {
                     end_group(&mut child, group);
-                    if supervisor.end().is_ok() {
-                        pid_file.remove();
-                    }
+                    self.confirm_ended(&mut supervisor, &mut pid_file)?;
                     return Err(io("wait for the run")(e));
                 }
             }
@@ -569,8 +565,7 @@ impl Sandbox {
                 thread::sleep(wait);
             }
         };
-        supervisor.end()?;
-        pid_file.remove();
+        self.confirm_ended(&mut supervisor, &mut pid_file)?;
         drain(&rx, on_line);
         Ok(RunStatus {
             exit_code: exit_code(status),
@@ -578,17 +573,37 @@ impl Sandbox {
         })
     }
 
+    /// Ends whatever the run was seen to start that is still going, and then removes the run's record. When
+    /// the end cannot be confirmed the record stays, since it is then all there is to find the run by, and the
+    /// error (`TurnError::Unended`) names it. Every way out of a run that was started goes through here.
+    fn confirm_ended(
+        &self,
+        supervisor: &mut Supervisor,
+        pid_file: &mut PidFile,
+    ) -> Result<(), TurnError> {
+        supervisor.end().map_err(|why| TurnError::Unended {
+            record: match &self.pid_file {
+                Some(path) => path.display().to_string(),
+                None => "(this run kept none)".to_string(),
+            },
+            why: why.to_string(),
+        })?;
+        pid_file.remove();
+        Ok(())
+    }
+
     /// Removes the sandbox: the clone that was made, even where a worker took away its own write permission,
     /// and the scratch directory a jailed run was given. Only those. If something else is at either path by
-    /// now, it is not the room's to remove: it is left as it is, the rest is still removed, and the error says
-    /// what was left.
+    /// now, it is not the room's to remove: it is left as it is, the rest is still removed, and the error
+    /// (`TurnError::Left`) holds the paths that were left, for a caller that tidies around them.
     pub fn destroy(self) -> Result<(), TurnError> {
         let mut left = Vec::new();
         let scratch = self.scratch();
         // The scratch directory, when a jailed run made one and it is still that one.
         match self.scratch_id.get() {
             Some(&id) if identity(&scratch).ok() == Some(id) => remove_tree(&scratch)?,
-            Some(_) if fs::symlink_metadata(&scratch).is_ok() => left.push(scratch.clone()),
+            // Something is there that the room did not make, or that is no longer what it made.
+            _ if fs::symlink_metadata(&scratch).is_ok() => left.push(scratch.clone()),
             _ => {}
         }
         // The Linux jail's filter, a file beside the scratch directory.
@@ -606,11 +621,7 @@ impl Sandbox {
         if left.is_empty() {
             return Ok(());
         }
-        let left: Vec<String> = left.iter().map(|p| p.display().to_string()).collect();
-        Err(TurnError::Refused(format!(
-            "not removed, because it is not what the room made there: {}",
-            left.join(", ")
-        )))
+        Err(TurnError::Left(left))
     }
 }
 
@@ -881,7 +892,7 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, TurnError> {
 }
 
 fn output(command: Command, what: &str) -> Result<Vec<u8>, TurnError> {
-    output_within(command, what, Duration::from_secs(ROOM_GIT_SECS))
+    output_within(command, what, Duration::from_secs(ROOM_GIT_SECS), None)
 }
 
 /// Runs the room's git, as `safe_git` made it and with what the caller added, for at most `ROOM_GIT_SECS`, and
@@ -890,13 +901,34 @@ pub fn safe_git_output(command: Command, what: &str) -> Result<Vec<u8>, TurnErro
     output(command, what)
 }
 
+/// `safe_git_output` for at most `limit`, and ended sooner if `stop` is set meanwhile: the clock sets it when
+/// the room is stopped or the turn's lease is lost. Set before the start, nothing is started.
+pub fn safe_git_output_until(
+    command: Command,
+    what: &str,
+    limit: Duration,
+    stop: &AtomicBool,
+) -> Result<Vec<u8>, TurnError> {
+    output_within(command, what, limit, Some(stop))
+}
+
 /// Runs `command` for at most `limit` and returns its stdout. The room's own git reads repositories a worker
 /// has had its hands on, and must not wait on one for ever.
 ///
 /// The limit covers everything: the program, and its output, which something the program started may hold
 /// open after the program itself is done. The program runs in a group of its own, and when the limit passes
-/// the whole group is ended, so nothing it started is left.
-fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Vec<u8>, TurnError> {
+/// the whole group is ended, so nothing it started is left. The same is done as soon as `stop` is set.
+fn output_within(
+    mut command: Command,
+    what: &str,
+    limit: Duration,
+    stop: Option<&AtomicBool>,
+) -> Result<Vec<u8>, TurnError> {
+    let stopped = || stop.is_some_and(|stop| stop.load(Ordering::Relaxed));
+    let halted = || TurnError::Git(format!("{what} was ended before it finished"));
+    if stopped() {
+        return Err(halted());
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -934,6 +966,9 @@ fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Ve
         signal_group(group, "KILL");
         let _ = child.kill();
         let _ = child.wait();
+        if stopped() {
+            return halted();
+        }
         TurnError::Git(format!(
             "{what} did not finish in {} seconds and was ended",
             limit.as_secs()
@@ -944,18 +979,29 @@ fn output_within(mut command: Command, what: &str, limit: Duration) -> Result<Ve
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
+            Ok(None) if Instant::now() < deadline && !stopped() => {
                 thread::sleep(pause);
                 pause = (pause * 2).min(POLL);
             }
             Ok(None) | Err(_) => return Err(late(&mut child)),
         }
     };
-    let left = |deadline: Instant| deadline.saturating_duration_since(Instant::now());
-    let Ok(stdout) = stdout.recv_timeout(left(deadline)) else {
+    // What a pipe held, waited for in short looks so that the switch is seen while waiting.
+    let read_out = |pipe: &mpsc::Receiver<Vec<u8>>| loop {
+        let now = Instant::now();
+        if now >= deadline || stopped() {
+            return None;
+        }
+        match pipe.recv_timeout((deadline - now).min(POLL)) {
+            Ok(bytes) => return Some(bytes),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    };
+    let Some(stdout) = read_out(&stdout) else {
         return Err(late(&mut child));
     };
-    let Ok(stderr) = stderr.recv_timeout(left(deadline)) else {
+    let Some(stderr) = read_out(&stderr) else {
         return Err(late(&mut child));
     };
     // The program is done and so is its output. Anything it left in its group goes with it.
@@ -1116,7 +1162,7 @@ mod tests {
         let mut slow = Command::new("/bin/sleep");
         slow.arg("30");
         let start = Instant::now();
-        let ended = output_within(slow, "a slow read", Duration::from_millis(300));
+        let ended = output_within(slow, "a slow read", Duration::from_millis(300), None);
         assert!(
             matches!(&ended, Err(TurnError::Git(why)) if why.contains("did not finish")),
             "{ended:?}"
@@ -1127,7 +1173,7 @@ mod tests {
         let mut leaves_one = Command::new("/bin/sh");
         leaves_one.args(["-c", "sleep 37.123 & echo started"]);
         let start = Instant::now();
-        let ended = output_within(leaves_one, "a read", Duration::from_millis(500));
+        let ended = output_within(leaves_one, "a read", Duration::from_millis(500), None);
         assert!(
             matches!(&ended, Err(TurnError::Git(why)) if why.contains("did not finish")),
             "{ended:?}"
@@ -1153,15 +1199,88 @@ mod tests {
         let mut quick = Command::new("/bin/sh");
         quick.args(["-c", "echo out"]);
         assert_eq!(
-            output_within(quick, "a quick read", Duration::from_secs(5)).unwrap(),
+            output_within(quick, "a quick read", Duration::from_secs(5), None).unwrap(),
             b"out\n"
         );
         let mut failing = Command::new("/bin/sh");
         failing.args(["-c", "echo why >&2; exit 3"]);
-        let failed = output_within(failing, "a read", Duration::from_secs(5));
+        let failed = output_within(failing, "a read", Duration::from_secs(5), None);
         assert!(
             matches!(&failed, Err(TurnError::Git(why)) if why.contains("why")),
             "{failed:?}"
+        );
+    }
+
+    /// The switch ends the room's git as its limit does, the whole group, and at once: while the program runs,
+    /// and while only its output is waited for. Set beforehand, nothing is started at all.
+    #[test]
+    fn the_rooms_git_is_ended_when_its_switch_is_set() {
+        let sleepers = |text: &str| {
+            let all = Command::new("ps")
+                .args(["-Ao", "command="])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&all.stdout)
+                .lines()
+                .filter(|command| command.trim() == text)
+                .count()
+        };
+        for (script, sleeper) in [
+            // The leader itself is slow.
+            ("exec sleep 41.317", "sleep 41.317"),
+            // The leader is done at once, and something it started keeps the pipe.
+            ("sleep 43.519 & echo started", "sleep 43.519"),
+        ] {
+            let stop = Arc::new(AtomicBool::new(false));
+            let setter = {
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(400));
+                    stop.store(true, Ordering::Relaxed);
+                })
+            };
+            let mut slow = Command::new("/bin/sh");
+            slow.args(["-c", script]);
+            let start = Instant::now();
+            let ended = safe_git_output_until(slow, "a read", Duration::from_secs(30), &stop);
+            let took = start.elapsed();
+            setter.join().unwrap();
+            assert!(
+                matches!(&ended, Err(TurnError::Git(why)) if why.contains("was ended before it finished")),
+                "{script}: {ended:?}"
+            );
+            assert!(
+                took >= Duration::from_millis(300) && took < Duration::from_secs(5),
+                "{script}: {took:?}"
+            );
+            thread::sleep(Duration::from_millis(300));
+            assert_eq!(
+                sleepers(sleeper),
+                0,
+                "{script}: the sleeper is still running"
+            );
+        }
+        // Set before the start: nothing is started. Seen with a program that is not there: had the runner
+        // tried to start it, the error would be that it could not.
+        let stop = AtomicBool::new(true);
+        let never = Command::new("/no/such/place/yak-never-started");
+        let refused = safe_git_output_until(never, "a read", Duration::from_secs(30), &stop);
+        assert!(
+            matches!(&refused, Err(TurnError::Git(why)) if why.contains("was ended before it finished")),
+            "{refused:?}"
+        );
+        // And the same program with the switch not set is what that error looks like.
+        let stop = AtomicBool::new(false);
+        let missing = Command::new("/no/such/place/yak-never-started");
+        let failed = safe_git_output_until(missing, "a read", Duration::from_secs(30), &stop);
+        assert!(matches!(&failed, Err(TurnError::Io(_))), "{failed:?}");
+        // The control: with the switch never set, the same runner gives the output.
+        let mut quick = Command::new("/bin/sh");
+        quick.args(["-c", "echo out"]);
+        let stop = AtomicBool::new(false);
+        assert_eq!(
+            safe_git_output_until(quick, "a read", Duration::from_secs(5), &stop).unwrap(),
+            b"out\n"
         );
     }
 

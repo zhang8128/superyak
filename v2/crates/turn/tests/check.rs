@@ -479,3 +479,59 @@ fn freeze_refuses_a_path_that_is_not_plain_or_not_tracked() {
     let head = git(&item.repo.path, &["rev-parse", "HEAD"]);
     assert_eq!(head, item.repo.base, "the repository was not moved");
 }
+
+/// A freeze runs its check in a sandbox inside a work directory of its own, and removes that directory when it
+/// is done. If something else is at the sandbox's path by then, it is not the room's to remove: it is left,
+/// with the work directory that holds it, and the freeze says so and gives no result.
+#[test]
+fn a_freeze_leaves_its_work_directory_when_something_took_its_sandboxs_place() {
+    let item = Item::new();
+    let checks = item.repo.scratch("checks");
+    let mut spec = item.spec();
+    spec.command = "sleep 3; exit 1".to_string();
+    let moved = item.repo.scratch("moved-away");
+    let swapper = {
+        let checks = checks.clone();
+        std::thread::spawn(move || {
+            // The sandbox of the freeze's first run, once it is running: the one name without a dot in the
+            // work directory beside its record.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut sandbox = None;
+            assert!(common::wait_until(deadline, || {
+                let record = std::fs::read_dir(&checks)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .find(|p| {
+                        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                        name.starts_with(".work-") && name.ends_with(".pid")
+                    });
+                sandbox = record.and_then(|record| {
+                    std::fs::read_dir(record.with_extension(""))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                        .find(|p| !p.file_name().unwrap().to_string_lossy().contains('.'))
+                });
+                sandbox.is_some()
+            }));
+            // Well inside the check's three seconds.
+            std::thread::sleep(Duration::from_secs(1));
+            let at = sandbox.unwrap();
+            std::fs::rename(&at, &moved).unwrap();
+            std::fs::create_dir(&at).unwrap();
+            std::fs::write(at.join("canary"), "KEEP").unwrap();
+            at
+        })
+    };
+    let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks);
+    let at = swapper.join().unwrap();
+    let Err(TurnError::Left(left)) = &frozen else {
+        panic!("{frozen:?}");
+    };
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0].file_name(), at.file_name());
+    assert_eq!(std::fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
+}

@@ -171,7 +171,10 @@ impl Supervisor {
         }
     }
 
-    fn learn(&mut self, processes: &[Process]) {
+    /// Takes in what is running now, and says whether the record changed: a process seen for the first time, or
+    /// a number that now belongs to another process than the one recorded under it.
+    fn learn(&mut self, processes: &[Process]) -> bool {
+        let mut changed = false;
         let anchored = processes
             .iter()
             .any(|p| p.pid == self.identity.group && p.start == self.identity.start);
@@ -185,25 +188,25 @@ impl Supervisor {
             for p in processes {
                 if roots.contains(&p.parent) || (anchored && p.group == self.identity.group) {
                     roots.insert(p.pid);
-                    self.seen.insert(p.pid, p.start.clone());
+                    changed |= self.seen.insert(p.pid, p.start.clone()).as_ref() != Some(&p.start);
                 }
             }
             if roots.len() == before {
                 break;
             }
         }
+        changed
     }
 
-    /// Looks at the processes again when it is time to, and says whether any was seen for the first time, so
-    /// that the caller can write the record anew.
+    /// Looks at the processes again when it is time to, and says whether the record changed, so that the caller
+    /// can write it anew.
     pub fn poll(&mut self) -> Result<bool, TurnError> {
         if self.best_effort || self.last_poll.elapsed() < SUPERVISION_POLL {
             return Ok(false);
         }
-        let before = self.seen.len();
-        self.learn(&snapshot(None)?);
+        let changed = self.learn(&snapshot(None)?);
         self.last_poll = Instant::now();
-        Ok(self.seen.len() > before)
+        Ok(changed)
     }
 
     /// Confirms each recorded identity before signalling and confirms all recorded live processes are gone.
@@ -395,5 +398,23 @@ mod tests {
         assert!(Identity::read(&path).unwrap().unwrap().others.is_empty());
         fs::remove_file(&path).unwrap();
         assert!(Identity::read(&path).unwrap().is_none());
+    }
+
+    /// A process number can be given again within one run: a child ends, and a later child gets its number. The
+    /// count of processes seen is then what it was, and the record still has to change, since it names the
+    /// later one by a start time that is no longer true.
+    #[test]
+    fn a_number_given_to_a_later_process_counts_as_something_new() {
+        let mut supervisor = Supervisor::new(Identity {
+            group: 10,
+            start: "leader".into(),
+            others: Vec::new(),
+        });
+        assert!(supervisor.learn(&[process(10, 1, 10, "leader"), process(11, 10, 10, "first"),]));
+        // Nothing new: the same two again.
+        assert!(!supervisor.learn(&[process(10, 1, 10, "leader"), process(11, 10, 10, "first"),]));
+        // The same number, another process.
+        assert!(supervisor.learn(&[process(10, 1, 10, "leader"), process(11, 10, 10, "second"),]));
+        assert_eq!(supervisor.record().others, [(11, "second".to_string())]);
     }
 }

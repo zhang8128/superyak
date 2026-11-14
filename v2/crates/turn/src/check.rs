@@ -61,7 +61,11 @@ pub fn freeze(
             red_on_wrong,
         })
     })();
-    remove_tree(&scratch)?;
+    // The work directory goes, unless something in it is not the room's to remove: what a run that could not
+    // be ended is still using, or what was found where a check's sandbox should be.
+    if !matches!(result, Err(TurnError::Unended { .. } | TurnError::Left(_))) {
+        remove_tree(&scratch)?;
+    }
     result
 }
 
@@ -105,6 +109,10 @@ pub fn run_check(
     record.push(".pid");
     sandbox.set_pid_file(work.with_file_name(record));
     let result = judge(&sandbox, spec, &files, check_hash);
+    // A run that could not be ended may still be using the clone: it stays, with the run's record.
+    if let Err(e @ TurnError::Unended { .. }) = result {
+        return Err(e);
+    }
     let removed = sandbox.destroy();
     let verdict = result?;
     removed?;

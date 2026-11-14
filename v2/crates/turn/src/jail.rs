@@ -297,7 +297,8 @@ impl Settings {
         let mut protected = Vec::new();
         let mut hidden = Vec::new();
         let mut hide = |path: &Path| -> Result<(), TurnError> {
-            protected.push(path.to_path_buf());
+            // Every place the name could come to be: a directory on the way to it may be a link.
+            protected.extend(places(path));
             if path.exists() {
                 hidden.push(real_path(path)?);
             }
@@ -359,6 +360,31 @@ impl Settings {
         }
         Ok(Settings { hidden, shown })
     }
+}
+
+/// Every place `path` could come to name. A directory on the way to it may be a link, and a link may later be
+/// replaced by a directory; so for each leading part of the path that exists, this gives where that part
+/// really is, followed by the rest as written. The path as written is among them (its leading part `/`), and
+/// so is the path with every link there is today followed.
+///
+/// A name that is not there yet has no one place. It has these.
+fn places(path: &Path) -> Vec<PathBuf> {
+    let parts: Vec<_> = path.components().collect();
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut leading = PathBuf::new();
+    for (count, part) in parts.iter().enumerate() {
+        leading.push(part);
+        let Ok(real) = leading.canonicalize() else {
+            break;
+        };
+        let place = parts[count + 1..]
+            .iter()
+            .fold(real, |so_far, rest| so_far.join(rest));
+        if !found.contains(&place) {
+            found.push(place);
+        }
+    }
+    found
 }
 
 /// Which tool makes the jail on this machine.
@@ -806,6 +832,40 @@ fn quoted(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_has_a_place_for_every_link_on_the_way_to_it() {
+        let tmp = std::env::temp_dir().join(format!("yak-places-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("first")).unwrap();
+        std::fs::create_dir_all(tmp.join("second")).unwrap();
+        std::fs::create_dir_all(tmp.join("third")).unwrap();
+        let tmp = tmp.canonicalize().unwrap();
+        // home/outer leads to first, and first/inner leads to second.
+        std::fs::create_dir_all(tmp.join("home")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("first"), tmp.join("home/outer")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("second"), tmp.join("first/inner")).unwrap();
+        // A name that is not there, behind both links: as written, behind the first, and behind both.
+        assert_eq!(
+            places(&tmp.join("home/outer/inner/later.toml")),
+            [
+                tmp.join("home/outer/inner/later.toml"),
+                tmp.join("first/inner/later.toml"),
+                tmp.join("second/later.toml"),
+            ]
+        );
+        // With no link on the way, a name has the one place.
+        assert_eq!(
+            places(&tmp.join("third/none/at/all")),
+            [tmp.join("third/none/at/all")]
+        );
+        // One that is there has its real place too.
+        assert_eq!(
+            places(&tmp.join("home/outer")),
+            [tmp.join("home/outer"), tmp.join("first")]
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     fn sample(kind: Kind) -> Jail {
         Jail {

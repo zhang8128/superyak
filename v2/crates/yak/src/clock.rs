@@ -75,9 +75,12 @@ pub enum ClockError {
     },
     #[error("git: {0}")]
     Git(String),
+    /// A run could not be confirmed ended: one an earlier clock left, or one of this clock's own. The clock
+    /// stops, and what is left of that run stays where it is.
     #[error(
-        "a run that an earlier clock left could not be ended ({why}). Its record, {record}, is kept and nothing \
-         else was removed. End that run by hand, remove the record, and start the clock again"
+        "a run could not be confirmed ended ({why}). Its record, {record}, is kept, and so is everything else \
+         of that run: the clock removed nothing of it and starts no turn. End that run by hand, remove the \
+         record, and start the clock again"
     )]
     Unrecovered { record: String, why: String },
     #[error(
@@ -157,6 +160,8 @@ pub struct Options<'a> {
     pub poll: Duration,
     /// Called with each event as it happens.
     pub report: Option<&'a mut dyn FnMut(&Event)>,
+    /// The longest one git command of the clock's own may take, in seconds.
+    pub git_secs: u64,
 }
 
 impl Default for Options<'_> {
@@ -165,6 +170,7 @@ impl Default for Options<'_> {
             turn_secs: TURN_SECS,
             poll: Duration::from_secs(u64::from(CLOCK_POLL_SECS)),
             report: None,
+            git_secs: turn::sandbox::ROOM_GIT_SECS,
         }
     }
 }
@@ -209,6 +215,7 @@ pub fn run_with(
         turn_secs: options.turn_secs,
         poll: options.poll,
         report: options.report,
+        git_limit: Duration::from_secs(options.git_secs),
         next: 0,
         unfreezable: HashMap::new(),
         ceiling_day: None,
@@ -280,6 +287,7 @@ pub fn freeze_drafts(room: &mut Room) -> Result<u32, ClockError> {
             Ok(_) => frozen += 1,
             Err(Unfrozen::Item(reason)) => failed.push((id, reason)),
             Err(Unfrozen::Store(e)) => return Err(e.into()),
+            Err(Unfrozen::Unended(stop)) => return Err(stop),
         }
     }
     match failed.first() {
@@ -298,6 +306,8 @@ enum Unfrozen {
     Item(String),
     /// The room's store failed.
     Store(RoomError),
+    /// A run of the check could not be confirmed ended. Nothing more is frozen, and the clock stops.
+    Unended(ClockError),
 }
 
 fn freeze_one(room: &mut Room, id: &ItemId) -> Result<ItemState, Unfrozen> {
@@ -310,9 +320,31 @@ fn freeze_one(room: &mut Room, id: &ItemId) -> Result<ItemState, Unfrozen> {
     };
     let spec = room.item_spec(id).map_err(store)?;
     let checks = room.dir().join(CHECKS);
-    let frozen = check::freeze(&spec.repo, &spec.base_commit, &spec.check, &checks)
-        .map_err(|e| Unfrozen::Item(e.to_string()))?;
+    let frozen =
+        check::freeze(&spec.repo, &spec.base_commit, &spec.check, &checks).map_err(|e| {
+            match unended(room.dir(), &e) {
+                Some(stop) => Unfrozen::Unended(stop),
+                None => Unfrozen::Item(e.to_string()),
+            }
+        })?;
     room.record_frozen(id, frozen).map_err(store)
+}
+
+/// The clock's stop for a run that could not be confirmed ended, and nothing for any other failure. The record
+/// is named as `clear_turns` names one: by its path in the room's directory.
+fn unended(room_dir: &Path, e: &TurnError) -> Option<ClockError> {
+    let TurnError::Unended { record, why } = e else {
+        return None;
+    };
+    let record = Path::new(record);
+    Some(ClockError::Unrecovered {
+        record: record
+            .strip_prefix(room_dir)
+            .unwrap_or(record)
+            .to_string_lossy()
+            .into_owned(),
+        why: why.clone(),
+    })
 }
 
 /// A room error that says the store itself cannot be trusted or reached, which ends the clock. The others are
@@ -341,15 +373,29 @@ struct Clock<'r, 'o> {
     turn_secs: u32,
     poll: Duration,
     report: Option<&'o mut dyn FnMut(&Event)>,
+    /// The longest one git command of the clock's own may take.
+    git_limit: Duration,
     /// The worker whose turn it is next.
     next: usize,
     /// Drafts that failed to freeze, and when: a broken one is tried again after `FREEZE_RETRY`, not every pass.
     unfreezable: HashMap<ItemId, Instant>,
     /// The UTC day the ceiling was last reported.
     ceiling_day: Option<i64>,
-    /// Attempts whose sandbox or scratch directory was not what the room made there when the turn ended. They
-    /// were left as they were, and tidying leaves them too.
-    kept: Vec<String>,
+    /// Paths where a sandbox or a scratch directory should have been and something else was, when the room
+    /// came to remove it. They were left as they were, and tidying leaves them too, with whatever holds them.
+    kept: Vec<PathBuf>,
+}
+
+/// What became of bringing a turn's commit into the item's repository.
+enum Brought {
+    /// It is there, and the turn's ref names it.
+    Named,
+    /// The room was stopped meanwhile. No ref of this turn's is left.
+    Stopped,
+    /// The lease is no longer this turn's. No ref of this turn's is left.
+    LeaseLost,
+    /// It could not be brought over or named, and why.
+    Failed(String),
 }
 
 /// One turn: its lease, and what `work` made for it.
@@ -427,7 +473,9 @@ impl Clock<'_, '_> {
     /// Ends the runs a dead clock left going, then removes whatever is in `turns/` and the scratch a freeze
     /// leaves in `checks/` (`.work-*`, `.freeze-*`). The room's writer lock is held, so all of it is from a clock
     /// that died. Its sandboxes are never fetched from. A run is ended before its sandbox is removed from under
-    /// it, and if one cannot be ended the clock stops here with everything still in place.
+    /// it, and if one cannot be ended the clock stops here: that run's record and directories stay as they are,
+    /// and so does every other directory. The records of runs already ended by then are gone, each removed as
+    /// its run was known to be over.
     ///
     /// What is removed here is removed by where it is. A dead clock's memory of which directory it made is gone
     /// with it, so the check a live turn makes before removing its sandbox cannot be made.
@@ -520,6 +568,7 @@ impl Clock<'_, '_> {
                     self.tell(&Event::NotFrozen { item: id, reason });
                 }
                 Err(Unfrozen::Store(e)) => return Err(e.into()),
+                Err(Unfrozen::Unended(stop)) => return Err(stop),
             }
         }
         Ok(())
@@ -556,7 +605,11 @@ impl Clock<'_, '_> {
             worker: lease.worker.clone(),
         });
         let result = self.attempt(&lease, taken_at, rng);
-        self.tidy(&lease);
+        // After a run that could not be ended nothing is tidied: its record and its directories are what is
+        // left to find it by.
+        if !matches!(result, Err(ClockError::Unrecovered { .. })) {
+            self.tidy(&lease);
+        }
         let outcome = result?;
         self.tell(&Event::Ended {
             item: lease.item.clone(),
@@ -647,10 +700,14 @@ impl Clock<'_, '_> {
             branch: &branch,
         };
         let outcome = self.work_in(&turn);
-        // The sandbox goes whatever became of the turn, and by the sandbox's own rule: only what the room made
-        // there. Something else found at its path is left, and tidying leaves it too.
+        // A run that could not be ended may still be using the sandbox: it stays.
+        if matches!(outcome, Err(ClockError::Unrecovered { .. })) {
+            return outcome;
+        }
+        // Otherwise the sandbox goes whatever became of the turn, and by the sandbox's own rule: only what the
+        // room made there. Something else found at its path is left, and tidying leaves it too.
         if let Err(e) = sandbox.destroy() {
-            self.kept.push(lease.attempt.0.clone());
+            self.keep(&e);
             self.tell(&Event::Problem {
                 item: Some(lease.item.clone()),
                 what: format!("the sandbox was not removed: {e}"),
@@ -669,7 +726,7 @@ impl Clock<'_, '_> {
             spec,
             frozen,
             turns,
-            branch,
+            branch: _,
         } = *turn;
         let stop = sandbox.stop_switch();
         let mut keeper = Keeper::new(lease, taken_at);
@@ -684,6 +741,11 @@ impl Clock<'_, '_> {
             self.watch(&mut keeper, Some(&stop), job)?
         };
         let (ran, watched) = ran;
+        if let Err(e) = &ran
+            && let Some(stop) = unended(self.room.dir(), e)
+        {
+            return Err(stop);
+        }
         let (steps, timed_out, failure) = match ran {
             Ok(run) => (run.steps, run.timed_out, None),
             Err(e) => (Vec::new(), false, Some(e.to_string())),
@@ -714,36 +776,22 @@ impl Clock<'_, '_> {
                 what: format!("the worker failed after committing: {what}"),
             });
         }
-        // The fetch comes before the hand-in, so that what is handed in is always in the item's repository for the
-        // check to clone; a commit that cannot be brought over is a turn that handed in nothing, and fails. A renewal
-        // first makes sure the lease is still this turn's: no other writer can take it between here and the
-        // hand-in, so the only ref a turn makes is under a lease it held.
+        // The commit is brought into the item's repository before the hand-in, so that what is handed in is always
+        // there for the check to clone; a commit that cannot be brought over is a turn that handed in nothing, and
+        // fails. A renewal first makes sure the lease is still this turn's.
         if commit != base {
             match self.room.renew(lease, now()) {
                 Ok(_) => keeper.last = now(),
                 Err(e) if fatal(&e) => return Err(e.into()),
                 Err(_) => return Ok((Outcome::LeaseLost, steps)),
             }
-            match fetch(sandbox, &spec.repo, &commit) {
-                Err(e) => {
-                    nothing = Some(format!("its commit could not be fetched: {e}"));
+            match self.bring(&mut keeper, turn, &commit)? {
+                Brought::Named => {}
+                Brought::Stopped => return self.stopped(lease, steps),
+                Brought::LeaseLost => return Ok((Outcome::LeaseLost, steps)),
+                Brought::Failed(why) => {
+                    nothing = Some(format!("its commit could not be fetched: {why}"));
                     commit = base.clone();
-                }
-                Ok(()) => {
-                    // The fetch can take a while, and nothing watched the room during it. So before the ref is
-                    // made: is the room stopped, and is the lease still this turn's?
-                    if self.room.stopped() {
-                        return self.stopped(lease, steps);
-                    }
-                    match self.room.renew(lease, now()) {
-                        Ok(_) => keeper.last = now(),
-                        Err(e) if fatal(&e) => return Err(e.into()),
-                        Err(_) => return Ok((Outcome::LeaseLost, steps)),
-                    }
-                    if let Err(e) = publish(&spec.repo, &format!("refs/heads/{branch}"), &commit) {
-                        nothing = Some(format!("its commit could not be fetched: {e}"));
-                        commit = base.clone();
-                    }
                 }
             }
         }
@@ -776,6 +824,7 @@ impl Clock<'_, '_> {
         let verdict = match checked {
             Ok(verdict) => verdict,
             Err(e) => {
+                self.check_failed(&e)?;
                 // `Room::release` could go here too, but it does not count the attempt: a check that can never run
                 // (its frozen copies gone) would then be retried until the daily ceiling. Expiry counts it, and
                 // abandons the item after `MAX_ATTEMPTS`; use `release` here only for a cause known to pass.
@@ -805,6 +854,129 @@ impl Clock<'_, '_> {
             },
             steps,
         ))
+    }
+
+    /// Brings the turn's commit into the item's repository and names it `refs/heads/<branch>`: a fetch, which
+    /// writes no ref, then the ref.
+    ///
+    /// The clock's git can take a while (its limit is `git_limit`), so each of the two is watched as the worker
+    /// was: the lease is kept renewed while it runs, and it is ended, its whole group, as soon as the room is
+    /// stopped or the lease is lost. After each, whatever it returned, the room itself is asked: is it stopped,
+    /// and is the lease still this turn's? So a turn makes its ref only under a lease it holds, in a room that
+    /// is not stopped; and when either changed while the ref was being made, the ref is taken back before the
+    /// turn ends. A stop is seen even when the fetch failed: no check is started after it.
+    fn bring(
+        &mut self,
+        keeper: &mut Keeper,
+        turn: &Turn<'_>,
+        commit: &str,
+    ) -> Result<Brought, ClockError> {
+        let (lease, sandbox, repo) = (turn.lease, turn.sandbox, &turn.spec.repo);
+        let name = format!("refs/heads/{}", turn.branch);
+        let limit = self.git_limit;
+
+        let halt = AtomicBool::new(false);
+        let fetched = {
+            let halt = &halt;
+            let job = move || fetch(sandbox, repo, commit, limit, halt).map_err(|e| e.to_string());
+            self.watch(keeper, Some(halt), job)?.0
+        };
+        if let Some(ended) = self.no_longer_ours(keeper, lease)? {
+            return Ok(ended);
+        }
+        if let Err(why) = fetched {
+            return Ok(Brought::Failed(why));
+        }
+
+        let halt = AtomicBool::new(false);
+        let named = {
+            let (halt, name) = (&halt, name.as_str());
+            let job = move || publish(repo, name, commit, limit, halt).map_err(|e| e.to_string());
+            self.watch(keeper, Some(halt), job)?.0
+        };
+        if let Some(ended) = self.no_longer_ours(keeper, lease)? {
+            // The turn hands nothing in, so its ref does not stay. A git that was ended may or may not have
+            // made it, so it is asked to go either way.
+            self.unpublish(lease, repo, &name, commit);
+            return Ok(ended);
+        }
+        Ok(match named {
+            Ok(()) => Brought::Named,
+            Err(why) => Brought::Failed(why),
+        })
+    }
+
+    /// Asks the room whether a turn should end where it is: `Stopped` when the stop file is there, `LeaseLost`
+    /// when a renewal is refused, and nothing when the lease was renewed.
+    fn no_longer_ours(
+        &mut self,
+        keeper: &mut Keeper,
+        lease: &Lease,
+    ) -> Result<Option<Brought>, ClockError> {
+        if self.room.stopped() {
+            return Ok(Some(Brought::Stopped));
+        }
+        match self.room.renew(lease, now()) {
+            Ok(_) => {
+                keeper.last = now();
+                Ok(None)
+            }
+            Err(e) if fatal(&e) => Err(e.into()),
+            Err(_) => Ok(Some(Brought::LeaseLost)),
+        }
+    }
+
+    /// Takes back the ref of a turn that then hands nothing in, if it is there and names this turn's commit: a
+    /// commit that was nowhere but in the turn's sandbox until this turn's fetch. A ref of that name that names
+    /// anything else was not made by this turn, and is left. One that cannot be taken back is said.
+    fn unpublish(&mut self, lease: &Lease, repo: &Path, name: &str, commit: &str) {
+        let go = AtomicBool::new(false);
+        let limit = self.git_limit;
+        // With the commit given, git removes the ref only while it names that commit.
+        let removed = git(
+            repo,
+            ["update-ref", "--no-deref", "-d", name, commit],
+            limit,
+            &go,
+        );
+        let Err(why) = removed else {
+            return;
+        };
+        // Not removed. If no ref of that name names this commit, there was nothing of this turn's to take back.
+        let named = git(
+            repo,
+            ["for-each-ref", "--format=%(objectname)", name],
+            limit,
+            &go,
+        );
+        if matches!(&named, Ok(names) if names != commit) {
+            return;
+        }
+        self.tell(&Event::Problem {
+            item: Some(lease.item.clone()),
+            what: format!(
+                "{name} was made for a turn that handed nothing in, and could not be removed: {why}"
+            ),
+        });
+    }
+
+    /// What a check that gave no verdict asks of the clock, whatever else is then done about it: to stop, when
+    /// its run could not be confirmed ended; and to leave in place what its sandbox's removal left.
+    fn check_failed(&mut self, e: &TurnError) -> Result<(), ClockError> {
+        if let Some(stop) = unended(self.room.dir(), e) {
+            return Err(stop);
+        }
+        self.keep(e);
+        Ok(())
+    }
+
+    /// Remembers what a removal left in place (`TurnError::Left`), so that tidying leaves it too. A sandbox
+    /// knows its own path with every link followed, from when it was made; tidying brings each name it finds
+    /// to the same form (`placed`) before it compares.
+    fn keep(&mut self, e: &TurnError) {
+        if let TurnError::Left(paths) = e {
+            self.kept.extend(paths.iter().cloned());
+        }
     }
 
     /// A turn the stop file ended. A person stopped the room, so the attempt does not count against the item, and
@@ -914,7 +1086,10 @@ impl Clock<'_, '_> {
                 Err(e) if fatal(&e) => return Err(e.into()),
                 Err(e) => format!("the recheck was refused: {e}"),
             },
-            Err(e) => format!("the recheck could not run: {e}"),
+            Err(e) => {
+                self.check_failed(&e)?;
+                format!("the recheck could not run: {e}")
+            }
         };
         self.tell(&Event::Problem {
             item: Some(lease.item.clone()),
@@ -924,9 +1099,9 @@ impl Clock<'_, '_> {
     }
 
     /// Removes everything of this attempt's in `turns/`: its pid file, a worker's settings file, the check's
-    /// scratch directories, and what is left of its sandbox when a turn ended before removing it. A sandbox or
-    /// scratch directory that the turn's own removal left in place, because it was not what the room made
-    /// there, is left here too.
+    /// scratch directories, and what is left of its sandbox when a turn ended before removing it. What a removal
+    /// left in place, because it was not what the room made there, is left here too: a sandbox, a scratch
+    /// directory, or a check's work directory that holds one.
     fn tidy(&mut self, lease: &Lease) {
         let turns = self.room.dir().join(TURNS);
         let Ok(entries) = fs::read_dir(&turns) else {
@@ -936,8 +1111,9 @@ impl Clock<'_, '_> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let left_in_place = self.kept.contains(&lease.attempt.0)
-                && (name == lease.attempt.0 || name == format!("{}.scratch", lease.attempt.0));
+            // What was left in place stays, and so does a directory that holds it.
+            let path = placed(&entry.path());
+            let left_in_place = self.kept.iter().any(|kept| kept.starts_with(&path));
             if (name == lease.attempt.0 || name.starts_with(&prefix))
                 && !left_in_place
                 && let Err(what) = remove_path(&entry.path())
@@ -998,7 +1174,13 @@ fn now() -> Ts {
 /// The clone is reclaimed from the worker first, since the git that serves the fetch reads the clone's
 /// configuration. The fetch asks for the commit by its id, so what arrives is that commit and what it holds, whatever
 /// the branch says by then; it writes no ref and runs no maintenance of its own.
-fn fetch(sandbox: &Sandbox, repo: &Path, commit: &str) -> Result<(), ClockError> {
+fn fetch(
+    sandbox: &Sandbox,
+    repo: &Path,
+    commit: &str,
+    limit: Duration,
+    stop: &AtomicBool,
+) -> Result<(), ClockError> {
     sandbox.reclaim()?;
     let fetched = [
         "fetch",
@@ -1012,31 +1194,51 @@ fn fetch(sandbox: &Sandbox, repo: &Path, commit: &str) -> Result<(), ClockError>
     .into_iter()
     .map(OsStr::new)
     .chain([sandbox.dir.as_os_str(), OsStr::new(commit)]);
-    git(repo, fetched)?;
+    git(repo, fetched, limit, stop)?;
     Ok(())
 }
 
 /// Names a fetched commit `name` in the item's repository. The name must not exist yet: each lease number is
 /// fetched once, so a ref already there was not made by this clock, and is left as it is. An object the fetch
 /// did not bring is refused too.
-fn publish(repo: &Path, name: &str, commit: &str) -> Result<(), ClockError> {
-    git(repo, ["update-ref", "--no-deref", name, commit, ""])?;
+fn publish(
+    repo: &Path,
+    name: &str,
+    commit: &str,
+    limit: Duration,
+    stop: &AtomicBool,
+) -> Result<(), ClockError> {
+    git(
+        repo,
+        ["update-ref", "--no-deref", name, commit, ""],
+        limit,
+        stop,
+    )?;
     Ok(())
 }
 
-/// Runs the room's git in `dir`, with what the fetch needs added and under the room's time limit; returns its
-/// trimmed stdout.
-fn git<I, S>(dir: &Path, args: I) -> Result<String, ClockError>
+/// Runs the room's git in `dir`, with what the fetch needs added, for at most `limit` and until `stop` is set;
+/// returns its trimmed stdout.
+fn git<I, S>(dir: &Path, args: I, limit: Duration, stop: &AtomicBool) -> Result<String, ClockError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let mut command = turn::sandbox::safe_git();
     command.arg("-C").arg(dir).args(FETCH_FLAGS).args(args);
-    match turn::sandbox::safe_git_output(command, "the clock's git") {
+    match turn::sandbox::safe_git_output_until(command, "the clock's git", limit, stop) {
         Ok(out) => Ok(String::from_utf8_lossy(&out).trim().to_string()),
         Err(TurnError::Git(why)) => Err(ClockError::Git(why)),
         Err(e) => Err(ClockError::Git(e.to_string())),
+    }
+}
+
+/// `path` with the directory it is in resolved and its own name kept as it is, so that two spellings of one
+/// place compare equal, and a link found at that place is named and not followed.
+fn placed(path: &Path) -> PathBuf {
+    match (path.parent().map(fs::canonicalize), path.file_name()) {
+        (Some(Ok(dir)), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
     }
 }
 

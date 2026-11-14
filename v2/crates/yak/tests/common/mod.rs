@@ -103,6 +103,8 @@ pub struct World {
     pub room_dir: PathBuf,
     pub room: Room,
     pub items: Vec<ItemId>,
+    /// The limit `run` gives the clock's own git, in seconds: the clock's usual one unless a test changes it.
+    pub git_secs: u64,
 }
 
 impl World {
@@ -138,6 +140,7 @@ impl World {
             room_dir,
             room,
             items: Vec::new(),
+            git_secs: Options::default().git_secs,
         };
         for n in 1..=items {
             world.add(n);
@@ -264,6 +267,7 @@ impl World {
                 turn_secs,
                 poll: Duration::from_millis(100),
                 report: Some(&mut report),
+                git_secs: self.git_secs,
             },
         );
         (result, events)
