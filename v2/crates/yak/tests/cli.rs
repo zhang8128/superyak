@@ -650,3 +650,84 @@ fn events_arrive_during_a_turn_and_stop_works_while_the_clock_holds_the_lock() {
     success(yak(&f.room).arg("resume").output().unwrap());
     assert!(!f.room.join("STOP").exists());
 }
+
+// The lead's additions at the join, after reading the builder's work.
+
+/// `yak stop` makes a file named STOP. If something else is at that name, it says so and writes nothing: a link
+/// there would have it empty whatever file the link names, and a link to nowhere would leave the room running
+/// while the command said it had stopped.
+#[test]
+fn stop_writes_nothing_through_a_link_and_says_when_it_did_not_stop() {
+    let f = Fixture::new();
+    let kept = f.tmp.path().join("kept.txt");
+    fs::write(&kept, "keep me\n").unwrap();
+    std::os::unix::fs::symlink(&kept, f.room.join("STOP")).unwrap();
+    let err = refusal(yak(&f.room).arg("stop").output().unwrap());
+    assert!(err.contains("STOP"), "{err}");
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "keep me\n");
+
+    fs::remove_file(f.room.join("STOP")).unwrap();
+    std::os::unix::fs::symlink(f.tmp.path().join("nowhere"), f.room.join("STOP")).unwrap();
+    refusal(yak(&f.room).arg("stop").output().unwrap());
+    assert!(!f.tmp.path().join("nowhere").exists());
+
+    // Stopping twice is fine: the second finds the file the first made.
+    fs::remove_file(f.room.join("STOP")).unwrap();
+    success(yak(&f.room).arg("stop").output().unwrap());
+    success(yak(&f.room).arg("stop").output().unwrap());
+    assert!(f.room.join("STOP").is_file());
+}
+
+#[test]
+fn a_turn_of_no_length_is_refused() {
+    let f = Fixture::new();
+    let script = f.script("exit 0");
+    let err = refusal(
+        f.clock(&script)
+            .args(["--turn-secs", "0"])
+            .output()
+            .unwrap(),
+    );
+    assert!(err.contains("turn-secs"), "{err}");
+}
+
+/// A check can be a command alone, with no file of its own to freeze. The room takes such a check, so the
+/// command line does too.
+#[test]
+fn an_item_can_have_a_check_with_no_file_to_freeze() {
+    let f = Fixture::new();
+    let mut cmd = yak(&f.room);
+    cmd.args(["item", "add", "--title", "Make answer green", "--repo"])
+        .arg(&f.repo)
+        .args([
+            "--base",
+            "main",
+            "--check",
+            "grep -qx green answer",
+            "--origin",
+            "outside",
+            "--by",
+            "person:test",
+        ]);
+    let id = success(cmd.output().unwrap());
+    assert_eq!(f.show(&id)["state"], "draft");
+}
+
+/// Checking the jail's settings before the first turn leaves nothing behind beside the room.
+#[test]
+fn starting_a_clock_leaves_nothing_beside_the_room() {
+    let f = Fixture::new();
+    f.add();
+    let script = f.script("exit 0");
+    let beside = |f: &Fixture| {
+        let mut names: Vec<String> = fs::read_dir(f.tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = beside(&f);
+    let _ = f.clock(&script).output().unwrap();
+    assert_eq!(beside(&f), before);
+}

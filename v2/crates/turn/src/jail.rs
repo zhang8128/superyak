@@ -211,61 +211,113 @@ fn wanted_from(value: Option<&str>) -> bool {
 /// is hidden: one that was silently left out would look like a missing tool, and the home would show
 /// everything the jail is for.
 pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
+    let settings = Settings::read()?;
     let mut jail = Jail::new(checkout, scratch)?;
-    // The jail keeps a home out by knowing where it is. With none it would hide nothing and refuse nothing, so
-    // it does not start.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_absolute())
-        .and_then(|home| home.canonicalize().ok())
-        .filter(|home| home.is_dir())
-        .ok_or_else(|| {
-            TurnError::Refused(
-                "the jail needs HOME to be the full path of a directory that exists: it keeps a home out by \
-                 knowing where it is"
-                    .into(),
-            )
-        })?;
-    for name in HOME_SECRETS {
-        jail = jail.hide(&home.join(name))?;
+    for path in &settings.hidden {
+        jail = jail.hide(path)?;
     }
-    for name in crate::sandbox::AGENT_HOMES {
-        if let Some(dir) = std::env::var_os(name).map(PathBuf::from) {
-            if !dir.is_absolute() {
-                return Err(TurnError::Refused(format!(
-                    "{name} must be a full path for the jail to hide it: it is {}",
-                    dir.display()
-                )));
-            }
-            jail = jail.hide(&dir)?;
-        }
-    }
-    if let Some(list) = std::env::var_os("YAK_JAIL_READ") {
-        for path in std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()) {
-            let refuse = |why: &str| {
-                TurnError::Refused(format!("YAK_JAIL_READ names {}, {why}", path.display()))
-            };
-            if !path.is_absolute() {
-                return Err(refuse("which is not an absolute path"));
-            }
-            let real = path
-                .canonicalize()
-                .map_err(|_| refuse("which is not there"))?;
-            if home.starts_with(&real) {
-                return Err(refuse(
-                    "which holds the home directory: name the tool's own directory",
-                ));
-            }
-            if let Some(hidden) = jail.hides(&real) {
-                return Err(refuse(&format!(
-                    "which is hidden from every run: {} holds keys or settings",
-                    hidden.display()
-                )));
-            }
-            jail = jail.allow_read(&real)?;
-        }
+    for path in &settings.shown {
+        jail = jail.allow_read(path)?;
     }
     Ok(jail)
+}
+
+/// Whether a jail can be made on this machine with the settings as they are, without making one. A clock asks
+/// before its first turn, so that a wrong `YAK_JAIL_READ` entry or a machine with no jail tool is said at the
+/// start, and not as a check that mysteriously cannot be frozen. Nothing is written.
+pub fn check_settings() -> Result<(), TurnError> {
+    let (kind, _) = Jail::detect().ok_or_else(no_jail_tool)?;
+    if kind == Kind::Bubblewrap && crate::filter::this_machine().is_none() {
+        return Err(unknown_machine());
+    }
+    Settings::read().map(|_| ())
+}
+
+fn no_jail_tool() -> TurnError {
+    TurnError::Refused(
+        "no jail on this machine: it needs sandbox-exec on macOS or bwrap on Linux".into(),
+    )
+}
+
+fn unknown_machine() -> TurnError {
+    TurnError::Refused(
+        "no jail on this kind of machine: its system calls are not known here".into(),
+    )
+}
+
+/// What the environment says the room's jail hides and shows, checked.
+struct Settings {
+    /// The home's keys and tokens and the agents' settings directories: the ones that are there, as real paths.
+    hidden: Vec<PathBuf>,
+    /// Each path in `YAK_JAIL_READ`, as a real path.
+    shown: Vec<PathBuf>,
+}
+
+impl Settings {
+    fn read() -> Result<Settings, TurnError> {
+        // The jail keeps a home out by knowing where it is. With none it would hide nothing and refuse nothing,
+        // so it does not start.
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+            .and_then(|home| home.canonicalize().ok())
+            .filter(|home| home.is_dir())
+            .ok_or_else(|| {
+                TurnError::Refused(
+                    "the jail needs HOME to be the full path of a directory that exists: it keeps a home out \
+                     by knowing where it is"
+                        .into(),
+                )
+            })?;
+        let mut hidden = Vec::new();
+        let mut hide = |path: &Path| -> Result<(), TurnError> {
+            if path.exists() {
+                hidden.push(real_path(path)?);
+            }
+            Ok(())
+        };
+        for name in HOME_SECRETS {
+            hide(&home.join(name))?;
+        }
+        for name in crate::sandbox::AGENT_HOMES {
+            if let Some(dir) = std::env::var_os(name).map(PathBuf::from) {
+                if !dir.is_absolute() {
+                    return Err(TurnError::Refused(format!(
+                        "{name} must be a full path for the jail to hide it: it is {}",
+                        dir.display()
+                    )));
+                }
+                hide(&dir)?;
+            }
+        }
+        let mut shown = Vec::new();
+        if let Some(list) = std::env::var_os("YAK_JAIL_READ") {
+            for path in std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()) {
+                let refuse = |why: &str| {
+                    TurnError::Refused(format!("YAK_JAIL_READ names {}, {why}", path.display()))
+                };
+                if !path.is_absolute() {
+                    return Err(refuse("which is not an absolute path"));
+                }
+                let real = path
+                    .canonicalize()
+                    .map_err(|_| refuse("which is not there"))?;
+                if real.parent().is_none() || home.starts_with(&real) {
+                    return Err(refuse(
+                        "which holds the home directory: name the tool's own directory",
+                    ));
+                }
+                if let Some(hidden) = hidden.iter().find(|hidden| real.starts_with(hidden)) {
+                    return Err(refuse(&format!(
+                        "which is hidden from every run: {} holds keys or settings",
+                        hidden.display()
+                    )));
+                }
+                shown.push(real_path(&real)?);
+            }
+        }
+        Ok(Settings { hidden, shown })
+    }
 }
 
 /// Which tool makes the jail on this machine.
@@ -320,11 +372,7 @@ impl Jail {
 
     /// A jail whose run may write only under `checkout` and `scratch`. Both must be existing directories.
     pub fn new(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
-        let (kind, tool) = Self::detect().ok_or_else(|| {
-            TurnError::Refused(
-                "no jail on this machine: it needs sandbox-exec on macOS or bwrap on Linux".into(),
-            )
-        })?;
+        let (kind, tool) = Self::detect().ok_or_else(no_jail_tool)?;
         let (checkout, scratch) = (real_dir(checkout)?, real_dir(scratch)?);
         if checkout.parent().is_none() || scratch.parent().is_none() {
             return Err(TurnError::Refused(
@@ -336,12 +384,7 @@ impl Jail {
         let filter = match kind {
             Kind::Seatbelt => None,
             Kind::Bubblewrap => {
-                let machine = crate::filter::this_machine().ok_or_else(|| {
-                    TurnError::Refused(
-                        "no jail on this kind of machine: its system calls are not known here"
-                            .into(),
-                    )
-                })?;
+                let machine = crate::filter::this_machine().ok_or_else(unknown_machine)?;
                 let mut name = scratch.file_name().unwrap_or_default().to_os_string();
                 name.push(".filter");
                 let path = scratch.with_file_name(name);

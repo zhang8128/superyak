@@ -71,7 +71,8 @@ struct Add {
     base: String,
     #[arg(long)]
     check: String,
-    #[arg(long, num_args = 1.., required = true)]
+    /// The check's own files, frozen with it. A check that is a command alone has none.
+    #[arg(long, num_args = 1..)]
     file: Vec<String>,
     #[arg(long, num_args = 1..)]
     wrong: Vec<String>,
@@ -103,7 +104,7 @@ struct Run {
     worker: Vec<String>,
     #[arg(long, default_value_t = limits::LEASE_SECS)]
     lease_secs: i64,
-    #[arg(long, default_value_t = limits::TURN_SECS)]
+    #[arg(long, default_value_t = limits::TURN_SECS, value_parser = clap::value_parser!(u32).range(1..))]
     turn_secs: u32,
     #[arg(long, default_value_t = limits::DAILY_TURNS)]
     daily_turns: u32,
@@ -161,7 +162,7 @@ async fn execute(cli: Cli) -> Result<()> {
             Room::open_read_only(&dir)?;
             let stop = dir.join("STOP");
             if matches!(cli.command, Command::Stop) {
-                fs::write(stop, [])?;
+                make_stop_file(&stop)?;
             } else if let Err(error) = fs::remove_file(stop)
                 && error.kind() != io::ErrorKind::NotFound
             {
@@ -174,6 +175,31 @@ async fn execute(cli: Cli) -> Result<()> {
         Command::Mcp => yak::mcp::serve(&dir).await?,
     }
     Ok(())
+}
+
+/// Makes the file that stops the room, new, or finds the one already there. Anything else at that name is
+/// refused and nothing is written: a link would have the file it names emptied, and a link to nowhere would
+/// leave the room running after this command said it had stopped.
+fn make_stop_file(stop: &Path) -> Result<()> {
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stop)
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if fs::symlink_metadata(stop).is_ok_and(|meta| meta.is_file()) {
+                Ok(())
+            } else {
+                Err(RoomError::Refused(format!(
+                    "{} is there and is not a file, so the room is not stopped: remove it and stop again",
+                    stop.display()
+                ))
+                .into())
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn add_item(dir: &Path, add: Add) -> Result<()> {
@@ -250,8 +276,9 @@ fn run_clock(dir: &Path, run: Run) -> Result<()> {
         }
     }
     let mut room = Room::open(dir)?;
+    // Said at the start, and nothing is made to say it.
     if turn::jail::wanted() {
-        turn::jail::for_checkout(dir, dir)?;
+        turn::jail::check_settings()?;
     }
     room.set_lease_secs(run.lease_secs)?;
     room.set_ceiling(run.daily_turns, run.concurrent)?;
