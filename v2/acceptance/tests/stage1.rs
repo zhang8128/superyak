@@ -160,6 +160,11 @@ fn json_num(text: &str, key: &str) -> Option<i64> {
     rest[..end].parse().ok()
 }
 
+/// The item's `attempts` in `yak item show ID --json` (task 10).
+fn attempts(r: &Room, id: &str) -> Option<i64> {
+    json_num(&ok(&yak(&r.room, &["item", "show", id, "--json"])), "attempts")
+}
+
 fn state(r: &Room, id: &str) -> String {
     let shown = ok(&yak(&r.room, &["item", "show", id, "--json"]));
     json_str(&shown, "state").unwrap_or_else(|| panic!("no state in {shown}"))
@@ -202,10 +207,10 @@ impl Clock {
         Clock(cmd.spawn().expect("the clock starts"))
     }
 
+    /// The clock's whole group, then the clock itself, so a group kill that missed can't leave `wait` hanging.
     fn kill_group(&mut self) {
-        let _ = Command::new("kill")
-            .args(["-9", &format!("-{}", self.0.id())])
-            .status();
+        kill_groups(&[self.0.id().to_string()]);
+        let _ = self.0.kill();
         let _ = self.0.wait();
     }
 
@@ -235,10 +240,11 @@ fn wait_for(what: &str, limit: Duration, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Whether any process of a process group is left.
+/// Whether any process of a process group is left. `--` before the negative id: procps-ng's `kill -0 -GROUP` (the
+/// Pi's 4.0.2) answers 0 whatever is left (Serenity, 7c3ddd1d).
 fn group_alive(group: &str) -> bool {
     Command::new("kill")
-        .args(["-0", &format!("-{group}")])
+        .args(["-0", "--", &format!("-{group}")])
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
@@ -271,6 +277,7 @@ fn unchanged_tree_does_not_pass() {
         "abandoned",
         "never passed: failed each of MAX_ATTEMPTS turns"
     );
+    assert_eq!(attempts(&r, &id), Some(3), "MAX_ATTEMPTS turns");
 }
 
 #[test]
@@ -291,6 +298,7 @@ fn a_wrong_artifact_fails() {
         "abandoned",
         "never passed: failed each of MAX_ATTEMPTS turns"
     );
+    assert_eq!(attempts(&r, &id), Some(3), "MAX_ATTEMPTS turns");
 }
 
 #[test]
@@ -369,10 +377,12 @@ fn attempts_seen(r: &Room) -> Vec<String> {
     stems
 }
 
+/// SIGKILL to each process group. `--` before the negative id: procps-ng's `kill -9 -GROUP` returns 0 and kills
+/// nothing (the Pi's 4.0.2, Serenity 7c3ddd1d); macOS takes the same form.
 fn kill_groups(groups: &[String]) {
     for group in groups {
         let _ = Command::new("kill")
-            .args(["-9", &format!("-{group}")])
+            .args(["-9", "--", &format!("-{group}")])
             .status();
     }
 }
@@ -502,6 +512,7 @@ fn a_worker_cannot_change_its_check() {
         "abandoned",
         "a changed check is refused each turn, though the fix is right"
     );
+    assert_eq!(attempts(&r, &id), Some(3), "MAX_ATTEMPTS turns");
 }
 
 #[test]
