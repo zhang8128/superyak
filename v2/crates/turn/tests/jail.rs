@@ -242,6 +242,30 @@ fn what_is_hidden_stays_hidden_inside_what_is_shown() {
     );
 }
 
+/// Showing something inside a hidden directory does not bring it back: hiding wins, in whichever order the
+/// two were asked for.
+#[test]
+fn what_is_shown_inside_something_hidden_stays_hidden() {
+    let g = ground();
+    let secret = g.hidden.join("secret");
+    let read = format!("cat {}", sh_quote(&secret));
+    assert_eq!(unjailed(&read), "CANARY-HIDDEN");
+    let shown_then_hidden = Jail::new(&g.checkout, &g.scratch)
+        .unwrap()
+        .allow_read(&secret)
+        .unwrap()
+        .hide(&g.hidden)
+        .unwrap();
+    let hidden_then_shown = jail(&g).allow_read(&secret).unwrap();
+    for jail in [shown_then_hidden, hidden_then_shown] {
+        let out = jailed(&jail, &read);
+        assert!(!out.status.success());
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("CANARY"));
+        assert_eq!(jail.hides(&secret), Some(g.hidden.as_path()));
+    }
+    assert_eq!(jail(&g).hides(&g.outside), None);
+}
+
 /// A room kept below a hidden directory (`~/.superyak`, say) must still give a run its own checkout.
 #[test]
 fn a_checkout_inside_a_hidden_directory_is_still_the_runs_own() {

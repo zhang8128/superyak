@@ -189,9 +189,16 @@ fn inner_a_run_under_the_rooms_settings() {
     let repo = Repo::new(&[("a.txt", "one\n")]);
     let sandbox =
         Sandbox::create(&repo.path, &repo.base, &repo.scratch("turn"), "room/i1/1").unwrap();
-    let args = common::strings(&["-c", script.to_str().unwrap()]);
+    // `YAK_INNER` is a script for `sh`, or with `YAK_INNER_PROGRAM` set it is the path of a program to run.
+    let script = script.to_str().unwrap();
+    let (program, args) = match std::env::var_os("YAK_INNER_PROGRAM") {
+        Some(_) => (script, Vec::new()),
+        None => ("sh", common::strings(&["-c", script])),
+    };
     let mut said = Vec::new();
-    match sandbox.run_untrusted("sh", &args, "", 30, &mut |line| said.push(line.to_string())) {
+    match sandbox.run_untrusted(program, &args, "", 30, &mut |line| {
+        said.push(line.to_string())
+    }) {
         Ok(status) => {
             for line in said {
                 println!("SAID {line}");
@@ -212,6 +219,7 @@ fn under(script: &str, variables: &[(&str, &Path)], jail: bool) -> String {
             "--nocapture",
         ])
         .env("YAK_INNER", script)
+        .env_remove("YAK_INNER_PROGRAM")
         .env_remove("YAK_JAIL")
         .env_remove("YAK_JAIL_READ")
         .env_remove("CLAUDE_CONFIG_DIR")
@@ -318,7 +326,11 @@ fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
     let home = home();
     let above = home.dir.parent().unwrap().to_path_buf();
     let missing = home.dir.join("no-such-tools");
+    let keys = home.dir.join(".ssh");
+    let key = home.dir.join(".ssh/id");
     for (named, why) in [
+        (keys.as_path(), "is hidden"),
+        (key.as_path(), "is hidden"),
         (home.dir.as_path(), "holds the home directory"),
         (above.as_path(), "holds the home directory"),
         (Path::new("tools/bin"), "not an absolute path"),
@@ -343,4 +355,26 @@ fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
         true,
     );
     assert!(printed.contains("SAID ran"), "{printed}");
+}
+
+/// A worker's program kept where keys are kept would be named for its run and still be hidden from it. The
+/// room says so, and does not start a run that can only fail to find its own program.
+#[test]
+fn a_program_kept_in_a_hidden_place_is_refused_by_name() {
+    let home = home();
+    let tool = home.dir.join(".ssh/tool.sh");
+    fs::write(&tool, "#!/bin/sh\necho TOOL-RAN\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let settings: [(&str, &Path); 2] = [("HOME", &home.dir), ("YAK_INNER_PROGRAM", Path::new("1"))];
+
+    // The control: with the jail off it runs, so the refusal below is the jail's rule and not a broken program.
+    let free = under(tool.to_str().unwrap(), &settings, false);
+    assert!(free.contains("SAID TOOL-RAN"), "{free}");
+
+    let printed = under(tool.to_str().unwrap(), &settings, true);
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("is hidden from every run"),
+        "{printed}"
+    );
+    assert!(!printed.contains("TOOL-RAN"), "{printed}");
 }

@@ -197,6 +197,42 @@ fn a_run_past_its_limit_is_ended_with_its_children() {
     );
 }
 
+/// The clock ends a turn from another thread, when the room is stopped or the turn's lease is lost.
+#[test]
+fn a_stopped_run_is_ended_with_its_children_and_no_later_run_starts() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let stop = sb.stop_switch();
+    let start = Instant::now();
+    let (status, lines) = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(700));
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        sh(&sb, "echo $$; sleep 600 & echo $!; sleep 600", 60)
+    });
+    // It was ended, and not because its time was up.
+    assert!(!status.timed_out);
+    assert_ne!(status.exit_code, 0);
+    assert!(
+        start.elapsed() < Duration::from_secs(u64::from(TERM_GRACE_SECS)),
+        "{:?}",
+        start.elapsed()
+    );
+    let group: u32 = lines[0].parse().unwrap();
+    let background: u32 = lines[1].parse().unwrap();
+    assert!(wait_until(
+        Instant::now() + Duration::from_secs(2),
+        || !group_alive(group) && !pid_alive(background)
+    ));
+    // The switch stays set, so nothing more starts in this sandbox: not the turn's own git either.
+    let mark = repo.scratch("started-after-the-stop");
+    let touch = format!("touch '{}'", mark.display());
+    let refused = sb.run("sh", &strings(&["-c", &touch]), "", 60, &mut |_| {});
+    assert!(matches!(refused, Err(TurnError::Refused(_))));
+    assert!(!mark.exists());
+}
+
 #[test]
 fn a_group_that_ignores_term_is_killed_after_the_grace() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);

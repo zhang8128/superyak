@@ -112,14 +112,26 @@ fn wanted_from(value: Option<&str>) -> bool {
 /// for a toolchain outside the system directories. The home's keys and tokens, and the directories the agent
 /// programs keep their settings in, stay hidden whatever is shown.
 ///
-/// A path in `YAK_JAIL_READ` is refused when it is not absolute, is not there, or holds the home directory:
-/// one that was silently left out would look like a missing tool, and the home would show everything the jail
-/// is for.
+/// A path in `YAK_JAIL_READ` is refused when it is not absolute, is not there, holds the home directory, or
+/// is hidden: one that was silently left out would look like a missing tool, and the home would show
+/// everything the jail is for.
 pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
     let mut jail = Jail::new(checkout, scratch)?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute());
+    if let Some(home) = &home {
+        for name in HOME_SECRETS {
+            jail = jail.hide(&home.join(name))?;
+        }
+    }
+    for name in crate::sandbox::AGENT_HOMES {
+        if let Some(dir) = std::env::var_os(name).map(PathBuf::from)
+            && dir.is_absolute()
+        {
+            jail = jail.hide(&dir)?;
+        }
+    }
     if let Some(list) = std::env::var_os("YAK_JAIL_READ") {
         let real_home = home.as_ref().and_then(|home| home.canonicalize().ok());
         for path in std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()) {
@@ -140,19 +152,13 @@ pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> 
                     "which holds the home directory: name the tool's own directory",
                 ));
             }
+            if let Some(hidden) = jail.hides(&real) {
+                return Err(refuse(&format!(
+                    "which is hidden from every run: {} holds keys or settings",
+                    hidden.display()
+                )));
+            }
             jail = jail.allow_read(&real)?;
-        }
-    }
-    if let Some(home) = &home {
-        for name in HOME_SECRETS {
-            jail = jail.hide(&home.join(name))?;
-        }
-    }
-    for name in crate::sandbox::AGENT_HOMES {
-        if let Some(dir) = std::env::var_os(name).map(PathBuf::from)
-            && dir.is_absolute()
-        {
-            jail = jail.hide(&dir)?;
         }
     }
     Ok(jail)
@@ -245,6 +251,17 @@ impl Jail {
             self.hidden.push(Hidden { path, dir });
         }
         Ok(self)
+    }
+
+    /// The hidden path that is `path` or holds it, if there is one. Such a path stays hidden when it is shown,
+    /// so a caller that is about to name it for a run can say so and not hand over a jail where the named
+    /// thing is quietly missing.
+    pub fn hides(&self, path: &Path) -> Option<&Path> {
+        let real = path.canonicalize().ok()?;
+        self.hidden
+            .iter()
+            .map(|hidden| hidden.path.as_path())
+            .find(|hidden| real.starts_with(hidden))
     }
 
     pub fn kind(&self) -> Kind {
@@ -373,8 +390,9 @@ impl Jail {
     /// that nothing hides them; every namespace private; no capabilities; its own session, so it has no
     /// terminal; and gone when its parent goes.
     ///
-    /// Only what is hidden inside something shown is covered. The rest of the machine is not there at all,
-    /// and a cover would make its name, telling the run that it exists.
+    /// A hidden path is covered when it lies inside something shown, or holds something shown: hiding wins
+    /// either way, as it does on macOS. One that touches nothing shown is not covered: it is not there at
+    /// all, and a cover would make its name, telling the run that it exists.
     fn bubblewrap_args(&self) -> Vec<String> {
         let mut args: Vec<String> = [
             "--die-with-parent",
@@ -409,14 +427,14 @@ impl Jail {
             let dir = text(dir);
             args.extend(["--ro-bind".to_string(), dir.clone(), dir]);
         }
-        let shown = |path: &Path| {
+        let touches_shown = |path: &Path| {
             LINUX_SYSTEM_DIRS
                 .iter()
                 .map(Path::new)
                 .chain(self.readable.iter().map(PathBuf::as_path))
-                .any(|dir| path.starts_with(dir))
+                .any(|shown| path.starts_with(shown) || shown.starts_with(path))
         };
-        for hidden in self.hidden.iter().filter(|h| shown(&h.path)) {
+        for hidden in self.hidden.iter().filter(|h| touches_shown(&h.path)) {
             if hidden.dir {
                 args.extend(["--tmpfs".to_string(), text(&hidden.path)]);
             } else {
@@ -494,8 +512,13 @@ mod tests {
             tool: PathBuf::from("/jail-tool"),
             checkout: PathBuf::from("/room/checkout"),
             scratch: PathBuf::from("/room/scratch"),
-            readable: vec![PathBuf::from("/tools")],
+            readable: vec![PathBuf::from("/tools"), PathBuf::from("/keys/tool")],
             hidden: vec![
+                // A hidden directory that holds something shown: hiding wins.
+                Hidden {
+                    path: PathBuf::from("/keys"),
+                    dir: true,
+                },
                 Hidden {
                     path: PathBuf::from("/tools/keys"),
                     dir: true,
@@ -604,7 +627,7 @@ mod tests {
                 .find(rule)
                 .unwrap_or_else(|| panic!("no rule {rule} in {profile}"))
         };
-        let shown = at("(allow file-read* process-exec (subpath \"/tools\"))");
+        let shown = at("(allow file-read* process-exec (subpath \"/tools\")");
         let hidden_dir = at("(deny file-read* process-exec (subpath \"/tools/keys\"))");
         let hidden_file = at("(deny file-read* process-exec (subpath \"/tools/token\"))");
         let hidden_above = at("(deny file-read* process-exec (subpath \"/room\"))");
@@ -612,6 +635,9 @@ mod tests {
             "(allow file-read* process-exec (subpath \"/room/checkout\") (subpath \"/room/scratch\"))",
         );
         assert!(shown < hidden_dir && shown < hidden_file);
+        // Both shown paths are in the one rule, so the hidden directory that holds the second is after it.
+        assert!(profile.contains("(subpath \"/tools\") (subpath \"/keys/tool\"))"));
+        assert!(shown < at("(deny file-read* process-exec (subpath \"/keys\"))"));
         assert!(hidden_dir < own && hidden_file < own && hidden_above < own);
         // The directories above what is shown can be seen to exist, and no more than that.
         let above = profile
@@ -648,6 +674,9 @@ mod tests {
         assert!(at("--ro-bind /tools /tools") < at("--tmpfs /tools/keys"));
         assert!(at("--tmpfs /tools/keys") < at("--bind /room/checkout /room/checkout"));
         assert!(at("--ro-bind /dev/null /tools/token") < at("--bind /room/checkout"));
+        // A hidden directory that holds something shown is covered after that is bound, so hiding wins.
+        assert!(at("--ro-bind /keys/tool /keys/tool") < at("--tmpfs /keys"));
+        assert!(at("--tmpfs /keys") < at("--bind /room/checkout"));
         // What is hidden outside everything shown is not there at all, so it gets no cover: a cover would
         // make its name, and tell the run that it exists.
         assert!(!joined.contains("/home/someone"), "{joined}");

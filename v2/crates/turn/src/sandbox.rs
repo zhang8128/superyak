@@ -11,7 +11,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,6 +68,7 @@ pub struct Sandbox {
     base: String,
     config: Vec<u8>,
     pid_file: Option<PathBuf>,
+    stop: Arc<AtomicBool>,
 }
 
 /// Removes whatever is at `path` (a file, a link, a directory) without following a link. Nothing there is fine.
@@ -164,6 +166,7 @@ impl Sandbox {
             base,
             config,
             pid_file: None,
+            stop: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -273,6 +276,14 @@ impl Sandbox {
         Ok(())
     }
 
+    /// The switch that stops this sandbox, for another thread to set: the clock does when the room is
+    /// stopped or the turn's lease is lost. Once it is set, a run in progress is ended as one that ran out
+    /// of time is (its group gets SIGTERM, then SIGKILL after the grace, and the descendants it was seen to
+    /// start are ended), and no later run starts. It is never unset.
+    pub fn stop_switch(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
     /// Each run atomically writes its group and leader start time, one per line, to this path, and
     /// removes the file after confirmed cleanup. The clock keeps it beside the clone.
     pub fn set_pid_file(&mut self, path: PathBuf) {
@@ -336,6 +347,12 @@ impl Sandbox {
         // A program named by its path (a script worker's) is shown to the run: that one file, not what is
         // beside it.
         if Path::new(program).is_absolute() {
+            if let Some(hidden) = jail.hides(Path::new(program)) {
+                return Err(TurnError::Refused(format!(
+                    "{program} cannot run in the jail: {} is hidden from every run",
+                    hidden.display()
+                )));
+            }
             jail = jail.allow_read(Path::new(program))?;
         }
         self.run_with(
@@ -364,6 +381,11 @@ impl Sandbox {
         limit_secs: u32,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<RunStatus, TurnError> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err(TurnError::Refused(
+                "this sandbox was stopped, and nothing more runs in it".into(),
+            ));
+        }
         let wrapped;
         let (program, args) = match jailed {
             Some((jail, _)) => {
@@ -439,8 +461,8 @@ impl Sandbox {
                 return Err(e);
             }
             let now = Instant::now();
-            if now >= deadline {
-                timed_out = true;
+            if now >= deadline || self.stop.load(Ordering::Relaxed) {
+                timed_out = now >= deadline;
                 break end_group(&mut child, group);
             }
             let wait = (deadline - now).min(POLL);
@@ -693,6 +715,12 @@ pub(crate) const SAFE_GIT_ENV: [(&str, &str); 2] = [
     ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
 ];
+
+/// git as the room runs it, for the clock's own fetch as well: the flags and environment are kept in this one
+/// place.
+pub fn safe_git() -> Command {
+    git_command()
+}
 
 /// git with the scrubbed environment, no prompts, no hooks and no filesystem monitor: the turn's own git
 /// commands must not run anything a worker configured in its clone.
