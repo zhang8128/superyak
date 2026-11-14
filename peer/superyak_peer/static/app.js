@@ -2228,16 +2228,20 @@ function keepTyping(typing) {
   typedBox = again;
 }
 
-// A control the person was on that isn't a typed box (a select, a button, a tick box), drawn again for the same drawing
-// in the same place: the redraw gives it its focus back, so a keyboard user's next Tab goes on from where they were, not
-// from the top of the page (fix:redraw-keeps-control-focus). A typed box stays keepTyping's, which also asks for the
-// person's aim, since its focus decides where the next words go; a control's focus sends no words. A control is found
+// A button, a select, or a tick box, radio or file input the person was on, drawn again for the same drawing in the same
+// place: the redraw gives it its focus back, so a keyboard user's next Tab goes on from where they were, not from the top
+// of the page (fix:redraw-keeps-control-focus). Those only, since none takes words: a typed box stays keepTyping's, which
+// asks for the person's aim, and a number or date box isn't one of these, since a submit's draw must leave it unfocused,
+// as it does a text box, so a phone's keyboard closes and the next digits don't land in the next draft (the reader's
+// Should 1 on 69aac5b1). Headings and main, which the app focuses itself, aren't controls either. A control is found
 // again by its id, or, as buttons have none, by its tag and data-action; its chain (boxChain, which holds its own data-id
 // and every parent's marks) must be the same, and only one control may match it, so two alike never take a guess. A
-// control with neither an id nor a data-action (a nav link) isn't found again, and a dialog keeps its own return
-// (dialogReturn).
+// control with neither an id nor a data-action isn't found again, and a dialog keeps its own return (dialogReturn).
+const CONTROL_INPUTS = new Set(["checkbox", "radio", "file"]);
+
 function controlIn(node) {
-  if (!node || typedBoxRule(node) || !app.contains(node) || node === app) return null;
+  if (!node || !app.contains(node)) return null;
+  if (!(node.tagName === "BUTTON" || node.tagName === "SELECT" || (node.tagName === "INPUT" && CONTROL_INPUTS.has(node.type)))) return null;
   if (!node.id && !node.dataset.action) return null;
   return { id: node.id, action: node.dataset.action, tag: node.tagName, chain: boxChain(node) };
 }

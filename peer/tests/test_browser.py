@@ -7194,6 +7194,30 @@ def test_a_grant_is_made_on_the_page_held_by_its_grantee_and_revoked_after_the_a
     assert store.list_grants(patient)[0]["revoke_reason"] == "Done for now"
 
 
+def test_enter_in_builds_a_day_makes_the_grant_and_takes_the_focus_out_of_the_box(browser_peer):
+    """Break caught: a redraw giving a number box its focus back as if it were a button (the reader's Should 1 on
+    69aac5b1), so after Enter made the grant the focus was back in Builds a day, now holding the next grant's draft, and a
+    phone's keyboard stayed up. A submit ends the typing in a number box as it does in a text box."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            expect(page.get_by_role("heading", name="Grants", level=1)).to_be_visible()
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")  # as the test above makes its grant
+            budget = page.get_by_label("Builds a day")
+            budget.click()
+            page.keyboard.press("ControlOrMeta+a")
+            page.keyboard.type("7")
+            page.keyboard.press("Enter")
+            expect(page.locator(".grants-given .grant-item")).to_have_count(1)
+            made = store.list_grants(patient)[0]
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} made.")).to_be_visible()
+            assert made["budget"] == 7  # the Enter was in the box: what it held was sent
+            expect(budget).to_have_value("5")  # the form is the next grant's draft
+            expect(budget).not_to_be_focused()
+
+
 def test_a_double_click_on_make_grant_makes_one_grant(browser_peer):
     """Plan Review Focus 2: a second submit while the first is on its way would make a second grant, doubling the person's
     builds; the page sends one write at a time. The POSTs are counted, so a station that refused the second one could
