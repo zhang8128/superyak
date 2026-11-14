@@ -33,6 +33,8 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
+        if: success() || failure()  # each of the three reports, though one fails
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests, the acceptance suite with them
+        if: success() || failure()
         run: cargo test --workspace --locked

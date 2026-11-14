@@ -26,8 +26,14 @@ struct Room {
     fx: Fixture,
 }
 
+/// The `yak` binary `cargo test --workspace` built beside this test's own binary (target/<profile>/yak): another
+/// package's binary, which CARGO_BIN_EXE_ doesn't name.
 fn yak_bin() -> PathBuf {
-    assert_cmd::cargo::cargo_bin("yak")
+    let me = std::env::current_exe().expect("this test's path");
+    let profile = me.parent().and_then(Path::parent).expect("target/<profile>/deps/<test>");
+    let yak = profile.join(format!("yak{}", std::env::consts::EXE_SUFFIX));
+    assert!(yak.exists(), "no yak binary at {}: run `cargo build -p yak` first", yak.display());
+    yak
 }
 
 /// `yak ARGS --room ROOM`, with stdin closed: nothing in stage 1 may wait on a keystroke.
@@ -99,7 +105,7 @@ fn state(r: &Room, id: &str) -> String {
 fn once_through(r: &Room, workers: &[&str], extra: &[&str]) -> Output {
     let mut args = vec!["clock", "run", "--once-through", "--lease-secs", "30", "--turn-secs", "60"];
     for w in workers {
-        args.extend(["--worker", w]);
+        args.extend(["--worker", *w]);
     }
     args.extend(extra);
     yak(&r.room, &args)
@@ -114,7 +120,7 @@ impl Clock {
         let mut cmd = Command::new(yak_bin());
         cmd.args(["clock", "run"]);
         for w in workers {
-            cmd.args(["--worker", w]);
+            cmd.args(["--worker", *w]);
         }
         cmd.args(extra).arg("--room").arg(&r.room).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         cmd.process_group(0);
@@ -238,6 +244,14 @@ fn a_killed_turn_is_taken_again() {
     let slow_once = worker(&r.scratch, "slow-once", &body);
     let mut clock = Clock::start(&r, &[&slow_once], &["--lease-secs", "3", "--turn-secs", "600"]);
     wait_for("the first turn to begin", Duration::from_secs(60), || first.exists());
+    // Power loss takes the worker too: its process group is in <room>/turns/<attempt>.pid (plan a028145e).
+    for entry in fs::read_dir(r.room.join("turns")).expect("the room's turns") {
+        let path = entry.expect("an entry").path();
+        if path.extension().is_some_and(|e| e == "pid") {
+            let group = fs::read_to_string(&path).expect("a pid file").trim().to_string();
+            let _ = Command::new("kill").args(["-9", &format!("-{group}")]).status();
+        }
+    }
     clock.kill_group();
     sleep(Duration::from_secs(4)); // past the first lease
     ok(&once_through(&r, &[&slow_once], &["--lease-secs", "3"]));
@@ -318,7 +332,7 @@ fn a_worker_has_no_remote() {
     assert_eq!(fs::read_to_string(&seen).unwrap_or_default().trim(), "", "the sandbox has no remote");
     assert!(lines(&pushed).iter().all(|code| code != "0"), "every push fails: {:?}", lines(&pushed));
     let after = refs(&r.fx.repo);
-    let new: Vec<&String> = after.iter().filter(|line| !before.contains(line)).collect();
+    let new: Vec<&String> = after.iter().filter(|line| !before.contains(*line)).collect();
     assert!(new.iter().all(|line| line.contains(&format!("refs/heads/room/{id}/"))), "only the clock's ref: {new:?}");
     assert_eq!(git(&r.fx.repo, &["remote"]), "", "the item's repository gained no remote");
 }
