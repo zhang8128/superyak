@@ -335,7 +335,9 @@ fn turn_entries(r: &Room) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(r.room.join("turns")) else {
         return Vec::new();
     };
-    entries.filter_map(|entry| entry.ok().map(|e| e.path())).collect()
+    entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .collect()
 }
 
 /// The worker's process group, the first line of each `<room>/turns/<attempt>.pid` while a turn runs (plan
