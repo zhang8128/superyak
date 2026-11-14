@@ -1,0 +1,20 @@
+[package]
+name = "turn"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libc = "0.2.191"
+room = { version = "0.1.0", path = "../room" }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

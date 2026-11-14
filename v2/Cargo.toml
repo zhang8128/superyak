@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/room", "crates/turn", "crates/yak", "acceptance"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.100"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

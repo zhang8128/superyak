@@ -1,0 +1,24 @@
+[package]
+name = "yak"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+rand = "0.10.3"
+rmcp = { version = "3.10.0", features = ["server", "transport-io"] }
+room = { version = "0.1.0", path = "../room" }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt", "macros", "io-std"] }
+turn = { version = "0.1.0", path = "../turn" }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+tempfile = "3.27.0"
