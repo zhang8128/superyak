@@ -731,3 +731,32 @@ fn starting_a_clock_leaves_nothing_beside_the_room() {
     let _ = f.clock(&script).output().unwrap();
     assert_eq!(beside(&f), before);
 }
+
+/// A number given twice is not a mistake to refuse: a script that wraps `yak` adds its own after the defaults
+/// it was handed. The last one wins, as it does in most command lines.
+#[test]
+fn a_number_given_twice_takes_the_last() {
+    let f = Fixture::new();
+    f.add();
+    let script = f.script("echo green > answer\ngit commit -qam fix");
+    // The first lease of 0 would be refused if it were the one used.
+    let out = f
+        .clock(&script)
+        .args(["--lease-secs", "0", "--lease-secs", "30"])
+        .args(["--turn-secs", "1", "--turn-secs", "60"])
+        .args(["--daily-turns", "0", "--daily-turns", "5"])
+        .args(["--concurrent", "9", "--concurrent", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status: Value = serde_json::from_str(&success(
+        yak(&f.room).args(["status", "--json"]).output().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(status["counts"]["passed_verified"], json!(1), "{status}");
+    assert_eq!(status["daily_ceiling"], json!(5), "{status}");
+}

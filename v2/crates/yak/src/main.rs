@@ -98,17 +98,18 @@ enum ClockCommand {
 
 #[derive(Args)]
 struct Run {
+    // Each of the four numbers may be given more than once; the last one counts.
     #[arg(long)]
     once_through: bool,
     #[arg(long, num_args = 1.., required = true)]
     worker: Vec<String>,
-    #[arg(long, default_value_t = limits::LEASE_SECS)]
+    #[arg(long, default_value_t = limits::LEASE_SECS, overrides_with = "lease_secs")]
     lease_secs: i64,
-    #[arg(long, default_value_t = limits::TURN_SECS, value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, default_value_t = limits::TURN_SECS, value_parser = clap::value_parser!(u32).range(1..), overrides_with = "turn_secs")]
     turn_secs: u32,
-    #[arg(long, default_value_t = limits::DAILY_TURNS)]
+    #[arg(long, default_value_t = limits::DAILY_TURNS, overrides_with = "daily_turns")]
     daily_turns: u32,
-    #[arg(long, default_value_t = limits::CONCURRENT_TURNS)]
+    #[arg(long, default_value_t = limits::CONCURRENT_TURNS, overrides_with = "concurrent")]
     concurrent: u32,
 }
 
