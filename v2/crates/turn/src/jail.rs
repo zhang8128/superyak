@@ -114,8 +114,10 @@ impl Jail {
     }
 
     /// Deny everything, then allow: starting programs, signalling what is in the same jail, reading files and
-    /// system settings, semaphores, and writing in the two directories and to the null devices. It may look up
-    /// no system service at all. Where two rules match, the later one decides, so the denials come last.
+    /// system settings, and writing in the two directories and to the null devices. Of the device files it may
+    /// read only the null, zero and random devices and its own open files, so no terminal. It may look up no
+    /// system service and make no named semaphore, which would be shared with every process outside. Where two
+    /// rules match, the later one decides.
     fn seatbelt_profile(&self) -> String {
         let mut profile = String::from(
             "(version 1)\n\
@@ -124,8 +126,10 @@ impl Jail {
              (allow process-fork)\n\
              (allow signal (target same-sandbox))\n\
              (allow sysctl-read)\n\
-             (allow ipc-posix-sem)\n\
              (allow file-read*)\n\
+             (deny file-read* (subpath \"/dev\"))\n\
+             (allow file-read* (literal \"/dev\") (literal \"/dev/null\") (literal \"/dev/zero\") \
+             (literal \"/dev/random\") (literal \"/dev/urandom\") (subpath \"/dev/fd\"))\n\
              (allow file-write*",
         );
         for dir in [&self.checkout, &self.scratch] {
@@ -263,15 +267,16 @@ mod tests {
                     "(allow process-exec)",
                     "(allow process-fork)",
                     "(allow sysctl-read)",
-                    "(allow ipc-posix-sem)",
                     "(allow file-read*)"
                 ]
                 .contains(&line),
                 "an unfiltered allow that is not on the list: {line}"
             );
         }
-        // No network, no terminal, and no system service.
+        // No network, no terminal, no system service, and nothing shared between processes.
         assert!(!profile.contains("network"));
+        assert!(!profile.contains("ipc-"));
+        assert!(profile.contains("(deny file-read* (subpath \"/dev\"))"));
         assert!(!profile.contains("mach-lookup") && !profile.contains("global-name"));
         assert!(profile.contains("(deny file-read* file-write* (literal \"/dev/tty\"))"));
         assert!(profile.contains("(deny file-read* (subpath \"/home/someone/keys\"))"));

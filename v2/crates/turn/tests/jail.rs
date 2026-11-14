@@ -280,7 +280,7 @@ fn a_jailed_run_cannot_write_to_the_terminal() {
 }
 
 /// The jail must not break an honest check: a shell pipeline, git, a scripting language making a temporary
-/// file and a semaphore, the machine's processor count, and the user's name, with the scratch directory as home
+/// file, the random device, the machine's processor count, and the user's name, with the scratch directory as home
 /// and as the place for temporary files. Each thing the jail allows beyond reading and writing is used here, so
 /// taking one away fails this test.
 #[test]
@@ -292,7 +292,7 @@ fn honest_tools_still_run_in_the_jail() {
          git init -q . && git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m one && \
          git log --oneline | wc -l | tr -d ' ' > count && \
          python3 -c 'import tempfile; f = tempfile.NamedTemporaryFile(); f.write(b\"x\"); f.flush(); print(\"made\")' && \
-         python3 -c 'import multiprocessing; multiprocessing.Semaphore(1); print(\"counted\")' && \
+         test \"$(head -c 8 /dev/urandom | wc -c | tr -d ' ')\" = 8 && echo counted && \
          test \"$(getconf _NPROCESSORS_ONLN)\" -ge 1 && \
          test -n \"$(id -un)\"",
         checkout = sh_quote(&g.checkout)
@@ -322,6 +322,57 @@ fn honest_tools_still_run_in_the_jail() {
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("made") && said.contains("counted"), "{said}");
+}
+
+/// A named semaphore is shared by every process of the user, so one made in the jail could be reached from
+/// outside it. The run without the jail is the control.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_make_a_named_semaphore() {
+    let g = ground();
+    let make = "python3 -c 'import multiprocessing; multiprocessing.Semaphore(1)'";
+    let free = Command::new("/bin/sh").args(["-c", make]).output().unwrap();
+    assert!(
+        free.status.success(),
+        "control failed: a semaphore could not be made without the jail either"
+    );
+    assert!(!jailed(&jail(&g), make).status.success());
+}
+
+/// Every terminal device, not only the `/dev/tty` alias: another window's terminal carries what a person types.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_jailed_run_cannot_open_a_terminal_device() {
+    let g = ground();
+    // Given to the interpreter as an argument. A here-document would need a temporary file, and the jail
+    // lets a run write only in its own two directories.
+    let script = r#"import glob, os, sys
+opened = []
+paths = ['/dev/tty', '/dev/ptmx'] + sorted(glob.glob('/dev/ttys*'))[:4] + sorted(glob.glob('/dev/pty*'))[:2]
+for path in paths:
+    try:
+        os.close(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY))
+        opened.append(path)
+    except PermissionError:
+        pass
+    except OSError as e:
+        opened.append(f'{path}:errno{e.errno}')
+print(len(paths), ' '.join(opened))
+sys.exit(1 if opened or len(paths) < 3 else 0)
+"#;
+    let (program, args) =
+        jail(&g).command("/usr/bin/python3", &["-c".to_string(), script.to_string()]);
+    let out = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "paths tried, then any that opened or failed for another reason: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
