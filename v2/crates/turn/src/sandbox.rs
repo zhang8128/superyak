@@ -44,6 +44,10 @@ const ENV_KEPT: &[&str] = &[
     "CLAUDE_CONFIG_DIR",
 ];
 
+/// Where the agent programs keep their settings and sign-ins. A model worker's run keeps these; a jailed run
+/// loses them, and the directories they name are hidden from it.
+pub(crate) const AGENT_HOMES: [&str; 2] = ["CODEX_HOME", "CLAUDE_CONFIG_DIR"];
+
 /// The name and address the turn's own commits carry. No person made them.
 const TURN_NAME: &str = "yak turn";
 const TURN_EMAIL: &str = "turn@yak.invalid";
@@ -328,7 +332,12 @@ impl Sandbox {
         }
         let scratch = self.scratch();
         fs::create_dir_all(&scratch).map_err(io("make the scratch directory"))?;
-        let jail = jail::for_checkout(&self.dir, &scratch)?;
+        let mut jail = jail::for_checkout(&self.dir, &scratch)?;
+        // A program named by its path (a script worker's) is shown to the run: that one file, not what is
+        // beside it.
+        if Path::new(program).is_absolute() {
+            jail = jail.allow_read(Path::new(program))?;
+        }
         self.run_with(
             Some((&jail, &scratch)),
             program,
@@ -381,10 +390,10 @@ impl Sandbox {
             .env("YAK_TURN", &marker)
             .current_dir(&self.dir);
         if let Some((_, scratch)) = jailed {
-            command
-                .env("HOME", scratch)
-                .env("TMPDIR", scratch)
-                .env_remove("CODEX_HOME");
+            command.env("HOME", scratch).env("TMPDIR", scratch);
+            for name in AGENT_HOMES {
+                command.env_remove(name);
+            }
         }
         command
             .stdin(Stdio::piped())

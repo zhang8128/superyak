@@ -50,21 +50,35 @@ fn jail(g: &Ground) -> Jail {
         .unwrap()
 }
 
+/// Runs `program args` inside the jail the way the room does: started in the checkout, with a cleared
+/// environment whose home and place for temporary files are the scratch directory. A refusal seen here is one
+/// a real run would meet, and not one made by starting somewhere the jail does not show.
+fn run_in(jail: &Jail, program: &str, args: &[String]) -> Output {
+    let (program, args) = jail.command(program, args);
+    Command::new(program)
+        .args(args)
+        .current_dir(jail.checkout())
+        .env_clear()
+        .env(
+            "PATH",
+            "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
+        )
+        .env("HOME", jail.scratch())
+        .env("TMPDIR", jail.scratch())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 /// Runs `sh -c script` inside the jail, after proving the jail can be entered at all.
 fn jailed(jail: &Jail, script: &str) -> Output {
-    let (program, args) = jail.command("/usr/bin/true", &[]);
-    let probe = Command::new(&program).args(&args).output().unwrap();
+    let probe = run_in(jail, "/usr/bin/true", &[]);
     assert!(
         probe.status.success(),
         "cannot enter a jail here ({}). These tests must run outside any other sandbox.",
         String::from_utf8_lossy(&probe.stderr).trim()
     );
-    let (program, args) = jail.command("/bin/sh", &["-c".to_string(), script.to_string()]);
-    Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+    run_in(jail, "/bin/sh", &["-c".to_string(), script.to_string()])
 }
 
 fn sh_quote(path: &Path) -> String {
@@ -113,27 +127,148 @@ fn a_jailed_run_cannot_write_outside() {
     );
 }
 
-#[test]
-fn a_jailed_run_can_read_outside_but_not_what_is_hidden() {
-    let g = ground();
-    let out = jailed(&jail(&g), &format!("cat {}/readable", sh_quote(&g.outside)));
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "CANARY-READABLE");
+/// What `sh -c script` prints with no jail: the control for a read the jail refuses.
+fn unjailed(script: &str) -> String {
+    let out = Command::new("/bin/sh")
+        .args(["-c", script])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
 
+#[test]
+fn a_jailed_run_reads_only_what_it_is_shown() {
+    let g = ground();
+    let read = format!("cat {}/readable", sh_quote(&g.outside));
+    // The control: with no jail the same command reads the file.
+    assert_eq!(unjailed(&read), "CANARY-READABLE");
+
+    let out = jailed(&jail(&g), &read);
+    assert!(!out.status.success(), "read a file nobody showed it");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("CANARY"));
+    // Nor can it list the directory its checkout is in.
+    let root = g.checkout.parent().unwrap();
+    let out = jailed(&jail(&g), &format!("ls {}", sh_quote(root)));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("outside"));
+
+    let shown = jail(&g).allow_read(&g.outside).unwrap();
+    let out = jailed(&shown, &read);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "CANARY-READABLE");
+}
+
+#[test]
+fn a_jailed_run_cannot_read_the_home_of_whoever_runs_the_room() {
+    let home = PathBuf::from(std::env::var_os("HOME").expect("this test needs HOME"));
+    let list = format!("ls -a {}", sh_quote(&home));
+    // The control: with no jail the home lists more than `.` and `..`.
+    assert!(unjailed(&list).lines().count() > 2, "the home is empty");
+
+    let g = ground();
+    let out = jailed(&jail(&g), &list);
+    assert!(!out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+}
+
+#[test]
+fn what_is_hidden_stays_hidden_inside_what_is_shown() {
+    let g = ground();
+    let root = g.checkout.parent().unwrap();
+    // The whole ground is shown, and one directory and one file in it are hidden.
+    let jail = Jail::new(&g.checkout, &g.scratch)
+        .unwrap()
+        .allow_read(root)
+        .unwrap()
+        .hide(&g.hidden)
+        .unwrap()
+        .hide(&g.outside.join("readable"))
+        .unwrap();
+    fs::write(g.outside.join("other"), "CANARY-OTHER").unwrap();
+
+    let out = jailed(&jail, &format!("cat {}/other", sh_quote(&g.outside)));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "CANARY-OTHER");
     let out = jailed(
-        &jail(&g),
-        &format!("cat {0}/secret; ls {0}", sh_quote(&g.hidden)),
+        &jail,
+        &format!(
+            "cat {0}/secret; ls {0}; cat {1}/readable",
+            sh_quote(&g.hidden),
+            sh_quote(&g.outside)
+        ),
     );
     assert!(!out.status.success());
     let seen = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        !seen.contains("CANARY-HIDDEN"),
-        "read a hidden file: {seen}"
-    );
+    assert!(!seen.contains("CANARY"), "read what was hidden: {seen}");
     assert!(
         !seen.contains("secret"),
         "listed a hidden directory: {seen}"
     );
+}
+
+/// A room kept below a hidden directory (`~/.superyak`, say) must still give a run its own checkout.
+#[test]
+fn a_checkout_inside_a_hidden_directory_is_still_the_runs_own() {
+    let g = ground();
+    let root = g.checkout.parent().unwrap();
+    fs::write(g.checkout.join("mine"), "MINE").unwrap();
+    let jail = Jail::new(&g.checkout, &g.scratch)
+        .unwrap()
+        .hide(root)
+        .unwrap();
+    let out = jailed(
+        &jail,
+        &format!(
+            "cat {0}/mine && echo more > {0}/made && echo t > {1}/made",
+            sh_quote(&g.checkout),
+            sh_quote(&g.scratch)
+        ),
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "MINE");
+    // What is beside it stays hidden.
+    let out = jailed(&jail, &format!("cat {}/readable", sh_quote(&g.outside)));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("CANARY"));
+}
+
+#[test]
+fn one_file_can_be_shown_and_run_without_its_neighbours() {
+    use std::os::unix::fs::PermissionsExt;
+    let g = ground();
+    let tool = g.outside.join("tool.sh");
+    fs::write(&tool, "#!/bin/sh\necho TOOL-RAN\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let run = format!("{}; cat {}/readable", sh_quote(&tool), sh_quote(&g.outside));
+
+    // Not shown, it cannot be run.
+    let out = jailed(&jail(&g), &run);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("TOOL-RAN"));
+
+    let shown = jail(&g).allow_read(&tool).unwrap();
+    let out = jailed(&shown, &run);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("TOOL-RAN"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!said.contains("CANARY"), "read the file beside it: {said}");
+}
+
+#[test]
+fn the_whole_machine_cannot_be_shown() {
+    let g = ground();
+    assert!(matches!(
+        jail(&g).allow_read(Path::new("/")),
+        Err(TurnError::Refused(_))
+    ));
 }
 
 /// Fetches a local page with and without the jail. The run without it is the control: it shows the listener
@@ -330,13 +465,21 @@ fn honest_tools_still_run_in_the_jail() {
 #[test]
 fn a_jailed_run_cannot_make_a_named_semaphore() {
     let g = ground();
-    let make = "python3 -c 'import multiprocessing; multiprocessing.Semaphore(1)'";
+    let make = "python3 -c 'import multiprocessing; print(\"ready\", flush=True); multiprocessing.Semaphore(1)'";
     let free = Command::new("/bin/sh").args(["-c", make]).output().unwrap();
     assert!(
         free.status.success(),
         "control failed: a semaphore could not be made without the jail either"
     );
-    assert!(!jailed(&jail(&g), make).status.success());
+    let out = jailed(&jail(&g), make);
+    // It got as far as making one, and that is what was refused.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "ready",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success());
 }
 
 /// Every terminal device, not only the `/dev/tty` alias: another window's terminal carries what a person types.
@@ -360,13 +503,11 @@ for path in paths:
 print(len(paths), ' '.join(opened))
 sys.exit(1 if opened or len(paths) < 3 else 0)
 "#;
-    let (program, args) =
-        jail(&g).command("/usr/bin/python3", &["-c".to_string(), script.to_string()]);
-    let out = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let out = run_in(
+        &jail(&g),
+        "/usr/bin/python3",
+        &["-c".to_string(), script.to_string()],
+    );
     assert!(
         out.status.success(),
         "paths tried, then any that opened or failed for another reason: {} {}",

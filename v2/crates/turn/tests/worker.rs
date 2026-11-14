@@ -102,9 +102,13 @@ fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
     let mut scratch = sb.dir.file_name().unwrap().to_os_string();
     scratch.push(".scratch");
     let prompt_out = sb.dir.with_file_name(scratch).join("prompt.txt");
+    // The sample stream goes into the script itself: the jail shows a script worker its own program, and not
+    // the files of this source tree.
+    let sample = read(Path::new(&data("claude-read-src.jsonl")));
+    assert!(!sample.contains("YAK_SAMPLE"));
     let body = format!(
-        "#!/bin/sh\ncat > \"$HOME/prompt.txt\"\nsed \"s#/sandbox#$PWD#g\" '{}'\n",
-        data("claude-read-src.jsonl")
+        "#!/bin/sh\ncat > \"$HOME/prompt.txt\"\nsed \"s#/sandbox#$PWD#g\" <<'YAK_SAMPLE'\n{}\nYAK_SAMPLE\n",
+        sample.trim_end()
     );
     let path = script(&repo, "reader.sh", &body);
     let worker = from_name(&format!("script:{}", path.display())).unwrap();

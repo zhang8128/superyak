@@ -177,3 +177,170 @@ fn the_rooms_git_in_a_workers_tree_goes_through_the_jail() {
     assert!(body.contains("sandbox.run_untrusted("));
     assert!(!body.contains("sandbox.run("));
 }
+
+/// The inner half of the two tests below, and nothing by itself. What the room's jail shows and hides is
+/// read from the environment, and a test cannot change its own. So the outer half runs this test again in a
+/// child whose environment it chose, and reads what the child prints.
+#[test]
+fn inner_a_run_under_the_rooms_settings() {
+    let Some(script) = std::env::var_os("YAK_INNER") else {
+        return;
+    };
+    let repo = Repo::new(&[("a.txt", "one\n")]);
+    let sandbox =
+        Sandbox::create(&repo.path, &repo.base, &repo.scratch("turn"), "room/i1/1").unwrap();
+    let args = common::strings(&["-c", script.to_str().unwrap()]);
+    let mut said = Vec::new();
+    match sandbox.run_untrusted("sh", &args, "", 30, &mut |line| said.push(line.to_string())) {
+        Ok(status) => {
+            for line in said {
+                println!("SAID {line}");
+            }
+            println!("ENDED {}", status.exit_code);
+        }
+        Err(e) => println!("REFUSED {e}"),
+    }
+}
+
+/// Runs the inner half with `script` and these variables set, and returns what it printed.
+fn under(script: &str, variables: &[(&str, &Path)], jail: bool) -> String {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "inner_a_run_under_the_rooms_settings",
+            "--nocapture",
+        ])
+        .env("YAK_INNER", script)
+        .env_remove("YAK_JAIL")
+        .env_remove("YAK_JAIL_READ")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME");
+    if !jail {
+        child.env("YAK_JAIL", "off");
+    }
+    for (name, value) in variables {
+        child.env(name, value);
+    }
+    let out = child.output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        printed.contains("ENDED ") || printed.contains("REFUSED "),
+        "the inner run did not report: {printed} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    printed
+}
+
+/// A home with a toolchain in it, as `~/.cargo` is: a tool, and a file of credentials beside it.
+struct Home {
+    _tmp: tempfile::TempDir,
+    dir: std::path::PathBuf,
+}
+
+fn home() -> Home {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap().join("home");
+    for sub in [".cargo/bin", ".cargo/agent", ".ssh", "codex"] {
+        fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    let tool = dir.join(".cargo/bin/tool.sh");
+    fs::write(&tool, "#!/bin/sh\necho TOOL-RAN\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    for secret in [
+        ".cargo/credentials.toml",
+        ".cargo/agent/sign-in",
+        ".netrc",
+        ".ssh/id",
+        "codex/auth.json",
+    ] {
+        fs::write(dir.join(secret), format!("CANARY {secret}\n")).unwrap();
+    }
+    Home { _tmp: tmp, dir }
+}
+
+#[test]
+fn a_run_is_shown_the_tools_named_for_it_and_none_of_the_homes_secrets() {
+    let home = home();
+    let at = |name: &str| quote(&home.dir.join(name));
+    let script = format!(
+        "echo \"claude=[${{CLAUDE_CONFIG_DIR-unset}}] codex=[${{CODEX_HOME-unset}}]\"\n\
+         {tool}\n\
+         cat {a} {b} {c} {d} {e}\n\
+         ls -a {home}\n\
+         echo finished",
+        tool = at(".cargo/bin/tool.sh"),
+        a = at(".cargo/credentials.toml"),
+        b = at(".cargo/agent/sign-in"),
+        c = at(".netrc"),
+        d = at(".ssh/id"),
+        e = at("codex/auth.json"),
+        home = quote(&home.dir),
+    );
+    let toolchain = home.dir.join(".cargo");
+    let agent = home.dir.join(".cargo/agent");
+    let codex = home.dir.join("codex");
+    let variables: [(&str, &Path); 4] = [
+        ("HOME", &home.dir),
+        ("YAK_JAIL_READ", &toolchain),
+        ("CLAUDE_CONFIG_DIR", &agent),
+        ("CODEX_HOME", &codex),
+    ];
+
+    // A line of the listing of the home, which names the script itself never prints alone.
+    let listed = |printed: &str| printed.lines().any(|line| line == "SAID .netrc");
+
+    // The control: with the jail off, the same script reads all five, lists the home and sees both variables.
+    let free = under(&script, &variables, false);
+    assert_eq!(free.matches("SAID CANARY ").count(), 5, "{free}");
+    assert!(listed(&free), "{free}");
+    assert!(
+        free.contains(&format!("claude=[{}]", agent.display())),
+        "{free}"
+    );
+
+    let jailed = under(&script, &variables, true);
+    assert!(
+        jailed.contains("SAID TOOL-RAN"),
+        "the named tool did not run: {jailed}"
+    );
+    assert!(jailed.contains("SAID finished"), "{jailed}");
+    assert!(!jailed.contains("CANARY"), "a secret was read: {jailed}");
+    assert!(!listed(&jailed), "the home was listed: {jailed}");
+    assert!(
+        jailed.contains("SAID claude=[unset] codex=[unset]"),
+        "an agent's settings directory was passed on: {jailed}"
+    );
+}
+
+#[test]
+fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
+    let home = home();
+    let above = home.dir.parent().unwrap().to_path_buf();
+    let missing = home.dir.join("no-such-tools");
+    for (named, why) in [
+        (home.dir.as_path(), "holds the home directory"),
+        (above.as_path(), "holds the home directory"),
+        (Path::new("tools/bin"), "not an absolute path"),
+        (missing.as_path(), "not there"),
+    ] {
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home.dir), ("YAK_JAIL_READ", named)],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains(why),
+            "{}: {printed}",
+            named.display()
+        );
+        assert!(!printed.contains("SAID ran"), "{printed}");
+    }
+    // Set and empty names nothing, and the run goes ahead.
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home.dir), ("YAK_JAIL_READ", Path::new(""))],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+}
