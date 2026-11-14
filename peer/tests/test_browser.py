@@ -4899,6 +4899,59 @@ def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_pe
             expect(editor.get_by_text("Unsaved changes", exact=True)).to_be_visible()  # the absence above is not vacuous
 
 
+# Clicks a control from the page's own world (no focus moves), and resolves at the next draw of #app.
+REDRAW_BY = """(selector) => new Promise(done => {
+    const seen = new MutationObserver(() => { seen.disconnect(); done(); });
+    seen.observe(document.querySelector('#app'), {childList: true});
+    document.querySelector(selector).click(); })"""
+
+
+def focused(page):
+    return page.evaluate("""() => { const a = document.activeElement;
+        return a === document.body ? 'the page' : a.id || `${a.dataset.action} ${a.dataset.id}`; }""")
+
+
+def test_a_redraw_gives_a_keyboard_user_their_place_back(browser_peer):
+    """Break caught: a background redraw dropped the focus from a select to the page, so a keyboard user's next Tab
+    started from the top (fix:redraw-keeps-control-focus; the note test's flake, CI run 43516196877). The layer's own
+    button draws the same editor again while Kind has the focus, as that layer's load did there."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    layer = store.create_layer(users["patient"]["id"], {"title": "Plain note", "body": "Hello."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            go_to(page, "My sharing layers")
+            page.get_by_role("button", name="Plain note").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_label("Layer title")).to_have_value("Plain note")
+            editor.get_by_label("Kind").focus()
+            page.evaluate(REDRAW_BY, f'[data-action="open-layer"][data-id="{layer["id"]}"]')
+            assert focused(page) == "layer-kind"
+            page.keyboard.press("Tab")
+            assert focused(page) == "layer-body"  # the next Tab goes on from Kind, not from the top of the page
+            button = f'[data-action="open-layer"][data-id="{layer["id"]}"]'
+            page.locator(button).focus()  # a button has no id: it's found again by its action and its chain
+            page.evaluate(REDRAW_BY, button)
+            assert focused(page) == f"open-layer {layer['id']}"
+
+
+def test_a_redraw_for_another_layer_gives_its_same_named_control_no_focus(browser_peer):
+    """Break caught: the focus going back by id alone, so a person on one layer's Kind lands on another layer's. Opening
+    another layer draws an editor whose Kind has the same id, for another drawing and under another form."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    store.create_layer(users["patient"]["id"], {"title": "First note", "body": "One."})
+    second = store.create_layer(users["patient"]["id"], {"title": "Second note", "body": "Two."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            go_to(page, "My sharing layers")
+            page.get_by_role("button", name="First note").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_label("Layer title")).to_have_value("First note")
+            editor.get_by_label("Kind").focus()
+            page.evaluate(REDRAW_BY, f'[data-action="open-layer"][data-id="{second["id"]}"]')
+            expect(editor.get_by_label("Layer title")).to_have_value("Second note")
+            assert focused(page) == "the page"
+
+
 def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_peer):
     """Break caught: the owner cannot write a brief, it is carried without being chosen, or old messages come with it."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
