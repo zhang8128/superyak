@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","cwd":"/sandbox","model":"claude-haiku-5-5","permissionMode":"dontAsk","tools":["Bash","Edit","Read","Write"]}
+{"type":"assistant","message":{"id":"msg_one","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"toolu_read_src","name":"Read","input":{"file_path":"/sandbox/src/a.txt"}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000,"output_tokens":20}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read_src","content":"1\tsource\n"}]},"tool_use_result":{"type":"text","file":{"filePath":"/sandbox/src/a.txt","content":"source\n","numLines":1,"startLine":1,"totalLines":1}}}
+{"type":"assistant","message":{"id":"msg_two","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":2,"output_tokens":1}}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"done","usage":{"input_tokens":5,"output_tokens":21}}
