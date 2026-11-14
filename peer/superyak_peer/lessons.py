@@ -130,6 +130,13 @@ OUTCOME_NO_SHIP = ('No ship account on this peer is a member of the lessons room
 OUTCOME_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the '
                  "ship is this peer's one ship account in the room, never an argument")
 OUTCOME_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it records no outcome here"
+# `lessons lay`: the ship is this peer's own, found as repeat and outcome find it, never an argument (Serenity's read
+# of 2592072d: every ship has an account on the Pi's peer, so a name would let one ship post as another).
+LAY_NO_SHIP = ('No ship account on this peer is a member of the lessons room, so there is no ship to lay as: the ship '
+               "is this peer's one ship account in the room, never an argument")
+LAY_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the ship '
+             "is this peer's one ship account in the room, never an argument")
+LAY_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it lays nothing here"
 
 Lesson = namedtuple('Lesson', 'ship claim why error command file learned_from')
 Retraction = namedtuple('Retraction', 'lesson_id')
@@ -1614,6 +1621,11 @@ class Lessons:
             raise Problem(409, refusals[2])
         return ship
 
+    def lessons_own_ship(self, refusals):
+        """`lessons lay`'s ship: _lessons_ship in its own transaction."""
+        with self.transaction() as db:
+            return self._lessons_ship(db, refusals)
+
     def lesson_repeat(self, lesson, how, hook):
         """`lessons repeat`, section 7.1: record that this peer's ship made a mistake a lesson it had seen covers. The
         ship is never an argument: on the origin it is C28's recorded ship; where the record names none (every other
@@ -2270,21 +2282,26 @@ def _check(store, args):
     return f"ok: a {got['kind']}, lesson {got['short']}"
 
 
-@verb('lay', "Lay one lesson or retraction in the lessons room as this peer's ship: every check this peer's door runs, "
-      'then the room\'s send path; the post on stdin', ('--ship', {'required': True}))
+@verb('lay', "Lay one lesson or retraction in the lessons room as this peer's own ship: every check this peer's door "
+      "runs, then the room's send path; the post on stdin")
 def _lay(store, args):
-    """Lay a lesson as the ship named here, on the origin or on any peer that records the room: check_lesson's checks,
-    then send_message to the chain's current room, which on a peer other than the origin goes out as a reply that the
-    origin's door checks again. The client id is the lesson's own digest, so a second lay of the same post in the same
-    room is a replay that posts nothing, and copies across rooms collapse by lesson id (section 4)."""
-    with store.transaction() as db:
-        actor = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.ship,)).fetchone()
-    if actor is None:
-        raise Problem(404, f'No account named {args.ship} on this peer')
-    body = sys.stdin.buffer.read(BODY_BYTES + 1).decode('utf-8')  # bytes: a \r stays, and the door refuses it (a person too)
-    got = store.check_lesson(actor['id'], body)
+    """Lay a post as this peer's own ship, on the origin or on any peer that records the room. The ship is found as
+    repeat and outcome find it (on the origin its recorded ship, elsewhere the one ship account in the room) and is
+    never an argument, so a peer that holds accounts for other ships can't post as them; a post whose ship: line names
+    another is the door's SHIP_IS_AUTHOR. Then check_lesson's checks, then send_message to the chain's current room,
+    which on another peer goes out as a reply that the origin's door checks again. The client id is the lesson's own
+    digest, so a second lay of the same post in the same room is a replay, and copies across rooms collapse by id."""
+    raw = sys.stdin.buffer.read(BODY_BYTES + 1)
+    if len(raw) > BODY_BYTES:
+        raise Problem(400, 'A lesson is at most 4,096 bytes')  # before decoding: a cut character is the size's fault
+    try:
+        body = raw.decode('utf-8')  # bytes: a \r stays, and the door refuses it
+    except UnicodeDecodeError:
+        raise Problem(400, 'A lesson is UTF-8 text') from None
+    ship = store.lessons_own_ship((LAY_NO_SHIP, LAY_SHIPS, LAY_NOT_MEMBER))
+    got = store.check_lesson(ship, body)
     client = ('lay-retract-' if got['kind'] == 'retraction' else 'lay-') + got['lesson_id'].partition(':')[2][:32]
-    sent = store.send_message(actor['id'], got['room'], client, body)
+    sent = store.send_message(ship, got['room'], client, body)
     if 'state' not in sent:  # the origin's own room: the post is in it now, or was already
         return f"{'already laid' if sent.get('replayed') else 'laid'}: a {got['kind']}, lesson {got['short']}"
     # Another peer's: a first lay and a repeat while it waits both read as pending, so this says only what is known.

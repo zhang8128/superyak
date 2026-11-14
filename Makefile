@@ -118,7 +118,7 @@ help:
 	@echo "make lessons-where      This peer's lessons room, by its full id"
 	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
 	@echo "make lessons-check SHIP=… FILE=… [COMMANDS=…]  Run this peer's checks on one lesson or retraction, without posting; COMMANDS says each command value's breadth"
-	@echo "make lessons-lay SHIP=… FILE=…  Lay one lesson or retraction in the lessons room as this peer's ship, after the same checks"
+	@echo "make lessons-lay FILE=…  Lay one lesson or retraction in the lessons room as this peer's own ship, after the same checks"
 	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
 	@echo "make lessons-own-shown  Own lessons this machine's hook has shown (misses prompts; the last 14 days)"
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
@@ -530,8 +530,8 @@ lessons-check:
 	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)"$(if $(COMMANDS), --commands "$(COMMANDS)")$(if $(SHOW), --show) < "$(FILE)"
 
 lessons-lay:
-	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-lay SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]'; exit 2; }
-	$(LESSONS) lay --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)" < "$(FILE)"
+	@test -n "$(FILE)" || { echo 'Usage: make lessons-lay FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]: as this peer'"'"'s own ship'; exit 2; }
+	$(LESSONS) lay --data-dir "$(LESSONS_DATA)" < "$(FILE)"
 
 # Own lessons spec: a local count only. It misses own lessons shown at a prompt (the hook writes nothing there) and
 # covers the STATE_DAYS (14) a session record lives.
