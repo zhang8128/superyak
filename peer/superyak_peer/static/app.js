@@ -3933,6 +3933,18 @@ document.addEventListener("change", async (event) => {
 
 document.addEventListener("click", (event) => { if (event.target.closest?.('a[href^="#"]')) leftByLink = true; });
 
+// The skip link moves the focus to this page's main region and leaves the address alone. Its #main-content is no route:
+// as an address, routeParts reads it as an unknown one and draws Home, so pressed from Grants it left Grants and dropped
+// the focus on the page (fix:skip-link-draws-home; the reader's nit 5 on 69aac5b1). Without JavaScript it's a plain
+// anchor, and works as one. The sign-in page's main has no tabindex, so it gets one to take the focus.
+document.querySelector(".skip-link")?.addEventListener("click", (event) => {
+  const main = document.getElementById("main-content");
+  if (!main) return;
+  event.preventDefault();
+  if (!main.hasAttribute("tabindex")) main.setAttribute("tabindex", "-1");
+  main.focus();
+});
+
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
   // The failed page: no route loads without the home, so try it again, keeping an imprint link's code for its preview.

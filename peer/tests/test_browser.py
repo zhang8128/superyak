@@ -1271,6 +1271,27 @@ def test_a_submit_on_its_own_page_takes_the_caret_out_of_its_box(browser_peer):
         expect(title).not_to_be_focused()
 
 
+def test_the_skip_link_moves_the_focus_into_the_page_and_keeps_its_view(browser_peer):
+    """Break caught: the skip link's #main-content read as an unknown route, so pressed from Grants it drew Home and left
+    the focus on the page (fix:skip-link-draws-home; the reader's nit 5 on 69aac5b1). Also on the sign-in page, whose
+    main has no tabindex of its own."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            go_to(page, "Grants")
+            page.locator(".skip-link").focus()
+            page.keyboard.press("Enter")
+            expect(page.locator("#main-content")).to_be_focused()
+            expect(page.get_by_role("heading", name="Grants", level=1)).to_be_visible()
+            assert page.evaluate("location.hash") == "#grants"
+        with signed_out_browser(playwright) as page:
+            page.goto(browser_peer["base_url"] + "/")
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.locator(".skip-link").focus()
+            page.keyboard.press("Enter")
+            expect(page.locator("#main-content")).to_be_focused()
+            assert page.evaluate("location.hash") == ""
+
+
 def hold_next_layer_save(page):
     page.evaluate("""() => {
       const original = window.fetch;
