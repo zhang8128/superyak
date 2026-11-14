@@ -248,3 +248,22 @@ fn assert_store_lacks_marker(dir: &std::path::Path, marker: &str) {
         }
     }
 }
+
+#[test]
+fn an_item_others_wait_on_cannot_be_erased() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = Room::init(d.path()).unwrap();
+    let first = open_item(&mut r);
+    let second = r
+        .add_item(NewItem {
+            after: vec![first.clone()],
+            ..new_item()
+        })
+        .unwrap();
+    assert!(matches!(r.erase_item(&first), Err(RoomError::Refused(_))));
+    assert_eq!(r.item(&first).unwrap().state, ItemState::Open);
+    // Once nothing waits on it, it can go.
+    r.erase_item(&second).unwrap();
+    r.erase_item(&first).unwrap();
+    assert!(r.items().unwrap().is_empty());
+}

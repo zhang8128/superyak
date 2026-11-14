@@ -3,7 +3,11 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{ItemId, ItemState, Room, RoomError, item::item_view, limits};
+use crate::{
+    ItemId, ItemState, Room, RoomError,
+    item::{item_view, parse},
+    limits,
+};
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -158,6 +162,33 @@ impl Room {
         let view = item_view(&tx, id)?;
         if matches!(view.state, ItemState::Leased | ItemState::Checking) {
             return Err(RoomError::Refused("a running item cannot be erased".into()));
+        }
+        // An item that others wait on stays: removing it would leave them blocked for good, and
+        // dropping it from their lists would let work start whose condition was never met.
+        let waiting = {
+            let mut q = tx
+                .prepare("SELECT id,after_ids FROM items WHERE id<>?1 ORDER BY ordinal")
+                .map_err(db)?;
+            let rows = q
+                .query_map([&id.0], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            let mut waiting = Vec::new();
+            for (other, after) in rows {
+                if parse::<Vec<ItemId>>(&after)?.contains(id) {
+                    waiting.push(other);
+                }
+            }
+            waiting
+        };
+        if !waiting.is_empty() {
+            return Err(RoomError::Refused(format!(
+                "erase what waits on this item first: {}",
+                waiting.join(", ")
+            )));
         }
         tx.pragma_update(None, "secure_delete", true).map_err(db)?;
         for sql in [
