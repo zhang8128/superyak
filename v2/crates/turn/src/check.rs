@@ -137,7 +137,7 @@ fn judge(
     }
     let mut output = Sha256::new();
     let args = ["-c".to_string(), spec.command.clone()];
-    let status = sandbox.run("sh", &args, "", spec.timeout_secs, &mut |line| {
+    let status = sandbox.run_untrusted("sh", &args, "", spec.timeout_secs, &mut |line| {
         output.update(line.as_bytes());
         output.update(b"\n");
     })?;

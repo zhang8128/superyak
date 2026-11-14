@@ -97,10 +97,13 @@ fn an_unknown_worker_name_is_refused() {
 fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
     let repo = Repo::new(&[("src/a.txt", "source\n")]);
     let sb = sandbox(&repo);
-    let prompt_out = repo.scratch("prompt.txt");
+    // A script worker runs in the jail, where its home is the scratch directory beside the sandbox. That is
+    // the one place outside its clone where it can leave the prompt for this test to read.
+    let mut scratch = sb.dir.file_name().unwrap().to_os_string();
+    scratch.push(".scratch");
+    let prompt_out = sb.dir.with_file_name(scratch).join("prompt.txt");
     let body = format!(
-        "#!/bin/sh\ncat > '{}'\nsed \"s#/sandbox#$PWD#g\" '{}'\n",
-        prompt_out.display(),
+        "#!/bin/sh\ncat > \"$HOME/prompt.txt\"\nsed \"s#/sandbox#$PWD#g\" '{}'\n",
         data("claude-read-src.jsonl")
     );
     let path = script(&repo, "reader.sh", &body);

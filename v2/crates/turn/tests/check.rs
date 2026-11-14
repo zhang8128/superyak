@@ -134,10 +134,10 @@ fn a_commit_that_rewrote_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
     let mut spec = item.spec();
-    let marker = item.repo.scratch("check-ran");
-    spec.command = format!("touch '{}'; {COMMAND}", marker.display());
+    // The check says "ran" when it runs. A check runs in the jail, so it can leave no file outside its
+    // checkout to show that it ran; its output is the evidence.
+    spec.command = format!("echo ran; {COMMAND}");
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
-    std::fs::remove_file(&marker).unwrap();
     let cheat = item.repo.branch_commit("changed-check", &item.fix, |r| {
         r.write("check.sh", "exit 0\n")
     });
@@ -154,8 +154,20 @@ fn a_commit_that_rewrote_the_check_file_fails() {
     assert!(!verdict.passed);
     assert_eq!(verdict.exit_code, 125);
     assert!(!verdict.timed_out);
-    assert!(!marker.exists(), "the check was not run");
+    assert_eq!(verdict.output_sha256, sha256_hex(b""), "the check ran");
     assert_eq!(item.repo.scratch("work").read_dir().unwrap().count(), 0);
+    // The control: on the honest fix the same check does run, and its output shows it.
+    let honest = run_check(
+        &item.repo.path,
+        &item.fix,
+        &spec,
+        &frozen.check_hash,
+        &checks,
+        &work,
+    )
+    .unwrap();
+    assert!(honest.passed);
+    assert_ne!(honest.output_sha256, sha256_hex(b""));
 }
 
 #[test]
@@ -163,10 +175,10 @@ fn a_commit_that_deleted_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
     let mut spec = item.spec();
-    let marker = item.repo.scratch("check-ran");
-    spec.command = format!("touch '{}'; {COMMAND}", marker.display());
+    // The check says "ran" when it runs. A check runs in the jail, so it can leave no file outside its
+    // checkout to show that it ran; its output is the evidence.
+    spec.command = format!("echo ran; {COMMAND}");
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
-    std::fs::remove_file(&marker).unwrap();
     let gone = item
         .repo
         .branch_commit("gone", &item.fix, |r| r.remove("check.sh"));
@@ -183,7 +195,7 @@ fn a_commit_that_deleted_the_check_file_fails() {
     assert!(!verdict.passed);
     assert_eq!(verdict.exit_code, 125);
     assert!(!verdict.timed_out);
-    assert!(!marker.exists(), "the check was not run");
+    assert_eq!(verdict.output_sha256, sha256_hex(b""), "the check ran");
 }
 
 #[test]
@@ -191,11 +203,9 @@ fn a_check_path_must_keep_its_frozen_type() {
     for directory in [false, true] {
         let item = Item::new();
         let checks = item.repo.scratch("checks");
-        let marker = item.repo.scratch("check-ran");
         let mut spec = item.spec();
-        spec.command = format!("touch '{}'; {COMMAND}", marker.display());
+        spec.command = format!("echo ran; {COMMAND}");
         let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks).unwrap();
-        std::fs::remove_file(&marker).unwrap();
         let commit = item.repo.branch_commit("typed-check", &item.fix, |r| {
             r.remove("check.sh");
             if directory {
@@ -216,7 +226,7 @@ fn a_check_path_must_keep_its_frozen_type() {
         assert!(!v.passed);
         assert_eq!(v.exit_code, 125);
         assert!(!v.timed_out);
-        assert!(!marker.exists());
+        assert_eq!(v.output_sha256, sha256_hex(b""), "the check ran");
     }
 }
 

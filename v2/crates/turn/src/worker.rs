@@ -122,7 +122,8 @@ impl Worker for ScriptWorker {
             TurnError::Refused(format!("{} is not a UTF-8 path", self.path.display()))
         })?;
         let mut parser = ClaudeParser::new(sandbox);
-        let status = sandbox.run(
+        // A script stands in for a worker's own code, so it runs as untrusted.
+        let status = sandbox.run_untrusted(
             program,
             &[],
             &prompt(item_title, check_command),
@@ -378,7 +379,8 @@ fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError
             .collect();
         argv.push("git".to_string());
         argv.extend(SAFE_GIT_FLAGS.iter().chain(args).map(|s| s.to_string()));
-        let status = sandbox.run("env", &argv, "", SEAL_SECS, on_line)?;
+        // The room's git in a worker's tree: jailed, so nothing the tree makes it run can reach outside.
+        let status = sandbox.run_untrusted("env", &argv, "", SEAL_SECS, on_line)?;
         if status.exit_code == 0 && !status.timed_out {
             Ok(())
         } else {

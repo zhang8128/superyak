@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use room::limits::TERM_GRACE_SECS;
 
+use crate::jail::{self, Jail};
 use crate::process::{Identity, Supervisor, marker};
 use crate::{TurnError, io};
 
@@ -306,6 +307,63 @@ impl Sandbox {
         limit_secs: u32,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<RunStatus, TurnError> {
+        self.run_with(None, program, args, stdin, limit_secs, on_line)
+    }
+
+    /// Runs `program` as `run` does, inside an OS-level jail: it can write only in the sandbox and a scratch
+    /// directory beside it, reach no network, and signal nothing outside. Its home and its place for temporary
+    /// files are the scratch directory. This is for what the room does not trust: a check, a script worker, and
+    /// the room's own git in a worker's tree. With `YAK_JAIL=off` it is `run`. With no jail tool on the
+    /// machine it is refused.
+    pub fn run_untrusted(
+        &self,
+        program: &str,
+        args: &[String],
+        stdin: &str,
+        limit_secs: u32,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<RunStatus, TurnError> {
+        if !jail::wanted() {
+            return self.run(program, args, stdin, limit_secs, on_line);
+        }
+        let scratch = self.scratch();
+        fs::create_dir_all(&scratch).map_err(io("make the scratch directory"))?;
+        let jail = jail::for_checkout(&self.dir, &scratch)?;
+        self.run_with(
+            Some((&jail, &scratch)),
+            program,
+            args,
+            stdin,
+            limit_secs,
+            on_line,
+        )
+    }
+
+    /// The scratch directory a jailed run may write in: beside the sandbox, never inside the clone.
+    fn scratch(&self) -> PathBuf {
+        let mut name = self.dir.file_name().unwrap_or_default().to_os_string();
+        name.push(".scratch");
+        self.dir.with_file_name(name)
+    }
+
+    fn run_with(
+        &self,
+        jailed: Option<(&Jail, &Path)>,
+        program: &str,
+        args: &[String],
+        stdin: &str,
+        limit_secs: u32,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<RunStatus, TurnError> {
+        let wrapped;
+        let (program, args) = match jailed {
+            Some((jail, _)) => {
+                let (tool, tool_args) = jail.command(program, args);
+                wrapped = (tool.to_string_lossy().into_owned(), tool_args);
+                (wrapped.0.as_str(), wrapped.1.as_slice())
+            }
+            None => (program, args),
+        };
         let launch = Launch::new(program, args, limit_secs);
         let marker = marker()?;
         let (reader, writer) = std::io::pipe().map_err(io("make a pipe"))?;
@@ -321,7 +379,14 @@ impl Sandbox {
             .args(&launch.args)
             .envs(launch.env)
             .env("YAK_TURN", &marker)
-            .current_dir(&self.dir)
+            .current_dir(&self.dir);
+        if let Some((_, scratch)) = jailed {
+            command
+                .env("HOME", scratch)
+                .env("TMPDIR", scratch)
+                .env_remove("CODEX_HOME");
+        }
+        command
             .stdin(Stdio::piped())
             .stdout(writer.try_clone().map_err(io("make a pipe"))?)
             .stderr(writer)
@@ -408,6 +473,10 @@ impl Sandbox {
 
     /// Removes the sandbox's directory, even where a worker took away its own write permission.
     pub fn destroy(self) -> Result<(), TurnError> {
+        let scratch = self.scratch();
+        if fs::symlink_metadata(&scratch).is_ok() {
+            remove_tree(&scratch)?;
+        }
         remove_tree(&self.dir)
     }
 }

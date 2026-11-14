@@ -22,6 +22,51 @@ const BUBBLEWRAP_DIRS: [&str; 3] = ["/usr/bin", "/bin", "/usr/local/bin"];
 /// What a jailed run on Linux can see of the system, read-only. A directory that does not exist is left out.
 const LINUX_SYSTEM_DIRS: [&str; 6] = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"];
 
+/// Directories in a home that hold keys, tokens and agent settings. The room's jail hides each that exists.
+const HOME_SECRETS: [&str; 11] = [
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".config",
+    ".docker",
+    ".kube",
+    ".claude",
+    ".codex",
+    ".superyak",
+    ".engram",
+    "Library/Keychains",
+];
+
+/// Whether the room jails what it does not trust. It does, unless `YAK_JAIL` is `off`. That switch exists for
+/// tests that must run inside another sandbox, where no jail can be entered. A clock that runs model workers
+/// must refuse to start with it set.
+pub fn wanted() -> bool {
+    wanted_from(std::env::var("YAK_JAIL").ok().as_deref())
+}
+
+fn wanted_from(value: Option<&str>) -> bool {
+    value != Some("off")
+}
+
+/// The jail the room puts around `checkout`: the home's keys, tokens and agent settings hidden, and each
+/// directory in `YAK_JAIL_READ` (separated by colons) readable, for a toolchain outside the system directories.
+pub fn for_checkout(checkout: &Path, scratch: &Path) -> Result<Jail, TurnError> {
+    let mut jail = Jail::new(checkout, scratch)?;
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+        && home.is_absolute()
+    {
+        for name in HOME_SECRETS {
+            jail = jail.hide(&home.join(name))?;
+        }
+    }
+    if let Some(list) = std::env::var_os("YAK_JAIL_READ") {
+        for dir in std::env::split_paths(&list).filter(|d| d.is_absolute()) {
+            jail = jail.allow_read(&dir)?;
+        }
+    }
+    Ok(jail)
+}
+
 /// Which tool makes the jail on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -155,6 +200,12 @@ impl Jail {
             "--unshare-all",
             "--cap-drop",
             "ALL",
+            // The caller clears the environment, but a memory-capped run is started through the session bus,
+            // whose address must not follow it in. `/run` is empty inside, so the socket is not there either.
+            "--unsetenv",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "--unsetenv",
+            "XDG_RUNTIME_DIR",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -245,6 +296,15 @@ mod tests {
             readable: vec![PathBuf::from("/tools")],
             hidden: vec![PathBuf::from("/home/someone/keys")],
         }
+    }
+
+    #[test]
+    fn the_room_jails_unless_told_off() {
+        assert!(wanted_from(None));
+        assert!(wanted_from(Some("")));
+        assert!(wanted_from(Some("on")));
+        assert!(wanted_from(Some("OFF")));
+        assert!(!wanted_from(Some("off")));
     }
 
     #[test]
