@@ -484,7 +484,11 @@ fn a_worker_cannot_change_its_check() {
         ),
     );
     let _ = once_through(&r, &[&cheat], &[]);
-    assert_eq!(state(&r, &id), "failed", "a changed check is refused, though the fix is right");
+    assert_eq!(
+        state(&r, &id),
+        "failed",
+        "a changed check is refused, though the fix is right"
+    );
 }
 
 #[test]
