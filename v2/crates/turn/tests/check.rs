@@ -528,10 +528,72 @@ fn a_freeze_leaves_its_work_directory_when_something_took_its_sandboxs_place() {
     };
     let frozen = freeze(&item.repo.path, &item.repo.base, &spec, &checks);
     let at = swapper.join().unwrap();
-    let Err(TurnError::Left(left)) = &frozen else {
+    let Err(TurnError::Left { paths: left, .. }) = &frozen else {
         panic!("{frozen:?}");
     };
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!(left[0].file_name(), at.file_name());
     assert_eq!(std::fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
+}
+
+/// What a removal left is said even when the check itself failed for a reason of its own. Here a scratch
+/// directory is put beside the check's sandbox before its first run: with the jail on that run cannot start,
+/// which is an ordinary failure, and the removal then finds a scratch directory the room never made. The
+/// freeze says what was left, with the failure beside it, and leaves the work directory that holds it.
+#[test]
+fn a_check_that_failed_still_says_what_its_removal_left() {
+    let item = Item::new();
+    let checks = item.repo.scratch("checks");
+    let planter = {
+        let checks = checks.clone();
+        std::thread::spawn(move || {
+            // The sandbox of the freeze's first check, as soon as its directory is there: the one name
+            // without a dot in the work directory. Its clone is still being made, and no run has started.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut sandbox = None;
+            while sandbox.is_none() && Instant::now() < deadline {
+                sandbox = std::fs::read_dir(&checks)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with(".work-")
+                    })
+                    .flat_map(|work| std::fs::read_dir(work).into_iter().flatten().flatten())
+                    .map(|e| e.path())
+                    .find(|p| !p.file_name().unwrap().to_string_lossy().contains('.'));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let sandbox = sandbox.expect("the freeze made a sandbox");
+            let mut name = sandbox.file_name().unwrap().to_os_string();
+            name.push(".scratch");
+            let scratch = sandbox.with_file_name(name);
+            std::fs::create_dir(&scratch).unwrap();
+            std::fs::write(scratch.join("canary"), "KEEP").unwrap();
+            scratch
+        })
+    };
+    let frozen = freeze(&item.repo.path, &item.repo.base, &item.spec(), &checks);
+    let scratch = planter.join().unwrap();
+    let Err(TurnError::Left { paths, also }) = &frozen else {
+        panic!("{frozen:?}");
+    };
+    assert_eq!(paths.len(), 1, "{paths:?}");
+    assert_eq!(paths[0].file_name(), scratch.file_name());
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("canary")).unwrap(),
+        "KEEP"
+    );
+    // With the jail on, the run could not start, and that is kept beside what was left. With the jail off no
+    // scratch directory is asked for, the check runs, and there is nothing beside it.
+    if turn::jail::wanted() {
+        assert!(
+            also.as_deref().is_some_and(|why| why.contains("scratch")),
+            "{also:?}"
+        );
+    }
 }

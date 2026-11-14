@@ -600,3 +600,88 @@ fn a_secrets_place_is_known_through_each_link_on_the_way_to_it() {
     );
     assert!(printed.contains("SAID ran"), "{printed}");
 }
+
+/// A link to somewhere that is not there yet. `~/.cargo` leads to a directory that does not exist, inside one
+/// that does. A credentials file made later, once that directory is, would lie inside the one that does: so
+/// naming that one is refused. A link is followed by what it says, whether or not anything is there.
+#[test]
+fn a_secrets_place_is_known_through_a_link_to_somewhere_not_there_yet() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (home, grant) = (root.join("home"), root.join("grant"));
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(grant.join("bin")).unwrap();
+    std::os::unix::fs::symlink(grant.join("future-cargo"), home.join(".cargo")).unwrap();
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &grant)],
+        true,
+    );
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("would also show"),
+        "{printed}"
+    );
+    // The control: a directory beside where the link leads can be named.
+    let named = grant.join("bin");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+
+    // And a protected name behind links that lead round in a ring cannot be placed at all: no jail starts
+    // beside it, whatever is named.
+    let lost = root.join("lost-home");
+    fs::create_dir_all(&lost).unwrap();
+    std::os::unix::fs::symlink(lost.join(".ssh-b"), lost.join(".ssh")).unwrap();
+    std::os::unix::fs::symlink(lost.join(".ssh"), lost.join(".ssh-b")).unwrap();
+    let printed = under("echo ran", &[("HOME", &lost)], true);
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("links"),
+        "{printed}"
+    );
+}
+
+/// The rule for a named directory holds for the directories every run is shown without their being named. A
+/// place where an agent's settings would be kept, which is not there yet and would lie in one of those, would
+/// be shown the day it is made: no jail starts beside it. One that is there is hidden where it is, with
+/// whatever is put in it later, and the jail starts.
+#[test]
+fn a_secrets_place_in_a_directory_every_run_is_shown_stops_the_jail_unless_it_is_hidden() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    // Nothing is made at this path, by this test or by the jail.
+    let would_be = Path::new("/usr/share/yak-test-a-place-that-is-never-made/codex");
+    assert!(!would_be.exists() && !would_be.parent().unwrap().exists());
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("CODEX_HOME", would_be)],
+        true,
+    );
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("every run is shown"),
+        "{printed}"
+    );
+    // The control: the same name somewhere no run is shown.
+    let elsewhere = home.join("not-made-either/codex");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("CODEX_HOME", &elsewhere)],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+    // And one that is there, in a directory every run is shown: it is hidden, and the run goes on without it.
+    // Hidden is seen by what is in it: on Linux the run finds an empty directory in its place, on macOS it is
+    // refused the directory itself.
+    let there = Path::new("/usr/share/man");
+    if there.join("man1").is_dir() {
+        let script = "echo ran; ls /usr/share/man/man1 >/dev/null 2>&1 && echo SEEN || echo UNSEEN";
+        let printed = under(script, &[("HOME", &home), ("CODEX_HOME", there)], true);
+        assert!(printed.contains("SAID ran"), "{printed}");
+        assert!(printed.contains("UNSEEN"), "{printed}");
+        // The control: with nothing hiding it, the same run sees it.
+        let printed = under(script, &[("HOME", &home)], true);
+        assert!(printed.contains("SAID SEEN"), "{printed}");
+    }
+}

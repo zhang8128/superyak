@@ -358,6 +358,9 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
         .unwrap()
         .unwrap();
     assert_eq!(dead.lease_no, 1);
+    // The dead clock's lease is the short one, so the test does not wait long for it. The turn that follows
+    // gets one it cannot lose on a busy machine.
+    world.room.set_lease_secs(30).unwrap();
 
     // What the dead clock left: a clone holding a fix on the turn's branch, a directory the worker made
     // unwritable, a record of a run that is still going, and a check's scratch directory.
@@ -467,6 +470,7 @@ fn a_record_that_cannot_be_read_stops_the_clock_with_everything_in_place() {
         .take("script:/dead-clock", now())
         .unwrap()
         .unwrap();
+    world.room.set_lease_secs(30).unwrap();
     let turns = world.room_dir.join("turns");
     fs::create_dir_all(turns.join(&dead.attempt.0)).unwrap();
     let record = turns.join(format!("{}.pid", dead.attempt.0));
@@ -587,11 +591,19 @@ fn a_scratch_directory_the_room_did_not_make_is_left_where_it_is() {
 /// path when the check is done, it is left, and the clock's tidying leaves the work directory that holds it.
 /// No verdict is taken from that check: the item waits out its lease and is tried again. A recheck is a check
 /// like any other, and what took its sandbox's place is left in the same way.
+///
+/// The third way is a scratch directory put beside the check's sandbox before its first run. With the jail on
+/// that run cannot start, so the check fails for a reason of its own as well, and what the removal left is
+/// still what the clock is told.
 #[test]
 fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() {
-    for (which, rng) in [("check", NEVER), ("recheck", ALWAYS)] {
+    for (which, rng, how) in [
+        ("check", NEVER, "swap"),
+        ("recheck", ALWAYS, "swap"),
+        ("check", NEVER, "plant"),
+    ] {
         let mut world = World::new(0);
-        world.room.set_lease_secs(2).unwrap();
+        world.room.set_lease_secs(6).unwrap();
         // Slow only on the fix, so freezing it on the base and the wrong commit stays quick.
         let id = world.add_check(
             "answer 1 is 42, slowly",
@@ -601,44 +613,55 @@ fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() 
         let fix = world.script("fix.sh", FIX);
         let turns = world.room_dir.join("turns");
         let moved = world.scratch("moved-away");
-        let swapper = thread::spawn(move || {
-            // The sandbox of the first check of that kind, once it is running: the one name without a dot in
-            // the work directory beside its record.
+        let meddler = thread::spawn(move || {
+            // The sandbox of the first check of that kind: the one name without a dot in its work directory.
+            // To take its place the check must be running, so its record is waited for; to plant a scratch
+            // directory beside it no run may have started, so the directory alone is.
             let deadline = Instant::now() + Duration::from_secs(60);
-            let ending = format!(".{which}.pid");
+            let holder_ending = format!(".{which}");
             let mut sandbox = None;
-            assert!(wait_until(deadline, || {
-                let record = fs::read_dir(&turns)
+            while sandbox.is_none() && Instant::now() < deadline {
+                let names: Vec<std::path::PathBuf> = fs::read_dir(&turns)
                     .into_iter()
                     .flatten()
                     .flatten()
                     .map(|e| e.path())
-                    .find(|p| p.to_string_lossy().ends_with(&ending));
-                sandbox = record.and_then(|record| {
-                    fs::read_dir(record.with_extension(""))
-                        .into_iter()
-                        .flatten()
-                        .flatten()
-                        .map(|e| e.path())
-                        .find(|p| !p.file_name().unwrap().to_string_lossy().contains('.'))
-                });
-                sandbox.is_some()
-            }));
+                    .collect();
+                sandbox = names
+                    .iter()
+                    .filter(|p| p.to_string_lossy().ends_with(&holder_ending))
+                    .filter(|holder| {
+                        how == "plant"
+                            || names.contains(&holder.with_extension(format!("{which}.pid")))
+                    })
+                    .flat_map(|holder| fs::read_dir(holder).into_iter().flatten().flatten())
+                    .map(|e| e.path())
+                    .find(|p| !p.file_name().unwrap().to_string_lossy().contains('.'));
+                thread::sleep(Duration::from_millis(1));
+            }
+            let at = sandbox.expect("the check made a sandbox");
+            if how == "plant" {
+                let mut name = at.file_name().unwrap().to_os_string();
+                name.push(".scratch");
+                let scratch = at.with_file_name(name);
+                fs::create_dir(&scratch).unwrap();
+                fs::write(scratch.join("canary"), "KEEP").unwrap();
+                return scratch;
+            }
             // Well inside the check's three seconds.
             thread::sleep(Duration::from_secs(1));
-            let at = sandbox.unwrap();
             fs::rename(&at, &moved).unwrap();
             fs::create_dir(&at).unwrap();
             fs::write(at.join("canary"), "KEEP").unwrap();
             at
         });
         let (result, events) = world.run(&[&fix], Mode::OnceThrough, rng, TURN_SECS);
-        let at = swapper.join().unwrap();
+        let at = meddler.join().unwrap();
         result.unwrap();
         assert_eq!(
             fs::read_to_string(at.join("canary")).unwrap(),
             "KEEP",
-            "{which}"
+            "{which}, {how}"
         );
         let ends = outcomes(&events);
         let passed = |outcome: &Outcome| {
@@ -653,10 +676,10 @@ fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() 
         if which == "check" {
             assert!(
                 matches!(&ends[0], Outcome::Unchecked { reason } if reason.contains("not what the room made there")),
-                "{ends:?}"
+                "{how}: {ends:?}"
             );
             // The room went on: the lease ran out, and the next turn passed.
-            assert!(passed(&ends[1]), "{ends:?}");
+            assert!(passed(&ends[1]), "{how}: {ends:?}");
             assert_eq!(world.room.item(&id).unwrap().lease_no, 2);
         } else {
             // The pass stands, and what became of the recheck is said.
@@ -672,10 +695,65 @@ fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() 
         assert_eq!(
             world.turns(),
             [holder.to_string_lossy().into_owned()],
-            "{which}"
+            "{which}, {how}"
         );
         assert!(holder.to_string_lossy().ends_with(&format!(".{which}")));
     }
+}
+
+/// What a check left is remembered also when the room's store fails while the check runs. The store's failure
+/// ends the clock; it does not take the place of what the check said, and the clock's tidying on the way out
+/// still leaves the directory that holds what was found.
+#[test]
+fn what_a_check_left_is_remembered_though_the_store_fails_meanwhile() {
+    let mut world = World::new(0);
+    world.room.set_lease_secs(6).unwrap();
+    world.add_check(
+        "answer 1 is 42, slowly",
+        "if grep -qx 42 answer1.txt; then sleep 3; fi; sh check.sh 1",
+        &["check.sh"],
+    );
+    let fix = world.script("fix.sh", FIX);
+    let (turns, room_dir) = (world.room_dir.join("turns"), world.room_dir.clone());
+    let moved = world.scratch("moved-away");
+    let meddler = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut sandbox = None;
+        assert!(wait_until(deadline, || {
+            let record = fs::read_dir(&turns)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.to_string_lossy().ends_with(".check.pid"));
+            sandbox = record.and_then(|record| {
+                fs::read_dir(record.with_extension(""))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .find(|p| !p.file_name().unwrap().to_string_lossy().contains('.'))
+            });
+            sandbox.is_some()
+        }));
+        thread::sleep(Duration::from_secs(1));
+        let at = sandbox.unwrap();
+        fs::rename(&at, &moved).unwrap();
+        fs::create_dir(&at).unwrap();
+        fs::write(at.join("canary"), "KEEP").unwrap();
+        // And from here the store takes no write: the clock's next renewal fails.
+        (at, StoreHeld::hold(&room_dir))
+    });
+    let (result, _events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
+    let (at, held) = meddler.join().unwrap();
+    drop(held);
+    assert!(
+        matches!(result, Err(ClockError::Room(_))),
+        "the clock did not end for its store: {result:?}"
+    );
+    assert_eq!(fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
+    let holder = at.parent().unwrap().file_name().unwrap();
+    assert_eq!(world.turns(), [holder.to_string_lossy().into_owned()]);
 }
 
 /// When the clock stops at a run it cannot end, what stays is that run's: its record and its directories, and
@@ -761,7 +839,8 @@ fn the_ceiling_ends_a_once_through_run() {
 #[test]
 fn a_check_that_cannot_run_leaves_the_item_to_expire() {
     let mut world = World::new(1);
-    world.room.set_lease_secs(2).unwrap();
+    // Long enough that a turn on a busy machine hands in before it runs out, short enough to wait out thrice.
+    world.room.set_lease_secs(5).unwrap();
     let fix = world.script("fix.sh", FIX);
     // The frozen copies go while the first turn runs. A worker cannot do this itself: the jail keeps it out of
     // the room's directory. So the test does it, when the clock says a turn has started.
@@ -905,15 +984,17 @@ fn a_long_turn_keeps_its_lease() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let mut world = World::new(0);
-    world.room.set_lease_secs(2).unwrap();
+    // A lease of six seconds is renewed every two, and a worker and a check of seven seconds each outlast it.
+    // Two seconds would do on a quiet machine and is lost on a busy one, where a second can pass unseen.
+    world.room.set_lease_secs(6).unwrap();
     // Slow only on the fix, so freezing it on the base and the wrong commit stays quick.
     let id = world.add_check(
         "answer 1 is 42, slowly",
-        "if grep -qx 42 answer1.txt; then sleep 3; fi; sh check.sh 1",
+        "if grep -qx 42 answer1.txt; then sleep 7; fi; sh check.sh 1",
         &["check.sh"],
     );
     let fix = FIX.strip_prefix("#!/bin/sh\n").unwrap();
-    let slow = world.script("slow.sh", &format!("#!/bin/sh\nsleep 3\n{fix}"));
+    let slow = world.script("slow.sh", &format!("#!/bin/sh\nsleep 7\n{fix}"));
     let done = Arc::new(AtomicBool::new(false));
     let reader = {
         let (dir, id, done) = (world.room_dir.clone(), id.clone(), done.clone());
@@ -1063,7 +1144,12 @@ fn inner_a_clock_under_the_rooms_switches() {
     };
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
-    let workers: Vec<String> = workers
+    // A worker that hands in a commit the repository had all along: the wrong one.
+    let old = world.script(
+        "old.sh",
+        &format!("#!/bin/sh\ngit reset -q --hard {}\n", world.wrong),
+    );
+    let mut workers: Vec<String> = workers
         .to_str()
         .unwrap()
         .split(',')
@@ -1075,56 +1161,103 @@ fn inner_a_clock_under_the_rooms_switches() {
             }
         })
         .collect();
-    let workers: Vec<&str> = workers.iter().map(String::as_str).collect();
+    let first_ref = world.room_ref(&world.items[0], 1);
     // With `YAK_INNER_GIT_DIR` naming a directory that is first on this process's search path, a `git` is put
-    // there that is the real git except where the mode says otherwise: at the clock's fetch, or where the clock
-    // makes the turn's ref. Taking a ref back (`update-ref -d`) is always the real git's.
+    // there that is the real git except where the mode says otherwise: at the clock's fetch, where the clock
+    // looks whether the ref's name is free, or where it makes the ref. Taking a ref back (`update-ref -d`) is
+    // always the real git's.
     if let Some(dir) = std::env::var_os("YAK_INNER_GIT_DIR") {
+        let dir = std::path::PathBuf::from(dir);
         let mode = std::env::var("YAK_INNER_GIT_MODE").unwrap();
         let stop = format!(": > '{}'", world.room_dir.join("STOP").display());
+        // Left behind by a wrapped git that was let run to its end where it should have been ended.
+        let waited = format!(": > '{}'", dir.join("waited-out").display());
         let me = std::process::id();
         let real = "/usr/bin/git \"$@\"";
-        let (at_fetch, at_ref) = match mode.as_str() {
-            "slow-fetch" => ("sleep 4".to_string(), ":".to_string()),
-            // Nine seconds, where the whole of a run takes a few: one that waited them out is seen on any machine.
-            "fetch-stop" => (format!("{stop}; sleep 9"), ":".to_string()),
+        // The clock held still for longer than its lease, as a machine that sleeps holds it.
+        let asleep = |meanwhile: &str| {
+            format!("kill -STOP {me}; sleep 8; {meanwhile}; made=$?; kill -CONT {me}")
+        };
+        let nothing = || ":".to_string();
+        let (at_fetch, at_look, at_ref) = match mode.as_str() {
+            "slow-fetch" => ("sleep 8".to_string(), nothing(), nothing()),
+            "fetch-stop" => (format!("{stop}; sleep 9; {waited}"), nothing(), nothing()),
             // The fetch stops the room and then fails.
-            "fetch-stop-fail" => (format!("{stop}; exit 1"), ":".to_string()),
+            "fetch-stop-fail" => (format!("{stop}; exit 1"), nothing(), nothing()),
             // The fetch is done at once and leaves something holding its output, under a git limit of 2 s.
-            "fetch-held" => ("sleep 47.251 & exit 0".to_string(), ":".to_string()),
-            "slow-ref" => (":".to_string(), "sleep 4".to_string()),
+            "fetch-held" => ("sleep 47.251 & exit 0".to_string(), nothing(), nothing()),
+            "slow-ref" => (nothing(), nothing(), "sleep 8".to_string()),
             // The room is stopped as the ref is about to be made.
-            "ref-stop" => (":".to_string(), format!("{stop}; sleep 9")),
+            "ref-stop" => (nothing(), nothing(), format!("{stop}; sleep 9; {waited}")),
             // The ref is made, and the room is stopped before the clock has it back.
             "ref-then-stop" => (
-                ":".to_string(),
+                nothing(),
+                nothing(),
                 format!("{real}; made=$?; {stop}; sleep 1; exit $made"),
             ),
-            // The machine sleeps while the ref is made: the clock is held still for longer than the lease, the
-            // ref is made meanwhile, and the clock goes on.
+            // The machine sleeps while the ref is made.
             "ref-asleep" => (
-                ":".to_string(),
-                format!("kill -STOP {me}; sleep 3; {real}; made=$?; kill -CONT {me}; exit $made"),
+                nothing(),
+                nothing(),
+                format!("{}; exit $made", asleep(real)),
             ),
+            // The ref is made, and from then on the room's store takes no write. The holder leaves this
+            // program's group, which the clock ends with it, and says when it has the store.
+            "ref-then-store" => {
+                let (holder, held) = (dir.join("hold.py"), dir.join("held"));
+                fs::write(
+                    &holder,
+                    "import os, sqlite3, sys, time\nos.setsid()\n\
+                     held = sqlite3.connect(sys.argv[1], isolation_level=None, timeout=30)\n\
+                     held.execute('BEGIN IMMEDIATE')\nopen(sys.argv[2], 'w').close()\ntime.sleep(15)\n",
+                )
+                .unwrap();
+                (
+                    nothing(),
+                    nothing(),
+                    format!(
+                        "{real}; made=$?; python3 -I '{}' '{}' '{held}' </dev/null >/dev/null 2>&1 & \
+                         while [ ! -e '{held}' ]; do sleep 0.1; done; exit $made",
+                        holder.display(),
+                        world.room_dir.join("room.sqlite3").display(),
+                        held = held.display(),
+                    ),
+                )
+            }
+            // The ref's name is taken already, and names the very commit the worker hands in. The room is
+            // stopped, or the lease runs out, as the clock looks at the name.
+            "taken-ref-stop" => (nothing(), stop.clone(), nothing()),
+            "taken-ref-asleep" => (nothing(), asleep(":"), nothing()),
             other => panic!("unknown mode {other}"),
         };
-        if matches!(mode.as_str(), "slow-fetch" | "slow-ref" | "ref-asleep") {
-            world.room.set_lease_secs(2).unwrap();
+        if matches!(
+            mode.as_str(),
+            "slow-fetch" | "slow-ref" | "ref-asleep" | "taken-ref-asleep"
+        ) {
+            // Renewed every two seconds, so it is kept on a busy machine and outlasted by eight seconds.
+            world.room.set_lease_secs(6).unwrap();
         }
         if mode == "fetch-held" {
             world.git_secs = 2;
         }
-        let wrapper = std::path::Path::new(&dir).join("git");
+        if mode.starts_with("taken-ref") {
+            git(&world.repo, &["update-ref", &first_ref, &world.wrong]);
+            workers = vec![old.clone()];
+        }
+        let wrapper = dir.join("git");
         fs::write(
             &wrapper,
             format!(
-                "#!/bin/sh\ncase \" $* \" in\n*\" update-ref --no-deref -d \"*) ;;\n*\" fetch \"*) {at_fetch};;\n\
-                 *\" update-ref \"*) {at_ref};;\nesac\nexec {real}\n"
+                "#!/bin/sh\ncase \" $* \" in\n*\" update-ref --no-deref -d \"*) ;;\n\
+                 *\" for-each-ref --format=%(refname) refs/heads/room/\"*) {at_look};;\n\
+                 *\" fetch \"*) {at_fetch};;\n*\" update-ref \"*) {at_ref};;\nesac\nexec {real}\n"
             ),
         )
         .unwrap();
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        println!("WRAPPED {mode}");
     }
+    let workers: Vec<&str> = workers.iter().map(String::as_str).collect();
     let began = Instant::now();
     let (result, events) = world.run(&workers, Mode::OnceThrough, NEVER, TURN_SECS);
     println!("TOOK {} s", began.elapsed().as_secs());
@@ -1134,6 +1267,17 @@ fn inner_a_clock_under_the_rooms_switches() {
     }
     println!("FIRST {:?}", outcomes(&events).first());
     println!("REFS {}", world.room_refs().len());
+    let named = if world.room_refs().contains(&first_ref) {
+        let commit = git(&world.repo, &["rev-parse", &first_ref]);
+        match commit {
+            c if c == world.wrong => "the wrong commit".to_string(),
+            c if c == world.base => "the base".to_string(),
+            _ => "the turn's commit".to_string(),
+        }
+    } else {
+        "nothing".to_string()
+    };
+    println!("REF1 names {named}");
     let view = world.room.item(&world.items[0]).unwrap();
     println!(
         "ITEM {:?} attempts {} lease {}",
@@ -1146,6 +1290,10 @@ fn inner_a_clock_under_the_rooms_switches() {
             .filter(|e| matches!(e, Event::Problem { .. }))
             .count()
     );
+    if let Some(dir) = std::env::var_os("YAK_INNER_GIT_DIR") {
+        let waited = std::path::Path::new(&dir).join("waited-out").exists();
+        println!("WAITED-OUT {waited}");
+    }
 }
 
 /// Runs the inner test above in a child with `git` wrapped as `mode` says, and returns what it printed.
@@ -1189,7 +1337,7 @@ fn took(printed: &str) -> u64 {
 /// slow to fetch.
 #[test]
 fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() {
-    // A fetch of four seconds under a lease of two: the lease is renewed meanwhile, and the turn is judged
+    // A fetch of eight seconds under a lease of six: the lease is renewed meanwhile, and the turn is judged
     // under the lease it began with.
     let slow = with_git("slow-fetch");
     assert!(
@@ -1201,7 +1349,7 @@ fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() 
         slow.contains("ITEM PassedVerified attempts 1 lease 1"),
         "{slow}"
     );
-    assert!(took(&slow) >= 4, "the fetch was not slow: {slow}");
+    assert!(took(&slow) >= 8, "the fetch was not slow: {slow}");
 
     // Stopped by a person as the fetch began: the fetch is ended and not waited out, no ref is made, the item
     // is open again and the attempt does not count.
@@ -1209,7 +1357,10 @@ fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() 
     assert!(stopped.contains("FIRST Some(Stopped)"), "{stopped}");
     assert!(stopped.contains("REFS 0"), "{stopped}");
     assert!(stopped.contains("ITEM Open attempts 0"), "{stopped}");
-    assert!(took(&stopped) < 9, "the fetch was waited out: {stopped}");
+    assert!(
+        stopped.contains("WAITED-OUT false"),
+        "the fetch was waited out: {stopped}"
+    );
 
     // A fetch that fails is a turn that handed in nothing. One that also stopped the room is a stopped turn:
     // nothing is handed in, and no check runs.
@@ -1225,25 +1376,29 @@ fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() 
 /// is slow to make a ref, or that makes it while the clock is held still.
 #[test]
 fn a_ref_is_made_only_under_a_lease_the_turn_holds_in_a_room_that_is_not_stopped() {
-    // Four seconds to make the ref under a lease of two: the lease is renewed meanwhile.
+    // Eight seconds to make the ref under a lease of six: the lease is renewed meanwhile.
     let slow = with_git("slow-ref");
     assert!(
         slow.contains("FIRST Some(Judged { state: PassedVerified"),
         "{slow}"
     );
     assert!(slow.contains("REFS 1"), "{slow}");
+    assert!(slow.contains("REF1 names the turn's commit"), "{slow}");
     assert!(
         slow.contains("ITEM PassedVerified attempts 1 lease 1"),
         "{slow}"
     );
-    assert!(took(&slow) >= 4, "making the ref was not slow: {slow}");
+    assert!(took(&slow) >= 8, "making the ref was not slow: {slow}");
 
     // The room is stopped as the ref is about to be made: git is ended, and no ref is made.
     let stopped = with_git("ref-stop");
     assert!(stopped.contains("FIRST Some(Stopped)"), "{stopped}");
     assert!(stopped.contains("REFS 0"), "{stopped}");
     assert!(stopped.contains("ITEM Open attempts 0"), "{stopped}");
-    assert!(took(&stopped) < 9, "git was waited out: {stopped}");
+    assert!(
+        stopped.contains("WAITED-OUT false"),
+        "git was waited out: {stopped}"
+    );
 
     // The room is stopped just after the ref was made: the ref is taken back.
     let after = with_git("ref-then-stop");
@@ -1258,6 +1413,37 @@ fn a_ref_is_made_only_under_a_lease_the_turn_holds_in_a_room_that_is_not_stopped
     assert!(asleep.contains("FIRST Some(LeaseLost)"), "{asleep}");
     assert!(asleep.contains("REFS 0"), "{asleep}");
     assert!(asleep.contains("PROBLEMS 0"), "{asleep}");
+}
+
+/// A ref that was there before the turn came to make its own is never the turn's to take back, whatever it
+/// names. Here it names the very commit the worker hands in, one the repository had all along. The turn ends,
+/// for a stop or for a lease that ran out as the clock looked at the name, and the ref is as it was.
+#[test]
+fn a_ref_that_was_already_there_is_left_when_the_turn_ends_without_a_hand_in() {
+    for (mode, ended) in [
+        ("taken-ref-stop", "FIRST Some(Stopped)"),
+        ("taken-ref-asleep", "FIRST Some(LeaseLost)"),
+    ] {
+        let taken = with_git(mode);
+        assert!(taken.contains(ended), "{mode}: {taken}");
+        assert!(taken.contains("REFS 1"), "{mode}: {taken}");
+        assert!(
+            taken.contains("REF1 names the wrong commit"),
+            "{mode}: {taken}"
+        );
+        assert!(taken.contains("PROBLEMS 0"), "{mode}: {taken}");
+    }
+}
+
+/// When the room's store fails just after the ref was made, the clock ends, as it does for any failure of its
+/// store. The turn hands nothing in, so its ref is taken back first: that needs git, not the store.
+#[test]
+fn a_ref_is_taken_back_when_the_store_fails_before_the_hand_in() {
+    let failed = with_git("ref-then-store");
+    assert!(failed.contains("REFUSED "), "{failed}");
+    assert!(failed.contains("locked"), "{failed}");
+    assert!(failed.contains("REFS 0"), "{failed}");
+    assert!(failed.contains("REF1 names nothing"), "{failed}");
 }
 
 /// The clock's own git has a time limit that covers its output too, and the clock's fetch runs under it: a git
@@ -1285,10 +1471,15 @@ fn the_clocks_fetch_runs_under_the_rooms_git_limit() {
     assert_eq!(left, 0, "what the fetch started is still running");
 }
 
-/// The inner half of the test below, and nothing by itself: a clock whose look at the machine's processes
+/// The inner half of the tests below, and nothing by itself: a clock whose look at the machine's processes
 /// starts to fail part of the way through a run. `YAK_INNER_PS_DIR` names a directory that is first on this
 /// process's search path; a `ps` is put there that is the real one until a file named `ps-fails` appears in a
 /// sandbox of the room's, and fails from then on.
+///
+/// In the modes that end in `-store` the room's store fails as well: its write lock is taken by another
+/// program while the run is going, so the clock's next renewal fails. From that moment the `ps` here waits six
+/// seconds and then fails, each time it is asked. So the run is still being ended, and cannot be confirmed
+/// ended, when the store's failure is already known: both are there when the clock comes to decide.
 #[test]
 fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
     let Some(dir) = std::env::var_os("YAK_INNER_PS_DIR") else {
@@ -1296,17 +1487,21 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
     };
     let mode = std::env::var("YAK_INNER_PS_MODE").unwrap();
     let mut world = World::new(0);
-    // A short lease: a clock that went on where it should have stopped would leave an item waiting out its
-    // lease, and this run would wait with it.
-    world.room.set_lease_secs(2).unwrap();
+    // Short enough that a clock which went on where it should have stopped is over in seconds, since an item
+    // would wait out its lease and this run with it; long enough to be kept on a busy machine.
+    world.room.set_lease_secs(6).unwrap();
     let room = world.room_dir.display().to_string();
     let wrapper = std::path::Path::new(&dir).join("ps");
+    // Made by this test once it holds the store.
+    let store_held = std::path::Path::new(&dir).join("store-held");
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nfor flag in '{room}'/turns/*/ps-fails '{room}'/turns/*/*/ps-fails \
+            "#!/bin/sh\nif [ -e '{held}' ]; then sleep 6; exit 2; fi\n\
+             for flag in '{room}'/turns/*/ps-fails '{room}'/turns/*/*/ps-fails \
              '{room}'/checks/.work-*/*/ps-fails; do\n  [ -e \"$flag\" ] && exit 2\ndone\n\
-             for real in /bin/ps /usr/bin/ps; do [ -x \"$real\" ] && exec \"$real\" \"$@\"; done\nexit 2\n"
+             for real in /bin/ps /usr/bin/ps; do [ -x \"$real\" ] && exec \"$real\" \"$@\"; done\nexit 2\n",
+            held = store_held.display()
         ),
     )
     .unwrap();
@@ -1327,6 +1522,15 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
         "freeze" => (
             world.script("fix.sh", FIX),
             format!("{breaks}; sh check.sh 1"),
+        ),
+        // In these two the run only waits. What breaks the look is the store being held.
+        "worker-store" => (
+            world.script("waits.sh", "#!/bin/sh\nsleep 600\n"),
+            "sh check.sh 1".to_string(),
+        ),
+        "check-store" => (
+            world.script("fix.sh", FIX),
+            "if grep -qx 42 answer1.txt; then sleep 600; fi; sh check.sh 1".to_string(),
         ),
         other => panic!("unknown mode {other}"),
     };
@@ -1351,6 +1555,10 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
             Err(e) => println!("{label} ERROR {e}"),
         }
         println!("{label} STARTED {}", started(events).len());
+        let said = events.iter().any(
+            |e| matches!(e, Event::Problem { what, .. } if what.contains("the room's store failed as well")),
+        );
+        println!("{label} STORE-SAID {said}");
         let named = |dir: &str| {
             let mut names: Vec<String> = fs::read_dir(world.room_dir.join(dir))
                 .into_iter()
@@ -1400,14 +1608,129 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
             .collect();
         println!("{label} ITEMS {states:?}");
     };
-    let (result, events) = world.run(&[&worker], Mode::OnceThrough, NEVER, TURN_SECS);
+    // In the `-store` modes: once the run in question has its record, the store is held.
+    let holder = mode.ends_with("-store").then(|| {
+        let (turns, room_dir) = (world.room_dir.join("turns"), world.room_dir.clone());
+        let of_a_check = mode == "check-store";
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(90);
+            let there = wait_until(deadline, || {
+                fs::read_dir(&turns)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        name.ends_with(".pid") && name.ends_with(".check.pid") == of_a_check
+                    })
+            });
+            assert!(there, "the run never had a record");
+            let held = StoreHeld::hold(&room_dir);
+            fs::write(&store_held, "").unwrap();
+            held
+        })
+    });
+    // A turn limit of twenty seconds: a clock that went on where it should have stopped would otherwise run a
+    // worker that never ends for the room's usual limit, and this test with it.
+    let turn_secs = 20;
+    let (result, events) = world.run(&[&worker], Mode::OnceThrough, NEVER, turn_secs);
+    let held = holder.map(|holder| holder.join().unwrap());
     let attempt = started(&events).first().map(|turn| turn.1.0.clone());
     report(&world, "FIRST", result, &events, &attempt);
+    // The store is let go before the clock is started again.
+    drop(held);
     if mode != "plain" {
         // A clock started again while the look still fails finds the record, and stops the same way.
-        let (result, events) = world.run(&[&worker], Mode::OnceThrough, NEVER, TURN_SECS);
+        let (result, events) = world.run(&[&worker], Mode::OnceThrough, NEVER, turn_secs);
         report(&world, "AGAIN", result, &events, &attempt);
     }
+}
+
+/// Runs the inner test above in a child with `ps` wrapped, in `mode`, and returns what it printed.
+fn with_ps(mode: &str) -> String {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let mut path = dir.clone().into_os_string();
+    path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inner_a_clock_that_can_no_longer_look_at_its_processes",
+            "--nocapture",
+        ])
+        .env("YAK_INNER_PS_DIR", &dir)
+        .env("YAK_INNER_PS_MODE", mode)
+        .env("PATH", path)
+        .env_remove("YAK_JAIL")
+        .env_remove("YAK_SUPERVISION")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        printed.contains("FIRST ITEMS "),
+        "{mode}: the inner run did not report: {printed} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    printed
+}
+
+/// What an inner run that stopped at a worker's run must have printed.
+fn stopped_at_the_workers_run(printed: &str) {
+    assert!(
+        printed.contains("FIRST UNRECOVERED turns/A.pid BECAUSE "),
+        "{printed}"
+    );
+    assert!(printed.contains("FIRST STARTED 1"), "{printed}");
+    let turns = printed
+        .lines()
+        .find(|l| l.starts_with("FIRST TURNS "))
+        .unwrap();
+    assert!(
+        turns.contains("\"A\"") && turns.contains("\"A.pid\""),
+        "{printed}"
+    );
+    assert!(printed.contains("FIRST ITEMS [Leased, Open]"), "{printed}");
+    assert!(
+        printed.contains("AGAIN UNRECOVERED turns/A.pid BECAUSE "),
+        "{printed}"
+    );
+    assert!(printed.contains("AGAIN STARTED 0"), "{printed}");
+    let again = printed
+        .lines()
+        .find(|l| l.starts_with("AGAIN TURNS "))
+        .unwrap();
+    assert_eq!(
+        again.strip_prefix("AGAIN "),
+        turns.strip_prefix("FIRST "),
+        "{printed}"
+    );
+}
+
+/// What an inner run that stopped at a check's run must have printed: the worker's sandbox, the check's own and
+/// the check's record all stay.
+fn stopped_at_the_checks_run(printed: &str) {
+    assert!(
+        printed.contains("FIRST UNRECOVERED turns/A.check.pid BECAUSE "),
+        "{printed}"
+    );
+    assert!(printed.contains("FIRST STARTED 1"), "{printed}");
+    let turns = printed
+        .lines()
+        .find(|l| l.starts_with("FIRST TURNS "))
+        .unwrap();
+    for name in ["\"A\"", "\"A.check\"", "\"A.check.pid\""] {
+        assert!(turns.contains(name), "{name}: {printed}");
+    }
+    assert!(printed.contains("FIRST CHECK-SANDBOXES 1"), "{printed}");
+    assert!(
+        printed.contains("FIRST ITEMS [Checking, Open]"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("AGAIN UNRECOVERED turns/A.check.pid BECAUSE "),
+        "{printed}"
+    );
+    assert!(printed.contains("AGAIN STARTED 0"), "{printed}");
 }
 
 /// A run ends when the room has seen that every process it started is gone. When that cannot be seen (here the
@@ -1417,34 +1740,8 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
 /// in the same way until the run can be ended.
 #[test]
 fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place() {
-    let under = |mode: &str| {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().canonicalize().unwrap();
-        let mut path = dir.clone().into_os_string();
-        path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "inner_a_clock_that_can_no_longer_look_at_its_processes",
-                "--nocapture",
-            ])
-            .env("YAK_INNER_PS_DIR", &dir)
-            .env("YAK_INNER_PS_MODE", mode)
-            .env("PATH", path)
-            .env_remove("YAK_JAIL")
-            .env_remove("YAK_SUPERVISION")
-            .output()
-            .unwrap();
-        let printed = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert!(
-            printed.contains("FIRST ITEMS "),
-            "{mode}: the inner run did not report: {printed} {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        printed
-    };
     // The control: with the same `ps` in the way and nothing breaking it, both items pass and nothing is left.
-    let plain = under("plain");
+    let plain = with_ps("plain");
     assert!(plain.contains("FIRST OK"), "{plain}");
     assert!(plain.contains("FIRST STARTED 2"), "{plain}");
     assert!(plain.contains("FIRST TURNS []"), "{plain}");
@@ -1453,61 +1750,11 @@ fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place
         "{plain}"
     );
 
-    // A worker's run.
-    let worker = under("worker");
-    assert!(
-        worker.contains("FIRST UNRECOVERED turns/A.pid BECAUSE "),
-        "{worker}"
-    );
-    assert!(worker.contains("FIRST STARTED 1"), "{worker}");
-    let turns = worker
-        .lines()
-        .find(|l| l.starts_with("FIRST TURNS "))
-        .unwrap();
-    assert!(
-        turns.contains("\"A\"") && turns.contains("\"A.pid\""),
-        "{worker}"
-    );
-    assert!(worker.contains("FIRST ITEMS [Leased, Open]"), "{worker}");
-    assert!(
-        worker.contains("AGAIN UNRECOVERED turns/A.pid BECAUSE "),
-        "{worker}"
-    );
-    assert!(worker.contains("AGAIN STARTED 0"), "{worker}");
-    let again = worker
-        .lines()
-        .find(|l| l.starts_with("AGAIN TURNS "))
-        .unwrap();
-    assert_eq!(
-        again.strip_prefix("AGAIN "),
-        turns.strip_prefix("FIRST "),
-        "{worker}"
-    );
-
-    // A check's run: the worker's sandbox, the check's own and the check's record all stay.
-    let check = under("check");
-    assert!(
-        check.contains("FIRST UNRECOVERED turns/A.check.pid BECAUSE "),
-        "{check}"
-    );
-    assert!(check.contains("FIRST STARTED 1"), "{check}");
-    let turns = check
-        .lines()
-        .find(|l| l.starts_with("FIRST TURNS "))
-        .unwrap();
-    for name in ["\"A\"", "\"A.check\"", "\"A.check.pid\""] {
-        assert!(turns.contains(name), "{name}: {check}");
-    }
-    assert!(check.contains("FIRST CHECK-SANDBOXES 1"), "{check}");
-    assert!(check.contains("FIRST ITEMS [Checking, Open]"), "{check}");
-    assert!(
-        check.contains("AGAIN UNRECOVERED turns/A.check.pid BECAUSE "),
-        "{check}"
-    );
-    assert!(check.contains("AGAIN STARTED 0"), "{check}");
+    stopped_at_the_workers_run(&with_ps("worker"));
+    stopped_at_the_checks_run(&with_ps("check"));
 
     // A check being frozen: its work directory, the sandbox in it and its record all stay, and no turn starts.
-    let freeze = under("freeze");
+    let freeze = with_ps("freeze");
     assert!(
         freeze.contains("FIRST UNRECOVERED checks/.work-") && freeze.contains(".pid BECAUSE "),
         "{freeze}"
@@ -1523,6 +1770,20 @@ fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place
         "{freeze}"
     );
     assert!(freeze.contains("AGAIN STARTED 0"), "{freeze}");
+}
+
+/// The same when the room's store fails in the same turn. A store that fails ends the clock, and it is why the
+/// run was being ended; but it is no leave to remove what is left of a run that may still be going. The clock
+/// stops for the run, with its record and its directories in place, and says that the store failed as well.
+#[test]
+fn a_run_that_cannot_be_confirmed_ended_is_kept_though_the_store_fails_too() {
+    let worker = with_ps("worker-store");
+    stopped_at_the_workers_run(&worker);
+    assert!(worker.contains("FIRST STORE-SAID true"), "{worker}");
+
+    let check = with_ps("check-store");
+    stopped_at_the_checks_run(&check);
+    assert!(check.contains("FIRST STORE-SAID true"), "{check}");
 }
 
 /// With the jail or the watch on processes switched off, the clock runs script workers and no model: a model

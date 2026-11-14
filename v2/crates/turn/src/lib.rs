@@ -33,14 +33,21 @@ pub enum TurnError {
     #[error("a run could not be confirmed ended ({why}); its record, {record}, is kept")]
     Unended { record: String, why: String },
     /// What was found where a sandbox or its scratch directory should be was not what the room made there. It
-    /// was left as it is; these are the paths.
-    #[error("not removed, because it is not what the room made there: {}", listed(.0))]
-    Left(Vec<std::path::PathBuf>),
+    /// was left as it is; these are the paths. This is said before anything else that went wrong in the same
+    /// step, since whoever gets it must not remove around those paths; `also` keeps what else went wrong.
+    #[error("not removed, because it is not what the room made there: {}", listed(.paths, .also))]
+    Left {
+        paths: Vec<std::path::PathBuf>,
+        also: Option<String>,
+    },
 }
 
-fn listed(paths: &[std::path::PathBuf]) -> String {
+fn listed(paths: &[std::path::PathBuf], also: &Option<String>) -> String {
     let names: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-    names.join(", ")
+    match also {
+        Some(also) => format!("{} (and besides: {also})", names.join(", ")),
+        None => names.join(", "),
+    }
 }
 
 /// Maps an `io::Error` to a `TurnError::Io` that says what was being done.

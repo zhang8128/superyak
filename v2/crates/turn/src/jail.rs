@@ -298,7 +298,7 @@ impl Settings {
         let mut hidden = Vec::new();
         let mut hide = |path: &Path| -> Result<(), TurnError> {
             // Every place the name could come to be: a directory on the way to it may be a link.
-            protected.extend(places(path));
+            protected.extend(places(path)?);
             if path.exists() {
                 hidden.push(real_path(path)?);
             }
@@ -316,6 +316,25 @@ impl Settings {
                     )));
                 }
                 hide(&dir)?;
+            }
+        }
+        // A directory every run is shown is shown as it is when the run starts, like one that was named. A place
+        // where keys or settings would be kept must not lie in one, unless what is there now is already hidden:
+        // then whatever is put there later is hidden with it.
+        if let Some((kind, _)) = Jail::detect() {
+            for dir in always_shown(kind) {
+                let exposed = protected
+                    .iter()
+                    .filter(|place| place.starts_with(&dir))
+                    .find(|place| !hidden.iter().any(|hidden| place.starts_with(hidden)));
+                if let Some(place) = exposed {
+                    return Err(TurnError::Refused(format!(
+                        "{} is where keys or settings are kept, or would be, and it lies in {}, which every run \
+                         is shown: the jail does not start beside it",
+                        place.display(),
+                        dir.display()
+                    )));
+                }
             }
         }
         let mut shown = Vec::new();
@@ -362,29 +381,150 @@ impl Settings {
     }
 }
 
-/// Every place `path` could come to name. A directory on the way to it may be a link, and a link may later be
-/// replaced by a directory; so for each leading part of the path that exists, this gives where that part
-/// really is, followed by the rest as written. The path as written is among them (its leading part `/`), and
-/// so is the path with every link there is today followed.
-///
-/// A name that is not there yet has no one place. It has these.
-fn places(path: &Path) -> Vec<PathBuf> {
-    let parts: Vec<_> = path.components().collect();
-    let mut found: Vec<PathBuf> = Vec::new();
-    let mut leading = PathBuf::new();
-    for (count, part) in parts.iter().enumerate() {
-        leading.push(part);
-        let Ok(real) = leading.canonicalize() else {
-            break;
-        };
-        let place = parts[count + 1..]
+/// The directories every run is shown without their being named, on a machine whose jail is of this kind.
+fn always_shown(kind: Kind) -> Vec<PathBuf> {
+    match kind {
+        Kind::Seatbelt => {
+            let mut dirs: Vec<PathBuf> = MACOS_SYSTEM_DIRS.iter().map(PathBuf::from).collect();
+            for root in MACOS_PACKAGE_ROOTS {
+                dirs.extend(
+                    MACOS_PACKAGE_PARTS
+                        .iter()
+                        .map(|part| Path::new(root).join(part)),
+                );
+            }
+            dirs
+        }
+        Kind::Bubblewrap => LINUX_SYSTEM_DIRS
             .iter()
-            .fold(real, |so_far, rest| so_far.join(rest));
+            .chain(&LINUX_ETC)
+            .map(PathBuf::from)
+            .collect(),
+    }
+}
+
+/// How many links one path may lead through. More than this is a loop, or as good as one.
+const MAX_LINKS: usize = 40;
+
+/// Every place `path` could come to name.
+///
+/// A name that is not there yet has no one place. It will be wherever the links on the way to it lead when it
+/// is made, and a link there today can be replaced by a directory tomorrow. So the path is walked a part at a
+/// time, and at every link met on the way there are two answers: the link stays, and the walk goes on where it
+/// leads; or it becomes a directory, and then the name is right there, with the rest as written. Each second
+/// answer is a place, and so is where the walk ends.
+///
+/// A link is followed by what it says, whether or not anything is there: a directory made later where a link
+/// points is where the name would land. From the first part that is not there, the rest is kept as written,
+/// since nothing below it can be a link yet. The path as written is always among the places.
+///
+/// A path that leads through more than `MAX_LINKS` links has no answer. That is an error, and a jail does not
+/// start beside a protected name it cannot place.
+fn places(path: &Path) -> Result<Vec<PathBuf>, TurnError> {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::path::Component;
+
+    /// A part of a path still to be walked.
+    enum Part {
+        Root,
+        Up,
+        Name(OsString),
+    }
+    fn parts(path: &Path) -> impl Iterator<Item = Part> + '_ {
+        path.components().filter_map(|part| match part {
+            Component::RootDir => Some(Part::Root),
+            Component::ParentDir => Some(Part::Up),
+            Component::Normal(name) => Some(Part::Name(name.to_os_string())),
+            Component::CurDir | Component::Prefix(_) => None,
+        })
+    }
+    /// `at`, then `rest` as written: no look at what is there.
+    fn written<'a>(at: &Path, rest: impl Iterator<Item = &'a Part>) -> PathBuf {
+        let mut place = at.to_path_buf();
+        for part in rest {
+            match part {
+                Part::Root => place = PathBuf::from("/"),
+                Part::Up => {
+                    place.pop();
+                }
+                Part::Name(name) => place.push(name),
+            }
+        }
+        place
+    }
+
+    if !path.is_absolute() {
+        return Err(TurnError::Refused(format!(
+            "a protected path must be absolute: {}",
+            path.display()
+        )));
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut keep = |place: PathBuf| {
         if !found.contains(&place) {
             found.push(place);
         }
+    };
+    let mut left: VecDeque<Part> = parts(path).collect();
+    let mut at = PathBuf::new();
+    let mut links = 0;
+    while let Some(part) = left.pop_front() {
+        let name = match part {
+            Part::Root => {
+                at = PathBuf::from("/");
+                continue;
+            }
+            Part::Up => {
+                // `at` has no link in it, so the directory above it is the one its name says.
+                at.pop();
+                continue;
+            }
+            Part::Name(name) => name,
+        };
+        at.push(&name);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                // Were this a directory, the name would be here.
+                keep(written(&at, left.iter()));
+                links += 1;
+                if links > MAX_LINKS {
+                    return Err(TurnError::Refused(format!(
+                        "{} leads through more than {MAX_LINKS} links, so the jail cannot say where it is",
+                        path.display()
+                    )));
+                }
+                let target = std::fs::read_link(&at).map_err(|e| {
+                    TurnError::Refused(format!("the link {} cannot be read: {e}", at.display()))
+                })?;
+                // The walk goes on with what the link says, from beside the link, and then with what was
+                // still to come.
+                at.pop();
+                let mut next: VecDeque<Part> = parts(&target).collect();
+                next.append(&mut left);
+                left = next;
+            }
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                // Not there, so nothing below it is either.
+                at = written(&at, left.iter());
+                break;
+            }
+            Err(e) => {
+                return Err(TurnError::Refused(format!(
+                    "the jail cannot look at {}: {e}",
+                    at.display()
+                )));
+            }
+        }
     }
-    found
+    keep(at);
+    Ok(found)
 }
 
 /// Which tool makes the jail on this machine.
@@ -562,14 +702,7 @@ impl Jail {
     /// Where two rules match, the later one decides. So the order is: what is shown, then what is hidden, then
     /// the run's own two directories, which nothing hides.
     fn seatbelt_profile(&self) -> String {
-        let mut system: Vec<PathBuf> = MACOS_SYSTEM_DIRS.iter().map(PathBuf::from).collect();
-        for root in MACOS_PACKAGE_ROOTS {
-            system.extend(
-                MACOS_PACKAGE_PARTS
-                    .iter()
-                    .map(|part| Path::new(root).join(part)),
-            );
-        }
+        let system = always_shown(Kind::Seatbelt);
         let own = [self.checkout.clone(), self.scratch.clone()];
         let subpaths = |paths: &[PathBuf]| -> String {
             paths
@@ -837,33 +970,74 @@ mod tests {
     fn a_name_has_a_place_for_every_link_on_the_way_to_it() {
         let tmp = std::env::temp_dir().join(format!("yak-places-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("first")).unwrap();
-        std::fs::create_dir_all(tmp.join("second")).unwrap();
-        std::fs::create_dir_all(tmp.join("third")).unwrap();
+        for dir in ["home", "first", "second", "third", "grant"] {
+            std::fs::create_dir_all(tmp.join(dir)).unwrap();
+        }
         let tmp = tmp.canonicalize().unwrap();
+        let link = |to: &str, at: &str| std::os::unix::fs::symlink(to, tmp.join(at)).unwrap();
+        let places = |path: &str| places(&tmp.join(path)).unwrap();
+        let at = |paths: &[&str]| -> Vec<PathBuf> { paths.iter().map(|p| tmp.join(p)).collect() };
+
         // home/outer leads to first, and first/inner leads to second.
-        std::fs::create_dir_all(tmp.join("home")).unwrap();
-        std::os::unix::fs::symlink(tmp.join("first"), tmp.join("home/outer")).unwrap();
-        std::os::unix::fs::symlink(tmp.join("second"), tmp.join("first/inner")).unwrap();
+        link(tmp.join("first").to_str().unwrap(), "home/outer");
+        link(tmp.join("second").to_str().unwrap(), "first/inner");
         // A name that is not there, behind both links: as written, behind the first, and behind both.
         assert_eq!(
-            places(&tmp.join("home/outer/inner/later.toml")),
-            [
-                tmp.join("home/outer/inner/later.toml"),
-                tmp.join("first/inner/later.toml"),
-                tmp.join("second/later.toml"),
-            ]
+            places("home/outer/inner/later.toml"),
+            at(&[
+                "home/outer/inner/later.toml",
+                "first/inner/later.toml",
+                "second/later.toml"
+            ])
         );
         // With no link on the way, a name has the one place.
-        assert_eq!(
-            places(&tmp.join("third/none/at/all")),
-            [tmp.join("third/none/at/all")]
-        );
+        assert_eq!(places("third/none/at/all"), at(&["third/none/at/all"]));
         // One that is there has its real place too.
+        assert_eq!(places("home/outer"), at(&["home/outer", "first"]));
+
+        // A link to somewhere that is not there yet is followed all the same: a directory made there later
+        // is where the name would land.
+        link(tmp.join("grant/later").to_str().unwrap(), "home/dangling");
         assert_eq!(
-            places(&tmp.join("home/outer")),
-            [tmp.join("home/outer"), tmp.join("first")]
+            places("home/dangling/credentials.toml"),
+            at(&[
+                "home/dangling/credentials.toml",
+                "grant/later/credentials.toml"
+            ])
         );
+        // A link that says where it leads from where it is, and goes up on the way.
+        link("../grant/sideways", "home/beside");
+        assert_eq!(
+            places("home/beside/key"),
+            at(&["home/beside/key", "grant/sideways/key"])
+        );
+        // A link reached through a link, each written from where it is.
+        link("up-and-over", "home/chain");
+        link("../third/end", "home/up-and-over");
+        assert_eq!(
+            places("home/chain/key"),
+            at(&["home/chain/key", "home/up-and-over/key", "third/end/key"])
+        );
+        // Dots in the name as written are taken as written.
+        assert_eq!(places("home/./none/../other/key"), at(&["home/other/key"]));
+        // A loop has no place, and that is an error. It is asked on a thread of its own with a time limit: a
+        // walk that went round for ever would otherwise hold this test for ever, and say nothing.
+        link("round-b", "home/round-a");
+        link("round-a", "home/round-b");
+        let ring = tmp.join("home/round-a/key");
+        let (answer, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = answer.send(super::places(&ring));
+        });
+        let lost = wait
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the walk round a ring of links did not end");
+        assert!(
+            matches!(&lost, Err(TurnError::Refused(why)) if why.contains("links")),
+            "{lost:?}"
+        );
+        // And a name that is not a full path is not placed at all.
+        assert!(super::places(Path::new("home/key")).is_err());
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 

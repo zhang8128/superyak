@@ -105,6 +105,8 @@ pub struct World {
     pub items: Vec<ItemId>,
     /// The limit `run` gives the clock's own git, in seconds: the clock's usual one unless a test changes it.
     pub git_secs: u64,
+    /// The time limit of each check added from here on, in seconds.
+    pub check_secs: u32,
 }
 
 impl World {
@@ -141,6 +143,7 @@ impl World {
             room,
             items: Vec::new(),
             git_secs: Options::default().git_secs,
+            check_secs: 30,
         };
         for n in 1..=items {
             world.add(n);
@@ -173,7 +176,7 @@ impl World {
                 check: CheckSpec {
                     command: command.to_string(),
                     files: files.iter().map(|f| f.to_string()).collect(),
-                    timeout_secs: 30,
+                    timeout_secs: self.check_secs,
                     origin: CheckOrigin::Outside,
                     wrong_artifacts: vec![self.wrong.clone()],
                     written_by: "person:tester".to_string(),
@@ -439,4 +442,48 @@ pub fn started_at(pid: u32) -> String {
     let start = text.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(!start.is_empty(), "no start time for process {pid}");
     start
+}
+
+/// The room's store held against every writer, as a store that has failed looks to a clock: another program
+/// takes the database's write lock and keeps it, so the clock's next write waits out its patience and fails.
+/// Readers are not held up. Let go when this is dropped.
+pub struct StoreHeld(std::process::Child);
+
+impl StoreHeld {
+    pub fn hold(room_dir: &Path) -> StoreHeld {
+        let taken = room_dir.with_file_name(format!(
+            "store-held-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let script = "import sqlite3, sys, time\n\
+                      held = sqlite3.connect(sys.argv[1], isolation_level=None, timeout=30)\n\
+                      held.execute('BEGIN IMMEDIATE')\n\
+                      open(sys.argv[2], 'w').close()\n\
+                      time.sleep(120)\n";
+        let child = Command::new("python3")
+            .args(["-I", "-c", script])
+            .arg(room_dir.join("room.sqlite3"))
+            .arg(&taken)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("python3 runs");
+        assert!(
+            wait_until(Instant::now() + Duration::from_secs(40), || taken.exists()),
+            "the store's write lock was not taken"
+        );
+        StoreHeld(child)
+    }
+}
+
+impl Drop for StoreHeld {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }

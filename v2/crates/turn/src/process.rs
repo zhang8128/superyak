@@ -201,10 +201,18 @@ impl Supervisor {
     /// Looks at the processes again when it is time to, and says whether the record changed, so that the caller
     /// can write it anew.
     pub fn poll(&mut self) -> Result<bool, TurnError> {
+        self.poll_with(|| snapshot(None))
+    }
+
+    /// `poll`, with the look at the machine's processes given: a test gives a list it made up.
+    fn poll_with(
+        &mut self,
+        look: impl FnOnce() -> Result<Vec<Process>, TurnError>,
+    ) -> Result<bool, TurnError> {
         if self.best_effort || self.last_poll.elapsed() < SUPERVISION_POLL {
             return Ok(false);
         }
-        let changed = self.learn(&snapshot(None)?);
+        let changed = self.learn(&look()?);
         self.last_poll = Instant::now();
         Ok(changed)
     }
@@ -416,5 +424,31 @@ mod tests {
         // The same number, another process.
         assert!(supervisor.learn(&[process(10, 1, 10, "leader"), process(11, 10, 10, "second"),]));
         assert_eq!(supervisor.record().others, [(11, "second".to_string())]);
+    }
+
+    /// The same through `poll`, which is what a run asks: it answers with what `learn` found, and not with
+    /// whether more processes are known than before.
+    #[test]
+    fn a_poll_says_the_record_changed_when_a_number_went_to_a_later_process() {
+        let mut supervisor = Supervisor::new(Identity {
+            group: 10,
+            start: "leader".into(),
+            others: Vec::new(),
+        });
+        let look = |supervisor: &mut Supervisor, child: &str| {
+            // As if it were time to look again.
+            supervisor.last_poll = Instant::now() - SUPERVISION_POLL;
+            let list = vec![process(10, 1, 10, "leader"), process(11, 10, 10, child)];
+            supervisor.poll_with(|| Ok(list)).unwrap()
+        };
+        assert!(look(&mut supervisor, "first"));
+        assert!(!look(&mut supervisor, "first"));
+        // As many processes as before, and one of them another process.
+        assert!(look(&mut supervisor, "second"));
+        assert_eq!(supervisor.record().others, [(11, "second".to_string())]);
+        // Before it is time to look again, nothing is looked at.
+        supervisor.last_poll = Instant::now();
+        let asked = supervisor.poll_with(|| panic!("looked too soon")).unwrap();
+        assert!(!asked);
     }
 }

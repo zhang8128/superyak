@@ -598,10 +598,17 @@ impl Sandbox {
     /// (`TurnError::Left`) holds the paths that were left, for a caller that tidies around them.
     pub fn destroy(self) -> Result<(), TurnError> {
         let mut left = Vec::new();
+        // A removal that fails does not end the others, and does not take the place of what was left.
+        let mut failed: Option<TurnError> = None;
+        let mut tried = |removal: Result<(), TurnError>| {
+            if let Err(e) = removal {
+                failed.get_or_insert(e);
+            }
+        };
         let scratch = self.scratch();
         // The scratch directory, when a jailed run made one and it is still that one.
         match self.scratch_id.get() {
-            Some(&id) if identity(&scratch).ok() == Some(id) => remove_tree(&scratch)?,
+            Some(&id) if identity(&scratch).ok() == Some(id) => tried(remove_tree(&scratch)),
             // Something is there that the room did not make, or that is no longer what it made.
             _ if fs::symlink_metadata(&scratch).is_ok() => left.push(scratch.clone()),
             _ => {}
@@ -611,17 +618,21 @@ impl Sandbox {
         filter.push(".filter");
         let filter = PathBuf::from(filter);
         if fs::symlink_metadata(&filter).is_ok_and(|meta| meta.is_file()) {
-            fs::remove_file(&filter).map_err(io("remove the jail's filter"))?;
+            tried(fs::remove_file(&filter).map_err(io("remove the jail's filter")));
         }
         if identity(&self.dir).ok() == Some(self.id) {
-            remove_tree(&self.dir)?;
+            tried(remove_tree(&self.dir));
         } else if fs::symlink_metadata(&self.dir).is_ok() {
             left.push(self.dir.clone());
         }
-        if left.is_empty() {
-            return Ok(());
+        match (left.is_empty(), failed) {
+            (true, None) => Ok(()),
+            (true, Some(e)) => Err(e),
+            (false, failed) => Err(TurnError::Left {
+                paths: left,
+                also: failed.map(|e| e.to_string()),
+            }),
         }
-        Err(TurnError::Left(left))
     }
 }
 

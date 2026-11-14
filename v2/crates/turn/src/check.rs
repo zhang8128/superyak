@@ -63,7 +63,10 @@ pub fn freeze(
     })();
     // The work directory goes, unless something in it is not the room's to remove: what a run that could not
     // be ended is still using, or what was found where a check's sandbox should be.
-    if !matches!(result, Err(TurnError::Unended { .. } | TurnError::Left(_))) {
+    if !matches!(
+        result,
+        Err(TurnError::Unended { .. } | TurnError::Left { .. })
+    ) {
         remove_tree(&scratch)?;
     }
     result
@@ -113,10 +116,19 @@ pub fn run_check(
     if let Err(e @ TurnError::Unended { .. }) = result {
         return Err(e);
     }
-    let removed = sandbox.destroy();
-    let verdict = result?;
-    removed?;
-    Ok(verdict)
+    // What the removal left is said before anything else that went wrong: whoever called must not remove
+    // around it, whatever became of the check itself.
+    match (sandbox.destroy(), result) {
+        (Err(TurnError::Left { paths, also }), result) => Err(TurnError::Left {
+            paths,
+            also: result.err().map(|e| e.to_string()).or(also),
+        }),
+        (removed, result) => {
+            let verdict = result?;
+            removed?;
+            Ok(verdict)
+        }
+    }
 }
 
 fn judge(

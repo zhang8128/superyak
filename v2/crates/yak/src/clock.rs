@@ -738,13 +738,18 @@ impl Clock<'_, '_> {
             let job = move || -> Result<WorkerRun, TurnError> {
                 worker::from_name(name)?.run(sandbox, title, command, limit)
             };
-            self.watch(&mut keeper, Some(&stop), job)?
+            self.watch(&mut keeper, Some(&stop), job)
         };
-        let (ran, watched) = ran;
+        let (ran, watched, store_failed) = ran;
         if let Err(e) = &ran
             && let Some(stop) = unended(self.room.dir(), e)
         {
+            // The run comes first: the clock stops for it, with the turn's files in place, whatever the store did.
+            self.also_failed(lease, &store_failed);
             return Err(stop);
+        }
+        if let Some(e) = store_failed {
+            return Err(e.into());
         }
         let (steps, timed_out, failure) = match ran {
             Ok(run) => (run.steps, run.timed_out, None),
@@ -818,13 +823,24 @@ impl Clock<'_, '_> {
             // lease is kept so that it stays this turn's for anyone reading the room; a renewal refused while the
             // check runs (the machine slept) does not throw the verdict away, since the hand-in was made under a
             // live lease and `record_verdict` refuses one whose lease number moved on.
-            self.watch(&mut keeper, None, job)?.0
+            self.watch(&mut keeper, None, job)
         };
+        let (checked, _, store_failed) = checked;
+        // First what the check's own failure asks of the clock, whatever the store did: to stop for a run that
+        // may still be going, and to remember what was left in place.
+        if let Err(e) = &checked {
+            if matches!(e, TurnError::Unended { .. }) {
+                self.also_failed(lease, &store_failed);
+            }
+            self.check_failed(e)?;
+        }
+        if let Some(e) = store_failed {
+            return Err(e.into());
+        }
         // Whatever verdict the check reaches is recorded as it is; the room classifies it.
         let verdict = match checked {
             Ok(verdict) => verdict,
             Err(e) => {
-                self.check_failed(&e)?;
                 // `Room::release` could go here too, but it does not count the attempt: a check that can never run
                 // (its frozen copies gone) would then be retried until the daily ceiling. Expiry counts it, and
                 // abandons the item after `MAX_ATTEMPTS`; use `release` here only for a cause known to pass.
@@ -865,6 +881,10 @@ impl Clock<'_, '_> {
     /// and is the lease still this turn's? So a turn makes its ref only under a lease it holds, in a room that
     /// is not stopped; and when either changed while the ref was being made, the ref is taken back before the
     /// turn ends. A stop is seen even when the fetch failed: no check is started after it.
+    ///
+    /// The ref is this turn's only if its name was free when the turn came to make it. A name already taken is
+    /// left as it is, also when the room is stopped or the lease is lost at that moment. Nothing else is taken
+    /// to write `refs/heads/room/` in the item's repository while the clock runs.
     fn bring(
         &mut self,
         keeper: &mut Keeper,
@@ -876,11 +896,15 @@ impl Clock<'_, '_> {
         let limit = self.git_limit;
 
         let halt = AtomicBool::new(false);
-        let fetched = {
+        let (fetched, _, store_failed) = {
             let halt = &halt;
             let job = move || fetch(sandbox, repo, commit, limit, halt).map_err(|e| e.to_string());
-            self.watch(keeper, Some(halt), job)?.0
+            self.watch(keeper, Some(halt), job)
         };
+        // No ref yet, so nothing to take back.
+        if let Some(e) = store_failed {
+            return Err(e.into());
+        }
         if let Some(ended) = self.no_longer_ours(keeper, lease)? {
             return Ok(ended);
         }
@@ -889,16 +913,42 @@ impl Clock<'_, '_> {
         }
 
         let halt = AtomicBool::new(false);
-        let named = {
+        let ((free, named), _, store_failed) = {
             let (halt, name) = (&halt, name.as_str());
-            let job = move || publish(repo, name, commit, limit, halt).map_err(|e| e.to_string());
-            self.watch(keeper, Some(halt), job)?.0
+            let job = move || {
+                // A name that is taken is not this turn's to make, and never its to take back, whatever commit
+                // it names: a worker can hand in a commit that was in the repository all along.
+                let taken = git(
+                    repo,
+                    ["for-each-ref", "--format=%(refname)", name],
+                    limit,
+                    halt,
+                );
+                match taken {
+                    Ok(names) if names.is_empty() => (
+                        true,
+                        publish(repo, name, commit, limit, halt).map_err(|e| e.to_string()),
+                    ),
+                    Ok(_) => (false, Err(format!("{name} is already there"))),
+                    Err(e) => (false, Err(e.to_string())),
+                }
+            };
+            self.watch(keeper, Some(halt), job)
         };
-        if let Some(ended) = self.no_longer_ours(keeper, lease)? {
-            // The turn hands nothing in, so its ref does not stay. A git that was ended may or may not have
-            // made it, so it is asked to go either way.
-            self.unpublish(lease, repo, &name, commit);
-            return Ok(ended);
+        // Where the name was free, a ref there now is this turn's, and whatever ends the turn from here takes it
+        // back first: a git that was ended may or may not have made it, so it is asked to go either way.
+        let ended = match store_failed {
+            Some(e) => Err(e.into()),
+            None => self.no_longer_ours(keeper, lease),
+        };
+        match ended {
+            Ok(None) => {}
+            ended => {
+                if free {
+                    self.unpublish(lease, repo, &name, commit);
+                }
+                return ended.map(|ended| ended.unwrap_or(Brought::Stopped));
+            }
         }
         Ok(match named {
             Ok(()) => Brought::Named,
@@ -926,9 +976,9 @@ impl Clock<'_, '_> {
         }
     }
 
-    /// Takes back the ref of a turn that then hands nothing in, if it is there and names this turn's commit: a
-    /// commit that was nowhere but in the turn's sandbox until this turn's fetch. A ref of that name that names
-    /// anything else was not made by this turn, and is left. One that cannot be taken back is said.
+    /// Takes back the ref of a turn that then hands nothing in. Called only when the name was free before the
+    /// turn came to make it (`bring`), so a ref there now is the turn's own. It is removed only while it names
+    /// this turn's commit, and one that cannot be taken back is said.
     fn unpublish(&mut self, lease: &Lease, repo: &Path, name: &str, commit: &str) {
         let go = AtomicBool::new(false);
         let limit = self.git_limit;
@@ -960,6 +1010,17 @@ impl Clock<'_, '_> {
         });
     }
 
+    /// Says that the room's store failed as well, when the clock is about to stop for a run it could not end:
+    /// the stop is all the caller is given, and the store's failure is why the run was being ended.
+    fn also_failed(&mut self, lease: &Lease, store_failed: &Option<RoomError>) {
+        if let Some(e) = store_failed {
+            self.tell(&Event::Problem {
+                item: Some(lease.item.clone()),
+                what: format!("the room's store failed as well: {e}"),
+            });
+        }
+    }
+
     /// What a check that gave no verdict asks of the clock, whatever else is then done about it: to stop, when
     /// its run could not be confirmed ended; and to leave in place what its sandbox's removal left.
     fn check_failed(&mut self, e: &TurnError) -> Result<(), ClockError> {
@@ -974,7 +1035,7 @@ impl Clock<'_, '_> {
     /// knows its own path with every link followed, from when it was made; tidying brings each name it finds
     /// to the same form (`placed`) before it compares.
     fn keep(&mut self, e: &TurnError) {
-        if let TurnError::Left(paths) = e {
+        if let TurnError::Left { paths, .. } = e {
             self.kept.extend(paths.iter().cloned());
         }
     }
@@ -997,12 +1058,16 @@ impl Clock<'_, '_> {
     /// appears, the lease is lost or the room's store fails, `stop` is set: the sandbox then ends its run (SIGTERM
     /// to the group, SIGKILL after `TERM_GRACE_SECS`, and the descendants it saw) and starts no other, so the job
     /// returns.
+    ///
+    /// What the job returned always comes back, and a failure of the room's store comes back beside it, never
+    /// in its place. The job may be saying that a run could not be confirmed ended, or that something was left
+    /// where a sandbox should be; the caller acts on that first, and ends the clock for the store after.
     fn watch<T: Send>(
         &mut self,
         keeper: &mut Keeper,
         stop: Option<&AtomicBool>,
         job: impl FnOnce() -> T + Send,
-    ) -> Result<(T, Watched), ClockError> {
+    ) -> (T, Watched, Option<RoomError>) {
         thread::scope(|scope| {
             let handle = scope.spawn(job);
             let mut watched = Watched::default();
@@ -1030,10 +1095,7 @@ impl Clock<'_, '_> {
                 Ok(value) => value,
                 Err(panic) => std::panic::resume_unwind(panic),
             };
-            match failure {
-                Some(e) => Err(e.into()),
-                None => Ok((value, watched)),
-            }
+            (value, watched, failure)
         })
     }
 
