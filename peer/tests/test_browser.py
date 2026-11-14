@@ -7022,6 +7022,31 @@ def test_an_empty_history_says_so(browser_peer):
             expect(panel.locator(".brief-revision")).to_have_count(0)
 
 
+def test_the_brief_history_toggle_keeps_a_keyboard_users_focus_both_ways(browser_peer):
+    """Break caught: Brief history and Hide brief history were two actions, so the redraw after each press found no
+    button like the one pressed and dropped the focus on the page (fix:toggle-keeps-focus; the reader's nit 3 on
+    69aac5b1). Now it's one action, and aria-expanded says which way it goes."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "Toggled history", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            opener = panel.get_by_role("button", name="Brief history", exact=True)
+            expect(opener).to_have_attribute("aria-expanded", "false")
+            opener.focus()
+            page.keyboard.press("Enter")
+            expect(panel.locator(".brief-history")).to_contain_text("No revisions yet.")  # its read has landed and drawn
+            closer = panel.get_by_role("button", name="Hide brief history", exact=True)
+            expect(closer).to_have_attribute("aria-expanded", "true")
+            expect(closer).to_be_focused()
+            page.keyboard.press("Enter")
+            expect(panel.locator(".brief-history")).to_have_count(0)
+            expect(opener).to_have_attribute("aria-expanded", "false")
+            expect(opener).to_be_focused()
+
+
 def test_use_this_text_asks_before_replacing_unsaved_typing(browser_peer):
     """Follow-up from the final reviews: "Use this text" replaced an open editor's typed text silently. When the text
     differs from what the editor opened with it asks first, inline; Cancel keeps the typing, Yes replaces it. An

@@ -897,7 +897,7 @@ function roomBrief(room) {
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
     ? `<form id="brief-form" data-room="${escapeHtml(room.id)}"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
-    : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
+    : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="toggle-brief-history" aria-expanded="${historyOpen}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Members on other homes don't get this.${room.cloud ? "" : " A ship aboard, or an app a member connected, sends it to its AI company."}</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
@@ -3591,8 +3591,12 @@ document.addEventListener("click", async (event) => {
     const list = app.querySelector(".messages");
     if (list) { list.tabIndex = -1; list.focus({ preventScroll: true }); }
   }
-  if (action === "brief-history" && state.room) await openBriefHistory(state.room);
-  if (action === "hide-brief-history") { state.briefHistory = null; render(); }
+  // One action for both states, so the redraw finds the same button and gives it its focus back (keepControl); its label
+  // and aria-expanded say which way it goes (fix:toggle-keeps-focus; the reader's nit 3 on 69aac5b1).
+  if (action === "toggle-brief-history" && state.room) {
+    if (state.briefHistory?.roomId === state.room.id) { state.briefHistory = null; render(); }
+    else await openBriefHistory(state.room);
+  }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
   if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); focusForTyping(document.querySelector("#brief-body")); }
