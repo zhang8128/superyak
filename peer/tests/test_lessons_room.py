@@ -503,6 +503,51 @@ def test_lessons_check_runs_the_doors_checks_without_posting(lessons_station):
         assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0
 
 
+def test_lessons_lay_posts_once_as_this_peers_own_ship_and_never_as_another(lessons_station):
+    """`lessons lay` on the origin (Rio Grande's ask, all hands fe6ecaac): the door's checks, then the post in the room
+    as this peer's own ship, here the recorded rio-grande. The ship is never an argument, so a post naming another
+    ship this peer holds an account for (tardis) lays nothing (Serenity's read of 2592072d). A second lay of the same
+    post is a replay; a \\r, bytes that aren't UTF-8 and an over-long post are refused with the door's words."""
+    store, clock, ids, room = lessons_station
+    mine = lesson_body(ship='rio-grande')
+    first = run_lessons('lay', '--data-dir', store.data_dir, stdin=mine)
+    assert first.returncode == 0 and first.stdout.startswith('laid: a lesson, lesson '), first.stderr
+    again = run_lessons('lay', '--data-dir', store.data_dir, stdin=mine)
+    assert again.returncode == 0 and again.stdout.startswith('already laid: a lesson, lesson ')
+    other = run_lessons('lay', '--data-dir', store.data_dir, stdin=lesson_body(ship='tardis'))
+    assert other.returncode == 1 and lessons.SHIP_IS_AUTHOR in other.stderr
+    named = run_lessons('lay', '--data-dir', store.data_dir, '--ship', 'tardis', stdin=lesson_body(ship='tardis'))
+    assert named.returncode == 2  # there is no --ship to name
+    crlf = run_lessons('lay', '--data-dir', store.data_dir, stdin=mine.replace('\n', '\r\n'))
+    assert crlf.returncode == 1 and '\\r' in crlf.stderr
+    import subprocess, sys
+    code = 'import sys\nfrom superyak_peer.lessons import main\nmain(sys.argv[1:])'
+    for raw, said in ((mine.encode() + b'\xff', 'UTF-8'), (b'x' * (lessons.BODY_BYTES + 1), '4,096')):
+        out = subprocess.run([sys.executable, '-c', code, 'lay', '--data-dir', str(store.data_dir)], input=raw,
+                             capture_output=True)
+        assert out.returncode == 1 and said in out.stderr.decode() and b'Traceback' not in out.stderr
+    with store.transaction() as db:
+        rows = db.execute('SELECT author_id, body FROM messages WHERE room_id=?', (room,)).fetchall()
+    assert [tuple(row) for row in rows] == [(ids['rio-grande'], mine)]
+
+
+def test_lessons_lay_on_another_peer_reaches_the_origin_through_its_door(lessons_peers):
+    """On a peer other than the origin, `lessons lay` lays as the one ship account here in the room, hands the post to
+    delivery as a reply, and the origin's door takes it; a second lay before delivery queues nothing more."""
+    tardis = lessons_peers['peers']['tardis'][0]
+    pi = lessons_peers['peers']['pi'][0]
+    first = run_lessons('lay', '--data-dir', tardis.data_dir, stdin=lesson_body())
+    assert first.returncode == 0 and first.stdout.startswith('handed to delivery: a lesson, lesson '), first.stderr
+    assert "pending; the origin's door checks it again" in first.stdout
+    again = run_lessons('lay', '--data-dir', tardis.data_dir, stdin=lesson_body())
+    assert again.returncode == 0
+    with tardis.transaction() as db:
+        assert db.execute("SELECT count(*) FROM outbox WHERE action='room.reply'").fetchone()[0] == 1
+    assert lessons_peers['deliver']('tardis', 'pi')['delivered'] == 1
+    with pi.transaction() as db:
+        assert [row[0] for row in db.execute('SELECT body FROM peer_messages')] == [lesson_body()]
+
+
 def test_breadth_says_how_many_of_the_authors_commands_each_command_value_holds():
     """Tardis's idea (all hands 003bb56d): a lesson is shown once a session, so a command value that holds on most
     commands is spent at the first of them, where it may not apply. The author measures it against their own recent
