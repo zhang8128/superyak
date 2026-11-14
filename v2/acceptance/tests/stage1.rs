@@ -165,19 +165,17 @@ fn state(r: &Room, id: &str) -> String {
     json_str(&shown, "state").unwrap_or_else(|| panic!("no state in {shown}"))
 }
 
-/// `yak clock run --once-through` with these workers and short limits, stdin closed, to its end.
+/// `yak clock run --once-through` with these workers and short limits, stdin closed, to its end. A limit `extra`
+/// names is given once, as `extra` says (Serenity's run of 858c9ada: the helper's and the test's were both passed).
 fn once_through(r: &Room, workers: &[&str], extra: &[&str]) -> Output {
-    let mut args = vec![
-        "clock",
-        "run",
-        "--once-through",
-        "--lease-secs",
-        "30",
-        "--turn-secs",
-        "60",
-    ];
+    let mut args = vec!["clock", "run", "--once-through"];
     for w in workers {
         args.extend(["--worker", *w]);
+    }
+    for (flag, value) in [("--lease-secs", "30"), ("--turn-secs", "60")] {
+        if !extra.contains(&flag) {
+            args.extend([flag, value]);
+        }
     }
     args.extend(extra);
     yak(&r.room, &args)
@@ -268,7 +266,11 @@ fn unchanged_tree_does_not_pass() {
     let id = add(&r, 0, "outside", "person:fixture");
     let idle = worker(&r.scratch, "idle", "exit 0");
     let _ = once_through(&r, &[&idle], &[]);
-    assert_eq!(state(&r, &id), "failed");
+    assert_eq!(
+        state(&r, &id),
+        "abandoned",
+        "never passed: failed each of MAX_ATTEMPTS turns"
+    );
 }
 
 #[test]
@@ -284,7 +286,11 @@ fn a_wrong_artifact_fails() {
         ),
     );
     let _ = once_through(&r, &[&wrong], &[]);
-    assert_eq!(state(&r, &id), "failed");
+    assert_eq!(
+        state(&r, &id),
+        "abandoned",
+        "never passed: failed each of MAX_ATTEMPTS turns"
+    );
 }
 
 #[test]
@@ -493,8 +499,8 @@ fn a_worker_cannot_change_its_check() {
     let _ = once_through(&r, &[&cheat], &[]);
     assert_eq!(
         state(&r, &id),
-        "failed",
-        "a changed check is refused, though the fix is right"
+        "abandoned",
+        "a changed check is refused each turn, though the fix is right"
     );
 }
 
