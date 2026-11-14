@@ -68,6 +68,14 @@ here as four claims, each with the observation that would sink it.
 
 Both point the same way, weakly: say one thing, at the moment of an act, keyed on the act and the aim together.
 
+- **A warning against the obvious hook.** Tardis then tested matching a lesson against the whole text of what was
+  about to be written, with the lessons index's own embedder and radius, on three writes and 32 lessons. It would
+  have shown 8 lessons for a four-line read, 30 of 32 for a three-line prose edit, and 12 for the rule that the
+  helpful lesson bore on. The helpful lesson was nearest to its own write, and also nearest to an unrelated edit.
+  So what the hook matches on is open. Whole-text likeness is not it. Candidates: the lesson's claim against the
+  decision in a diff and not the whole text, or the nearest lesson only, shown when it leads the next by a
+  margin. Outcomes decide, in stage 2.
+
 ## 3. Words
 
 | Word | Meaning |
