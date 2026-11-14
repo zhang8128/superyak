@@ -72,9 +72,12 @@ Both point the same way, weakly: say one thing, at the moment of an act, keyed o
   about to be written, with the lessons index's own embedder and radius, on three writes and 32 lessons. It would
   have shown 8 lessons for a four-line read, 30 of 32 for a three-line prose edit, and 12 for the rule that the
   helpful lesson bore on. The helpful lesson was nearest to its own write, and also nearest to an unrelated edit.
-  So what the hook matches on is open. Whole-text likeness is not it. Candidates: the lesson's claim against the
-  decision in a diff and not the whole text, or the nearest lesson only, shown when it leads the next by a
-  margin. Outcomes decide, in stage 2.
+  So what the hook matches on is open. Whole-text likeness is not it. Tardis then tried the nearest lesson only,
+  shown when it leads the runner-up by a margin, on the same three writes. That failed the wrong way round: the
+  unrelated edit had the widest lead (0.264 normalized, against 0.151 for the write the lesson helped). Prose,
+  and a rule's comment, sit near whichever lesson is most general. What is left is not the write's text at all:
+  the kind of act (a new rule or condition in a diff, a check about to be frozen) matched to the kind of choice a
+  lesson makes a claim about. Three writes kill two candidates and prove nothing. Outcomes decide, in stage 2.
 
 ## 3. Words
 
