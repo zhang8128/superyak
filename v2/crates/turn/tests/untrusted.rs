@@ -685,3 +685,47 @@ fn a_secrets_place_in_a_directory_every_run_is_shown_stops_the_jail_unless_it_is
         assert!(printed.contains("SAID SEEN"), "{printed}");
     }
 }
+
+/// On a disk where capital and small letters name the same file, a directory kept as `.Cargo` is where
+/// `~/.cargo/credentials.toml` would be made. Naming it to the jail is refused like `~/.cargo` itself. On a
+/// disk that tells the two apart they are two names, and `.Cargo` is an ordinary directory.
+#[test]
+fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let kept = home.join(".Cargo");
+    fs::create_dir_all(kept.join("bin")).unwrap();
+    let folds = home.join(".cargo").is_dir();
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &kept)],
+        true,
+    );
+    if folds {
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{printed}"
+        );
+        // Written in small letters, it is the same directory and the same answer.
+        let written = home.join(".cargo");
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &written)],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{printed}"
+        );
+    } else {
+        assert!(printed.contains("SAID ran"), "{printed}");
+    }
+    // The control, on either kind of disk: the tool's own directory inside it can be named.
+    let named = kept.join("bin");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+}

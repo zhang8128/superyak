@@ -418,6 +418,9 @@ const MAX_LINKS: usize = 40;
 /// points is where the name would land. From the first part that is not there, the rest is kept as written,
 /// since nothing below it can be a link yet. The path as written is always among the places.
 ///
+/// A name that is there is spelled as the machine spells it. On a disk where capital and small letters name the
+/// same file, a place written `.cargo` and a directory kept as `.Cargo` are one, and are compared as one.
+///
 /// A path that leads through more than `MAX_LINKS` links has no answer. That is an error, and a jail does not
 /// start beside a protected name it cannot place.
 fn places(path: &Path) -> Result<Vec<PathBuf>, TurnError> {
@@ -504,7 +507,15 @@ fn places(path: &Path) -> Result<Vec<PathBuf>, TurnError> {
                 next.append(&mut left);
                 left = next;
             }
-            Ok(_) => {}
+            Ok(_) => {
+                // It is there, and it is no link. Its name is taken as the machine has it, not as it was
+                // written: where capital and small letters name the same file, `.Cargo` on the disk is what
+                // `.cargo` means, and two spellings of one place must compare as one. Everything before it
+                // has been through here already, so this changes the last name only.
+                at = at.canonicalize().map_err(|e| {
+                    TurnError::Refused(format!("the jail cannot look at {}: {e}", at.display()))
+                })?;
+            }
             Err(e)
                 if matches!(
                     e.kind(),
@@ -1038,6 +1049,33 @@ mod tests {
         );
         // And a name that is not a full path is not placed at all.
         assert!(super::places(Path::new("home/key")).is_err());
+
+        // A name that is there is spelled as the machine has it. Where capital and small letters name the same
+        // file, a name written in other letters is that same place; where they do not, it is another name, one
+        // that is not there.
+        std::fs::create_dir_all(tmp.join("Mixed/Inner")).unwrap();
+        let folds = tmp.join("mixed/inner").is_dir();
+        assert_eq!(
+            places("mixed/inner/later"),
+            at(&[if folds {
+                "Mixed/Inner/later"
+            } else {
+                "mixed/inner/later"
+            }])
+        );
+        // The same behind a link: what the link says is spelled as the machine has it too.
+        link("../mixed/inner", "home/shouting");
+        assert_eq!(
+            places("home/shouting/key"),
+            at(&[
+                "home/shouting/key",
+                if folds {
+                    "Mixed/Inner/key"
+                } else {
+                    "mixed/inner/key"
+                }
+            ])
+        );
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
