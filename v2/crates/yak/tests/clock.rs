@@ -338,10 +338,14 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     }
 }
 
-/// After a restart the clock finds a dead clock's turn. It ends the run the pid file describes, when that run is
-/// still the process it was; removes its sandbox, pid file and scratch; never fetches from that sandbox; and takes
-/// the item again once the lease expires. A pid file whose number has gone to another process, or that describes
-/// no run, is removed, and the process it names is left alone.
+/// After a restart the clock finds a dead clock's turn. It ends the run that turn's record describes, when that
+/// run is still the process it was; removes its sandbox, records and scratch; never fetches from that sandbox;
+/// and takes the item again once the lease expires.
+///
+/// It acts only on a record the room wrote. A record of this attempt whose process number has since gone to
+/// another process ends nothing. And a file that only looks like a record, named for no attempt of the room, is
+/// not read at all, however truly it describes a process that is running: ending a process on the word of a
+/// file anyone could have put there is not the clock's to do.
 #[test]
 fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     let mut world = World::new(1);
@@ -356,7 +360,7 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     assert_eq!(dead.lease_no, 1);
 
     // What the dead clock left: a clone holding a fix on the turn's branch, a directory the worker made
-    // unwritable, a pid file for a run that is still going, and a check's scratch directory.
+    // unwritable, a record of a run that is still going, and a check's scratch directory.
     let turns = world.room_dir.join("turns");
     fs::create_dir_all(&turns).unwrap();
     let clone = turns.join(&dead.attempt.0);
@@ -371,21 +375,26 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     fs::create_dir(&locked).unwrap();
     fs::write(locked.join("f"), "x").unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+    let record = |name: &str, text: String| fs::write(turns.join(name), text).unwrap();
+    // The dead turn's own run, still going: the record holds its group and its start time.
     let left = Orphan::start();
-    let pid_file = |name: &str, text: String| fs::write(turns.join(name), text).unwrap();
-    pid_file(
+    record(
         &format!("{}.pid", dead.attempt.0),
         format!("{}\n{}\n", left.0, started_at(left.0)),
     );
-    // Two pid files that describe no run of the room's: one whose number now belongs to a process that started
-    // at another time, and one in the form written before the start time was kept.
+    // A record of the same attempt's check whose number has since gone to a process that started at another
+    // time.
     let reused = Orphan::start();
-    pid_file(
-        "a-reused.pid",
+    record(
+        &format!("{}.check.pid", dead.attempt.0),
         format!("{}\nMon Jan 1 00:00:00 2001\n", reused.0),
     );
-    let bare = Orphan::start();
-    pid_file("a-bare.pid", bare.0.to_string());
+    // A file that is no record of the room's, though everything it says of a running process is true.
+    let foreign = Orphan::start();
+    record(
+        "a-stranger.pid",
+        format!("{}\n{}\n", foreign.0, started_at(foreign.0)),
+    );
     fs::create_dir(turns.join(format!("{}.check", dead.attempt.0))).unwrap();
     // And a freeze's scratch clone in checks/.
     let freeze_scratch = world.room_dir.join("checks").join(".work-1-2-3");
@@ -394,13 +403,13 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     let fix = world.script("fix.sh", FIX);
     let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
     let ended = wait_until(Instant::now() + Duration::from_secs(2), || !left.alive());
-    let spared = [reused.alive(), bare.alive()];
+    let spared = [reused.alive(), foreign.alive()];
     result.unwrap();
     assert!(ended, "the dead clock's run was left going");
     assert_eq!(
         spared,
         [true, true],
-        "the clock signalled a process no pid file described"
+        "the clock ended a process no record of the room's described"
     );
 
     let cleared: Vec<&Event> = events
@@ -411,22 +420,21 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     assert!(!freeze_scratch.exists());
     for (name, ended) in [
         (format!("turns/{}.pid", dead.attempt.0), true),
-        ("turns/a-reused.pid".to_string(), false),
-        ("turns/a-bare.pid".to_string(), false),
+        (format!("turns/{}.check.pid", dead.attempt.0), false),
+        ("turns/a-stranger.pid".to_string(), false),
     ] {
         assert!(
             cleared.contains(&&Event::Cleared { name, ended }),
             "{cleared:?}"
         );
     }
-    // The file that describes no run is said to be one, and nothing else is called a problem: only pid files
-    // are read as descriptions of runs.
+    // The file that is no record is said to be none, and nothing else is called a problem.
     let problems: Vec<&Event> = events
         .iter()
         .filter(|e| matches!(e, Event::Problem { .. }))
         .collect();
     assert!(
-        matches!(problems[..], [Event::Problem { item: None, what }] if what.contains("a-bare.pid")),
+        matches!(problems[..], [Event::Problem { item: None, what }] if what.contains("a-stranger.pid")),
         "{problems:?}"
     );
     // Everything was cleared before the clock's own turn began.
@@ -444,6 +452,92 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     assert_eq!(view.lease_no, 2);
     assert_eq!(world.room_refs(), [world.room_ref(&id, 2)]);
     assert!(world.turns().is_empty(), "left: {:?}", world.turns());
+}
+
+/// A record of an attempt of the room's that cannot be read as one may be all that is left of a run still
+/// going. The clock stops where it is: it removes nothing, starts no turn, and says which record. With the
+/// record gone, by a person's hand, it starts.
+#[test]
+fn a_record_that_cannot_be_read_stops_the_clock_with_everything_in_place() {
+    let mut world = World::new(1);
+    assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 1);
+    world.room.set_lease_secs(2).unwrap();
+    let dead = world
+        .room
+        .take("script:/dead-clock", now())
+        .unwrap()
+        .unwrap();
+    let turns = world.room_dir.join("turns");
+    fs::create_dir_all(turns.join(&dead.attempt.0)).unwrap();
+    let record = turns.join(format!("{}.pid", dead.attempt.0));
+    fs::write(&record, "4242").unwrap();
+    let fix = world.script("fix.sh", FIX);
+
+    let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
+    assert!(
+        matches!(&result, Err(ClockError::Unrecovered { record, .. }) if record.ends_with(".pid")),
+        "{result:?}"
+    );
+    assert!(started(&events).is_empty(), "a turn started: {events:?}");
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Cleared { .. })),
+        "something was removed: {events:?}"
+    );
+    assert!(record.exists() && turns.join(&dead.attempt.0).is_dir());
+
+    fs::remove_file(&record).unwrap();
+    let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    assert_eq!(started(&events).len(), 1);
+    assert_eq!(state(&world, 0), ItemState::PassedVerified);
+}
+
+/// A sandbox is removed only if it is still the directory the room made. If something else is at its path when
+/// the turn ends, the clock leaves it where it is, says so, and goes on.
+#[test]
+fn a_sandbox_that_was_replaced_is_left_where_it_is() {
+    let mut world = World::new(1);
+    // It commits nothing: three turns, each a failure.
+    let slow = world.script("slow.sh", "#!/bin/sh\nsleep 3\n");
+    let turns = world.room_dir.join("turns");
+    let moved = world.scratch("moved-away");
+    let swapper = thread::spawn(move || {
+        // The first turn's sandbox, once its worker is running: the name in `turns/` with no dot in it.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut sandbox = None;
+        assert!(wait_until(deadline, || {
+            let names: Vec<String> = fs::read_dir(&turns)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            let running = names.iter().any(|n| n.ends_with(".pid"));
+            sandbox = names.into_iter().find(|n| !n.contains('.'));
+            running && sandbox.is_some()
+        }));
+        let at = turns.join(sandbox.unwrap());
+        fs::rename(&at, &moved).unwrap();
+        fs::create_dir(&at).unwrap();
+        fs::write(at.join("canary"), "KEEP").unwrap();
+        at
+    });
+    let (result, events) = world.run(&[&slow], Mode::OnceThrough, NEVER, TURN_SECS);
+    let at = swapper.join().unwrap();
+    result.unwrap();
+    assert_eq!(fs::read_to_string(at.join("canary")).unwrap(), "KEEP");
+    assert!(
+        events.iter().any(
+            |e| matches!(e, Event::Problem { what, .. } if what.contains("the sandbox was not removed"))
+        ),
+        "{events:?}"
+    );
+    // The room went on: the item was tried its three times.
+    assert_eq!(outcomes(&events).len(), MAX_ATTEMPTS as usize);
+    assert_eq!(state(&world, 0), ItemState::Abandoned);
+    // Nothing else of any turn is left.
+    let name = at.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(world.turns(), [name]);
 }
 
 /// In `OnceThrough`, the ceiling ends the run with its reason, for the command line to say.
@@ -785,11 +879,82 @@ fn inner_a_clock_under_the_rooms_switches() {
         })
         .collect();
     let workers: Vec<&str> = workers.iter().map(String::as_str).collect();
+    // With `YAK_INNER_SLOW_FETCH` naming a directory that is first on this process's search path, a `git` is put
+    // there that takes four seconds over a fetch and is the real git for everything else. `stop` makes it stop the
+    // room as the fetch begins; `lease` gives the room a lease of two seconds, which the fetch then outlasts.
+    if let Some(dir) = std::env::var_os("YAK_INNER_SLOW_FETCH") {
+        let mode = std::env::var("YAK_INNER_SLOW_MODE").unwrap();
+        let first = match mode.as_str() {
+            "stop" => format!(": > '{}'", world.room_dir.join("STOP").display()),
+            _ => ":".to_string(),
+        };
+        if mode == "lease" {
+            world.room.set_lease_secs(2).unwrap();
+        }
+        let wrapper = std::path::Path::new(&dir).join("git");
+        fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in *\" fetch \"*) {first}; sleep 4;; esac\nexec /usr/bin/git \"$@\"\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let (result, events) = world.run(&workers, Mode::OnceThrough, NEVER, TURN_SECS);
     match result {
         Ok(()) => println!("RAN {} turn(s)", started(&events).len()),
         Err(e) => println!("REFUSED {e}"),
     }
+    println!("FIRST {:?}", outcomes(&events).first());
+    println!("REFS {}", world.room_refs().len());
+    let view = world.room.item(&world.items[0]).unwrap();
+    println!("ITEM {:?} attempts {}", view.state, view.attempts);
+}
+
+/// The clock's fetch can take a while, and nothing watches the room while it does. So when it is done the clock
+/// looks again before it makes the turn's ref: a room that was stopped meanwhile, or a lease that ran out, ends
+/// the turn with no ref made. Seen with a `git` that is slow to fetch.
+#[test]
+fn a_slow_fetch_makes_no_ref_once_the_room_is_stopped_or_the_lease_is_lost() {
+    let under = |mode: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        let mut path = dir.clone().into_os_string();
+        path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "inner_a_clock_under_the_rooms_switches",
+                "--nocapture",
+            ])
+            .env("YAK_INNER_WORKERS", "FIX")
+            .env("YAK_INNER_SLOW_FETCH", &dir)
+            .env("YAK_INNER_SLOW_MODE", mode)
+            .env("PATH", path)
+            .env_remove("YAK_JAIL")
+            .env_remove("YAK_SUPERVISION")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    // The control: the same slow fetch with nothing else going on ends in a pass and one ref.
+    let plain = under("plain");
+    assert!(
+        plain.contains("FIRST Some(Judged { state: PassedVerified"),
+        "{plain}"
+    );
+    assert!(plain.contains("REFS 1"), "{plain}");
+
+    let stopped = under("stop");
+    assert!(stopped.contains("FIRST Some(Stopped)"), "{stopped}");
+    assert!(stopped.contains("REFS 0"), "{stopped}");
+    // Stopped by a person: the item is open again and the attempt does not count.
+    assert!(stopped.contains("ITEM Open attempts 0"), "{stopped}");
+
+    let lost = under("lease");
+    assert!(lost.contains("FIRST Some(LeaseLost)"), "{lost}");
+    assert!(lost.contains("REFS 0"), "{lost}");
 }
 
 /// With the jail or the watch on processes switched off, the clock runs script workers and no model: a model
