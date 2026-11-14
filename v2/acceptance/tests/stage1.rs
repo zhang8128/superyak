@@ -190,7 +190,10 @@ fn once_through(r: &Room, workers: &[&str], extra: &[&str]) -> Output {
 }
 
 /// A clock running in the background, in its own process group, killed with its workers when dropped.
-struct Clock(Child);
+struct Clock {
+    child: Child,
+    room: PathBuf,
+}
 
 impl Clock {
     fn start(r: &Room, workers: &[&str], extra: &[&str]) -> Clock {
@@ -207,20 +210,23 @@ impl Clock {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         cmd.process_group(0);
-        Clock(cmd.spawn().expect("the clock starts"))
+        Clock {
+            child: cmd.spawn().expect("the clock starts"),
+            room: r.room.clone(),
+        }
     }
 
     /// The clock's whole group, then the clock itself, so a group kill that missed can't leave `wait` hanging.
     fn kill_group(&mut self) {
-        kill_groups(&[self.0.id().to_string()]);
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        kill_groups(&[self.child.id().to_string()]);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 
     fn exited_within(&mut self, limit: Duration) -> bool {
         let deadline = Instant::now() + limit;
         while Instant::now() < deadline {
-            if self.0.try_wait().expect("wait").is_some() {
+            if self.child.try_wait().expect("wait").is_some() {
                 return true;
             }
             sleep(Duration::from_millis(100));
@@ -232,6 +238,9 @@ impl Clock {
 impl Drop for Clock {
     fn drop(&mut self) {
         self.kill_group();
+        // Each worker has a process group of its own, which the clock's group kill leaves running; the dead clock's
+        // pid files still name each one (Serenity found a sleeper left so after a green run, all hands af528faa).
+        kill_groups(&worker_groups_in(&self.room));
     }
 }
 
@@ -349,7 +358,11 @@ fn the_check_author_cannot_take_the_item() {
 
 /// Every entry in `<room>/turns/`, so a test sees each turn the clock starts.
 fn turn_entries(r: &Room) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(r.room.join("turns")) else {
+    turn_entries_in(&r.room)
+}
+
+fn turn_entries_in(room: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(room.join("turns")) else {
         return Vec::new();
     };
     entries
@@ -360,7 +373,11 @@ fn turn_entries(r: &Room) -> Vec<PathBuf> {
 /// The worker's process group, the first line of each `<room>/turns/<attempt>.pid` while a turn runs (plan
 /// a028145e; the second line is the leader's start time). A script's own `$$` is no host pid inside the jail.
 fn worker_groups(r: &Room) -> Vec<String> {
-    turn_entries(r)
+    worker_groups_in(&r.room)
+}
+
+fn worker_groups_in(room: &Path) -> Vec<String> {
+    turn_entries_in(room)
         .into_iter()
         .filter(|path| path.extension().is_some_and(|e| e == "pid"))
         .filter_map(|path| fs::read_to_string(path).ok())
