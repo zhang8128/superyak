@@ -4,8 +4,6 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -134,10 +132,12 @@ fn stop_ends_a_running_worker() {
         )),
         "the worker's group {group} is still alive"
     );
-    // No new turn started, nothing was handed in, and the item keeps its lease until it expires.
+    // No new turn started, nothing was handed in, and the item is open again with no attempt counted: a person
+    // stopped the room, and the item did nothing wrong.
     assert_eq!(started(&events).len(), 1);
     assert_eq!(outcomes(&events), [Outcome::Stopped]);
-    assert_eq!(state(&world, 0), ItemState::Leased);
+    let view = world.room.item(&world.items[0]).unwrap();
+    assert_eq!((view.state, view.attempts), (ItemState::Open, 0));
     assert_eq!(state(&world, 1), ItemState::Open);
     assert!(world.room_refs().is_empty());
     assert!(world.turns().is_empty(), "left: {:?}", world.turns());
@@ -160,13 +160,11 @@ fn workers_take_turns() {
 #[test]
 fn a_recheck_that_differs_is_listed() {
     let mut world = World::new(0);
-    let mark = world.scratch("checked-once");
-    // Red on the base and on the wrong commit; on the fix it passes the first time and fails after.
-    let command = format!(
-        "if grep -qx 42 answer1.txt; then if [ -e '{0}' ]; then exit 1; fi; : > '{0}'; exit 0; fi; exit 1",
-        mark.display()
-    );
-    let id = world.add_check("answer 1 is 42, once", &command, &[]);
+    // Red on the base and on the wrong commit; on the fix it passes the first time and fails when rechecked. A
+    // check in the jail cannot leave a mark outside its checkout to count its runs, so it tells the recheck by
+    // where it runs: the clock gives a recheck a directory of its own, `turns/<attempt>.recheck`.
+    let command = "case \"$PWD\" in *.recheck/*) exit 1;; esac; grep -qx 42 answer1.txt";
+    let id = world.add_check("answer 1 is 42, once", command, &[]);
     let fix = world.script("fix.sh", FIX);
     let (result, events) = world.run(&[&fix], Mode::OnceThrough, ALWAYS, TURN_SECS);
     result.unwrap();
@@ -279,11 +277,11 @@ fn a_turn_that_commits_nothing_fails_and_the_room_moves_on() {
 #[test]
 fn a_turn_out_of_time_is_judged_by_what_it_committed() {
     let mut world = World::new(1);
-    let pgid = world.scratch("pgid");
-    let body = format!("{FIX}echo $$ > '{}'\nsleep 600\n", pgid.display());
-    let late = world.script("late.sh", &body);
+    let late = world.script("late.sh", &format!("{FIX}sleep 600\n"));
+    let groups = Groups::watch(world.room_dir.join("turns"));
     let started_at = Instant::now();
     let (result, events) = world.run(&[&late], Mode::OnceThrough, NEVER, 2);
+    let groups = groups.seen();
     result.unwrap();
     assert!(started_at.elapsed() < Duration::from_secs(60));
     assert!(matches!(
@@ -295,13 +293,15 @@ fn a_turn_out_of_time_is_judged_by_what_it_committed() {
             ..
         }]
     ));
-    let group = read_group(&pgid, Instant::now());
-    assert!(
-        wait_until(Instant::now() + Duration::from_secs(2), || !group_alive(
-            group
-        )),
-        "the worker's group {group} is still alive"
-    );
+    assert!(!groups.is_empty(), "no pid file was seen");
+    for group in groups {
+        assert!(
+            wait_until(Instant::now() + Duration::from_secs(2), || !group_alive(
+                group
+            )),
+            "the group {group} is still alive"
+        );
+    }
 }
 
 /// A lease the room calls stale mid-turn (here a lease of one second, so the first renewal is too late) ends the
@@ -310,12 +310,12 @@ fn a_turn_out_of_time_is_judged_by_what_it_committed() {
 fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     let mut world = World::new(1);
     world.room.set_lease_secs(1).unwrap();
-    let pgid = world.scratch("pgid");
     let fix = FIX.strip_prefix("#!/bin/sh\n").unwrap();
-    let body = format!("#!/bin/sh\necho $$ > '{}'\nsleep 30\n{fix}", pgid.display());
-    let slow = world.script("slow.sh", &body);
+    let slow = world.script("slow.sh", &format!("#!/bin/sh\nsleep 30\n{fix}"));
+    let groups = Groups::watch(world.room_dir.join("turns"));
     let began = Instant::now();
     let (result, events) = world.run(&[&slow], Mode::OnceThrough, NEVER, TURN_SECS);
+    let groups = groups.seen();
     result.unwrap();
     // Each worker is ended when its lease is lost, not left to run its 30 seconds.
     assert!(
@@ -332,17 +332,18 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     assert_eq!(view.lease_no, MAX_ATTEMPTS);
     assert!(world.room_refs().is_empty());
     assert!(world.turns().is_empty());
-    let group = read_group(&pgid, Instant::now());
-    assert!(
-        !group_alive(group),
-        "the worker's group {group} is still alive"
-    );
+    assert!(!groups.is_empty(), "no pid file was seen");
+    for group in groups {
+        assert!(!group_alive(group), "the group {group} is still alive");
+    }
 }
 
-/// After a restart the clock finds a dead clock's turn: it removes its sandbox, pid file and scratch, never fetches
-/// from that sandbox, never signals the group the pid file names, and takes the item again once the lease expires.
+/// After a restart the clock finds a dead clock's turn. It ends the run the pid file describes, when that run is
+/// still the process it was; removes its sandbox, pid file and scratch; never fetches from that sandbox; and takes
+/// the item again once the lease expires. A pid file whose number has gone to another process, or that describes
+/// no run, is removed, and the process it names is left alone.
 #[test]
-fn a_restart_waits_out_a_dead_clocks_lease_and_clears_its_files() {
+fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     let mut world = World::new(1);
     assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 1);
     world.room.set_lease_secs(2).unwrap();
@@ -355,7 +356,7 @@ fn a_restart_waits_out_a_dead_clocks_lease_and_clears_its_files() {
     assert_eq!(dead.lease_no, 1);
 
     // What the dead clock left: a clone holding a fix on the turn's branch, a directory the worker made
-    // unwritable, a pid file naming a group that is still running, and a check's scratch directory.
+    // unwritable, a pid file for a run that is still going, and a check's scratch directory.
     let turns = world.room_dir.join("turns");
     fs::create_dir_all(&turns).unwrap();
     let clone = turns.join(&dead.attempt.0);
@@ -370,20 +371,21 @@ fn a_restart_waits_out_a_dead_clocks_lease_and_clears_its_files() {
     fs::create_dir(&locked).unwrap();
     fs::write(locked.join("f"), "x").unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
-    let mut orphan = Command::new("sleep")
-        .arg("600")
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let group = orphan.id();
-    fs::write(
-        turns.join(format!("{}.pid", dead.attempt.0)),
-        group.to_string(),
-    )
-    .unwrap();
+    let left = Orphan::start();
+    let pid_file = |name: &str, text: String| fs::write(turns.join(name), text).unwrap();
+    pid_file(
+        &format!("{}.pid", dead.attempt.0),
+        format!("{}\n{}\n", left.0, started_at(left.0)),
+    );
+    // Two pid files that describe no run of the room's: one whose number now belongs to a process that started
+    // at another time, and one in the form written before the start time was kept.
+    let reused = Orphan::start();
+    pid_file(
+        "a-reused.pid",
+        format!("{}\nMon Jan 1 00:00:00 2001\n", reused.0),
+    );
+    let bare = Orphan::start();
+    pid_file("a-bare.pid", bare.0.to_string());
     fs::create_dir(turns.join(format!("{}.check", dead.attempt.0))).unwrap();
     // And a freeze's scratch clone in checks/.
     let freeze_scratch = world.room_dir.join("checks").join(".work-1-2-3");
@@ -391,25 +393,41 @@ fn a_restart_waits_out_a_dead_clocks_lease_and_clears_its_files() {
 
     let fix = world.script("fix.sh", FIX);
     let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
-    let still_running = group_alive(group);
-    let _ = orphan.kill();
-    let _ = orphan.wait();
+    let ended = wait_until(Instant::now() + Duration::from_secs(2), || !left.alive());
+    let spared = [reused.alive(), bare.alive()];
     result.unwrap();
+    assert!(ended, "the dead clock's run was left going");
+    assert_eq!(
+        spared,
+        [true, true],
+        "the clock signalled a process no pid file described"
+    );
 
     let cleared: Vec<&Event> = events
         .iter()
         .filter(|e| matches!(e, Event::Cleared { .. }))
         .collect();
-    assert_eq!(cleared.len(), 4, "{cleared:?}");
+    assert_eq!(cleared.len(), 6, "{cleared:?}");
     assert!(!freeze_scratch.exists());
-    assert!(cleared.contains(&&Event::Cleared {
-        name: format!("turns/{}.pid", dead.attempt.0),
-        group: Some(group),
-        running: true,
-    }));
+    for (name, ended) in [
+        (format!("turns/{}.pid", dead.attempt.0), true),
+        ("turns/a-reused.pid".to_string(), false),
+        ("turns/a-bare.pid".to_string(), false),
+    ] {
+        assert!(
+            cleared.contains(&&Event::Cleared { name, ended }),
+            "{cleared:?}"
+        );
+    }
+    // The file that describes no run is said to be one, and nothing else is called a problem: only pid files
+    // are read as descriptions of runs.
+    let problems: Vec<&Event> = events
+        .iter()
+        .filter(|e| matches!(e, Event::Problem { .. }))
+        .collect();
     assert!(
-        still_running,
-        "the clock signalled a group it did not start"
+        matches!(problems[..], [Event::Problem { item: None, what }] if what.contains("a-bare.pid")),
+        "{problems:?}"
     );
     // Everything was cleared before the clock's own turn began.
     let first_start = events
@@ -420,7 +438,7 @@ fn a_restart_waits_out_a_dead_clocks_lease_and_clears_its_files() {
         .iter()
         .filter(|e| matches!(e, Event::Cleared { .. }))
         .count();
-    assert_eq!(cleared_first, 4);
+    assert_eq!(cleared_first, 6);
     let view = world.room.item(&id).unwrap();
     assert_eq!(view.state, ItemState::PassedVerified);
     assert_eq!(view.lease_no, 2);
@@ -453,12 +471,17 @@ fn the_ceiling_ends_a_once_through_run() {
 fn a_check_that_cannot_run_leaves_the_item_to_expire() {
     let mut world = World::new(1);
     world.room.set_lease_secs(2).unwrap();
-    let body = format!(
-        "{FIX}rm -rf '{}'\n",
-        world.room_dir.join("checks").display()
-    );
-    let vandal = world.script("vandal.sh", &body);
-    let (result, events) = world.run(&[&vandal], Mode::OnceThrough, NEVER, TURN_SECS);
+    let fix = world.script("fix.sh", FIX);
+    // The frozen copies go while the first turn runs. A worker cannot do this itself: the jail keeps it out of
+    // the room's directory. So the test does it, when the clock says a turn has started.
+    let checks = world.room_dir.join("checks");
+    let mut vandal = |event: &Event| {
+        if matches!(event, Event::Started { .. }) && checks.exists() {
+            fs::remove_dir_all(&checks).unwrap();
+        }
+    };
+    let (result, events) =
+        world.run_hooked(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS, &mut vandal);
     result.unwrap();
     let ends = outcomes(&events);
     assert_eq!(ends.len(), MAX_ATTEMPTS as usize);

@@ -7,7 +7,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread::sleep;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use room::{AttemptId, CheckOrigin, CheckSpec, ItemId, NewItem, Room};
@@ -234,9 +236,25 @@ impl World {
         rng: u32,
         turn_secs: u32,
     ) -> (Result<(), ClockError>, Vec<Event>) {
+        self.run_hooked(workers, mode, rng, turn_secs, &mut |_| {})
+    }
+
+    /// `run`, calling `hook` with each event as the clock reports it, on the clock's own thread: a test changes
+    /// the world there at a known point of a turn.
+    pub fn run_hooked(
+        &mut self,
+        workers: &[&str],
+        mode: Mode,
+        rng: u32,
+        turn_secs: u32,
+        hook: &mut dyn FnMut(&Event),
+    ) -> (Result<(), ClockError>, Vec<Event>) {
         let workers: Vec<String> = workers.iter().map(|w| w.to_string()).collect();
         let mut events = Vec::new();
-        let mut report = |e: &Event| events.push(e.clone());
+        let mut report = |e: &Event| {
+            hook(e);
+            events.push(e.clone());
+        };
         let result = run_with(
             &mut self.room,
             &workers,
@@ -302,18 +320,119 @@ pub fn wait_until(deadline: Instant, mut done: impl FnMut() -> bool) -> bool {
     }
 }
 
-/// Reads a process group id from a file another process writes, waiting until it holds one.
+/// The process group a turn's pid file names: its first line. The second is the leader's start time.
+fn group_in(path: &Path) -> Option<u32> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.lines().next().and_then(|line| line.parse().ok()))
+}
+
+/// Reads the process group from a turn's pid file, waiting until it holds one.
 pub fn read_group(path: &Path, deadline: Instant) -> u32 {
     let mut group = None;
     assert!(
         wait_until(deadline, || {
-            group = fs::read_to_string(path)
-                .ok()
-                .and_then(|t| t.trim().parse().ok());
+            group = group_in(path);
             group.is_some()
         }),
         "no process group in {}",
         path.display()
     );
     group.unwrap()
+}
+
+/// Watches the room's `turns/` while a clock runs, and remembers every process group a pid file there named. A
+/// worker in the jail cannot leave its own process id anywhere a test could read it afterwards; the pid file
+/// is the room's own record of it.
+pub struct Groups {
+    done: Arc<AtomicBool>,
+    watcher: JoinHandle<Vec<u32>>,
+}
+
+impl Groups {
+    pub fn watch(turns: PathBuf) -> Groups {
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = done.clone();
+        let watcher = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            while !stop.load(Ordering::SeqCst) {
+                for entry in fs::read_dir(&turns).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|x| x == "pid")
+                        && let Some(group) = group_in(&path)
+                        && !seen.contains(&group)
+                    {
+                        seen.push(group);
+                    }
+                }
+                sleep(Duration::from_millis(10));
+            }
+            seen
+        });
+        Groups { done, watcher }
+    }
+
+    /// Stops watching and returns the groups seen, in the order they appeared.
+    pub fn seen(self) -> Vec<u32> {
+        self.done.store(true, Ordering::SeqCst);
+        self.watcher.join().unwrap()
+    }
+}
+
+/// A process that leads its own group and is nobody's child here, as a run is whose clock has died: it was
+/// started by a process that has already gone. Ended when this is dropped.
+pub struct Orphan(pub u32);
+
+impl Orphan {
+    pub fn start() -> Orphan {
+        // The first process leaves at once; the second leads a new session, says its id and closes its output,
+        // so that reading it does not wait for the ten minutes.
+        let out = Command::new("perl")
+            .args([
+                "-MPOSIX",
+                "-e",
+                "exit if fork; setsid(); $| = 1; print \"$$\\n\"; close STDOUT; close STDERR; close STDIN; sleep 600",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .expect("perl runs");
+        let pid = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("the orphan said its process id");
+        Orphan(pid)
+    }
+
+    pub fn alive(&self) -> bool {
+        Command::new("kill")
+            .args(["-0", "--", &self.0.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for Orphan {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-9", "--", &self.0.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// The start time of process `pid` as the room records it in a pid file: `ps`'s `lstart`, single-spaced.
+pub fn started_at(pid: u32) -> String {
+    let out = Command::new("ps")
+        .env("LC_ALL", "C")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let start = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(!start.is_empty(), "no start time for process {pid}");
+    start
 }

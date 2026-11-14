@@ -18,15 +18,14 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
-use room::limits::{CLOCK_POLL_SECS, RECHECK_ONE_IN, TERM_GRACE_SECS, TURN_SECS};
+use room::limits::{CLOCK_POLL_SECS, RECHECK_ONE_IN, TURN_SECS};
 use room::{AttemptId, ItemId, ItemState, Lease, Room, RoomError, Step, Ts};
 use turn::{Sandbox, TurnError, WorkerRun, check, worker};
 
@@ -46,21 +45,9 @@ const TURNS: &str = "turns";
 /// Below the room's directory: the frozen copies of every check, by hash.
 const CHECKS: &str = "checks";
 
-/// What the clock's environment passes to the git it runs itself. Everything else, `GIT_DIR` included, is left out.
-const GIT_ENV_KEPT: &[&str] = &[
-    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ",
-];
-
-/// The flags of the turn crate's own git (`turn::sandbox::SAFE_GIT_FLAGS`, which is private to it): no hooks, no
-/// filesystem monitor, no attributes file of the user's. And for the fetch, the local transport, with every
+/// What the clock's fetch adds to the room's git (`turn::sandbox::safe_git`): the local transport, with every
 /// incoming object checked.
-const GIT_FLAGS: [&str; 10] = [
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.attributesFile=/dev/null",
+const FETCH_FLAGS: [&str; 4] = [
     "-c",
     "protocol.file.allow=always",
     "-c",
@@ -100,14 +87,10 @@ pub enum ClockError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// Something a clock that died left was removed at the start of a run: `name` is its path in the room's
-    /// directory. For a pid file, `group` is the process group it named and `running` whether anything was still
-    /// in that group. The clock never signals
-    /// such a group: it cannot tell that the number was not given to someone else's processes since.
-    Cleared {
-        name: String,
-        group: Option<u32>,
-        running: bool,
-    },
+    /// directory. For a pid file, `ended` says whether the run it names was still going and was ended. A run is
+    /// ended only when its leader is still the process the file describes, by number and by start time; a
+    /// number that has since gone to someone else's process is never signalled.
+    Cleared { name: String, ended: bool },
     /// A draft's check was frozen; `state` is where that left the item.
     Frozen { item: ItemId, state: ItemState },
     /// A draft's check could not be frozen. The item stays a draft, and is tried again after an hour.
@@ -144,7 +127,8 @@ pub enum Outcome {
         /// The item's state after a recheck, when one ran.
         recheck: Option<ItemState>,
     },
-    /// The stop file ended the turn before it handed in. The item keeps its lease until the lease expires.
+    /// The stop file ended the turn before it handed in. The item is open again, and the attempt does not count
+    /// against it: a person stopped the room, and the item did nothing wrong.
     Stopped,
     /// The room called the lease stale (the machine slept past it, say). The turn ended without handing in, and
     /// the next pass's `expire_due` returns the item.
@@ -390,9 +374,10 @@ impl Clock<'_, '_> {
             .any(|item| matches!(item.state, ItemState::Leased | ItemState::Checking)))
     }
 
-    /// Removes whatever is in `turns/`, and the scratch a freeze leaves in `checks/` (`.work-*`, `.freeze-*`). The
-    /// room's writer lock is held, so all of it is from a clock that died. Its sandboxes are never fetched from, and
-    /// the process groups its pid files name are never signalled.
+    /// Ends the runs a dead clock left going, then removes whatever is in `turns/` and the scratch a freeze
+    /// leaves in `checks/` (`.work-*`, `.freeze-*`). The room's writer lock is held, so all of it is from a clock
+    /// that died. Its sandboxes are never fetched from. A run is ended before its sandbox is removed from under
+    /// it.
     fn clear_turns(&mut self) -> Result<(), ClockError> {
         let mut paths = Vec::new();
         for (dir, scratch_only) in [(TURNS, false), (CHECKS, true)] {
@@ -413,22 +398,33 @@ impl Clock<'_, '_> {
             found.sort();
             paths.extend(found);
         }
-        for path in paths {
-            let name = path
-                .strip_prefix(self.room.dir())
-                .unwrap_or(&path)
+        let room_dir = self.room.dir().to_path_buf();
+        let name = |path: &Path| {
+            path.strip_prefix(&room_dir)
+                .unwrap_or(path)
                 .to_string_lossy()
-                .into_owned();
-            let group = name.ends_with(".pid").then(|| read_group(&path)).flatten();
-            let running = group.is_some_and(group_alive);
-            match remove_path(&path) {
-                Ok(()) => self.tell(&Event::Cleared {
-                    name,
-                    group,
-                    running,
-                }),
-                Err(what) => self.tell(&Event::Problem { item: None, what }),
+                .into_owned()
+        };
+        let mut ended = Vec::new();
+        for path in paths.iter().filter(|p| is_pid_file(p)) {
+            match Sandbox::end_stale(path) {
+                Ok(true) => ended.push(path.clone()),
+                Ok(false) => {}
+                Err(e) => {
+                    let what = format!("a run named in {} was not ended: {e}", name(path));
+                    self.tell(&Event::Problem { item: None, what });
+                }
             }
+        }
+        for path in paths {
+            let event = match remove_path(&path) {
+                Ok(()) => Event::Cleared {
+                    name: name(&path),
+                    ended: ended.contains(&path),
+                },
+                Err(what) => Event::Problem { item: None, what },
+            };
+            self.tell(&event);
         }
         Ok(())
     }
@@ -566,8 +562,10 @@ impl Clock<'_, '_> {
                 return Ok((Outcome::NotRun { reason }, Vec::new()));
             }
         };
-        let pid_file = turns.join(format!("{}.pid", lease.attempt.0));
-        sandbox.set_pid_file(pid_file.clone());
+        // The pid file is for a clock that starts after this one died. This clock ends its own turn with the
+        // sandbox's switch.
+        sandbox.set_pid_file(turns.join(format!("{}.pid", lease.attempt.0)));
+        let stop = sandbox.stop_switch();
         let mut keeper = Keeper::new(lease, taken_at);
 
         let ran = {
@@ -578,7 +576,7 @@ impl Clock<'_, '_> {
             let job = move || -> Result<WorkerRun, TurnError> {
                 worker::from_name(name)?.run(sandbox, title, command, limit)
             };
-            self.watch(&mut keeper, Some(&pid_file), job)?
+            self.watch(&mut keeper, Some(&stop), job)?
         };
         let (ran, watched) = ran;
         let (steps, timed_out, failure) = match ran {
@@ -587,9 +585,12 @@ impl Clock<'_, '_> {
         };
         let failure_said = failure.clone();
         if watched.stopped {
-            // `Room::release` belongs here once it is on v2: a person stopped the turn, so the attempt should not
-            // count against the item, and the item need not wait out its lease.
-            return Ok((Outcome::Stopped, steps));
+            // A person stopped the room, so the attempt does not count against the item, and the item does not
+            // wait out its lease. A release the room refuses (the lease just ran out) leaves that to expiry.
+            match self.room.release(lease, now()) {
+                Err(e) if fatal(&e) => return Err(e.into()),
+                Ok(()) | Err(_) => return Ok((Outcome::Stopped, steps)),
+            }
         }
         if watched.lost {
             return Ok((Outcome::LeaseLost, steps));
@@ -648,7 +649,7 @@ impl Clock<'_, '_> {
                 remove_path(scratch).map_err(TurnError::Io)?;
                 check::run_check(repo, commit, check, hash, checks, scratch)
             };
-            // The check is not ended by the stop file: it has no pid file, and its own time limit bounds it. Its
+            // The check is not ended by the stop file: its sandbox is its own, and its time limit bounds it. Its
             // lease is kept so that it stays this turn's for anyone reading the room; a renewal refused while the
             // check runs (the machine slept) does not throw the verdict away, since the hand-in was made under a
             // live lease and `record_verdict` refuses one whose lease number moved on.
@@ -697,20 +698,19 @@ impl Clock<'_, '_> {
     }
 
     /// Runs `job` on its own thread while this one watches the stop file and keeps the lease. When the stop file
-    /// appears or the lease is lost, and `group_file` names the job's process group, the group gets SIGTERM and,
-    /// after `TERM_GRACE_SECS`, SIGKILL, until the job returns.
+    /// appears, the lease is lost or the room's store fails, `stop` is set: the sandbox then ends its run (SIGTERM
+    /// to the group, SIGKILL after `TERM_GRACE_SECS`, and the descendants it saw) and starts no other, so the job
+    /// returns.
     fn watch<T: Send>(
         &mut self,
         keeper: &mut Keeper,
-        group_file: Option<&Path>,
+        stop: Option<&AtomicBool>,
         job: impl FnOnce() -> T + Send,
     ) -> Result<(T, Watched), ClockError> {
         thread::scope(|scope| {
             let handle = scope.spawn(job);
             let mut watched = Watched::default();
             let mut failure: Option<RoomError> = None;
-            let mut ending_since: Option<Instant> = None;
-            let mut termed: Vec<u32> = Vec::new();
             while !handle.is_finished() {
                 thread::sleep(WATCH);
                 if !watched.stopped && self.room.stopped() {
@@ -724,18 +724,10 @@ impl Clock<'_, '_> {
                         Err(_) => watched.lost = true,
                     }
                 }
-                let ending = watched.stopped || watched.lost || failure.is_some();
-                if let (true, Some(file)) = (ending, group_file) {
-                    let since = *ending_since.get_or_insert_with(Instant::now);
-                    // Read each time: a worker's own git runs (its seal) start groups of their own.
-                    if let Some(group) = read_group(file) {
-                        if since.elapsed() >= Duration::from_secs(u64::from(TERM_GRACE_SECS)) {
-                            signal_group(group, "KILL");
-                        } else if !termed.contains(&group) {
-                            signal_group(group, "TERM");
-                            termed.push(group);
-                        }
-                    }
+                if let (true, Some(stop)) =
+                    (watched.stopped || watched.lost || failure.is_some(), stop)
+                {
+                    stop.store(true, Ordering::Relaxed);
                 }
             }
             let value = match handle.join() {
@@ -898,29 +890,14 @@ fn fetch(sandbox: &Sandbox, repo: &Path, commit: &str, name: &str) -> Result<(),
     Ok(())
 }
 
-/// Runs git in `dir` with none of the clock's git environment, no system or global config, no prompt, and the
-/// flags above; returns its trimmed stdout.
+/// Runs the room's git in `dir`, with what the fetch needs added; returns its trimmed stdout.
 fn git<I, S>(dir: &Path, args: I) -> Result<String, ClockError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command = Command::new("git");
-    command.env_clear();
-    for name in GIT_ENV_KEPT {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .arg("-C")
-        .arg(dir)
-        .args(GIT_FLAGS)
-        .args(args)
-        .stdin(Stdio::null());
+    let mut command = turn::sandbox::safe_git();
+    command.arg("-C").arg(dir).args(FETCH_FLAGS).args(args);
     let out = command
         .output()
         .map_err(|e| ClockError::Git(format!("start git: {e}")))?;
@@ -931,55 +908,10 @@ where
     Err(ClockError::Git(stderr.trim().chars().take(300).collect()))
 }
 
-/// The process group a pid file names: a regular file holding a decimal number other than 0, 1 and this process.
-/// `kill -- -0` would be this process's own group, and `-1` every process it may signal.
-fn read_group(path: &Path) -> Option<u32> {
-    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
-        return None;
-    }
-    let mut text = String::new();
-    fs::File::open(path)
-        .ok()?
-        .take(32)
-        .read_to_string(&mut text)
-        .ok()?;
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let group: u32 = text.parse().ok()?;
-    (group > 1 && group != std::process::id()).then_some(group)
-}
-
-/// Sends `signal` to every process in `group`, through the `kill` program (there is no `unsafe` here), or the
-/// shell's own `kill` where there is no such program.
-fn signal_group(group: u32, signal: &str) {
-    let target = format!("-{group}");
-    let sent = Command::new("kill")
-        .args(["-s", signal, "--", &target])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if sent.is_err() {
-        let _ = Command::new("sh")
-            .args(["-c", "kill -s \"$1\" -- \"$2\"", "sh", signal, &target])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-}
-
-/// Whether any process remains in `group`. Signal 0 checks and sends nothing.
-fn group_alive(group: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &format!("-{group}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+/// Whether `path` is a pid file a turn left: a plain file named `<attempt>.pid`. A link is never one.
+fn is_pid_file(path: &Path) -> bool {
+    path.extension().is_some_and(|x| x == "pid")
+        && fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// Removes whatever is at `path` without following a link, making directories in a tree writable where a worker
@@ -1014,37 +946,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pid_file_names_a_group_only_as_a_plain_number_that_is_not_this_process_or_every_process() {
+    fn a_pid_file_is_a_plain_file_with_that_ending_and_never_a_link() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("a.pid");
-        let named = |text: &str| {
-            fs::write(&path, text).unwrap();
-            read_group(&path)
-        };
-        assert_eq!(named("4242"), Some(4242));
-        assert_eq!(named("4242\n"), Some(4242));
-        // `kill -- -0` is this process's own group and `-1` every process it may signal.
-        for bad in [
-            "0",
-            "1",
-            "-1",
-            "-4242",
-            "+4242",
-            "",
-            " ",
-            "42a",
-            "4294967296",
-            "999999999999999999999999999999999999999999",
-        ] {
-            assert_eq!(named(bad), None, "{bad:?}");
-        }
-        assert_eq!(named(&std::process::id().to_string()), None);
-        let target = dir.path().join("target");
-        fs::write(&target, "4242").unwrap();
-        let link = dir.path().join("link.pid");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert_eq!(read_group(&link), None, "a link is not followed");
-        assert_eq!(read_group(&dir.path().join("missing.pid")), None);
+        let file = dir.path().join("a1.pid");
+        fs::write(&file, "4242\nstart\n").unwrap();
+        assert!(is_pid_file(&file));
+        let other = dir.path().join("a1.check");
+        fs::write(&other, "").unwrap();
+        assert!(!is_pid_file(&other));
+        let link = dir.path().join("a2.pid");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(!is_pid_file(&link));
+        let folder = dir.path().join("a3.pid");
+        fs::create_dir(&folder).unwrap();
+        assert!(!is_pid_file(&folder));
+        assert!(!is_pid_file(&dir.path().join("missing.pid")));
     }
 
     #[test]
