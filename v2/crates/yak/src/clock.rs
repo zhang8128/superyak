@@ -147,7 +147,13 @@ impl TurnRecord {
     /// Ends the worker's phase. The room's commit on the worker's behalf ran inside it, and the worker timed
     /// that commit (`Seen::seal_ms`), so its time goes to the seal: the parts still add up.
     fn worker_done(&mut self) {
-        self.advance(Phase::Seal);
+        self.worker_done_at(Instant::now());
+    }
+
+    fn worker_done_at(&mut self, at: Instant) {
+        if let Some(timer) = &mut self.timer {
+            timer.advance_to(Phase::Seal, at, &mut self.measured);
+        }
         let sealed = self.seen.seal_ms.min(self.measured.worker_ms);
         self.measured.worker_ms -= sealed;
         self.measured.seal_ms += sealed;
@@ -958,22 +964,24 @@ impl Clock<'_, '_> {
             self.watch(&mut keeper, Some(&stop), job)
         };
         record.worker_done();
-        record.measured.ended = Ended::Exited;
         // How the worker's program ended, also when its run then failed (the room's commit for it, say).
         let status = match &ran.0 {
             Ok(status) => Some(*status),
             Err(_) => record.seen.status,
         };
-        if let Some(status) = status {
-            record.measured.exit_code = Some(status.exit_code);
-            record.measured.ended = if status.timed_out {
-                Ended::TimedOut
-            } else if status.exit_code >= 128 {
-                Ended::Signalled
-            } else {
-                Ended::Exited
-            };
-        }
+        record.measured.exit_code = status.map(|status| status.exit_code);
+        record.measured.ended = match status {
+            Some(status) if status.timed_out => Ended::TimedOut,
+            Some(status) if status.exit_code >= 128 => Ended::Signalled,
+            Some(_) => Ended::Exited,
+            // No status: the run failed. If nothing was ever started in the sandbox, no program ran (the worker
+            // could not be made, or what it does before its program failed). Otherwise one did, and how it
+            // ended is not known.
+            None if sandbox.started_a_run() => Ended::Unknown,
+            None => Ended::NotRun,
+        };
+        // Whether the room's switch ended the program: only then is how it ended a stop or a lost lease.
+        let ended_by_the_room = status.is_some_and(|status| status.stopped);
         let (ran, watched, store_failed) = ran;
         if let Err(e) = &ran
             && let Some(stop) = unended(self.room.dir(), e)
@@ -990,14 +998,19 @@ impl Clock<'_, '_> {
             Err(e) => (false, Some(e.to_string())),
         };
         let failure_said = failure.clone();
-        // Only here, where the watch over the worker ended it, is how it ended a stop or a lost lease. Either
-        // coming later leaves the worker's own end.
+        // Only where the watch over the worker ended its program is how it ended a stop or a lost lease. Either
+        // coming later leaves the program's own end: while the room commits for the worker, while its commit is
+        // brought in, at the hand-in, at the verdict.
         if watched.stopped {
-            record.measured.ended = Ended::Stopped;
+            if ended_by_the_room {
+                record.measured.ended = Ended::Stopped;
+            }
             return self.stopped(lease);
         }
         if watched.lost {
-            record.measured.ended = Ended::LeaseLost;
+            if ended_by_the_room {
+                record.measured.ended = Ended::LeaseLost;
+            }
             return Ok(Outcome::LeaseLost);
         }
 
@@ -1904,7 +1917,19 @@ mod measurement_tests {
     /// A room with one item whose check is frozen (by hand: nothing here runs it), at `repo` and `base`, and a
     /// lease of it for `worker`.
     fn leased(dir: &Path, repo: PathBuf, base: &str, worker: &str) -> (Room, Lease) {
+        leased_in(dir, repo, base, worker, |_| {})
+    }
+
+    /// The same, in a room `prepare` has set up before the item is taken.
+    fn leased_in(
+        dir: &Path,
+        repo: PathBuf,
+        base: &str,
+        worker: &str,
+        prepare: impl FnOnce(&mut Room),
+    ) -> (Room, Lease) {
         let mut room = Room::init(&dir.join("room")).unwrap();
+        prepare(&mut room);
         let item = room
             .add_item(room::NewItem {
                 title: "fixture".into(),
@@ -2174,12 +2199,268 @@ mod measurement_tests {
             })
             .unwrap();
         let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+        // The exact transfer is `the_seals_time_is_taken_out_of_the_workers_exactly`; here, that a real turn's
+        // record has the commit's time in its seal.
         assert!(m.seal_ms >= 2_000, "{m:?}");
-        assert!(m.worker_ms < 2_000, "{m:?}");
         assert_eq!(
             m.active_ms,
             m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
         );
+    }
+
+    /// A turn's start is one moment: its phases count from it, and so do its steps' times.
+    #[test]
+    fn a_turns_phases_and_its_steps_count_from_the_same_start() {
+        let mut record = TurnRecord::new();
+        let made = record.seen.started;
+        let at = made.checked_sub(Duration::from_secs(5)).unwrap();
+        record.start(at);
+        // The worker is given the turn's start, not the moment the record was made.
+        assert_eq!(record.seen.started, at);
+        assert_ne!(record.seen.started, made);
+        // And the phases count from it: a sandbox done one second after the start took one second.
+        let timer = record.timer.as_mut().unwrap();
+        timer.advance_to(
+            Phase::Worker,
+            at + Duration::from_secs(1),
+            &mut record.measured,
+        );
+        assert_eq!(record.measured.sandbox_ms, 1_000);
+    }
+
+    /// The time of the room's commit for a worker moves from the worker's phase to the seal's, exactly, and
+    /// never more than the worker's phase held.
+    #[test]
+    fn the_seals_time_is_taken_out_of_the_workers_exactly() {
+        for (sealed, worker_ms, seal_ms) in [(700, 2_300, 700), (0, 3_000, 0), (5_000, 0, 3_000)] {
+            let mut record = TurnRecord::new();
+            let at = Instant::now();
+            record.start(at);
+            let worker_from = at + Duration::from_millis(100);
+            record.timer.as_mut().unwrap().advance_to(
+                Phase::Worker,
+                worker_from,
+                &mut record.measured,
+            );
+            record.seen.seal_ms = sealed;
+            record.worker_done_at(worker_from + Duration::from_millis(3_000));
+            assert_eq!(
+                (record.measured.worker_ms, record.measured.seal_ms),
+                (worker_ms, seal_ms),
+                "a commit of {sealed} ms"
+            );
+            assert_eq!(record.measured.sandbox_ms, 100);
+        }
+    }
+
+    /// A script worker that, once its program has ended, says so by making the file `entered` and then waits,
+    /// as a model worker waits in the room's commit for it, until the sandbox's switch is set. Its run then
+    /// fails, as that commit does in a sandbox that was stopped.
+    struct WaitsInSeal {
+        script: Box<dyn turn::Worker>,
+        entered: PathBuf,
+    }
+    impl turn::Worker for WaitsInSeal {
+        fn name(&self) -> String {
+            self.script.name()
+        }
+        fn run(
+            &self,
+            sandbox: &Sandbox,
+            title: &str,
+            command: &str,
+            limit: u32,
+            seen: &mut Seen,
+        ) -> Result<RunStatus, TurnError> {
+            self.script.run(sandbox, title, command, limit, seen)?;
+            fs::write(&self.entered, "").map_err(|e| TurnError::Io(e.to_string()))?;
+            let switch = sandbox.stop_switch();
+            let patience = Instant::now() + PATIENCE;
+            while !switch.load(Ordering::Relaxed) {
+                if Instant::now() > patience {
+                    return Err(TurnError::Refused(
+                        "the test never set the sandbox's switch".into(),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(TurnError::Refused(
+                "this sandbox was stopped, and nothing more runs in it".into(),
+            ))
+        }
+    }
+
+    /// How long a test here waits for something that should come at once.
+    const PATIENCE: Duration = Duration::from_secs(60);
+
+    /// Does `act` once the file `path` is there, on a thread of its own. The thread gives whether it was.
+    fn once_there(path: PathBuf, act: impl FnOnce() + Send + 'static) -> thread::JoinHandle<bool> {
+        thread::spawn(move || {
+            let patience = Instant::now() + PATIENCE;
+            while !path.exists() {
+                if Instant::now() > patience {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            act();
+            true
+        })
+    }
+
+    /// A stop that comes while the room commits for a worker, after its program ended by itself or at its
+    /// limit, stops the turn and leaves how the program ended. A stop that comes while the program runs is how
+    /// it ended.
+    #[test]
+    fn a_stop_while_the_room_commits_for_a_worker_leaves_how_its_program_ended() {
+        // (the script, the turn's limit, whether the stop waits for the program's end, how it ended)
+        let cases: [(&str, u32, bool, Ended); 3] = [
+            ("#!/bin/sh\nexit 3\n", 60, true, Ended::Exited),
+            ("#!/bin/sh\nsleep 600\n", 1, true, Ended::TimedOut),
+            // The control: the same stop, while the program still runs.
+            ("#!/bin/sh\nsleep 600\n", 60, false, Ended::Stopped),
+        ];
+        for (body, limit, after_the_program, ended) in cases {
+            let d = tempfile::tempdir().unwrap();
+            let (repo, base) = base_repo(d.path());
+            let worker = script_worker(d.path(), body);
+            let (mut room, lease) = leased(d.path(), repo, &base, &worker);
+            let entered = d.path().join("entered");
+            let stop = room.dir().join("STOP");
+            // The run's own record is there once its program has started.
+            let running = room
+                .dir()
+                .join(TURNS)
+                .join(format!("{}.pid", lease.attempt.0));
+            let wait_for = if after_the_program {
+                entered.clone()
+            } else {
+                running
+            };
+            let stopper = once_there(wait_for, move || fs::write(stop, "").unwrap());
+            let mut clock = test_clock(&mut room, limit, None);
+            let outcome = clock.attempt(&lease, now(), &mut Fixed(1), |name| {
+                Ok(Box::new(WaitsInSeal {
+                    script: worker::from_name(name)?,
+                    entered,
+                }))
+            });
+            assert!(stopper.join().unwrap(), "{body}: the stop never came");
+            assert!(
+                matches!(outcome, Ok(Outcome::Stopped)),
+                "{body}: {outcome:?}"
+            );
+            let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+            assert_eq!(m.ended, ended, "{body}: {m:?}");
+            match ended {
+                Ended::Exited => assert_eq!(m.exit_code, Some(3), "{m:?}"),
+                _ => assert!(matches!(m.exit_code, Some(code) if code != 0), "{m:?}"),
+            }
+        }
+    }
+
+    /// The same for a lease that is lost while the room commits for a worker: the turn is lost, and how the
+    /// program ended is kept. (A lease lost while the program runs is in the clock's own tests.)
+    #[test]
+    fn a_lease_lost_while_the_room_commits_for_a_worker_leaves_how_its_program_ended() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, base) = base_repo(d.path());
+        let worker = script_worker(d.path(), "#!/bin/sh\nexit 3\n");
+        // A lease of three seconds is renewed every second, so a lease that has moved on is noticed within one.
+        let (mut room, lease) = leased_in(d.path(), repo, &base, &worker, |room| {
+            room.set_lease_secs(3).unwrap()
+        });
+        let entered = d.path().join("entered");
+        let (store, item) = (room.dir().join("room.sqlite3"), lease.item.0.clone());
+        let mover = once_there(entered.clone(), move || {
+            let moved = std::process::Command::new("python3")
+                .args([
+                    "-I",
+                    "-c",
+                    "import sqlite3, sys\n\
+                     c = sqlite3.connect(sys.argv[1], timeout=30)\n\
+                     c.execute('UPDATE items SET lease_no = lease_no + 1 WHERE id = ?', (sys.argv[2],))\n\
+                     c.commit()\n",
+                ])
+                .arg(&store)
+                .arg(&item)
+                .status()
+                .unwrap();
+            assert!(moved.success());
+        });
+        let mut clock = test_clock(&mut room, 60, None);
+        let outcome = clock.attempt(&lease, now(), &mut Fixed(1), |name| {
+            Ok(Box::new(WaitsInSeal {
+                script: worker::from_name(name)?,
+                entered,
+            }))
+        });
+        assert!(mover.join().unwrap(), "the lease was never moved on");
+        assert!(matches!(outcome, Ok(Outcome::LeaseLost)), "{outcome:?}");
+        let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+        assert_eq!(m.ended, Ended::Exited, "{m:?}");
+        assert_eq!(m.exit_code, Some(3), "{m:?}");
+    }
+
+    /// A worker whose run fails. With `starts`, it has started something in the sandbox first and does not say
+    /// how that ended; without, it has started nothing, as when what a worker does before its program fails.
+    struct FailsWithNoStatus {
+        starts: bool,
+    }
+    impl turn::Worker for FailsWithNoStatus {
+        fn name(&self) -> String {
+            "script:fails".into()
+        }
+        fn run(
+            &self,
+            sandbox: &Sandbox,
+            _title: &str,
+            _command: &str,
+            limit: u32,
+            _seen: &mut Seen,
+        ) -> Result<RunStatus, TurnError> {
+            if self.starts {
+                sandbox.run_untrusted("true", &[], "", limit, &mut |_| {})?;
+            }
+            Err(TurnError::Refused("the worker's run failed".into()))
+        }
+    }
+
+    /// A run that failed and gave no status is not recorded as a program that exited. If nothing was started in
+    /// the sandbox, no program ran; if something was, how it ended is not known. Either way the turn has its
+    /// record and the clock goes on.
+    #[test]
+    fn a_run_that_fails_with_no_status_is_not_recorded_as_exited() {
+        for (starts, ended) in [(false, Ended::NotRun), (true, Ended::Unknown)] {
+            let d = tempfile::tempdir().unwrap();
+            let (repo, base) = base_repo(d.path());
+            let worker = script_worker(d.path(), "#!/bin/sh\nexit 0\n");
+            let (mut room, lease) = leased(d.path(), repo, &base, &worker);
+            let mut clock = test_clock(&mut room, 60, None);
+            let outcome = clock.attempt(&lease, now(), &mut Fixed(1), |_| {
+                Ok(Box::new(FailsWithNoStatus { starts }))
+            });
+            assert!(outcome.is_ok(), "{outcome:?}");
+            let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+            assert_eq!(m.ended, ended, "starts {starts}: {m:?}");
+            assert_eq!(m.exit_code, None, "{m:?}");
+            assert_eq!(
+                m.active_ms,
+                m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
+            );
+        }
+        // A worker that cannot be made started nothing either.
+        let d = tempfile::tempdir().unwrap();
+        let (repo, base) = base_repo(d.path());
+        let worker = script_worker(d.path(), "#!/bin/sh\nexit 0\n");
+        let (mut room, lease) = leased(d.path(), repo, &base, &worker);
+        let mut clock = test_clock(&mut room, 60, None);
+        let outcome = clock.attempt(&lease, now(), &mut Fixed(1), |name| {
+            Err(TurnError::UnknownWorker(name.to_string()))
+        });
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+        assert_eq!((m.ended, m.exit_code), (Ended::NotRun, None), "{m:?}");
     }
 
     #[test]

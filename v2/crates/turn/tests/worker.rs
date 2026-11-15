@@ -432,7 +432,8 @@ fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
         kept.status,
         Some(RunStatus {
             exit_code: 0,
-            timed_out: false
+            timed_out: false,
+            stopped: false,
         })
     );
     // Codex: two commands and the closing total.
@@ -450,7 +451,8 @@ fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
         kept.status,
         Some(RunStatus {
             exit_code: 0,
-            timed_out: false
+            timed_out: false,
+            stopped: false,
         })
     );
 }

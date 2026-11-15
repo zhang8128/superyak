@@ -84,6 +84,8 @@ pub struct Sandbox {
     id: (u64, u64),
     /// The same for the scratch directory, once a jailed run has made it.
     scratch_id: OnceLock<(u64, u64)>,
+    /// Whether a run was started in this sandbox.
+    started: AtomicBool,
 }
 
 /// Which directory `path` is: its device and its number on that device. A link is not a directory.
@@ -206,6 +208,9 @@ pub struct RunStatus {
     /// The leader's exit code, or 128 plus the signal that ended it.
     pub exit_code: i32,
     pub timed_out: bool,
+    /// The sandbox's switch ended the run: the room did, when it was stopped or the turn's lease was lost. Not
+    /// the program, and not its limit.
+    pub stopped: bool,
 }
 
 impl Sandbox {
@@ -304,6 +309,7 @@ impl Sandbox {
             stop: Arc::new(AtomicBool::new(false)),
             id,
             scratch_id: OnceLock::new(),
+            started: AtomicBool::new(false),
         })
     }
 
@@ -420,6 +426,12 @@ impl Sandbox {
     /// start are ended), and no later run starts. It is never unset.
     pub fn stop_switch(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+
+    /// Whether a run was ever started in this sandbox: a worker's program, a check, the room's own git. Until
+    /// one is, nothing has run here, whatever a worker's `run` returned.
+    pub fn started_a_run(&self) -> bool {
+        self.started.load(Ordering::Relaxed)
     }
 
     /// Each run atomically writes its group and leader start time, one per line, to this path, and
@@ -586,6 +598,7 @@ impl Sandbox {
             .stderr(writer)
             .process_group(0);
         let mut child = command.spawn().map_err(io(format!("start {program}")))?;
+        self.started.store(true, Ordering::Relaxed);
         // The command holds the pipe's write ends; until it is gone the pipe never reaches its end.
         drop(command);
         let group = child.id();
@@ -614,7 +627,7 @@ impl Sandbox {
         thread::spawn(move || read_lines(reader, |line| tx.send(line).is_ok()));
 
         let deadline = Instant::now() + Duration::from_secs(u64::from(limit_secs));
-        let mut timed_out = false;
+        let (mut timed_out, mut stopped) = (false, false);
         let status = loop {
             // A process seen for the first time goes into the record at once: after a crash the record is
             // what a later clock ends this run by.
@@ -630,6 +643,7 @@ impl Sandbox {
             let now = Instant::now();
             if now >= deadline || self.stop.load(Ordering::Relaxed) {
                 timed_out = now >= deadline;
+                stopped = !timed_out;
                 break end_group(&mut child, group);
             }
             let wait = (deadline - now).min(POLL);
@@ -663,6 +677,7 @@ impl Sandbox {
         Ok(RunStatus {
             exit_code: exit_code(status),
             timed_out,
+            stopped,
         })
     }
 

@@ -509,8 +509,11 @@ const MESSAGE_FILE: &str = ".yak-message";
 const MESSAGE_BYTES: usize = 16_384;
 
 /// Whether the base commit tracks something at `MESSAGE_FILE`'s name, in any letter case: a name at the top of
-/// its tree that folds to it. Read with the room's git before the worker runs, from the clone as the room made
-/// it. A disk that does not tell capital letters from small ones holds such a file at `MESSAGE_FILE` itself.
+/// its tree that is `MESSAGE_FILE` once written in capitals and then in small letters. Read with the room's git
+/// before the worker runs, from the clone as the room made it. A disk that does not tell capital letters from
+/// small ones holds such a file at `MESSAGE_FILE` itself. This is the room's own rule for spelling, on the
+/// careful side: it is not what every disk means by the same name, and it takes a few names as the same that
+/// no disk would (a sharp s for two of them).
 fn base_tracks_message(sandbox: &Sandbox) -> Result<bool, TurnError> {
     let names = git(
         &sandbox.dir,

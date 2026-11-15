@@ -174,12 +174,20 @@ impl Tokens {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ended {
+    /// Its program ended by itself, with an exit code.
     Exited,
+    /// A signal ended its program, and neither its limit nor a stop or a lost lease sent it.
     Signalled,
+    /// Its program ran to the turn's limit and the room ended it.
     TimedOut,
+    /// The room was stopped while its program ran, and the room ended it.
     Stopped,
+    /// The turn's lease was lost while its program ran, and the room ended it.
     LeaseLost,
+    /// No program was started.
     NotRun,
+    /// A program was started and the room does not know how it ended: its run failed before it could say.
+    Unknown,
 }
 
 /// A turn's measured record. Durations are milliseconds on a clock that does not jump.
