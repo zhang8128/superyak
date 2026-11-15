@@ -8,6 +8,10 @@
 # Controls accept a real full commit id and two or three real commits immediately
 # before and after the relevant refusals, printing the added item's id.
 # Adds with no --wrong are accepted before and after all refusal cases.
+# Refuse a commit that only another repository has, with the add made from
+# inside that other repository: a wrong commit is looked for in --repo and
+# nowhere else. (Added after the first run, from a reading by the ship Tardis:
+# a fix that fell back to the current directory's repository passed without it.)
 # Branch/tag names resolving to commits and abbreviated ids are not tested.
 #
 # Run at the candidate clone's root with an absolute vendor directory as $1.
@@ -149,6 +153,18 @@ if git_fixture cat-file -e "$absent" 2>/dev/null; then fatal 'absent object fixt
 unresolved=no-such-wrong-commit
 if git_fixture rev-parse --verify "$unresolved" >/dev/null 2>&1; then fatal 'unresolved fixture resolves'; fi
 "$yak" --room "$room" init </dev/null
+other="$work/other"
+mkdir "$other"
+git_other() {
+    git -c user.name=Check -c user.email=check@example.invalid \
+        -c commit.gpgsign=false -c core.hooksPath=/dev/null -C "$other" "$@"
+}
+git_other init -q -b main
+printf 'elsewhere\n' >"$other/answer"
+git_other add answer
+git_other commit -qm elsewhere
+foreign=$(git_other rev-parse HEAD)
+if git_fixture cat-file -e "$foreign" 2>/dev/null; then fatal 'the other repository fixture commit is in the item repository'; fi
 
 accept 'before: no --wrong' false
 accept 'before absent object: full commit' false --wrong "$base"
@@ -178,5 +194,11 @@ accept 'after bad middle: three real commits' false --wrong "$base" --wrong "$se
 accept 'before bad last: two real commits' false --wrong "$base" --wrong "$second"
 refuse 'bad last among wrong commits' "$unresolved" false --wrong "$base" --wrong "$unresolved"
 accept 'after bad last: two real commits' false --wrong "$base" --wrong "$second"
+
+accept 'before commit of another repository: full commit' false --wrong "$base"
+cd "$other"
+refuse 'commit only the current directory has' "$foreign" false --wrong "$foreign"
+cd "$clone"
+accept 'after commit of another repository: full commit' false --wrong "$base"
 accept 'after: no --wrong' false
 finish

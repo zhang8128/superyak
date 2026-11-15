@@ -7,6 +7,10 @@
 # outside path, and checks/../../x; the outside file actually exists.
 # Refuse the entire add when an absent file is first, middle, or last among
 # valid --file values, and name the absent value in the one stderr line.
+# Refuse a submodule at the base, and a file reached through a tracked link to
+# a directory: neither is a plain tracked file at the base. (Added after the
+# first run, from a reading by the ship Tardis: a fix that refused only trees
+# and links, or one that looked only at a path's last name, passed without.)
 # Every refusal exits nonzero, has no stdout and exactly one stderr line,
 # and adds no item. No further error wording is required.
 #
@@ -145,7 +149,10 @@ printf 'exit 1\n' >"$repo/executable.sh"
 printf 'exit 1\n' >"$repo/deleted.sh"
 chmod +x "$repo/executable.sh"
 ln -s plain.sh "$repo/link.sh"
+ln -s checks "$repo/linkdir"
 git_fixture add .
+# A submodule's entry, with no submodule behind it: the entry is what is at the base.
+git_fixture update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
 git_fixture commit -qm base
 base=$(git_fixture rev-parse HEAD)
 printf 'exit 1\n' >"$repo/later.sh"
@@ -185,6 +192,8 @@ accept 'after spaces command: nonempty command' ' false '
 file_case 'path absent from base' missing.sh plain.sh
 file_case 'directory at base' checks checks/nested.sh
 file_case 'symbolic link at base' link.sh plain.sh
+file_case 'submodule at base' sub plain.sh
+file_case 'file through a linked directory' linkdir/nested.sh checks/nested.sh
 file_case 'untracked working file' worktree-only.sh plain.sh
 file_case 'file tracked only after base' later.sh plain.sh
 file_case 'parent path outside repository' ../x plain.sh
