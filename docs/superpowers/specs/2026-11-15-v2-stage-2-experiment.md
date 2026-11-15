@@ -129,11 +129,22 @@ commits offered, the version and hash of the ranker and of the renderer that mad
 length, and its hash. A hash alone is not a recipe, so the ranker and renderer are deterministic and pinned,
 and an offer can be made again from what is kept. The text itself is not kept.
 
-**A prompt of its own.** Two turns given the same prompt share its opening words, and a worker's program
-keeps what it has lately been sent. Within that memory's life the second turn reads the first one's: it is
-cheaper and faster, and the order turns ran in leaks into what they cost. So a turn's prompt can be made to
-begin with a line that is that turn's alone. The pilot and the experiment run with it on. Reads from that
-memory are kept apart from fresh input in a turn's tokens, never added to it as equals.
+**What turns share through a program's memory.** A worker's program keeps what it has lately been sent, and
+a later request that begins the same way reads it back: cheaper, and perhaps faster. So the order turns ran
+in can leak into what they cost.
+
+- **Measured, on two Claude runs 85 seconds apart (2026-11-15).** The first request of each read about 11,000
+  tokens from memory that was already warm: the program's own opening, which it sends before any prompt and
+  which is the same for every turn on the machine. The second run read about 2,000 more than the first, and
+  wrote about 2,000 fewer, of a first request of about 17,500. Two runs are not a rate. They show the channel
+  is there, and that most of what is shared comes before the prompt.
+- **So a first line of the prompt that is the turn's own is not enough,** though the room provides one: it
+  cannot reach what the program sends ahead of it.
+- **What is done about it.** Reads from memory, writes to it and fresh input are kept as three numbers for
+  every turn, never added as equals without saying so. No measured turn is the first after the memory has
+  gone cold: a block of turns begins with one that is thrown away. And the pilot's first job is to measure
+  what is left: the same item, back to back, with and without the turn's own first line, read by those three
+  numbers and by the seconds. What the pilot finds decides whether the line is kept.
 
 **A worker that cannot commit can still say what it did.** The room commits for Codex with a fixed message
 today. A worker may leave its message in one untracked file. The room uses it as the commit's message and
@@ -160,7 +171,8 @@ after, as a smoke test: they are not expected to produce the rare cases by thems
 | The record's ties | Everything under "What a record is tied to" is written and read back |
 | No text of a turn | None in the store, or in any log or cache of the room's. The message file is not in the committed tree: it is gone before the commit is made |
 | Two turns at one item | Shown not to share an answer, with the control present |
-| Two turns given the same item | Their prompts differ from the first line, and neither turn's line is kept in the store |
+| Two turns given the same item | With the switch on, their prompts differ from the first line, and neither turn's line is kept in the store |
+| A turn's tokens | Fresh input, writes to memory and reads from memory are three numbers, for both programs where each reports them |
 
 **Tokens or seconds: decided by the table, before the pilot.** Tokens are the deciding outcome only if every
 row above that speaks of a token cost shows a complete total: the normal turn, the turn with no tool call, the
@@ -186,8 +198,11 @@ same turn differs from itself. It is a pilot. Its numbers do not by themselves f
   it passed or not, plus the three replays of part 0.
 - **What is read:** for each item and worker, the spread of the deciding outcome across its five turns, as a
   standard deviation of the logarithm. All three are kept and reported, with the worker beside each.
-- **Each turn's prompt begins with its own line,** as part 0 provides. Without it the later of five identical
-  turns would be cheaper and faster than the first, and the spread would measure a program's memory.
+- **First, what a program's memory does to a turn.** Before the fifteen: one item, four turns back to back,
+  two with the turn's own first line and two without, after one turn that is thrown away. Read by fresh
+  input, writes, reads and seconds. If the later turn of a pair is cheaper or faster by more than the pair
+  without the line differs, the line is kept for the fifteen and for part 3.
+- **No measured turn is the first on a cold memory.** Each sitting begins with a turn that is thrown away.
 - **An item's five turns are spread out,** not run back to back: one of each item, then round again. What an
   hour does to a model's speed then falls on every item alike.
 - **What it cannot say:** how turns differ on the work part 2 will choose, how an offer changes the spread,
@@ -388,7 +403,7 @@ them; the lead takes the first to bear on the pilot as well.
 
 | Point | Answer in this draft |
 | --- | --- |
-| 1. A program's memory of its last prompt is a channel between turns: the second reads the first one's | "A prompt of its own", in part 0; used by the pilot and the experiment; memory reads kept apart in the tokens |
+| 1. A program's memory of its last prompt is a channel between turns: the second reads the first one's | "What turns share through a program's memory", in part 0: measured, and most of it lies before the prompt, so the line alone is not the answer; three numbers kept apart; a thrown-away turn first; the pilot measures the rest |
 | 2. If seconds decide, a model's speed drifts with the hour | "Paired in time as well"; the pilot's turns spread across items |
 | 3. Titles in one repository share a few words, so the ranker would offer whichever turn came last | A word in more than half the history titles scores nothing; every offer's score is reported |
 | 4. Resampling about twenty items gives an interval that runs narrow | Two intervals, and the wider one decides |
