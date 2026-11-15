@@ -55,6 +55,46 @@ fn the_sandbox_is_a_clone_with_no_remote() {
     );
 }
 
+/// A commit starts git's own tidying in the background, and that is still changing `.git` after the commit has
+/// returned: the room would be inspecting the clone while something moved under it. In a sandbox it is off,
+/// so a worker's commit starts none. Found by a turn that the room failed for a clone "not usable".
+#[test]
+fn a_commit_in_a_sandbox_starts_none_of_gits_own_tidying() {
+    // What git says it runs for one commit there, with no settings but the repository's own.
+    let trace = |dir: &std::path::Path| -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "-q", "--allow-empty", "-m", "one more"])
+            .env("GIT_TRACE", "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let tidies = |trace: &str| trace.contains("maintenance run") || trace.contains("gc --auto");
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    // The control: in an ordinary repository this git does start it. Without that, this test sees nothing.
+    let ordinary = trace(&repo.path);
+    assert!(
+        tidies(&ordinary),
+        "this git starts no tidying on a commit, so the test cannot see what it is for: {ordinary}"
+    );
+    let sb = sandbox(&repo);
+    let ours = trace(&sb.dir);
+    assert!(!tidies(&ours), "{ours}");
+}
+
 #[test]
 fn a_push_from_the_sandbox_fails_even_to_a_path() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);

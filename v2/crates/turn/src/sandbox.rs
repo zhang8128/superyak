@@ -119,6 +119,88 @@ fn write_new(path: &Path, content: &[u8]) -> Result<(), TurnError> {
     file.write_all(content).map_err(io(what()))
 }
 
+/// How many times the room inspects git metadata that changes under the inspection, before it refuses.
+const INSPECTIONS: u32 = 5;
+
+/// What one pass over the metadata found.
+enum Inspected {
+    Plain,
+    /// This path was listed and was gone when it was looked at.
+    Moved(PathBuf),
+}
+
+/// Confirms that everything under `git_dir` is a plain file or a directory. The inspection rests on nothing
+/// changing the clone any more: the worker has ended. If a path that was listed is gone when it is looked at,
+/// something is still changing it, and what was seen so far confirms nothing. The room waits a moment and
+/// inspects again from the start, a few times, and then refuses: it does not run git on metadata that will
+/// not hold still. `look` is how a path is looked at, so that a test can make one move.
+fn plain_metadata(
+    root: &Path,
+    git_dir: &Path,
+    look: &mut dyn FnMut(&Path) -> std::io::Result<fs::Metadata>,
+) -> Result<(), TurnError> {
+    let mut pause = Duration::from_millis(20);
+    let mut inspections = 0;
+    loop {
+        inspections += 1;
+        match inspect_once(root, git_dir, look)? {
+            Inspected::Plain => return Ok(()),
+            Inspected::Moved(path) if inspections >= INSPECTIONS => {
+                return Err(TurnError::Refused(format!(
+                    "git metadata kept changing while the room inspected it ({} went away): something the \
+                     worker started is still running",
+                    path.strip_prefix(root).unwrap_or(&path).display()
+                )));
+            }
+            Inspected::Moved(_) => {
+                thread::sleep(pause);
+                pause *= 2;
+            }
+        }
+    }
+}
+
+/// One pass over the metadata: every path under `git_dir`, each looked at once.
+fn inspect_once(
+    root: &Path,
+    git_dir: &Path,
+    look: &mut dyn FnMut(&Path) -> std::io::Result<fs::Metadata>,
+) -> Result<Inspected, TurnError> {
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    let mut pending = vec![git_dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let meta = match look(&path) {
+            Ok(meta) => meta,
+            Err(e) if gone(&e) => return Ok(Inspected::Moved(path)),
+            Err(e) => return Err(io("inspect git metadata")(e)),
+        };
+        if meta.is_symlink() {
+            return Err(TurnError::Refused(
+                "git metadata must contain no symbolic links".into(),
+            ));
+        }
+        // A named pipe where a ref should be would hold git, which opens a ref to read it, until somebody
+        // wrote to the pipe. Nothing but files and directories belongs here.
+        if !meta.is_dir() && !meta.is_file() {
+            return Err(TurnError::Refused(format!(
+                "git metadata must hold only files and directories: {} is neither",
+                path.strip_prefix(root).unwrap_or(&path).display()
+            )));
+        }
+        if meta.is_dir() {
+            let entries = match fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(e) if gone(&e) => return Ok(Inspected::Moved(path)),
+                Err(e) => return Err(io("read git metadata")(e)),
+            };
+            for entry in entries {
+                pending.push(entry.map_err(io("read git metadata entry"))?.path());
+            }
+        }
+    }
+    Ok(Inspected::Plain)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunStatus {
     /// The leader's exit code, or 128 plus the signal that ended it.
@@ -178,6 +260,11 @@ impl Sandbox {
             ("core.hooksPath", "/dev/null"),
             ("protocol.allow", "never"),
             ("credential.helper", ""),
+            // Git's own tidying is off in the clone. A commit would otherwise start it in the background, and
+            // it would still be changing `.git` after the worker had ended, under the room's inspection.
+            // `maintenance.auto` is what a commit asks; `gc.auto` is for a git old enough to ask that.
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0"),
         ] {
             git(dir, &["config", key, value])?;
         }
@@ -240,28 +327,7 @@ impl Sandbox {
                 )));
             }
         }
-        let mut pending = vec![git_dir.clone()];
-        while let Some(path) = pending.pop() {
-            let meta = fs::symlink_metadata(&path).map_err(io("inspect git metadata"))?;
-            if meta.is_symlink() {
-                return Err(TurnError::Refused(
-                    "git metadata must contain no symbolic links".into(),
-                ));
-            }
-            // A named pipe where a ref should be would hold git, which opens a ref to read it, until
-            // somebody wrote to the pipe. Nothing but files and directories belongs here.
-            if !meta.is_dir() && !meta.is_file() {
-                return Err(TurnError::Refused(format!(
-                    "git metadata must hold only files and directories: {} is neither",
-                    path.strip_prefix(&self.dir).unwrap_or(&path).display()
-                )));
-            }
-            if meta.is_dir() {
-                for entry in fs::read_dir(path).map_err(io("read git metadata"))? {
-                    pending.push(entry.map_err(io("read git metadata entry"))?.path());
-                }
-            }
-        }
+        plain_metadata(&self.dir, &git_dir, &mut |path| fs::symlink_metadata(path))?;
         let info = git_dir.join("objects").join("info");
         if fs::symlink_metadata(&info).is_ok_and(|m| !m.is_dir()) {
             clear(&info)?;
@@ -1227,6 +1293,90 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Metadata with one file in it, and a way of looking that says the file is gone the first `gone` times.
+    fn looked_at(gone: u32) -> (tempfile::TempDir, u32, Result<(), TurnError>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        fs::create_dir_all(git_dir.join("objects")).unwrap();
+        fs::write(git_dir.join("objects").join("one"), "x").unwrap();
+        let mut looks = 0;
+        let result = plain_metadata(tmp.path(), &git_dir, &mut |path| {
+            if path.ends_with("objects/one") {
+                looks += 1;
+                if looks <= gone {
+                    return Err(std::io::ErrorKind::NotFound.into());
+                }
+            }
+            fs::symlink_metadata(path)
+        });
+        (tmp, looks, result)
+    }
+
+    #[test]
+    fn metadata_that_moves_under_the_inspection_is_inspected_again() {
+        // Nothing moves: one look.
+        let (_tmp, looks, result) = looked_at(0);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(looks, 1);
+        // A path that was listed and is gone at the first look: the room inspects again, and it holds.
+        let (_tmp, looks, result) = looked_at(1);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(looks, 2);
+        // Gone at every look but the last the room allows itself.
+        let (_tmp, looks, result) = looked_at(INSPECTIONS - 1);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(looks, INSPECTIONS);
+    }
+
+    #[test]
+    fn metadata_that_keeps_moving_is_refused_and_named() {
+        let (_tmp, looks, result) = looked_at(u32::MAX);
+        assert_eq!(looks, INSPECTIONS);
+        let Err(TurnError::Refused(why)) = result else {
+            panic!("expected a refusal, and got {result:?}");
+        };
+        assert!(
+            why.contains("kept changing") && why.contains(".git/objects/one"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_goes_before_it_is_read_is_inspected_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        let objects = git_dir.join("objects");
+        fs::create_dir_all(&objects).unwrap();
+        let mut looks_at_the_top = 0;
+        // The directory is there when it is looked at, and gone before it is read.
+        let result = plain_metadata(tmp.path(), &git_dir, &mut |path| {
+            let meta = fs::symlink_metadata(path);
+            if path == git_dir {
+                looks_at_the_top += 1;
+            }
+            if path == objects {
+                fs::remove_dir(&objects).unwrap();
+            }
+            meta
+        });
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(looks_at_the_top, 2);
+    }
+
+    #[test]
+    fn metadata_that_cannot_be_looked_at_for_another_reason_is_not_inspected_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        let mut looks = 0;
+        let result = plain_metadata(tmp.path(), &git_dir, &mut |_| {
+            looks += 1;
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        });
+        assert_eq!(looks, 1);
+        assert!(matches!(result, Err(TurnError::Io(_))), "{result:?}");
+    }
 
     #[test]
     fn a_search_path_keeps_only_its_absolute_entries() {
