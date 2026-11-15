@@ -604,9 +604,10 @@ fn a_worker_has_no_remote() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn no_prompt_text_reaches_the_store() {
     let r = setup();
-    add(&r, 0, "outside", "person:fixture");
+    let id = add(&r, 0, "outside", "person:fixture");
     let body = format!(
         "echo {MARKER}\necho {MARKER} >&2\necho {g} > items/item0.txt\ncommit 'make item 0 green {MARKER}'",
         g = green(0)
@@ -622,6 +623,8 @@ fn no_prompt_text_reaches_the_store() {
             );
         }
     }
+    // No marker means something only if the worker's turn ran, and with it the commit whose message holds one.
+    assert_eq!(state(&r, &id), "passed_verified", "its turn ran");
 }
 
 #[test]
