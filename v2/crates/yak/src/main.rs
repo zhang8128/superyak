@@ -213,20 +213,20 @@ fn add_item(dir: &Path, add: Add) -> Result<()> {
         return Err(RoomError::Refused("--by must be <family>:<name>".into()).into());
     }
     let repo = add.repo.canonicalize()?;
-    let output = turn::sandbox::safe_git()
-        .arg("-C")
-        .arg(&repo)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{}^{{commit}}", add.base),
-        ])
-        .output()?;
-    if !output.status.success() {
-        return Err(RoomError::Refused(format!("unknown base commit: {}", add.base)).into());
+    let base_commit = resolve_commit(&repo, &add.base)
+        .ok_or_else(|| RoomError::Refused(format!("unknown base commit: {}", add.base)))?;
+    // Every wrong commit must be a commit of the repository, or nothing is added; the refusal names the first
+    // value that is not one.
+    let mut wrong_artifacts = Vec::with_capacity(add.wrong.len());
+    for wrong in &add.wrong {
+        let commit = resolve_commit(&repo, wrong).ok_or_else(|| {
+            RoomError::Refused(format!(
+                "--wrong {wrong} is not a commit of the repository {}",
+                repo.display()
+            ))
+        })?;
+        wrong_artifacts.push(commit);
     }
-    let base_commit = String::from_utf8(output.stdout)?.trim().to_owned();
     let id = room.add_item(NewItem {
         title: add.title,
         repo,
@@ -241,12 +241,34 @@ fn add_item(dir: &Path, add: Add) -> Result<()> {
                 Origin::Observed => CheckOrigin::ObservedFailure,
                 Origin::Model => CheckOrigin::Model,
             },
-            wrong_artifacts: add.wrong,
+            wrong_artifacts,
             written_by: add.by,
         },
     })?;
     println!("{}", id.0);
     Ok(())
+}
+
+/// The full id of the commit `name` names in `repo`, or `None` when it names no commit there: no object, a tree,
+/// a blob, or nothing at all.
+fn resolve_commit(repo: &Path, name: &str) -> Option<String> {
+    let output = turn::sandbox::safe_git()
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &format!("{name}^{{commit}}"),
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commit = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!commit.is_empty()).then_some(commit)
 }
 
 fn print_view(dir: &Path, view: View, json: bool) -> Result<()> {
