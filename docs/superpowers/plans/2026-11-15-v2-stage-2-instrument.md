@@ -421,8 +421,9 @@ item's repository, and the temporary directories the machine shares.
     `"read"`; each of `places.shown` as `"read"`; `worker_tmp()` as `"write"`; each of
     `hidden_from_worker()` and of `places.hidden` as `"deny"`. A key that is a path is a TOML basic string:
     `\` and `"` are escaped. A path that holds a control character or is not UTF-8 is refused. A shown
-    path that is also hidden is left out of the shown ones, and no path is written twice. Hiding the home alone is not used for Codex: measured, it breaks
-    `cd` in a script run by `sh`.
+    path that is also hidden, or lies inside something hidden by name, is left out of the shown ones, and no
+    path is written twice. Hiding the home alone is not used for Codex: measured, it breaks `cd` in a script
+    run by `sh`.
   - The environment a model worker's program is given also carries `TMPDIR` and `CLAUDE_CODE_TMPDIR`, both
     `worker_tmp()`, and `GIT_CONFIG_GLOBAL=/dev/null`: git stops when it may not read the home's settings
     (measured: "fatal: unable to access '…/.gitconfig': Operation not permitted").
@@ -430,6 +431,17 @@ item's repository, and the temporary directories the machine shares.
     in the clone looks for either in a home.
   - The clock hides the room's directory from every worker: `hide_from_worker(room directory)` on each
     sandbox it makes for a turn.
+  - Added by the lead after the builder's work, from measurements made while it was built:
+    - `SDKROOT` and `DEVELOPER_DIR` are among the variables a run keeps.
+    - Claude's settings hold `autoMemoryEnabled: false`, and `claudeMdExcludes`: for the sandbox's parent and
+      every directory above it, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/CLAUDE.md` and
+      `.claude/rules/**`; and for each of the home's `.claude` and the directory `CLAUDE_CONFIG_DIR` names, as
+      it is named and as it really is, `CLAUDE.md` and `rules/**`. The names are read as patterns, so a
+      directory whose name a pattern would read as more than itself is refused. Tests:
+      `claude_is_given_no_instruction_file_from_above_its_sandbox` (the whole list),
+      `a_directory_a_pattern_would_misread_cannot_be_left_out_and_is_refused`,
+      `claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is`, and the two settings in
+      `the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `a_sandbox_hides_its_items_repository_from_a_worker`: after `create`, the list is the repository's real
@@ -456,8 +468,9 @@ item's repository, and the temporary directories the machine shares.
   holds a script of probes and whose work is to run it and commit its output. Read the output in the commit
   handed in: the room's directory, the item's repository, another checkout, the home and a file left in
   `/tmp` refused; the sandbox, the turn's own temporary directory and a named tool used; an earlier answer's
-  object absent and the base's tree present. Then the three live replays of the stage 1 items, as the spec's
-  smoke test, to see that a worker can still do real work.
+  object absent and an object of the base present; the word planted in the repository's own instruction file
+  given, and the word planted above the room not given. Then the three live replays of the stage 1 items, as
+  the spec's smoke test, to see that a worker can still do real work.
 
 ---
 

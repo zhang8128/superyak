@@ -109,9 +109,17 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
 - **So two turns could teach each other three ways:** an earlier answer read from the item's repository; a
   finished fix read from another checkout on the machine; a file one turn left in a shared temporary
   directory. Whether any turn ever did is not known: the record keeps no command's text.
+- **A program also reads for itself, before its worker asks for anything.** The same ship pointed at this,
+  and it was measured the same way, with a word planted in a file and the worker asked for every word it
+  had been given. Claude loaded an instruction file from the directory above its sandbox, and it keeps a
+  memory of its own under the person's home, at a place made from the sandbox's path. Codex loaded no
+  instruction file from above its sandbox. Neither was given the person's plugins or skills. Claude's own
+  file tool was refused a file outside the sandbox and read one inside.
 - **The rule is the jail's own.** A worker's shell is shown its sandbox, a temporary directory of the turn's
   own, the system, and the directories named for tools. The home, the room's directory, the item's
-  repository and the shared temporary directories are hidden from it.
+  repository and the shared temporary directories are hidden from it. And a worker's program is given no
+  instruction file from outside its sandbox, and keeps no memory of its own. The sandbox's own instruction
+  file is still loaded: it is part of the item, the same for every turn at it.
 - **Measured with the same probes,** each program can be set so, and was, through a live turn of Claude and
   through Codex's own sandbox command: every read above was then refused, while the sandbox, the turn's own
   temporary directory and a named toolchain could be used, a small program compiled and ran, and a script
@@ -122,11 +130,22 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
     system's temporary root, not beside the sandbox.
   - For Codex, hiding the home alone breaks `cd` in a script run by `sh`. Hiding the whole disk and showing
     the system, as the jail does, does not.
+  - With the machine's shared temporary directory hidden, the macOS developer-tool shim complains on every
+    `git` call and every link, two lines or more each time, because it cannot write its cache there. With
+    git taken from the developer tools' own directory and `SDKROOT` set it is silent. So the room keeps
+    `SDKROOT` and `DEVELOPER_DIR` for what it starts, and a clock on macOS is started with both.
+  - Claude's settings can name the instruction files of every directory above the sandbox as left out, and
+    turn its memory off. Measured: the word planted above was then not given, the one in the sandbox was.
 - **What changes for a worker:** a bare `mktemp` fails in Codex's shell as it already did in Claude's,
   because it goes to the machine's shared directory whatever `TMPDIR` says. With a template under `TMPDIR`
   it works, and that is how the checks call it.
 - **Not shown:** any of this on Linux; for Claude, places outside the home, the room and the temporary
-  directories, which its shell reads as the machine lets it.
+  directories, which its shell reads as the machine lets it; whether either program loads an instruction
+  file from its own home, since none is there on this machine. Before each block of turns the absence of
+  such a file is checked, in both programs' homes and in every directory above the room.
+- **What would close the whole class:** a home for the worker programs that holds only the sign-in, as the
+  same ship proposed. It means copying a person's sign-in, so it is a person's decision, and it is not
+  taken here.
 
 **A turn's whole cost.**
 
@@ -187,7 +206,10 @@ in can leak into what they cost.
 
 **A worker that cannot commit can still say what it did.** The room commits for Codex with a fixed message
 today. A worker may leave its message in one untracked file. The room uses it as the commit's message and
-removes the file before the commit is made, so the file is never part of what is checked.
+removes the file before the commit is made, so the file is never part of what is checked. That holds for
+a commit the room makes. A worker that commits for itself decides what its commit holds. When the base
+already tracks a file of that name, it is the item's own file and the room leaves it alone. Something there
+that is neither a file nor a link stops the room's commit.
 
 **Where rule 9's line falls for notes.** The store keeps commit ids and a hash. Commit messages live in the
 repository, where they already are. The rendered offer, the message file and the full prompt are not kept in
@@ -210,7 +232,7 @@ after, as a smoke test: they are not expected to produce the rare cases by thems
 | The record's ties | Everything under "What a record is tied to" is written and read back |
 | No text of a turn | None in the store, or in any log or cache of the room's. The message file is not in the committed tree: it is gone before the commit is made |
 | Two turns at one item | Shown not to share an answer, with the control present |
-| What a worker's shell can read | Through a live turn of each program, as the room starts it: reads of the room's directory, the item's repository, another checkout, the home and a file left in a shared temporary directory are each refused; its sandbox, its own temporary directory and a named tool can be used; an earlier answer's object is absent from its sandbox and the base's tree is present |
+| What a worker's shell can read | Through a live turn of each program, as the room starts it: reads of the room's directory, the item's repository, another checkout, the home and a file left in a shared temporary directory are each refused; its sandbox, its own temporary directory and a named tool can be used; an earlier answer's object is absent from its sandbox and an object of the base is present; it is given the word planted in its repository's instruction file and not the one planted above the room |
 | Two turns given the same item | With the switch on, their prompts differ from the first line, and neither turn's line is kept in the store |
 | A turn's tokens | Fresh input, writes to memory and reads from memory are three numbers, for both programs where each reports them |
 

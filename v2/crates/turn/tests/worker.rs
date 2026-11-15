@@ -272,6 +272,33 @@ fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
     );
     let home = turn::jail::places().unwrap().home;
     assert_eq!(deny_read.first(), home.to_str().as_ref(), "{deny_read:?}");
+    // The program keeps no memory of its own, and is given no instruction file from above its sandbox or from
+    // its own home: each is named to be left out. Its sandbox's own are not.
+    assert_eq!(settings["autoMemoryEnabled"], false);
+    let left_out: Vec<&str> = settings["claudeMdExcludes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    let above = sb.dir.parent().unwrap();
+    for name in ["CLAUDE.md", "AGENTS.md", ".claude/rules/**"] {
+        let path = above.join(name);
+        assert!(
+            left_out.contains(&path.to_str().unwrap()),
+            "{name}: {left_out:?}"
+        );
+    }
+    assert!(left_out.contains(&"/CLAUDE.md"), "{left_out:?}");
+    let own_home = home.join(".claude/CLAUDE.md");
+    assert!(
+        left_out.contains(&own_home.to_str().unwrap()),
+        "{left_out:?}"
+    );
+    assert!(
+        left_out.iter().all(|path| !path.starts_with(dir)),
+        "{left_out:?}"
+    );
 }
 
 #[test]
@@ -1521,6 +1548,55 @@ fn a_workers_program_is_given_its_own_tmp_and_no_global_git_settings() {
 /// `jail::places` is the jail's own reading of the settings: the home, its keys and the agents' settings
 /// directories that are there, the named tool directories, the system directories that are there, each as a
 /// real path; and refused as the jail refuses.
+/// Claude keeps a person's own instructions in its own home, wherever that is: `.claude` in the home, or the
+/// directory `CLAUDE_CONFIG_DIR` names. Each is named to be left out, as it is named and as it really is, since
+/// either may be the path the program matches a pattern against.
+#[test]
+fn claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let agent = at.root.join("agent");
+    std::fs::create_dir(&agent).unwrap();
+    let (home_link, agent_link) = (at.root.join("home-link"), at.root.join("agent-link"));
+    std::os::unix::fs::symlink(&at.home, &home_link).unwrap();
+    std::os::unix::fs::symlink(&agent, &agent_link).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", home_link.as_os_str()),
+            ("CLAUDE_CONFIG_DIR", agent_link.as_os_str()),
+        ],
+    );
+    let settings = answer(&report, "claude");
+    let left_out = texts(&settings["claudeMdExcludes"]);
+    for dir in [
+        at.home.join(".claude"),
+        home_link.join(".claude"),
+        agent.clone(),
+        agent_link.clone(),
+    ] {
+        for name in ["CLAUDE.md", "rules/**"] {
+            let path = dir.join(name).to_str().unwrap().to_string();
+            assert!(left_out.contains(&path), "{path}: {left_out:?}");
+        }
+    }
+    assert_eq!(settings["autoMemoryEnabled"], false);
+    // The control: with no directory of its own named, nothing of that one is.
+    let report = reach(&repo, &[("HOME", at.home.as_os_str())]);
+    let left_out = texts(&answer(&report, "claude")["claudeMdExcludes"]);
+    assert!(
+        left_out.iter().all(|path| !path.contains("/agent")),
+        "{left_out:?}"
+    );
+    let own = at
+        .home
+        .join(".claude/CLAUDE.md")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(left_out.contains(&own), "{left_out:?}");
+}
+
 #[test]
 fn the_jails_places_are_its_own_reading_of_the_settings() {
     let repo = Repo::new(&[("a.txt", "x\n")]);

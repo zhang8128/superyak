@@ -332,6 +332,81 @@ fn plain(path: &Path) -> Result<&str, TurnError> {
     }
 }
 
+/// The names Claude reads instructions from at its start, in the directory it works in and in every one above it.
+const INSTRUCTIONS_IN_A_DIRECTORY: [&str; 5] = [
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "AGENTS.md",
+    ".claude/CLAUDE.md",
+    ".claude/rules/**",
+];
+
+/// And in its own home, where a person keeps their own.
+const INSTRUCTIONS_IN_ITS_HOME: [&str; 2] = ["CLAUDE.md", "rules/**"];
+
+/// The instruction files Claude is not to be given, as its settings name what to leave out (`claudeMdExcludes`:
+/// patterns, matched against full paths): those of the sandbox's parent and of every directory above it, and
+/// the person's own in each of `homes`. Measured: with a file one directory above its sandbox Claude gave back
+/// the word planted in it; with that file named here it did not, and still gave the word in its sandbox's own.
+/// The sandbox's own are not named: they are the item's, the same for every turn at it. Each path is written
+/// once.
+fn instructions_left_out(dir: &Path, homes: &[PathBuf]) -> Result<Vec<String>, TurnError> {
+    let mut left_out: Vec<String> = Vec::new();
+    let mut name = |within: &Path, names: &[&str]| -> Result<(), TurnError> {
+        let within = exact(within)?.trim_end_matches('/');
+        for name in names {
+            let path = format!("{within}/{name}");
+            if !left_out.contains(&path) {
+                left_out.push(path);
+            }
+        }
+        Ok(())
+    };
+    for above in dir.ancestors().skip(1) {
+        name(above, &INSTRUCTIONS_IN_A_DIRECTORY)?;
+    }
+    for home in homes {
+        name(home, &INSTRUCTIONS_IN_ITS_HOME)?;
+    }
+    Ok(left_out)
+}
+
+/// A directory's path as a pattern that names it and nothing else. One a pattern would read as more than
+/// itself is refused: its instruction files could not be named exactly, and one left in would be given to the
+/// worker.
+fn exact(dir: &Path) -> Result<&str, TurnError> {
+    let text = plain(dir)?;
+    let misread = text
+        .chars()
+        .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\'))
+        || ["+(", "@(", "!("].iter().any(|pair| text.contains(pair));
+    if misread {
+        return Err(TurnError::Refused(format!(
+            "{dir:?} cannot be named exactly in Claude's settings: a pattern would read it as more than itself, \
+             and an instruction file there could not be left out"
+        )));
+    }
+    Ok(text)
+}
+
+/// Where Claude keeps a person's own instructions: `.claude` in the home, as the room knows the home and as the
+/// environment names it, and the directory `CLAUDE_CONFIG_DIR` names, as it is named and as it really is. Each
+/// is a full path: the jail's own reading of the settings (`jail::places`) has refused a home or a directory
+/// of an agent's that is not, before this is asked.
+fn claude_homes(home: &Path) -> Vec<PathBuf> {
+    let mut homes = vec![home.join(".claude")];
+    if let Some(named) = std::env::var_os("HOME").map(PathBuf::from) {
+        homes.push(named.join(".claude"));
+    }
+    if let Some(own) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        if let Ok(real) = std::fs::canonicalize(&own) {
+            homes.push(real);
+        }
+        homes.push(own);
+    }
+    homes
+}
+
 /// A path as a key of a TOML table: a basic string, with `\` and `"` escaped.
 fn toml_key(path: &Path) -> Result<String, TurnError> {
     let mut key = String::from("\"");
@@ -414,7 +489,9 @@ impl ClaudeWorker {
     /// `allowRead` is the sandbox, the turn's own temporary directory and each tool directory that is not
     /// hidden; `allowWrite` is those first two. Where read rules overlap, Claude's narrower path decides.
     pub fn settings(sandbox: &Sandbox) -> Result<serde_json::Value, TurnError> {
-        let filesystem = Reach::of(sandbox)?.claude_filesystem()?;
+        let reach = Reach::of(sandbox)?;
+        let filesystem = reach.claude_filesystem()?;
+        let left_out = instructions_left_out(&reach.dir, &claude_homes(&reach.home))?;
         let dir = plain(&sandbox.dir)?;
         // `//` makes a rule's path absolute; a single `/` is relative to the settings file.
         let scoped = |tool: &str| format!("{tool}(/{dir}/**)");
@@ -437,6 +514,10 @@ impl ClaudeWorker {
                 "network": { "allowedDomains": [] },
             },
             "disableAllHooks": true,
+            // The worker is given no instruction file from outside its sandbox, and its program keeps no memory
+            // of its own (it would be under the person's home, at a place made from the sandbox's path).
+            "claudeMdExcludes": left_out,
+            "autoMemoryEnabled": false,
         }))
     }
 }
@@ -736,8 +817,118 @@ fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, Turn
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Reach, is_status_entry, plain, toml_key};
+    use super::{Reach, instructions_left_out, is_status_entry, plain, toml_key};
     use crate::TurnError;
+
+    /// Claude reads instruction files at its start from every directory above the one it works in, and from its
+    /// own home. A worker is given none of them: each is named to be left out. The sandbox's own are not named:
+    /// they are the item's.
+    #[test]
+    fn claude_is_given_no_instruction_file_from_above_its_sandbox() {
+        let p = PathBuf::from;
+        let left_out = instructions_left_out(
+            Path::new("/room dir/turns/a1"),
+            &[p("/home/someone/.claude"), p("/elsewhere/claude (2)")],
+        )
+        .unwrap();
+        assert_eq!(
+            left_out,
+            [
+                "/room dir/turns/CLAUDE.md",
+                "/room dir/turns/CLAUDE.local.md",
+                "/room dir/turns/AGENTS.md",
+                "/room dir/turns/.claude/CLAUDE.md",
+                "/room dir/turns/.claude/rules/**",
+                "/room dir/CLAUDE.md",
+                "/room dir/CLAUDE.local.md",
+                "/room dir/AGENTS.md",
+                "/room dir/.claude/CLAUDE.md",
+                "/room dir/.claude/rules/**",
+                "/CLAUDE.md",
+                "/CLAUDE.local.md",
+                "/AGENTS.md",
+                "/.claude/CLAUDE.md",
+                "/.claude/rules/**",
+                "/home/someone/.claude/CLAUDE.md",
+                "/home/someone/.claude/rules/**",
+                "/elsewhere/claude (2)/CLAUDE.md",
+                "/elsewhere/claude (2)/rules/**",
+            ]
+        );
+        // Nothing of the sandbox's own is among them.
+        assert!(
+            left_out
+                .iter()
+                .all(|path| !path.starts_with("/room dir/turns/a1")),
+            "{left_out:?}"
+        );
+        // A home named twice is written once, and one that is a directory above the sandbox adds only its rules.
+        let once = instructions_left_out(
+            Path::new("/h/.claude/t"),
+            &[p("/h/.claude"), p("/h/.claude")],
+        )
+        .unwrap();
+        assert_eq!(
+            once.iter()
+                .filter(|path| *path == "/h/.claude/CLAUDE.md")
+                .count(),
+            1,
+            "{once:?}"
+        );
+        assert_eq!(
+            once.iter()
+                .filter(|path| *path == "/h/.claude/rules/**")
+                .count(),
+            1,
+            "{once:?}"
+        );
+    }
+
+    /// The names are read by Claude as patterns. A directory whose name a pattern would read as more than itself
+    /// cannot be named exactly, and a file left in would be given to the worker: so it is refused.
+    #[test]
+    fn a_directory_a_pattern_would_misread_cannot_be_left_out_and_is_refused() {
+        let homes = [PathBuf::from("/home/someone/.claude")];
+        for odd in [
+            "/a*b/turns/t",
+            "/a?b/turns/t",
+            "/a[b]/turns/t",
+            // Each of a pair by itself, too: which of them a pattern needs is not the room's to guess.
+            "/a[b/turns/t",
+            "/a]b/turns/t",
+            "/a{b,c}/turns/t",
+            "/a{b/turns/t",
+            "/a}b/turns/t",
+            "/a\\b/turns/t",
+            "/a+(b)/turns/t",
+            "/a@(b)/turns/t",
+            "/a!(b)/turns/t",
+        ] {
+            let refused = instructions_left_out(Path::new(odd), &homes);
+            assert!(
+                matches!(&refused, Err(TurnError::Refused(why)) if why.contains("pattern")),
+                "{odd}: {refused:?}"
+            );
+        }
+        // A home with such a name is refused too.
+        let refused = instructions_left_out(Path::new("/room/turns/t"), &[PathBuf::from("/h[1]")]);
+        assert!(matches!(refused, Err(TurnError::Refused(_))), "{refused:?}");
+        // The control: names with a space, brackets of the ordinary kind, a plus or an at sign are themselves.
+        for plain_name in [
+            "/a b/turns/t",
+            "/a (1)/turns/t",
+            "/c++/turns/t",
+            "/@scope/turns/t",
+            "/a!b/turns/t",
+        ] {
+            assert!(
+                instructions_left_out(Path::new(plain_name), &homes).is_ok(),
+                "{plain_name}"
+            );
+        }
+        // And the sandbox's own name is not among the patterns, so it is not looked at.
+        assert!(instructions_left_out(Path::new("/room/turns/t[1]"), &homes).is_ok());
+    }
 
     /// What a turn in a room on a Mac would be given: the clone is in the room's directory, which is hidden, and
     /// among the tools named are one in the home (twice), one the system already shows, one inside the item's
