@@ -1880,7 +1880,11 @@ fn inner_a_clock_under_the_rooms_switches() {
             // The fetch stops the room and then fails.
             "fetch-stop-fail" => (format!("{stop}; exit 1"), nothing(), nothing()),
             // The fetch is done at once and leaves something holding its output, under a git limit of 2 s.
-            "fetch-held" => ("sleep 47.251 & exit 0".to_string(), nothing(), nothing()),
+            "fetch-held" => {
+                // Named by this process, so that what another run left behind is not taken for this one's.
+                println!("SLEEPER sleep 47.{me}");
+                (format!("sleep 47.{me} & exit 0"), nothing(), nothing())
+            }
             "slow-ref" => (nothing(), nothing(), "sleep 8".to_string()),
             // The room is stopped as the ref is about to be made.
             "ref-stop" => (nothing(), nothing(), format!("{stop}; sleep 9; {waited}")),
@@ -2270,15 +2274,14 @@ fn the_clocks_fetch_runs_under_the_rooms_git_limit() {
     // Three turns, each ended at its limit, and none of them waited out.
     assert!(held.contains("ITEM Abandoned attempts 3"), "{held}");
     assert!(took(&held) < 40, "{held}");
-    let all = std::process::Command::new("ps")
-        .args(["-Ao", "command="])
-        .output()
-        .unwrap();
-    let left = String::from_utf8_lossy(&all.stdout)
+    let sleeper = held
         .lines()
-        .filter(|command| command.trim() == "sleep 47.251")
-        .count();
-    assert_eq!(left, 0, "what the fetch started is still running");
+        .find_map(|line| line.strip_prefix("SLEEPER "))
+        .expect("the inner run names what its fetch leaves running");
+    assert!(
+        gone(sleeper),
+        "what the fetch started ({sleeper}) is still running"
+    );
 }
 
 /// The inner half of the tests below, and nothing by itself: a clock whose look at the machine's processes

@@ -281,7 +281,18 @@ fn two_turns_at_one_item_have_prompts_that_differ_from_the_first_line() {
     let f = Fixture::new();
     let id = f.add();
     let worker = f.script(HANDS_IN_ITS_PROMPT);
-    let out = f.clock(&worker).arg("--own-prompts").output().unwrap();
+    // Through the clock's restart of itself, which a variable it does not keep brings about: the switch is
+    // among what the restarted clock is given.
+    let out = f
+        .clock(&worker)
+        .arg("--own-prompts")
+        .env("YAK_TEST_CANARY", "task10-canary")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next(),
+        Some("starting again with a clean environment")
+    );
     let prompts = prompts_handed_in(&f, &id);
     assert!(
         prompts.len() >= 2,
@@ -311,7 +322,16 @@ fn the_prompt_is_as_it_was_without_the_switch() {
     let f = Fixture::new();
     let id = f.add();
     let worker = f.script(HANDS_IN_ITS_PROMPT);
-    let out = f.clock(&worker).output().unwrap();
+    // Through the clock's restart of itself too: nothing there turns the switch on.
+    let out = f
+        .clock(&worker)
+        .env("YAK_TEST_CANARY", "task10-canary")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next(),
+        Some("starting again with a clean environment")
+    );
     let prompts = prompts_handed_in(&f, &id);
     assert!(
         prompts.len() >= 2,

@@ -1722,6 +1722,43 @@ mod tests {
     /// The room keeps no more of a git command's output than its limit. A command that prints more is refused
     /// and ended at once: nothing past the limit is read. What a command says of a failure is cut short and the
     /// rest dropped, and the command goes on to its own end.
+    /// How many processes run with exactly this command line. A process is looked for by its whole command and
+    /// not by a piece of text: a search for the text would also find whatever shell was told to run a test by
+    /// name. The listing is shown to be one that can say so: the command that made it ended well, and is
+    /// itself in it, found the same way.
+    fn running(command: &str) -> usize {
+        let listed = Command::new("ps")
+            .args(["-Ao", "command="])
+            .output()
+            .unwrap();
+        assert!(
+            listed.status.success(),
+            "the processes could not be listed: {}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert!(
+            listed.lines().any(|line| line.trim() == "ps -Ao command="),
+            "the list of processes does not hold the command that made it"
+        );
+        listed.lines().filter(|line| line.trim() == command).count()
+    }
+
+    /// Whether no process runs with this command line, looked for again for a short while: a signal takes a
+    /// moment to land.
+    fn gone(command: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if running(command) == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     #[test]
     fn the_rooms_git_is_not_read_past_its_limit_of_output() {
         let prints = |bytes: usize| {
@@ -1780,19 +1817,9 @@ mod tests {
             "{:?}",
             over.map(|out| out.len())
         );
-        // Neither refusal left anything of the program's behind. Looked for by the whole command, as below.
-        thread::sleep(Duration::from_millis(300));
-        let all = Command::new("ps")
-            .args(["-Ao", "command="])
-            .output()
-            .unwrap();
-        let all = String::from_utf8_lossy(&all.stdout);
+        // Neither refusal left anything of the program's behind.
         for sleeper in [format!("sleep 97.{own}"), format!("sleep 98.{own}")] {
-            let left = all
-                .lines()
-                .filter(|command| command.trim() == sleeper)
-                .count();
-            assert_eq!(left, 0, "`{sleeper}` is still running");
+            assert!(gone(&sleeper), "`{sleeper}` is still running");
         }
         for more in [1, 8 * ROOM_GIT_OUTPUT_BYTES] {
             let start = Instant::now();
@@ -1842,7 +1869,10 @@ mod tests {
         // A leader that is done at once, while something it started keeps the pipe: the limit still holds,
         // and what it started is ended with it.
         let mut leaves_one = Command::new("/bin/sh");
-        leaves_one.args(["-c", "sleep 37.123 & echo started"]);
+        // The sleeper is named by this test's own process, as every sleeper here is: what another run of these
+        // tests left behind on this machine is then not taken for this run's.
+        let sleeper = format!("sleep 37.{}", std::process::id());
+        leaves_one.args(["-c", &format!("{sleeper} & echo started")]);
         let start = Instant::now();
         let ended = output_within(leaves_one, "a read", Duration::from_millis(500), None);
         assert!(
@@ -1854,18 +1884,7 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
-        thread::sleep(Duration::from_millis(300));
-        // Looked for by its whole command, and not by a piece of text: a search for the text would also find
-        // whatever shell was told to run this test by name.
-        let all = Command::new("ps")
-            .args(["-Ao", "command="])
-            .output()
-            .unwrap();
-        let left = String::from_utf8_lossy(&all.stdout)
-            .lines()
-            .filter(|command| command.trim() == "sleep 37.123")
-            .count();
-        assert_eq!(left, 0, "the sleeper is still running");
+        assert!(gone(&sleeper), "the sleeper is still running");
         // One that finishes in time gives its output, and one that fails says why.
         let mut quick = Command::new("/bin/sh");
         quick.args(["-c", "echo out"]);
@@ -1886,21 +1905,15 @@ mod tests {
     /// and while only its output is waited for. Set beforehand, nothing is started at all.
     #[test]
     fn the_rooms_git_is_ended_when_its_switch_is_set() {
-        let sleepers = |text: &str| {
-            let all = Command::new("ps")
-                .args(["-Ao", "command="])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&all.stdout)
-                .lines()
-                .filter(|command| command.trim() == text)
-                .count()
-        };
+        let own = std::process::id();
         for (script, sleeper) in [
             // The leader itself is slow.
-            ("exec sleep 41.317", "sleep 41.317"),
+            (format!("exec sleep 41.{own}"), format!("sleep 41.{own}")),
             // The leader is done at once, and something it started keeps the pipe.
-            ("sleep 43.519 & echo started", "sleep 43.519"),
+            (
+                format!("sleep 43.{own} & echo started"),
+                format!("sleep 43.{own}"),
+            ),
         ] {
             let stop = Arc::new(AtomicBool::new(false));
             let setter = {
@@ -1911,7 +1924,7 @@ mod tests {
                 })
             };
             let mut slow = Command::new("/bin/sh");
-            slow.args(["-c", script]);
+            slow.args(["-c", &script]);
             let start = Instant::now();
             let ended = safe_git_output_until(slow, "a read", Duration::from_secs(30), &stop);
             let took = start.elapsed();
@@ -1924,12 +1937,7 @@ mod tests {
                 took >= Duration::from_millis(300) && took < Duration::from_secs(5),
                 "{script}: {took:?}"
             );
-            thread::sleep(Duration::from_millis(300));
-            assert_eq!(
-                sleepers(sleeper),
-                0,
-                "{script}: the sleeper is still running"
-            );
+            assert!(gone(&sleeper), "{script}: the sleeper is still running");
         }
         // Set before the start: nothing is started. Seen with a program that is not there: had the runner
         // tried to start it, the error would be that it could not.

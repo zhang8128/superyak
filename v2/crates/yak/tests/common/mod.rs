@@ -278,6 +278,35 @@ impl World {
     }
 }
 
+/// Whether no process runs with exactly this command line, looked for again for a short while. The listing
+/// is shown to be one that can say so: the command that made it ended well, and is itself in it.
+pub fn gone(command: &str) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let listed = std::process::Command::new("ps")
+            .args(["-Ao", "command="])
+            .output()
+            .unwrap();
+        assert!(
+            listed.status.success(),
+            "the processes could not be listed: {}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert!(
+            listed.lines().any(|line| line.trim() == "ps -Ao command="),
+            "the list of processes does not hold the command that made it"
+        );
+        if !listed.lines().any(|line| line.trim() == command) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub fn outcomes(events: &[Event]) -> Vec<Outcome> {
     events
         .iter()

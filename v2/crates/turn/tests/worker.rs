@@ -240,6 +240,7 @@ fn a_named_turns_prompt_begins_with_a_line_of_its_own() {
         // A refusal is one line and does not repeat what it refused.
         let said = refused.unwrap_err().to_string();
         assert!(!said.contains('\n') && said.len() < 200, "{said:?}");
+        assert!(odd.is_empty() || !said.contains(odd), "{said:?}");
         assert_eq!(made.turn(), None);
     }
     made.name_turn("a-1").unwrap();
@@ -254,6 +255,20 @@ fn a_named_turns_prompt_begins_with_a_line_of_its_own() {
 #[test]
 fn the_prompt_is_the_item_its_check_and_the_rules() {
     let text = prompt(None, "Make the greeting say bye", "grep -q bye a.txt");
+    // The whole of it, to the byte, by its length and its SHA-256. Turns are compared with each other, so a
+    // change to what every worker is told is a change someone meant, made here as well.
+    use sha2::Digest;
+    let digest: String = sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        (text.len(), digest.as_str()),
+        (
+            1459,
+            "8699a0aba2df7a5be0be41c461772bb05ba3ca5834a678e50d4741cc47706884"
+        )
+    );
     assert!(text.contains("Make the greeting say bye"));
     assert!(text.contains("grep -q bye a.txt"));
     assert!(text.contains(RULES));

@@ -157,12 +157,16 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
   removed and not read. Measured with the same kind of probe: neither program's sandbox nor the room's jail
   lets a worker give a second name to a file it cannot read. The room does not rest on that for what it
   reads itself. For any other file in a worker's tree it does: to git, a second name is a file like any
-  other. The file is opened without following a link and without waiting, so nothing put at its path after
-  the room looked can lead the room elsewhere or hold it up.
-- **The room keeps no git output without end.** It keeps at most 64 MiB of one git command's output and ends
-  a command that prints more, with all the command started. That is a ceiling for honest work too: a check's
-  file larger than that cannot be frozen, and a turn whose list of changed files is longer hands in nothing
-  and counts as a failed attempt. Nothing stage 2 runs is near either.
+  other. The file is opened so that a link put at its name after the room looked is not followed, and a
+  named pipe put there is not waited on for a writer. That is all the opening adds. It still rests on the
+  worker and everything it started having ended, and on the directories above the sandbox being the room's
+  alone.
+- **The room keeps no git output without end.** Of one git command it keeps at most 64 MiB of what the
+  command prints as its answer, and 64 KiB of what it prints of a failure, reading the rest of that and
+  dropping it. A command whose answer is longer is refused, and its process group is ended; something it
+  started that left that group is not. That is a ceiling for honest work too: a check's file larger than
+  64 MiB cannot be frozen, and a turn whose list of changed files is longer hands in nothing and counts as
+  a failed attempt. Nothing stage 2 runs is near either.
 - **What would close the whole class:** a home for the worker programs that holds only the sign-in, as the
   same ship proposed. It means copying a person's sign-in, so it is a person's decision, and it is not
   taken here.
