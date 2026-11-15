@@ -50,3 +50,14 @@ jobs:
       - name: Tests, the acceptance suite with them
         if: success() || failure()
         run: cargo test --workspace --locked --no-fail-fast
+      - name: The first run's three checks
+        # The frozen checks of the first run with model workers. Its items are done, so the checks are regression
+        # checks now: each builds yak offline from this checkout and drives `yak item add` from outside. They want
+        # a folder of vendored crates, which is made here, and a place for temporary files.
+        if: success() || failure()
+        working-directory: .
+        run: |
+          (cd v2 && cargo vendor --locked "$RUNNER_TEMP/vendor" > /dev/null)
+          for check in item-add-wrong-commit item-add-check-freezable item-add-title; do
+            TMPDIR="$RUNNER_TEMP" sh "v2/checks/$check.sh" "$RUNNER_TEMP/vendor"
+          done
