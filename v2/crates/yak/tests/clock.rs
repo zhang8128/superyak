@@ -767,7 +767,29 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     for group in groups {
         assert!(!group_alive(group), "the group {group} is still alive");
     }
-    assert_measured(&world, &events, room::Ended::LeaseLost);
+    // Every turn is measured. One whose lease ran out before its worker's program had started says its worker
+    // did not run; every other says the lease was lost while its worker ran. Which it is depends on how busy
+    // the machine is, so neither is asked for by itself here. (A turn that did not run can still hold time in
+    // the worker's part: the room had begun to start it.)
+    let attempts = started(&events);
+    assert_eq!(attempts.len(), MAX_ATTEMPTS as usize);
+    for (_, attempt, _, _) in attempts {
+        let m = world
+            .room
+            .measured(&attempt)
+            .unwrap()
+            .expect("every turn is measured");
+        assert_eq!(
+            m.active_ms,
+            m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0),
+            "{m:?}"
+        );
+        match m.ended {
+            room::Ended::LeaseLost => assert!(m.worker_ms > 0, "{m:?}"),
+            room::Ended::NotRun => assert_eq!(m.exit_code, None, "{m:?}"),
+            _ => panic!("a turn whose lease went stale is recorded as {m:?}"),
+        }
+    }
 }
 
 /// After a restart the clock finds a dead clock's turn. It ends the run that turn's record describes, when that
@@ -2002,6 +2024,13 @@ fn inner_a_clock_under_the_rooms_switches() {
         Err(e) => println!("REFUSED {e}"),
     }
     println!("FIRST {:?}", outcomes(&events).first());
+    // The first turn's record, where it has one: how its worker ended, and whether it holds a worker's time.
+    if let Some((_, attempt, _, _)) = started(&events).first()
+        && let Ok(Some(m)) = world.room.measured(attempt)
+    {
+        let time = if m.worker_ms > 0 { "ran" } else { "none" };
+        println!("MEASURED {:?} worker {time}", m.ended);
+    }
     println!("REFS {}", world.room_refs().len());
     let named = if world.room_refs().contains(&first_ref) {
         let commit = git(&world.repo, &["rev-parse", &first_ref]);
@@ -2087,6 +2116,11 @@ fn a_lease_that_runs_out_while_the_worker_runs_ends_the_worker() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(printed.contains("FIRST Some(LeaseLost)"), "{printed}");
+    // Its record says the same of its worker, which had run: here nothing is left to how busy the machine is.
+    assert!(
+        printed.contains("MEASURED LeaseLost worker ran"),
+        "{printed}"
+    );
     // The worker had started, and it is gone: not left to wait out its thirty seconds.
     assert!(printed.contains("GROUPS seen 1 alive 0"), "{printed}");
     assert!(took(&printed) < 25, "{printed}");
