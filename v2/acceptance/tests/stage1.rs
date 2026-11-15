@@ -264,8 +264,15 @@ fn group_alive(group: &str) -> bool {
 }
 
 // --- The sixteen tests of plan task 0 (e01c0c74) ---
+//
+// A test marked "needs the room" is left out of a plain `cargo test`, and the whole suite asks for it with
+// `--include-ignored` (spec 2026-11-15, tests where the room cannot run). Where processes can't be listed, no item
+// leaves draft: the clock's freeze runs the check on the base commit, and every run of a check or a worker starts
+// by listing processes (turn's `Supervisor::start`, `ps -A`). So each test that needs an item frozen, taken or
+// turned fails there. The two store tests run no clock, and pass anywhere.
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn five_items_pass_with_no_keystrokes() {
     let r = setup();
     let ids: Vec<String> = (0..5)
@@ -279,6 +286,7 @@ fn five_items_pass_with_no_keystrokes() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn unchanged_tree_does_not_pass() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
@@ -293,6 +301,7 @@ fn unchanged_tree_does_not_pass() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_wrong_artifact_fails() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
@@ -314,6 +323,7 @@ fn a_wrong_artifact_fails() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_weak_check_never_opens() {
     let r = setup();
     let id = add_with_check(&r, 0, "true", "outside", "person:fixture"); // passes on the base commit
@@ -328,6 +338,7 @@ fn a_weak_check_never_opens() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_model_written_check_is_unverified() {
     let r = setup();
     let id = add(&r, 0, "model", "claude:fixture");
@@ -337,6 +348,7 @@ fn a_model_written_check_is_unverified() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_check_author_cannot_take_the_item() {
     // By family (spec rule 3, plan e01c0c74): a check written by script:a is never leased to a script: worker.
     let r = setup();
@@ -420,6 +432,7 @@ fn sleeper(r: &Room) -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_killed_worker_fails_the_turn() {
     // kill -9 on the worker's process group mid-turn, the clock alive: that turn fails, and the item is taken again.
     // Workers take turns (plan task 9): the sleeper's turn is killed, and the fixer takes the item next.
@@ -440,6 +453,7 @@ fn a_killed_worker_fails_the_turn() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_killed_clock_recovers() {
     // Review focus 1: the clock dies mid-turn (power loss: kill -9 on its process group and the worker's). On restart
     // the item is taken again with the next lease number, and the dead turn leaves no ref.
@@ -465,6 +479,7 @@ fn a_killed_clock_recovers() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn stop_halts_within_fifteen_seconds() {
     let r = setup();
     add(&r, 0, "outside", "person:fixture");
@@ -497,6 +512,7 @@ fn stop_halts_within_fifteen_seconds() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_ceiling_refuses_the_next_turn() {
     let r = setup();
     for n in 0..3 {
@@ -518,6 +534,7 @@ fn the_ceiling_refuses_the_next_turn() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_cannot_change_its_check() {
     // The worker makes the right fix and also rewrites the check, so the item can fail only because a commit that
     // alters a file its check froze is refused (plan, 340df0a8).
@@ -541,6 +558,7 @@ fn a_worker_cannot_change_its_check() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_has_no_remote() {
     let r = setup();
     let id = add(&r, 0, "outside", "person:fixture");
@@ -607,6 +625,7 @@ fn no_prompt_text_reaches_the_store() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_second_clock_refuses() {
     let r = setup();
     add(&r, 0, "outside", "person:fixture");
