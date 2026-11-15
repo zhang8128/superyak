@@ -31,6 +31,12 @@ fn assert_measured(world: &World, events: &[Event], ended: room::Ended) {
     }
 }
 
+/// Off unless asked for: a caller that sets nothing gets the prompt as it was.
+#[test]
+fn a_clock_gives_no_turn_a_line_of_its_own_unless_asked() {
+    assert!(!Options::default().own_prompts);
+}
+
 #[test]
 fn every_way_a_turn_ends_leaves_a_measured_record() {
     for (body, limit, ended) in [

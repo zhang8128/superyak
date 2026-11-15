@@ -37,10 +37,14 @@ repository's root and the room will commit for you with it.";
 /// How long the room gives git to commit what an agent left uncommitted.
 const SEAL_SECS: u32 = 120;
 
-/// The prompt every worker gets on stdin: the item's title, its check command and the room's rules.
-pub fn prompt(item_title: &str, check_command: &str) -> String {
+/// The prompt every worker gets on stdin: the item's title, its check command and the room's rules. With
+/// `turn`, the turn's name, it begins with one line that is this turn's alone, and is otherwise the same.
+pub fn prompt(turn: Option<&str>, item_title: &str, check_command: &str) -> String {
+    let own = turn
+        .map(|turn| format!("This is turn {turn} of the room.\n\n"))
+        .unwrap_or_default();
     format!(
-        "{INTRO}\n\nThe item: {item_title}\n\nIts check, frozen before you started, is run by the room at the \
+        "{own}{INTRO}\n\nThe item: {item_title}\n\nIts check, frozen before you started, is run by the room at the \
          repository's root after you finish, and must pass on your commit:\n{check_command}\n\nThe room's \
          rules:\n{RULES}\n"
     )
@@ -195,7 +199,7 @@ impl Worker for ScriptWorker {
         let status = sandbox.run_untrusted(
             program,
             &[],
-            &prompt(item_title, check_command),
+            &prompt(sandbox.turn(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
@@ -557,7 +561,7 @@ impl Worker for ClaudeWorker {
         let status = sandbox.run_model(
             &self.program,
             &self.args(&path),
-            &prompt(item_title, check_command),
+            &prompt(sandbox.turn(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
@@ -662,7 +666,7 @@ impl Worker for CodexWorker {
         let status = sandbox.run_model(
             &self.program,
             &args,
-            &prompt(item_title, check_command),
+            &prompt(sandbox.turn(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;

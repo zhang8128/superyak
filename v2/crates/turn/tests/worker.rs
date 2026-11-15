@@ -157,13 +157,103 @@ fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
     assert_eq!(seen.steps[0].target, tracked(&repo, "src/a.txt"));
     assert_eq!(
         read(&prompt_out),
-        prompt("Read the source", "test -f src/a.txt")
+        prompt(None, "Read the source", "test -f src/a.txt")
     );
+}
+
+/// With a turn's name, its prompt begins with one line that holds the name, and the rest is the prompt as it
+/// is without one. Each kind of worker gives its program that prompt when its sandbox has the turn's name.
+#[test]
+fn a_named_turns_prompt_begins_with_a_line_of_its_own() {
+    let plain = prompt(None, "Read the source", "test -f src/a.txt");
+    let named = prompt(Some("a1b2c3"), "Read the source", "test -f src/a.txt");
+    assert_eq!(
+        named,
+        format!("This is turn a1b2c3 of the room.\n\n{plain}")
+    );
+    assert_ne!(
+        prompt(Some("a1b2c3"), "t", "true").lines().next(),
+        prompt(Some("d4e5f6"), "t", "true").lines().next()
+    );
+    assert!(!plain.contains("This is turn"));
+    // Through each worker: a stand-in for its program keeps what it was sent.
+    for family in ["script", "claude", "codex"] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let mut made = Sandbox::create(
+            &repo.path,
+            &repo.base,
+            &repo.scratch("sandbox"),
+            "room/i1/1",
+        )
+        .unwrap();
+        made.name_turn("a1b2c3").unwrap();
+        let sent = repo.scratch("sent.txt");
+        let stand_in = script(
+            &repo,
+            family,
+            // A jailed script writes in its sandbox; the others anywhere the test can read.
+            "#!/bin/sh\ncat > sent-here.txt\n",
+        );
+        let worker: Box<dyn Worker> = match family {
+            "script" => from_name(&format!("script:{}", stand_in.display())).unwrap(),
+            _ => family_worker(family, &stand_in),
+        };
+        // What the room commits for a model worker, or what a script left, is not asked here: only what
+        // the program was sent.
+        let _ = worker.run(
+            &made,
+            "Read the source",
+            "test -f src/a.txt",
+            60,
+            &mut seen(),
+        );
+        std::fs::copy(made.dir.join("sent-here.txt"), &sent).unwrap();
+        assert_eq!(read(&sent), named, "{family}");
+        made.destroy().unwrap();
+    }
+    // A name that is not the room's kind is refused, and names nothing.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let mut made = Sandbox::create(
+        &repo.path,
+        &repo.base,
+        &repo.scratch("sandbox"),
+        "room/i1/1",
+    )
+    .unwrap();
+    let too_long = "a".repeat(65);
+    let huge = "a".repeat(100_000);
+    for odd in [
+        "",
+        "a b",
+        "a\nb",
+        "turn/1",
+        "caf\u{e9}",
+        too_long.as_str(),
+        huge.as_str(),
+    ] {
+        let refused = made.name_turn(odd);
+        assert!(
+            matches!(refused, Err(TurnError::Refused(_))),
+            "a name of {} bytes",
+            odd.len()
+        );
+        // A refusal is one line and does not repeat what it refused.
+        let said = refused.unwrap_err().to_string();
+        assert!(!said.contains('\n') && said.len() < 200, "{said:?}");
+        assert_eq!(made.turn(), None);
+    }
+    made.name_turn("a-1").unwrap();
+    assert_eq!(made.turn(), Some("a-1"));
+    // The longest name there is.
+    let longest = "a".repeat(64);
+    made.name_turn(&longest).unwrap();
+    assert_eq!(made.turn(), Some(longest.as_str()));
+    made.destroy().unwrap();
 }
 
 #[test]
 fn the_prompt_is_the_item_its_check_and_the_rules() {
-    let text = prompt("Make the greeting say bye", "grep -q bye a.txt");
+    let text = prompt(None, "Make the greeting say bye", "grep -q bye a.txt");
     assert!(text.contains("Make the greeting say bye"));
     assert!(text.contains("grep -q bye a.txt"));
     assert!(text.contains(RULES));
@@ -415,7 +505,7 @@ fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
     assert_eq!(seen, ClaudeWorker::settings(&sb).unwrap());
     assert_eq!(
         read(&repo.scratch("prompt.txt")),
-        prompt("Make the greeting say bye", "grep -q bye a.txt")
+        prompt(None, "Make the greeting say bye", "grep -q bye a.txt")
     );
 
     // The change it left uncommitted is committed for it, on the turn's branch.
@@ -465,7 +555,7 @@ fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
     assert_eq!(args, worker.args(&sb).unwrap());
     assert_eq!(
         read(&repo.scratch("prompt.txt")),
-        prompt("Make the greeting say bye", "grep -q bye a.txt")
+        prompt(None, "Make the greeting say bye", "grep -q bye a.txt")
     );
     assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed");
     let message = git(&sb.dir, &["log", "-1", "--format=%B"]);
@@ -1134,7 +1224,7 @@ fn something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit() {
 
 #[test]
 fn the_prompt_says_where_to_leave_a_message() {
-    assert!(prompt("t", "true").contains(
+    assert!(prompt(None, "t", "true").contains(
         "If your tools cannot commit, leave your commit message in a file named `.yak-message` at the \
          repository's root and the room will commit for you with it."
     ));

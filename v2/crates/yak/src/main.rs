@@ -116,6 +116,10 @@ struct Run {
     daily_turns: u32,
     #[arg(long, default_value_t = limits::CONCURRENT_TURNS, overrides_with = "concurrent")]
     concurrent: u32,
+    /// Begin each turn's prompt with a line of that turn's own, so that two turns at one item do not begin
+    /// alike. For measuring what a worker's program keeps of a prompt it has seen before.
+    #[arg(long)]
+    own_prompts: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -332,6 +336,7 @@ fn run_clock(dir: &Path, run: Run) -> Result<()> {
         Options {
             turn_secs: run.turn_secs,
             report: Some(&mut report),
+            own_prompts: run.own_prompts,
             ..Options::default()
         },
     )?;

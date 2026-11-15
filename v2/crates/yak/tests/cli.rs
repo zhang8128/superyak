@@ -239,6 +239,151 @@ fn item_turns_prints_what_was_measured() {
     }
 }
 
+/// A worker that hands in the prompt it was given and never the answer, so its item is taken again.
+const HANDS_IN_ITS_PROMPT: &str = "cat > prompt.txt\ngit add prompt.txt\ngit -c user.name=Test -c user.email=test@example.invalid commit -qm prompt";
+
+/// The prompt every turn at an item was given, beside the turn's attempt id, in the order the turns were taken:
+/// read whole, from the commit each turn handed in.
+fn prompts_handed_in(f: &Fixture, id: &str) -> Vec<(String, String)> {
+    Room::open_read_only(&f.room)
+        .unwrap()
+        .turns(&ItemId(id.to_string()))
+        .unwrap()
+        .iter()
+        .map(|turn| {
+            let commit = turn.commit.as_deref().expect("a turn handed a commit in");
+            let out = turn::sandbox::safe_git()
+                .arg("-C")
+                .arg(&f.repo)
+                .args(["show", &format!("{commit}:prompt.txt")])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            (
+                turn.attempt.0.clone(),
+                String::from_utf8(out.stdout).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// The prompt as it is without a line of a turn's own.
+fn the_prompt_as_it_was() -> String {
+    turn::worker::prompt(None, "Make answer green", "sh check.sh")
+}
+
+#[test]
+fn two_turns_at_one_item_have_prompts_that_differ_from_the_first_line() {
+    let f = Fixture::new();
+    let id = f.add();
+    let worker = f.script(HANDS_IN_ITS_PROMPT);
+    let out = f.clock(&worker).arg("--own-prompts").output().unwrap();
+    let prompts = prompts_handed_in(&f, &id);
+    assert!(
+        prompts.len() >= 2,
+        "the item was taken {} time(s): {}",
+        prompts.len(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let as_it_was = the_prompt_as_it_was();
+    let mut first_lines = Vec::new();
+    for (attempt, prompt) in &prompts {
+        // The line holds the turn's own attempt id, and all after it is the prompt as it was.
+        assert_eq!(
+            prompt,
+            &format!("This is turn {attempt} of the room.\n\n{as_it_was}")
+        );
+        let first = prompt.lines().next().unwrap().to_string();
+        assert!(
+            !first_lines.contains(&first),
+            "two turns began with {first:?}"
+        );
+        first_lines.push(first);
+    }
+}
+
+#[test]
+fn the_prompt_is_as_it_was_without_the_switch() {
+    let f = Fixture::new();
+    let id = f.add();
+    let worker = f.script(HANDS_IN_ITS_PROMPT);
+    let out = f.clock(&worker).output().unwrap();
+    let prompts = prompts_handed_in(&f, &id);
+    assert!(
+        prompts.len() >= 2,
+        "the item was taken {} time(s): {}",
+        prompts.len(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let as_it_was = the_prompt_as_it_was();
+    for (_, prompt) in &prompts {
+        assert_eq!(prompt, &as_it_was);
+    }
+}
+
+/// Every file under a directory, as bytes.
+fn files_under(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut left = vec![dir.to_path_buf()];
+    while let Some(dir) = left.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                left.push(path);
+            } else if meta.is_file() {
+                let bytes = fs::read(&path).unwrap();
+                found.push((path, bytes));
+            }
+        }
+    }
+    found
+}
+
+fn holds(bytes: &[u8], words: &str) -> bool {
+    bytes.windows(words.len()).any(|w| w == words.as_bytes())
+}
+
+#[test]
+fn no_turns_own_line_reaches_the_store() {
+    let f = Fixture::new();
+    let id = f.add();
+    let worker = f.script(HANDS_IN_ITS_PROMPT);
+    let _ = f.clock(&worker).arg("--own-prompts").output().unwrap();
+    // The turns were given the line: without that, finding it nowhere would say nothing.
+    let prompts = prompts_handed_in(&f, &id);
+    assert!(prompts.len() >= 2);
+    assert!(
+        prompts
+            .iter()
+            .all(|(_, prompt)| prompt.starts_with("This is turn "))
+    );
+    let kept = files_under(&f.room);
+    // The scan can find text the store keeps: the item's title is in it, as it was written.
+    assert!(
+        kept.iter()
+            .any(|(path, bytes)| path.starts_with(&f.room) && holds(bytes, "Make answer green")),
+        "the item's title was found in none of {:?}",
+        kept.iter().map(|(path, _)| path).collect::<Vec<_>>()
+    );
+    for (path, bytes) in &kept {
+        assert!(
+            !holds(bytes, "This is turn"),
+            "{} holds a turn's own line",
+            path.display()
+        );
+        assert!(
+            !holds(bytes, "of the room."),
+            "{} holds the end of a turn's own line",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn a_refusal_is_one_line_on_stderr_and_a_non_zero_exit() {
     let f = Fixture::new();

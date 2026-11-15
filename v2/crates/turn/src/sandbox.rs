@@ -75,6 +75,8 @@ pub const ROOM_GIT_SECS: u64 = 600;
 /// what matters is that it is not without end, whatever a worker left in a repository the room reads. A command
 /// that prints more is refused, whoever asked.
 pub const ROOM_GIT_OUTPUT_BYTES: usize = 64 << 20;
+/// The longest name a turn is given for its prompt's first line (`Sandbox::name_turn`).
+pub const TURN_NAME_CHARS: usize = 64;
 
 /// How much the room keeps of what a git command says of its failure.
 const ROOM_GIT_COMPLAINT_BYTES: usize = 64 << 10;
@@ -102,6 +104,8 @@ pub struct Sandbox {
     hidden_from_worker: Vec<PathBuf>,
     /// The turn's own temporary directory and which directory it is, once made.
     worker_tmp: Mutex<Option<(PathBuf, (u64, u64))>>,
+    /// The turn's name, when the room gave it one for its worker's prompt to begin with.
+    turn: Option<String>,
 }
 
 /// Which directory `path` is: its device and its number on that device. A link is not a directory.
@@ -368,6 +372,7 @@ impl Sandbox {
             a_run_began: AtomicBool::new(false),
             hidden_from_worker: vec![repo],
             worker_tmp: Mutex::new(None),
+            turn: None,
         })
     }
 
@@ -388,6 +393,30 @@ impl Sandbox {
         })?;
         self.hidden_from_worker.push(real);
         Ok(())
+    }
+
+    /// Names the turn this sandbox is for. Its worker's prompt then begins with a line that holds the name, so
+    /// that two turns given the same item do not begin alike (a worker's program keeps what it was lately sent,
+    /// and reads back a prompt that begins the same way). The name is the room's own, an attempt's id: letters,
+    /// digits and `-`, `TURN_NAME_CHARS` of them at most and nothing else, since it goes into a prompt.
+    pub fn name_turn(&mut self, turn: &str) -> Result<(), TurnError> {
+        if turn.is_empty()
+            || turn.len() > TURN_NAME_CHARS
+            || !turn.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            // What was refused may be long or hold anything: its length is said, not the name.
+            return Err(TurnError::Refused(format!(
+                "a turn's name is 1 to {TURN_NAME_CHARS} letters, digits and `-`: the one given, of {} bytes, is not",
+                turn.len()
+            )));
+        }
+        self.turn = Some(turn.to_string());
+        Ok(())
+    }
+
+    /// The turn's name, when it was given one.
+    pub fn turn(&self) -> Option<&str> {
+        self.turn.as_deref()
     }
 
     /// What a model worker's shell is not shown, as real paths: first the item's repository, then what was

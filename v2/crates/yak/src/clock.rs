@@ -334,6 +334,9 @@ pub struct Options<'a> {
     pub report: Option<&'a mut dyn FnMut(&Event)>,
     /// The longest one git command of the clock's own may take, in seconds.
     pub git_secs: u64,
+    /// Whether each turn's prompt begins with a line of that turn's own (its attempt's id). Off unless asked
+    /// for: it is there to measure what a worker's program keeps of a prompt it has seen before.
+    pub own_prompts: bool,
 }
 
 impl Default for Options<'_> {
@@ -343,6 +346,7 @@ impl Default for Options<'_> {
             poll: Duration::from_secs(u64::from(CLOCK_POLL_SECS)),
             report: None,
             git_secs: turn::sandbox::ROOM_GIT_SECS,
+            own_prompts: false,
         }
     }
 }
@@ -388,6 +392,7 @@ pub fn run_with(
         poll: options.poll,
         report: options.report,
         git_limit: Duration::from_secs(options.git_secs),
+        own_prompts: options.own_prompts,
         next: 0,
         unfreezable: HashMap::new(),
         ceiling_day: None,
@@ -548,6 +553,8 @@ struct Clock<'r, 'o> {
     report: Option<&'o mut dyn FnMut(&Event)>,
     /// The longest one git command of the clock's own may take.
     git_limit: Duration,
+    /// Whether each turn's prompt begins with a line of its own.
+    own_prompts: bool,
     /// The worker whose turn it is next.
     next: usize,
     /// Drafts that failed to freeze, and when: a broken one is tried again after `FREEZE_RETRY`, not every pass.
@@ -904,7 +911,16 @@ impl Clock<'_, '_> {
         };
         // No worker's shell may read the room's own directory: the store, the other turns' directories, the
         // checks. It was found a moment ago, so this fails only if it went away since; then no worker runs.
-        if let Err(e) = sandbox.hide_from_worker(&room_dir) {
+        // And when the clock was asked for it, the turn is named by its attempt's id, for its prompt's first
+        // line: the id is the room's own, so that does not fail.
+        let prepared = sandbox.hide_from_worker(&room_dir).and_then(|()| {
+            if self.own_prompts {
+                sandbox.name_turn(&lease.attempt.0)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(e) = prepared {
             if let Err(left) = sandbox.destroy() {
                 self.keep(&left);
             }
@@ -2098,6 +2114,7 @@ mod measurement_tests {
             poll: WATCH,
             report,
             git_limit: Duration::from_secs(5),
+            own_prompts: false,
             next: 0,
             unfreezable: HashMap::new(),
             ceiling_day: None,

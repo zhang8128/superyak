@@ -355,18 +355,33 @@ Added after the plan was written, from an advisory read of the spec by the ship 
 same prompt share a program's memory of it, so the later one is cheaper and faster.
 
 **Files:**
-- Modify: `v2/crates/turn/src/worker.rs`, `v2/crates/yak/src/main.rs`, `v2/crates/yak/src/clock.rs`
-- Test: `v2/crates/turn/tests/worker.rs`, `v2/crates/yak/tests/cli.rs`
+- Modify: `v2/crates/turn/src/worker.rs`, `v2/crates/turn/src/sandbox.rs`, `v2/crates/yak/src/main.rs`,
+  `v2/crates/yak/src/clock.rs`
+- Test: `v2/crates/turn/tests/worker.rs`, `v2/crates/yak/tests/cli.rs`, `v2/crates/yak/tests/clock.rs`
 
 **Interfaces:**
 - Produces: `yak clock run --own-prompts`. With it, `prompt` is given the turn's attempt id and begins with one
   line holding it. Without it the prompt is as it was. The line is in no store.
+- As built:
+  - `turn::worker::prompt(turn: Option<&str>, item_title, check_command)`. With a name, the prompt begins
+    `This is turn <name> of the room.` and a blank line, and is otherwise the same bytes.
+  - `Sandbox::name_turn(&mut self, turn: &str) -> Result<(), TurnError>` and `Sandbox::turn(&self) ->
+    Option<&str>`. A name is 1 to `TURN_NAME_CHARS` (64) ASCII letters, digits and `-`. Anything else is
+    refused, and the refusal says the length of what it refused, not the text. All three kinds of worker
+    give their program the named prompt.
+  - `clock::Options::own_prompts`, off by default. With it on, the clock names each turn's sandbox by its
+    attempt's id before the worker runs.
 
-- [ ] **Step 1: Write the failing tests.** `two_turns_at_one_item_have_prompts_that_differ_from_the_first_line`
-  with the switch on; `the_prompt_is_as_it_was_without_the_switch`; `no_turns_own_line_reaches_the_store`
-  (scan the store's file for the attempt id inside any text that is not an id column).
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 1: Write the failing tests.** `two_turns_at_one_item_have_prompts_that_differ_from_the_first_line`
+  with the switch on; `the_prompt_is_as_it_was_without_the_switch`; `no_turns_own_line_reaches_the_store`.
+  The last was planned as a scan for the attempt id outside id columns. As built it scans every file under
+  the room's directory for the line's own words, which are in no id, with the item's title as the control
+  that the scan can find text the store keeps. Also `a_named_turns_prompt_begins_with_a_line_of_its_own`
+  (a stand-in for each of the three kinds of worker is sent the named prompt; the names refused) and
+  `a_clock_gives_no_turn_a_line_of_its_own_unless_asked`.
+- [x] **Step 2:** Shown to fail by taking each condition out in turn: one mutant for each condition and
+  constant added.
+- [x] **Step 3: Implement.**
 - [ ] **Step 4:** The whole suite on both machines. Commit.
 
 ---

@@ -271,6 +271,7 @@ impl World {
                 poll: Duration::from_millis(100),
                 report: Some(&mut report),
                 git_secs: self.git_secs,
+                own_prompts: false,
             },
         );
         (result, events)
