@@ -1,0 +1,2810 @@
+{
+ "what": "The 21 turns of the stage 2 pilot, as the room recorded them, in the order they were run. A step is one tool call: its tool, whether it went well, and the milliseconds from the turn's start to the call being seen and to its result. No command's text is kept.",
+ "block": {
+  "versions": [
+   "claude 2.1.325 (Claude Code)",
+   "codex codex-cli 0.163.0",
+   "git git version 2.54.0 (Apple Git-157)",
+   "yak 5d7c9e74521cc36d4684dd9507d6cf112583caeee8913a95655b9a64f8e2cfcd",
+   "machine Darwin 27.0.0 arm64"
+  ],
+  "items_base": "453c8b6b1aa49881ff5b065d0bef9284224c87bb",
+  "limits_in_force": {
+   "concurrent": 1,
+   "daily-turns": 1,
+   "lease-secs": 1800,
+   "turn-secs": 1200
+  },
+  "items": {
+   "item-add-check-freezable": {
+    "check_file": "v2/checks/item-add-check-freezable.sh",
+    "check_blob": "ea23a1428e89d687419ef74dd7ae9f18de568629",
+    "wrong_commit": "b5cd1bd2a208b3595d99615b6747bdede6c1be48"
+   },
+   "item-add-title": {
+    "check_file": "v2/checks/item-add-title.sh",
+    "check_blob": "5b7d897476653800eeb917b175c5d26c30975a9e",
+    "wrong_commit": "002c84f2feababf77b7b67712025b784f64ef6f6"
+   },
+   "item-add-wrong-commit": {
+    "check_file": "v2/checks/item-add-wrong-commit.sh",
+    "check_blob": "ec4b4ecedaa235541e0670e8e989e3a1d9063d51",
+    "wrong_commit": "fae97c0bab3674389b7987b0c66776ee3c067af5"
+   }
+  }
+ },
+ "turns": [
+  {
+   "slot": 1,
+   "kind": "thrown-away",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 10:58:03 UTC",
+   "ended_utc": "2026-11-15 11:00:59 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    5.91,
+    8.32,
+    7.8
+   ],
+   "load_after": [
+    16.66,
+    13.27,
+    10.07
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4847,
+     "result_ms": 5231
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7561,
+     "result_ms": 7710
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9989,
+     "result_ms": 10136
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13298,
+     "result_ms": 13440
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13622,
+     "result_ms": 13744
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 22925,
+     "result_ms": 41061
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 45829,
+     "result_ms": 74120
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 78649,
+     "result_ms": 104291
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 108303,
+     "result_ms": 108462
+    }
+   ],
+   "record": {
+    "attempt": "a00559447bbb9",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "8ed5e54946d9d09be778096a1e6911401552b730",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 132273,
+     "bring_ms": 246,
+     "check_ms": 16921,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 1081,
+     "seal_ms": 131,
+     "steps_seen": 9,
+     "tokens": {
+      "cache_read": 265976,
+      "cache_write": 28696,
+      "complete": true,
+      "fresh_in": 18,
+      "output": 2842,
+      "reasoning": 189
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 6,
+     "worker_ms": 113894
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 9,
+    "steps_with_a_name": 3,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 2,
+   "kind": "memory-without",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": false,
+   "started_utc": "2026-11-15 11:01:00 UTC",
+   "ended_utc": "2026-11-15 11:04:29 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    16.66,
+    13.27,
+    10.07
+   ],
+   "load_after": [
+    14.2,
+    13.27,
+    10.78
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 3923,
+     "result_ms": 4275
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6634,
+     "result_ms": 6783
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8740,
+     "result_ms": 8866
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10803,
+     "result_ms": 10935
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11388,
+     "result_ms": 11552
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 21626,
+     "result_ms": 37483
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 42215,
+     "result_ms": 70617
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 75389,
+     "result_ms": 75756
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 80495,
+     "result_ms": 145625
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 149917,
+     "result_ms": 150209
+    }
+   ],
+   "record": {
+    "attempt": "aa3d6f1e3b833",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "0c7da5a1d2f3d5a5bfd7d09505b404d531803e26",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 174485,
+     "bring_ms": 253,
+     "check_ms": 16743,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 931,
+     "seal_ms": 142,
+     "steps_seen": 10,
+     "tokens": {
+      "cache_read": 307094,
+      "cache_write": 29114,
+      "complete": true,
+      "fresh_in": 20,
+      "output": 3527,
+      "reasoning": 437
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 6,
+     "worker_ms": 156416
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 10,
+    "steps_with_a_name": 4,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 3,
+   "kind": "memory-without",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": false,
+   "started_utc": "2026-11-15 11:04:30 UTC",
+   "ended_utc": "2026-11-15 11:07:10 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    14.2,
+    13.27,
+    10.78
+   ],
+   "load_after": [
+    14.84,
+    13.72,
+    11.4
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 3801,
+     "result_ms": 4179
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6724,
+     "result_ms": 6874
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9256,
+     "result_ms": 9387
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11548,
+     "result_ms": 11676
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 17746,
+     "result_ms": 17908
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27176,
+     "result_ms": 43284
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 47985,
+     "result_ms": 72938
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 76194,
+     "result_ms": 98153
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 102160,
+     "result_ms": 102324
+    }
+   ],
+   "record": {
+    "attempt": "aa9fa0cc5e911",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "5ff07c66c8341dd241d0fc8ad3205215b771030a",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 126119,
+     "bring_ms": 280,
+     "check_ms": 17070,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 935,
+     "seal_ms": 125,
+     "steps_seen": 9,
+     "tokens": {
+      "cache_read": 299199,
+      "cache_write": 26840,
+      "complete": true,
+      "fresh_in": 20,
+      "output": 2973,
+      "reasoning": 368
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 7,
+     "worker_ms": 107709
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 9,
+    "steps_with_a_name": 2,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 4,
+   "kind": "memory-with",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:07:10 UTC",
+   "ended_utc": "2026-11-15 11:10:28 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    14.84,
+    13.72,
+    11.4
+   ],
+   "load_after": [
+    6.48,
+    11.42,
+    11.04
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4390,
+     "result_ms": 4755
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7598,
+     "result_ms": 23306
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27363,
+     "result_ms": 27512
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 29675,
+     "result_ms": 29808
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 40085,
+     "result_ms": 42159
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 47759,
+     "result_ms": 81698
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 86583,
+     "result_ms": 112191
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 116787,
+     "result_ms": 116919
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 119665,
+     "result_ms": 119800
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 124961,
+     "result_ms": 125137
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 129024,
+     "result_ms": 131742
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 136305,
+     "result_ms": 138412
+    }
+   ],
+   "record": {
+    "attempt": "a0fd28917f0ea",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/tests/cli.rs"
+     }
+    ],
+    "commit": "4ebf4456668757184dcadb5acff63f3e82b7fcf7",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 163313,
+     "bring_ms": 212,
+     "check_ms": 16875,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 995,
+     "seal_ms": 132,
+     "steps_seen": 12,
+     "tokens": {
+      "cache_read": 423329,
+      "cache_write": 30434,
+      "complete": true,
+      "fresh_in": 26,
+      "output": 4646,
+      "reasoning": 566
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 9,
+     "worker_ms": 145099
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 12,
+    "steps_with_a_name": 3,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 5,
+   "kind": "memory-with",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:10:29 UTC",
+   "ended_utc": "2026-11-15 11:13:17 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    6.48,
+    11.42,
+    11.04
+   ],
+   "load_after": [
+    7.17,
+    11.13,
+    11.13
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4454,
+     "result_ms": 4832
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7818,
+     "result_ms": 23687
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27527,
+     "result_ms": 27700
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 30441,
+     "result_ms": 30570
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 39692,
+     "result_ms": 41775
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 46192,
+     "result_ms": 74174
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 79302,
+     "result_ms": 105172
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 109703,
+     "result_ms": 109865
+    }
+   ],
+   "record": {
+    "attempt": "a689ea254181c",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "270e5fa11c3fec49a4c411919562c7df0b506de1",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 134927,
+     "bring_ms": 471,
+     "check_ms": 16502,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 949,
+     "seal_ms": 125,
+     "steps_seen": 8,
+     "tokens": {
+      "cache_read": 262960,
+      "cache_write": 25851,
+      "complete": true,
+      "fresh_in": 18,
+      "output": 3110,
+      "reasoning": 459
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 5,
+     "worker_ms": 116880
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 8,
+    "steps_with_a_name": 3,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 6,
+   "kind": "thrown-away",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:13:18 UTC",
+   "ended_utc": "2026-11-15 11:15:09 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    7.17,
+    11.13,
+    11.13
+   ],
+   "load_after": [
+    15.41,
+    12.82,
+    11.77
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 5749,
+     "result_ms": 5774
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9023,
+     "result_ms": 9042
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13560,
+     "result_ms": 13560
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 16860,
+     "result_ms": 16860
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 30050,
+     "result_ms": 30215
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 30050,
+     "result_ms": 30215
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 30384,
+     "result_ms": 45318
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 36927,
+     "result_ms": 47303
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 48067,
+     "result_ms": 48111
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 53255,
+     "result_ms": 53297
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 53467,
+     "result_ms": 53593
+    },
+    {
+     "tool": "write",
+     "ok": true,
+     "seen_ms": 57213,
+     "result_ms": 57321
+    }
+   ],
+   "record": {
+    "attempt": "a1e346c57ba2e",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/room/tests/item.rs"
+     }
+    ],
+    "commit": "879d19fb5226dd0502112de1e5fdc86162f10518",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 77648,
+     "bring_ms": 217,
+     "check_ms": 16456,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 977,
+     "seal_ms": 638,
+     "steps_seen": 12,
+     "tokens": {
+      "cache_read": 291584,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 27094,
+      "output": 1573,
+      "reasoning": 28
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 5,
+     "worker_ms": 59360
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 12,
+    "steps_with_a_name": 7,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 7,
+   "kind": "round-1",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:15:10 UTC",
+   "ended_utc": "2026-11-15 11:18:05 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    15.41,
+    12.82,
+    11.77
+   ],
+   "load_after": [
+    9.1,
+    11.97,
+    11.69
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 5200,
+     "result_ms": 5564
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8506,
+     "result_ms": 8653
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9281,
+     "result_ms": 9429
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12457,
+     "result_ms": 28294
+    },
+    {
+     "tool": "read",
+     "ok": true,
+     "seen_ms": 31479,
+     "result_ms": 31519
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 42364,
+     "result_ms": 44460
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 49132,
+     "result_ms": 78080
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 83792,
+     "result_ms": 109584
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 115971,
+     "result_ms": 116218
+    }
+   ],
+   "record": {
+    "attempt": "a4e112b000e10",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "7dabbc30bd937bbef731ed72759215e58af29415",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 141120,
+     "bring_ms": 398,
+     "check_ms": 16564,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 969,
+     "seal_ms": 127,
+     "steps_seen": 9,
+     "tokens": {
+      "cache_read": 264893,
+      "cache_write": 27775,
+      "complete": true,
+      "fresh_in": 18,
+      "output": 3685,
+      "reasoning": 520
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 5,
+     "worker_ms": 123062
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 9,
+    "steps_with_a_name": 4,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 8,
+   "kind": "round-1",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:18:06 UTC",
+   "ended_utc": "2026-11-15 11:20:03 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    9.1,
+    11.97,
+    11.69
+   ],
+   "load_after": [
+    18.17,
+    14.48,
+    12.73
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6150,
+     "result_ms": 6150
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 9582,
+     "result_ms": 9603
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12334,
+     "result_ms": 12359
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 16850,
+     "result_ms": 16850
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 24010,
+     "result_ms": 24092
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 24261,
+     "result_ms": 38972
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 36210,
+     "result_ms": 36312
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 43428,
+     "result_ms": 43446
+    },
+    {
+     "tool": "write",
+     "ok": true,
+     "seen_ms": 47730,
+     "result_ms": 47806
+    }
+   ],
+   "record": {
+    "attempt": "a5eb9f4a1f6db",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     }
+    ],
+    "commit": "0498e7d9d0f960b8df298007d1d9a55418dbd9e4",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 68776,
+     "bring_ms": 485,
+     "check_ms": 16340,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": 16271,
+     "sandbox_ms": 943,
+     "seal_ms": 467,
+     "steps_seen": 9,
+     "tokens": {
+      "cache_read": 213120,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 18040,
+      "output": 977,
+      "reasoning": 15
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 2,
+     "worker_ms": 50541
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 9,
+    "steps_with_a_name": 7,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 9,
+   "kind": "round-1",
+   "item": "item-add-check-freezable",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:20:04 UTC",
+   "ended_utc": "2026-11-15 11:35:16 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    17.51,
+    14.41,
+    12.72
+   ],
+   "load_after": [
+    15.2,
+    9.3,
+    9.72
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 5415,
+     "result_ms": 5779
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8296,
+     "result_ms": 8426
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11254,
+     "result_ms": 11384
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 14175,
+     "result_ms": 14296
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 14563,
+     "result_ms": 14702
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 17172,
+     "result_ms": 17302
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 20526,
+     "result_ms": 20673
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 23239,
+     "result_ms": 23387
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 29836,
+     "result_ms": 29983
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 36155,
+     "result_ms": 36170
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 38160,
+     "result_ms": 38203
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 40458,
+     "result_ms": 40503
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 44028,
+     "result_ms": 61987
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 65951,
+     "result_ms": 136823
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 140962,
+     "result_ms": 207858
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 213191,
+     "result_ms": 814220
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 818548,
+     "result_ms": 818693
+    },
+    {
+     "tool": "other",
+     "ok": true,
+     "seen_ms": 824318,
+     "result_ms": 824318
+    },
+    {
+     "tool": "other",
+     "ok": true,
+     "seen_ms": 826768,
+     "result_ms": 826814
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 829357,
+     "result_ms": 829524
+    }
+   ],
+   "record": {
+    "attempt": "a4beeb3410c85",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/turn/src/check.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "bf2546d947c6ee42ed4f291814aa51923f3e4b33",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 856679,
+     "bring_ms": 224,
+     "check_ms": 18094,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": 18701,
+     "sandbox_ms": 1004,
+     "seal_ms": 161,
+     "steps_seen": 20,
+     "tokens": {
+      "cache_read": 623295,
+      "cache_write": 38208,
+      "complete": true,
+      "fresh_in": 36,
+      "output": 5293,
+      "reasoning": 761
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 14,
+     "worker_ms": 837196
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 20,
+    "steps_with_a_name": 6,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 10,
+   "kind": "round-2",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:35:17 UTC",
+   "ended_utc": "2026-11-15 11:38:35 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    15.2,
+    9.3,
+    9.72
+   ],
+   "load_after": [
+    13.47,
+    10.84,
+    10.32
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4182,
+     "result_ms": 4559
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7198,
+     "result_ms": 7343
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9549,
+     "result_ms": 9700
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11957,
+     "result_ms": 12088
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 16612,
+     "result_ms": 16764
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 19892,
+     "result_ms": 20037
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27095,
+     "result_ms": 43128
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 47052,
+     "result_ms": 71983
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 75506,
+     "result_ms": 75672
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 78866,
+     "result_ms": 100680
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 103629,
+     "result_ms": 103781
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 106212,
+     "result_ms": 106364
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 111990,
+     "result_ms": 112034
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 113439,
+     "result_ms": 114838
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 118010,
+     "result_ms": 118663
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 123367,
+     "result_ms": 124635
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 129350,
+     "result_ms": 131396
+    }
+   ],
+   "record": {
+    "attempt": "aa3e3302d31df",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/tests/cli.rs"
+     }
+    ],
+    "commit": "57a0e3ec4589ceb1a60a305bb8b3112aa3634f26",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 163709,
+     "bring_ms": 292,
+     "check_ms": 24696,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 883,
+     "seal_ms": 125,
+     "steps_seen": 17,
+     "tokens": {
+      "cache_read": 567488,
+      "cache_write": 30779,
+      "complete": true,
+      "fresh_in": 34,
+      "output": 4744,
+      "reasoning": 461
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 13,
+     "worker_ms": 137713
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 17,
+    "steps_with_a_name": 4,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 11,
+   "kind": "round-2",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:38:36 UTC",
+   "ended_utc": "2026-11-15 11:40:48 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    12.87,
+    10.76,
+    10.29
+   ],
+   "load_after": [
+    19.84,
+    14.01,
+    11.65
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6184,
+     "result_ms": 6184
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11546,
+     "result_ms": 11580
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 25005,
+     "result_ms": 25090
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 25258,
+     "result_ms": 46145
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 40251,
+     "result_ms": 40340
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 40515,
+     "result_ms": 48622
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 53853,
+     "result_ms": 54076
+    },
+    {
+     "tool": "write",
+     "ok": true,
+     "seen_ms": 56848,
+     "result_ms": 56923
+    }
+   ],
+   "record": {
+    "attempt": "aa5c2c6a5b611",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/room/tests/item.rs"
+     }
+    ],
+    "commit": "a381eec9a0f8106ebdbd2e4479294ff748666e84",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 82443,
+     "bring_ms": 225,
+     "check_ms": 20189,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 1065,
+     "seal_ms": 447,
+     "steps_seen": 8,
+     "tokens": {
+      "cache_read": 251136,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 24540,
+      "output": 1593,
+      "reasoning": 36
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 1,
+     "worker_ms": 60517
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 8,
+    "steps_with_a_name": 7,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 12,
+   "kind": "round-2",
+   "item": "item-add-check-freezable",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:40:49 UTC",
+   "ended_utc": "2026-11-15 11:46:50 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    19.84,
+    14.01,
+    11.65
+   ],
+   "load_after": [
+    13.28,
+    14.65,
+    13.26
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4726,
+     "result_ms": 5080
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8321,
+     "result_ms": 8463
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10948,
+     "result_ms": 11095
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13328,
+     "result_ms": 13466
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 17542,
+     "result_ms": 17671
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 20241,
+     "result_ms": 20390
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 24962,
+     "result_ms": 25095
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 31782,
+     "result_ms": 31805
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 33827,
+     "result_ms": 33855
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 35979,
+     "result_ms": 36027
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 39325,
+     "result_ms": 63687
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 67486,
+     "result_ms": 142280
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 146790,
+     "result_ms": 215346
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 218717,
+     "result_ms": 283058
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 288270,
+     "result_ms": 288471
+    }
+   ],
+   "record": {
+    "attempt": "aa524a0dac9ad",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/turn/src/check.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "f5ec98b54b9e9e745a1b406afa432630937d7f0f",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 314353,
+     "bring_ms": 339,
+     "check_ms": 18379,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 1060,
+     "seal_ms": 132,
+     "steps_seen": 15,
+     "tokens": {
+      "cache_read": 501315,
+      "cache_write": 36893,
+      "complete": true,
+      "fresh_in": 28,
+      "output": 4277,
+      "reasoning": 440
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 10,
+     "worker_ms": 294443
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 15,
+    "steps_with_a_name": 5,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 13,
+   "kind": "round-3",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:46:51 UTC",
+   "ended_utc": "2026-11-15 11:49:57 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    14.14,
+    14.8,
+    13.32
+   ],
+   "load_after": [
+    17.19,
+    15.63,
+    13.98
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4750,
+     "result_ms": 5121
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8210,
+     "result_ms": 24054
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27305,
+     "result_ms": 27456
+    },
+    {
+     "tool": "read",
+     "ok": true,
+     "seen_ms": 30365,
+     "result_ms": 30384
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 34940,
+     "result_ms": 35089
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 44825,
+     "result_ms": 46989
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 52216,
+     "result_ms": 81214
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 84918,
+     "result_ms": 106764
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 110820,
+     "result_ms": 110984
+    }
+   ],
+   "record": {
+    "attempt": "a3cd4adde2c58",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "0959b5b3b624510c919a3a6025f42e0424b7decb",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 134983,
+     "bring_ms": 345,
+     "check_ms": 16846,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": 16639,
+     "sandbox_ms": 885,
+     "seal_ms": 132,
+     "steps_seen": 9,
+     "tokens": {
+      "cache_read": 303601,
+      "cache_write": 28298,
+      "complete": true,
+      "fresh_in": 20,
+      "output": 3263,
+      "reasoning": 381
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 5,
+     "worker_ms": 116775
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 9,
+    "steps_with_a_name": 4,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 14,
+   "kind": "round-3",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:49:58 UTC",
+   "ended_utc": "2026-11-15 11:51:53 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    17.19,
+    15.63,
+    13.98
+   ],
+   "load_after": [
+    14.78,
+    15.53,
+    14.17
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6650,
+     "result_ms": 6650
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9878,
+     "result_ms": 9906
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13435,
+     "result_ms": 13435
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 22672,
+     "result_ms": 22754
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 22923,
+     "result_ms": 37656
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 35329,
+     "result_ms": 35336
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 42154,
+     "result_ms": 42165
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 44934,
+     "result_ms": 44934
+    }
+   ],
+   "record": {
+    "attempt": "ac858dc1ce5cc",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     }
+    ],
+    "commit": "efd373ee3b95ab9aa0e605dc164840b6212785a2",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 65718,
+     "bring_ms": 238,
+     "check_ms": 16464,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": 16345,
+     "sandbox_ms": 948,
+     "seal_ms": 404,
+     "steps_seen": 8,
+     "tokens": {
+      "cache_read": 213120,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 17436,
+      "output": 995,
+      "reasoning": 41
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 1,
+     "worker_ms": 47664
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 8,
+    "steps_with_a_name": 7,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 15,
+   "kind": "round-3",
+   "item": "item-add-check-freezable",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:51:54 UTC",
+   "ended_utc": "2026-11-15 11:55:49 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    14.78,
+    15.53,
+    14.17
+   ],
+   "load_after": [
+    25.95,
+    18.68,
+    15.75
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4443,
+     "result_ms": 4807
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7594,
+     "result_ms": 24334
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 27773,
+     "result_ms": 27924
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 30995,
+     "result_ms": 31108
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 33923,
+     "result_ms": 34071
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 36994,
+     "result_ms": 37146
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 42834,
+     "result_ms": 42990
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 48710,
+     "result_ms": 48738
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 53862,
+     "result_ms": 53889
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 55364,
+     "result_ms": 59874
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 65105,
+     "result_ms": 75549
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 80442,
+     "result_ms": 89135
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 93456,
+     "result_ms": 116388
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 119597,
+     "result_ms": 119742
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 124549,
+     "result_ms": 147077
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 152015,
+     "result_ms": 152193
+    }
+   ],
+   "record": {
+    "attempt": "a3f0117f59ccd",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/turn/src/check.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "825e0ec701fceec64d1d13e14aec1ecd44ca02e6",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 179226,
+     "bring_ms": 224,
+     "check_ms": 20363,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": 20233,
+     "sandbox_ms": 905,
+     "seal_ms": 133,
+     "steps_seen": 16,
+     "tokens": {
+      "cache_read": 513553,
+      "cache_write": 34028,
+      "complete": true,
+      "fresh_in": 30,
+      "output": 5690,
+      "reasoning": 604
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 10,
+     "worker_ms": 157601
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 16,
+    "steps_with_a_name": 6,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 16,
+   "kind": "round-4",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:55:50 UTC",
+   "ended_utc": "2026-11-15 11:58:42 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    25.95,
+    18.68,
+    15.75
+   ],
+   "load_after": [
+    14.46,
+    16.84,
+    15.59
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4881,
+     "result_ms": 5215
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7469,
+     "result_ms": 7619
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10087,
+     "result_ms": 10237
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12523,
+     "result_ms": 12670
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 23519,
+     "result_ms": 40709
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 46098,
+     "result_ms": 75392
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 79837,
+     "result_ms": 105665
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 111060,
+     "result_ms": 111303
+    }
+   ],
+   "record": {
+    "attempt": "a9cabcbc1c2db",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "29bcaa8eb1b3f5fca7c817ad2e8295e2f26986ce",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 134798,
+     "bring_ms": 210,
+     "check_ms": 16957,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 1036,
+     "seal_ms": 130,
+     "steps_seen": 8,
+     "tokens": {
+      "cache_read": 266546,
+      "cache_write": 28432,
+      "complete": true,
+      "fresh_in": 18,
+      "output": 3103,
+      "reasoning": 483
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 6,
+     "worker_ms": 116465
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 8,
+    "steps_with_a_name": 2,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 17,
+   "kind": "round-4",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 11:58:43 UTC",
+   "ended_utc": "2026-11-15 12:00:48 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    14.46,
+    16.84,
+    15.59
+   ],
+   "load_after": [
+    10.78,
+    15.12,
+    15.11
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 5871,
+     "result_ms": 5871
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10155,
+     "result_ms": 10176
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12865,
+     "result_ms": 12865
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 16099,
+     "result_ms": 16099
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 20266,
+     "result_ms": 20266
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 23323,
+     "result_ms": 23323
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 38675,
+     "result_ms": 38838
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 38675,
+     "result_ms": 38838
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 39007,
+     "result_ms": 39046
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 41873,
+     "result_ms": 41900
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 47089,
+     "result_ms": 62092
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 53958,
+     "result_ms": 54057
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 54229,
+     "result_ms": 64038
+    },
+    {
+     "tool": "shell",
+     "ok": false,
+     "seen_ms": 67017,
+     "result_ms": 67112
+    },
+    {
+     "tool": "write",
+     "ok": true,
+     "seen_ms": 70529,
+     "result_ms": 70599
+    }
+   ],
+   "record": {
+    "attempt": "ae311d09b8816",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/room/tests/item.rs"
+     }
+    ],
+    "commit": "d9d5337bb73323764f1d98529e6126eedb9c8c04",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 91960,
+     "bring_ms": 213,
+     "check_ms": 16246,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 976,
+     "seal_ms": 379,
+     "steps_seen": 15,
+     "tokens": {
+      "cache_read": 397696,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 25309,
+      "output": 1891,
+      "reasoning": 30
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 3,
+     "worker_ms": 74146
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 15,
+    "steps_with_a_name": 12,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 18,
+   "kind": "round-4",
+   "item": "item-add-check-freezable",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 12:00:49 UTC",
+   "ended_utc": "2026-11-15 12:03:28 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    10.78,
+    15.12,
+    15.11
+   ],
+   "load_after": [
+    20.09,
+    16.07,
+    15.45
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6236,
+     "result_ms": 6583
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 9631,
+     "result_ms": 9802
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12776,
+     "result_ms": 29399
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 31902,
+     "result_ms": 32028
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 35634,
+     "result_ms": 35780
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 38970,
+     "result_ms": 39124
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 49035,
+     "result_ms": 53877
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 57959,
+     "result_ms": 81024
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 84705,
+     "result_ms": 93737
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 97901,
+     "result_ms": 98070
+    }
+   ],
+   "record": {
+    "attempt": "af5ea5d109dbf",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/turn/src/check.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "10b84aefe31529e86282419d55dca46d79d804ff",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 123385,
+     "bring_ms": 273,
+     "check_ms": 18624,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 978,
+     "seal_ms": 164,
+     "steps_seen": 10,
+     "tokens": {
+      "cache_read": 333536,
+      "cache_write": 27961,
+      "complete": true,
+      "fresh_in": 22,
+      "output": 3266,
+      "reasoning": 309
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 7,
+     "worker_ms": 103346
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 10,
+    "steps_with_a_name": 3,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 19,
+   "kind": "round-5",
+   "item": "item-add-wrong-commit",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 12:03:29 UTC",
+   "ended_utc": "2026-11-15 12:06:30 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    20.09,
+    16.07,
+    15.45
+   ],
+   "load_after": [
+    8.45,
+    14.53,
+    15.14
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 4324,
+     "result_ms": 4692
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6907,
+     "result_ms": 7019
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 8942,
+     "result_ms": 9092
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 11385,
+     "result_ms": 11534
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 22690,
+     "result_ms": 38625
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 42116,
+     "result_ms": 66951
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 71239,
+     "result_ms": 93043
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 96663,
+     "result_ms": 96809
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 99868,
+     "result_ms": 100008
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 106312,
+     "result_ms": 106333
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 110187,
+     "result_ms": 117407
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 121423,
+     "result_ms": 123702
+    }
+   ],
+   "record": {
+    "attempt": "a828baa070514",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/tests/cli.rs"
+     }
+    ],
+    "commit": "3aadaf99786fa85641c9f4690979b629bb9586d4",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 146881,
+     "bring_ms": 331,
+     "check_ms": 16697,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 928,
+     "seal_ms": 142,
+     "steps_seen": 12,
+     "tokens": {
+      "cache_read": 411556,
+      "cache_write": 29223,
+      "complete": true,
+      "fresh_in": 26,
+      "output": 4142,
+      "reasoning": 328
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 8,
+     "worker_ms": 128783
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 12,
+    "steps_with_a_name": 4,
+    "worker": "claude:opus"
+   }
+  },
+  {
+   "slot": 20,
+   "kind": "round-5",
+   "item": "item-add-title",
+   "worker": "codex:gpt-6.1-sol",
+   "own_line": true,
+   "started_utc": "2026-11-15 12:06:31 UTC",
+   "ended_utc": "2026-11-15 12:08:38 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    8.45,
+    14.53,
+    15.14
+   ],
+   "load_after": [
+    13.96,
+    14.21,
+    14.92
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 6991,
+     "result_ms": 6991
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10373,
+     "result_ms": 10382
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12840,
+     "result_ms": 12840
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 16070,
+     "result_ms": 16070
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 28600,
+     "result_ms": 28689
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 28849,
+     "result_ms": 43560
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 33339,
+     "result_ms": 33340
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 43495,
+     "result_ms": 43495
+    },
+    {
+     "tool": "edit",
+     "ok": true,
+     "seen_ms": 56871,
+     "result_ms": 56954
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 57124,
+     "result_ms": 57131
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 61346,
+     "result_ms": 64036
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 65189,
+     "result_ms": 65189
+    },
+    {
+     "tool": "write",
+     "ok": true,
+     "seen_ms": 72954,
+     "result_ms": 73054
+    }
+   ],
+   "record": {
+    "attempt": "a93a2db94d10e",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/room/src/item.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/room/tests/item.rs"
+     }
+    ],
+    "commit": "0330f394ee8665eb8aadbc5e75351d8d6da4f278",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 94380,
+     "bring_ms": 234,
+     "check_ms": 16219,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 1043,
+     "seal_ms": 453,
+     "steps_seen": 13,
+     "tokens": {
+      "cache_read": 389632,
+      "cache_write": 0,
+      "complete": true,
+      "fresh_in": 24500,
+      "output": 1760,
+      "reasoning": 21
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 5,
+     "worker_ms": 76431
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 13,
+    "steps_with_a_name": 8,
+    "worker": "codex:gpt-6.1-sol"
+   }
+  },
+  {
+   "slot": 21,
+   "kind": "round-5",
+   "item": "item-add-check-freezable",
+   "worker": "claude:opus",
+   "own_line": true,
+   "started_utc": "2026-11-15 12:08:39 UTC",
+   "ended_utc": "2026-11-15 12:14:46 UTC",
+   "clock_exit": 0,
+   "load_before": [
+    13.96,
+    14.21,
+    14.92
+   ],
+   "load_after": [
+    8.69,
+    11.01,
+    13.28
+   ],
+   "steps": [
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 5253,
+     "result_ms": 5589
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 7792,
+     "result_ms": 7940
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 10333,
+     "result_ms": 10465
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 12800,
+     "result_ms": 12940
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 13026,
+     "result_ms": 13149
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 15925,
+     "result_ms": 16069
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 18880,
+     "result_ms": 19026
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 21412,
+     "result_ms": 21562
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 30651,
+     "result_ms": 49001
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 52637,
+     "result_ms": 123554
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 127483,
+     "result_ms": 194284
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 199190,
+     "result_ms": 276950
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 282046,
+     "result_ms": 282288
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 285296,
+     "result_ms": 300393
+    },
+    {
+     "tool": "shell",
+     "ok": true,
+     "seen_ms": 304756,
+     "result_ms": 304955
+    }
+   ],
+   "record": {
+    "attempt": "a44e04fbb285c",
+    "changes": [
+     {
+      "change": "changed",
+      "path": "v2/crates/turn/src/check.rs"
+     },
+     {
+      "change": "changed",
+      "path": "v2/crates/yak/src/main.rs"
+     }
+    ],
+    "commit": "92b87ca9e1be6ec061dc4f6e77532c1224b9e602",
+    "lease_no": 1,
+    "measured": {
+     "active_ms": 330781,
+     "bring_ms": 324,
+     "check_ms": 18520,
+     "ended": "exited",
+     "exit_code": 0,
+     "recheck_ms": null,
+     "sandbox_ms": 986,
+     "seal_ms": 146,
+     "steps_seen": 15,
+     "tokens": {
+      "cache_read": 530087,
+      "cache_write": 34603,
+      "complete": true,
+      "fresh_in": 30,
+      "output": 4339,
+      "reasoning": 279
+     },
+     "unknown_changes": 0,
+     "unknown_steps": 13,
+     "worker_ms": 310805
+    },
+    "passed": true,
+    "state": "finished",
+    "steps": 15,
+    "steps_with_a_name": 2,
+    "worker": "claude:opus"
+   }
+  }
+ ]
+}

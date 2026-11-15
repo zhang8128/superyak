@@ -2,7 +2,8 @@
 # The live turns that show what a worker's shell can read: adds the two probe items to a new room and runs
 # the clock once through.
 #   sh run.sh <run-dir> <who wrote worker-reach-done.sh, as family:name>
-# <run-dir> holds yak (the binary) and made/ (from setup.sh). It gets room/, items.txt, clock.log.
+# <run-dir> holds yak (the binary) and made/ (from setup.sh). It gets room/, items.txt, clock.log, and
+# after.txt (whether the file a probe tries to write in /tmp is in the machine's /tmp afterwards).
 # Before the clock starts it runs the probe's own control: the probe, here, where nothing is hidden, in a
 # copy of the repository, kept as made/host-control.txt. If any line of that is a CANNOT the run is refused:
 # a target that cannot be read without a sandbox says nothing when a worker cannot read it. One probe's
@@ -73,3 +74,11 @@ set -- HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL="${SHELL:-/bin/sh}" LA
     printf '%s %s\n' "$(date -u '+%H:%M:%S')" "$line"
 done > "$RUN/clock.log"
 date -u '+%Y-%m-%d %H:%M:%S UTC' > "$RUN/ended.txt"
+# The probe tries to write one file in /tmp. Whether that reached the machine's /tmp is seen from here: a
+# shell given a /tmp of its own writes there, and nothing shows here.
+if [ -e /tmp/yak-reach-probe-w.tmp ]; then
+    echo "a worker's file in /tmp is in the machine's /tmp" > "$RUN/after.txt"
+    unlink /tmp/yak-reach-probe-w.tmp
+else
+    echo "no worker's file reached the machine's /tmp" > "$RUN/after.txt"
+fi

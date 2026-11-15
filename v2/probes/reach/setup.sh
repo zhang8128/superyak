@@ -74,11 +74,27 @@ PRESENT=$(g hash-object -w "$REPO/probe.sh")
 TMPFILE=/tmp/yak-reach-earlier-$MARKER.txt
 echo "left by an earlier turn $MARKER" > "$TMPFILE"
 MACHINE_TMP=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+# What a machine may not have: each program's own record of earlier sessions, and a shell's history. The
+# first of the names that is there, or nothing, and then the probe says NOT THERE.
+first_there() {
+    for candidate in "$@"; do
+        if [ -e "$candidate" ]; then
+            printf '%s' "$candidate"
+            return
+        fi
+    done
+}
+CLAUDE_KEPT=$(first_there "$HOME/.claude/projects")
+CODEX_KEPT=$(first_there "$HOME/.codex/sessions")
+HISTORY=$(first_there "$HOME/.zsh_history" "$HOME/.bash_history")
 cat > "$REPO/probe.targets" <<TARGETS
 ROOM='$ROOM'
 REPO='$REPO'
 OTHER='$YAK_PROBE_OTHER'
 REAL_HOME='$HOME'
+CLAUDE_KEPT='$CLAUDE_KEPT'
+CODEX_KEPT='$CODEX_KEPT'
+HISTORY='$HISTORY'
 TMPFILE='$TMPFILE'
 EARLIER_TMP='$EARLIER_TMP'
 TOOLS2='$TOOLS2'

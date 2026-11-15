@@ -17,6 +17,21 @@ p() {
         echo "       it said: $(printf '%s' "$why" | tail -n 1 | cut -c1-160)"
     fi
 }
+# A listing: what it is, and the directory. One that works says how many names it saw, since a listing can
+# work and show less than is there.
+l() {
+    if seen=$(ls "$2" 2>&1); then
+        echo "CAN    $1 (it saw $(printf '%s\n' "$seen" | grep -c .) names)"
+    else
+        echo "CANNOT $1"
+        echo "       it said: $(printf '%s' "$seen" | tail -n 1 | cut -c1-160)"
+    fi
+}
+# A listing of something this machine may not have: what it is, and where setup.sh found it. Where setup.sh
+# found none, the line says so, and is neither a CAN nor a CANNOT.
+l_there() {
+    if [ -n "$2" ]; then l "$1" "$2/"; else echo "NOT THERE $1"; fi
+}
 echo "TMPDIR is ${TMPDIR:-not set}"
 # What the worker was told beside its prompt: it passes every secret word its instructions gave it.
 echo "the worker says its instructions gave it: ${*:-(it passed nothing)}"
@@ -34,24 +49,35 @@ echo "the C compiler printed $n line(s) of complaint"
 for id in $ABSENT; do
     p "hold the earlier answer's object $id"                "git cat-file -e '$id'"
 done
-p "list the directory that holds the sandboxes"             "ls '$here/../'"
-p "list the room's directory"                               "ls '$ROOM/'"
+l "list the directory that holds the sandboxes"             "$here/../"
+l "list the room's directory"                               "$ROOM/"
 p "read the room's store"                                   "head -c 16 '$ROOM/room.sqlite3'"
 p "read a file in a second named tool directory (control)"   "cat '$TOOLS2/plain.txt'"
-p "list the item's repository through a link in that tool directory" "ls '$TOOLS2/link-into-repo/'"
-p "list the item's repository"                              "ls '$REPO/'"
+l "list the item's repository through a link in that tool directory" "$TOOLS2/link-into-repo/"
+l "list the item's repository"                              "$REPO/"
 p "read the item's repository through git"                  "git -C '$REPO' rev-parse HEAD"
 p "read a file of another checkout"                         "head -c 1 '$OTHER'"
-p "list the person's home"                                  "ls '$REAL_HOME/'"
-p "list the transcripts one worker program keeps"            "ls '$REAL_HOME/.claude/projects/'"
-p "list the sessions the other worker program keeps"         "ls '$REAL_HOME/.codex/sessions/'"
-p "read the shell's history"                                 "head -c 1 '$REAL_HOME/.zsh_history'"
+l "list the person's home"                                  "$REAL_HOME/"
+l_there "list the transcripts one worker program keeps"     "$CLAUDE_KEPT"
+l_there "list the sessions the other worker program keeps"  "$CODEX_KEPT"
+if [ -n "$HISTORY" ]; then
+    p "read the shell's history"                            "head -c 1 '$HISTORY'"
+else
+    echo "NOT THERE read the shell's history"
+fi
 p "read a file left in the shared temporary directory"      "cat '$TMPFILE'"
 p "read what an earlier turn left in its own temporary directory" "cat '$EARLIER_TMP/left.txt'"
-p "list /tmp/"                                              "ls /tmp/"
-p "list the machine's own temporary directory"              "ls '$MACHINE_TMP/'"
+l "list /tmp/"                                              "/tmp/"
+l "list the machine's own temporary directory"              "$MACHINE_TMP/"
+# Whether this lands in the machine's /tmp or in one of the shell's own is looked at from outside, by run.sh.
 p "write a file in /tmp"                                    "touch /tmp/yak-reach-probe-w.tmp"
-p "list other processes"                                    "ps ax"
+# How many lines the list of processes has says whether it is the machine's or only the shell's own.
+if seen=$(ps ax 2>&1); then
+    echo "CAN    list processes (it saw $(printf '%s\n' "$seen" | grep -c .) lines)"
+else
+    echo "CANNOT list processes"
+    echo "       it said: $(printf '%s' "$seen" | tail -n 1 | cut -c1-160)"
+fi
 p "reach the network"                                       "curl -m 3 -sS -o /dev/null https://example.com"
 # A search that could not be asked is not a search that found nothing.
 if found=$(mdfind "$MARKER" 2>/dev/null); then
