@@ -455,8 +455,11 @@ fn a_killed_clock_recovers() {
     sleep(Duration::from_secs(4)); // past the first lease
     ok(&once_through(&r, &[&fix], &["--lease-secs", "3"]));
     assert_eq!(state(&r, &id), "passed_verified");
-    assert!(ref_for(&r, &id, 2), "taken again with lease 2");
-    assert!(!ref_for(&r, &id, 1), "the dead turn left no ref");
+    // What the repository's refs are is said with a failure: once, on a machine under load, the item passed and
+    // not on lease 2, and this test's words alone could not say on which.
+    let refs = refs(&r.fx.repo);
+    assert!(ref_for(&r, &id, 2), "taken again with lease 2: {refs:?}");
+    assert!(!ref_for(&r, &id, 1), "the dead turn left no ref: {refs:?}");
 }
 
 #[test]
