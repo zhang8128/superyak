@@ -937,4 +937,50 @@ fn a_removal_that_fails_is_said_beside_what_was_left() {
     );
     // The clone is still there, since it could not be removed; nothing else was touched.
     assert!(held.exists());
+
+    // The other way round: the scratch directory is the room's own and cannot be removed, and something else
+    // is where the clone was. The first failure does not stop the room from finding the second.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let status = sb
+        .run_untrusted(
+            "sh",
+            &strings(&["-c", ": > \"$HOME/held-here\""]),
+            "",
+            30,
+            &mut |_| {},
+        )
+        .unwrap();
+    assert_eq!(status.exit_code, 0);
+    let clone = sb.dir.clone();
+    let mut name = clone.file_name().unwrap().to_os_string();
+    name.push(".scratch");
+    let held = clone.with_file_name(name).join("held-here");
+    assert!(
+        held.exists(),
+        "the run did not write in its scratch directory"
+    );
+    let flag = |how: &str| {
+        let done = Command::new("/usr/bin/chflags")
+            .args([how])
+            .arg(&held)
+            .status()
+            .unwrap();
+        assert!(done.success(), "chflags {how}");
+    };
+    flag("uchg");
+    std::fs::rename(&clone, repo.scratch("moved-away")).unwrap();
+    std::fs::create_dir(&clone).unwrap();
+    std::fs::write(clone.join("canary"), "KEEP").unwrap();
+    let removed = sb.destroy();
+    flag("nouchg");
+    let Err(TurnError::Left { paths, also }) = &removed else {
+        panic!("{removed:?}");
+    };
+    assert_eq!(paths.as_slice(), std::slice::from_ref(&clone));
+    assert!(also.is_some(), "the removal's failure was dropped");
+    assert_eq!(
+        std::fs::read_to_string(clone.join("canary")).unwrap(),
+        "KEEP"
+    );
 }

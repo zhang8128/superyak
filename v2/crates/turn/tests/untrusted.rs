@@ -774,3 +774,99 @@ fn a_secrets_place_is_known_through_a_link_that_goes_up_out_of_what_is_not_there
         assert!(printed.contains("SAID ran"), "{form}: {printed}");
     }
 }
+
+/// macOS's jail does not tell capital letters from small: a rule that shows `…/share` shows a directory kept as
+/// `…/SHARE` (measured both ways round on macOS 27). So a place where an agent's settings would be kept that
+/// would lie in a directory every run is shown stops the jail in whatever letters it is written, also when
+/// neither is there yet and neither has a spelling on the disk to go by. On Linux the letters are told apart,
+/// and a name in other letters is another name.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_secrets_place_in_a_shown_directory_is_known_in_any_letters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    // One of the package directories every run is shown that is not on this machine, written in other letters.
+    let absent = [
+        "/usr/local/Cellar",
+        "/usr/local/Frameworks",
+        "/opt/homebrew/Cellar",
+    ]
+    .into_iter()
+    .map(Path::new)
+    .find(|dir| !dir.exists());
+    let Some(absent) = absent else {
+        eprintln!("every package directory is here: nothing to try this with");
+        return;
+    };
+    let shouted = absent
+        .parent()
+        .unwrap()
+        .join(absent.file_name().unwrap().to_string_lossy().to_uppercase());
+    assert_ne!(shouted, absent);
+    let would_be = shouted.join("yak-test-a-place-that-is-never-made/codex");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("CODEX_HOME", &would_be)],
+        true,
+    );
+    assert!(
+        printed.contains("REFUSED ") && printed.contains("every run is shown"),
+        "{}: {printed}",
+        would_be.display()
+    );
+    // The control: the same letters somewhere no run is shown.
+    let elsewhere = home.join("CELLAR/yak-test-a-place-that-is-never-made/codex");
+    let printed = under(
+        "echo ran",
+        &[("HOME", &home), ("CODEX_HOME", &elsewhere)],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+}
+
+/// A name with an accented letter can be written two ways: as one letter, or as a letter and a mark. A disk
+/// that takes the two for one name keeps one of them. An agent's settings directory given in the other
+/// writing is still inside the directory the disk has, and naming that directory to the jail is refused. On a
+/// disk that tells the two apart they are two names, and the directory is an ordinary one.
+#[test]
+fn a_secrets_place_is_known_however_an_accented_letter_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let (as_one_letter, as_letter_and_mark) = ("caf\u{e9}", "cafe\u{301}");
+    let kept = root.join(as_one_letter);
+    fs::create_dir_all(kept.join("bin")).unwrap();
+    let one_name = root.join(as_letter_and_mark).is_dir();
+    // Not there yet, and given in the other writing of the directory's name.
+    let agent = root.join(as_letter_and_mark).join("settings");
+    let printed = under(
+        "echo ran",
+        &[
+            ("HOME", &home),
+            ("CODEX_HOME", &agent),
+            ("YAK_JAIL_READ", &kept),
+        ],
+        true,
+    );
+    if one_name {
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{printed}"
+        );
+    } else {
+        assert!(printed.contains("SAID ran"), "{printed}");
+    }
+    // The control, on either kind of disk: a directory beside where the settings would be can be named.
+    let named = kept.join("bin");
+    let printed = under(
+        "echo ran",
+        &[
+            ("HOME", &home),
+            ("CODEX_HOME", &agent),
+            ("YAK_JAIL_READ", &named),
+        ],
+        true,
+    );
+    assert!(printed.contains("SAID ran"), "{printed}");
+}

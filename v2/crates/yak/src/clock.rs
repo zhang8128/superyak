@@ -1026,11 +1026,12 @@ impl Clock<'_, '_> {
     }
 
     /// Remembers what a removal left in place (`TurnError::Left`), so that tidying leaves it too. Each is kept
-    /// as the disk spells it (`spelled`), which is how tidying meets it again: a sandbox knows the name it
-    /// would have made, and what was found in its place may be kept in other letters.
+    /// under every name the disk has for it (`spelled`), which is how tidying meets it again: a sandbox knows
+    /// the name it would have made, and what was found in its place may be kept in other letters.
     fn keep(&mut self, e: &TurnError) {
         if let TurnError::Left { paths, .. } = e {
-            self.kept.extend(paths.iter().map(|path| spelled(path)));
+            self.kept
+                .extend(paths.iter().flat_map(|path| spelled(path)));
         }
     }
 
@@ -1324,28 +1325,44 @@ fn placed(path: &Path) -> PathBuf {
     }
 }
 
-/// `path` as the disk spells it: the directory it is in resolved, and its own name as that directory lists it.
-/// The entry is found by which file it is, not by its letters: on a disk where capital and small letters name
-/// the same file, `a.scratch` may be kept as `a.SCRATCH`. A link at that place is named and not followed.
-fn spelled(path: &Path) -> PathBuf {
+/// Every name `path` goes by in the directory it is in, as the disk spells them, with the directory resolved.
+/// The entries are found by which file they are, not by their letters: on a disk where capital and small
+/// letters name the same file, `a.scratch` may be kept as `a.SCRATCH`. And a file can have more than one name
+/// in a directory, so all of them are kept, and the name as it was given with them: picking one could pick the
+/// wrong one. A link at that place is named and not followed.
+fn spelled(path: &Path) -> Vec<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let (Some(Ok(dir)), Ok(this)) = (
         path.parent().map(fs::canonicalize),
         fs::symlink_metadata(path),
     ) else {
-        return placed(path);
+        return vec![placed(path)];
     };
-    fs::read_dir(&dir)
+    let listed = fs::read_dir(&dir)
         .into_iter()
         .flatten()
         .flatten()
-        .find(|entry| {
-            entry
-                .metadata()
-                .is_ok_and(|other| other.dev() == this.dev() && other.ino() == this.ino())
-        })
-        .map(|entry| entry.path())
-        .unwrap_or_else(|| placed(path))
+        .filter_map(|entry| {
+            let other = entry.metadata().ok()?;
+            Some((entry.path(), (other.dev(), other.ino())))
+        });
+    spellings(placed(path), (this.dev(), this.ino()), listed)
+}
+
+/// `given`, and every listed name of the same file. Kept apart from the listing so that it can be tried with a
+/// listing in any order.
+fn spellings(
+    given: PathBuf,
+    file: (u64, u64),
+    listed: impl Iterator<Item = (PathBuf, (u64, u64))>,
+) -> Vec<PathBuf> {
+    let mut names = vec![given];
+    for (name, other) in listed {
+        if other == file && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// Whether `path` is a pid file a turn left: a plain file named `<attempt>.pid`. A link is never one.
@@ -1384,6 +1401,53 @@ fn remove_path(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kept file is remembered by the name it was given and by every other name it has, whichever comes
+    /// first in the listing.
+    #[test]
+    fn a_kept_file_is_remembered_by_every_name_it_has() {
+        let name = |text: &str| PathBuf::from(text);
+        let (kept, other) = ((1, 7), (1, 8));
+        let both_ways = [
+            vec![
+                (name("/t/other-name"), kept),
+                (name("/t/a.scratch"), kept),
+                (name("/t/b"), other),
+            ],
+            vec![
+                (name("/t/b"), other),
+                (name("/t/a.scratch"), kept),
+                (name("/t/other-name"), kept),
+            ],
+        ];
+        for listing in both_ways {
+            let names = spellings(name("/t/a.scratch"), kept, listing.into_iter());
+            assert!(names.contains(&name("/t/a.scratch")), "{names:?}");
+            assert!(names.contains(&name("/t/other-name")), "{names:?}");
+            assert!(!names.contains(&name("/t/b")), "{names:?}");
+            assert_eq!(names.len(), 2, "{names:?}");
+        }
+        // Three names for one file: all three, and not only the first other one met.
+        let listing = [
+            (name("/t/0-other"), kept),
+            (name("/t/a.scratch"), kept),
+            (name("/t/zz-other"), kept),
+        ];
+        let names = spellings(name("/t/a.scratch"), kept, listing.into_iter());
+        assert_eq!(names.len(), 3, "{names:?}");
+        // Kept in other letters than it was given: both spellings, so whichever tidying meets is left.
+        let names = spellings(
+            name("/t/a.scratch"),
+            kept,
+            [(name("/t/a.SCRATCH"), kept)].into_iter(),
+        );
+        assert_eq!(names, [name("/t/a.scratch"), name("/t/a.SCRATCH")]);
+        // Not listed at all: the name as given.
+        assert_eq!(
+            spellings(name("/t/gone"), kept, std::iter::empty()),
+            [name("/t/gone")]
+        );
+    }
 
     #[test]
     fn a_pid_file_is_a_plain_file_with_that_ending_and_never_a_link() {

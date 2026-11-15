@@ -321,8 +321,11 @@ impl Settings {
         // A directory every run is shown is shown as it is when the run starts, like one that was named. A place
         // where keys or settings would be kept must not lie in one, unless what is there now is already hidden:
         // then whatever is put there later is hidden with it.
+        // Whether the jail's own rules on this machine tell capital letters from small.
+        let folds = matches!(Jail::detect(), Some((Kind::Seatbelt, _)));
         if let Some((kind, _)) = Jail::detect()
-            && let Some((place, dir)) = shown_by_default(&always_shown(kind), &protected, &hidden)
+            && let Some((place, dir)) =
+                shown_by_default(&always_shown(kind), &protected, &hidden, folds)
         {
             return Err(TurnError::Refused(format!(
                 "{} is where keys or settings are kept, or would be, and {}, which every run is shown, would \
@@ -343,12 +346,12 @@ impl Settings {
                 let real = path
                     .canonicalize()
                     .map_err(|_| refuse("which is not there"))?;
-                if real.parent().is_none() || home.starts_with(&real) {
+                if real.parent().is_none() || inside(&home, &real, folds) {
                     return Err(refuse(
                         "which holds the home directory: name the tool's own directory",
                     ));
                 }
-                if let Some(hidden) = hidden.iter().find(|hidden| real.starts_with(hidden)) {
+                if let Some(hidden) = hidden.iter().find(|hidden| inside(&real, hidden, folds)) {
                     return Err(refuse(&format!(
                         "which is hidden from every run: {} holds keys or settings",
                         hidden.display()
@@ -360,7 +363,7 @@ impl Settings {
                 if let Some(inside) = protected
                     .iter()
                     .chain(&hidden)
-                    .find(|protected| protected.starts_with(&real))
+                    .find(|protected| inside(protected, &real, folds))
                 {
                     return Err(refuse(&format!(
                         "which would also show {}, where keys or settings are kept, if that is ever there: \
@@ -397,6 +400,23 @@ fn always_shown(kind: Kind) -> Vec<PathBuf> {
     }
 }
 
+/// Whether `path` is `dir` or lies in it, as the jail's own rules would have it. `folds` says those rules do
+/// not tell capital letters from small: macOS's do not, measured on macOS 27 with a rule written `share` and a
+/// directory kept as `SHARE`, each way round. A name that is there has been spelled as the disk has it before
+/// it gets here, so this matters for a name that is not there yet, which has no spelling but the one written.
+/// Two names that differ in how an accented letter is put together are not taken as one.
+fn inside(path: &Path, dir: &Path, folds: bool) -> bool {
+    if !folds {
+        return path.starts_with(dir);
+    }
+    let small = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    small(path).starts_with(&small(dir))
+}
+
 /// A place where keys or settings are kept, or would be, that one of the directories every run is shown would
 /// show, with that directory; or none.
 ///
@@ -409,14 +429,16 @@ fn shown_by_default(
     dirs: &[PathBuf],
     protected: &[PathBuf],
     hidden: &[PathBuf],
+    folds: bool,
 ) -> Option<(PathBuf, PathBuf)> {
     for dir in dirs {
         let leads_to = dir.canonicalize().unwrap_or_else(|_| dir.clone());
         let elsewhere = leads_to != *dir;
         for at in [dir, &leads_to] {
             let shown = protected.iter().chain(hidden).find(|place| {
-                let touches = place.starts_with(at) || at.starts_with(place);
-                let covered = !elsewhere && hidden.iter().any(|hidden| place.starts_with(hidden));
+                let touches = inside(place, at, folds) || inside(at, place, folds);
+                let covered =
+                    !elsewhere && hidden.iter().any(|hidden| inside(place, hidden, folds));
                 touches && !covered
             });
             if let Some(place) = shown {
@@ -701,10 +723,11 @@ impl Jail {
     /// thing is quietly missing.
     pub fn hides(&self, path: &Path) -> Option<&Path> {
         let real = path.canonicalize().ok()?;
+        let folds = self.kind == Kind::Seatbelt;
         self.hidden
             .iter()
             .map(|hidden| hidden.path.as_path())
-            .find(|hidden| real.starts_with(hidden))
+            .find(|hidden| inside(&real, hidden, folds))
     }
 
     pub fn kind(&self) -> Kind {
@@ -1024,6 +1047,26 @@ fn quoted(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_path_is_inside_a_directory_by_its_names_and_by_its_letters_only_where_the_rules_tell_them_apart()
+     {
+        let inside =
+            |path: &str, dir: &str, folds: bool| inside(Path::new(path), Path::new(dir), folds);
+        for folds in [false, true] {
+            assert!(inside("/a/b/c", "/a/b", folds));
+            assert!(inside("/a/b", "/a/b", folds));
+            assert!(
+                !inside("/a/bc", "/a/b", folds),
+                "a name is not the start of a longer name"
+            );
+            assert!(!inside("/a", "/a/b", folds));
+        }
+        assert!(inside("/a/B/c", "/a/b", true));
+        assert!(inside("/A/b", "/a/B", true));
+        assert!(!inside("/a/B/c", "/a/b", false));
+        assert!(!inside("/a/Bc", "/a/b", true));
+    }
+
     /// The directories every run is shown are judged by their names and by where their names lead.
     #[test]
     fn a_directory_every_run_is_shown_is_judged_by_where_its_name_leads() {
@@ -1034,10 +1077,25 @@ mod tests {
         }
         let tmp = tmp.canonicalize().unwrap();
         let at = |path: &str| tmp.join(path);
+        let paths = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(|n| at(n)).collect() };
         let judged = |dirs: &[&str], protected: &[&str], hidden: &[&str]| {
-            let paths = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(|n| at(n)).collect() };
-            shown_by_default(&paths(dirs), &paths(protected), &paths(hidden))
+            shown_by_default(&paths(dirs), &paths(protected), &paths(hidden), false)
         };
+        // Neither the directory nor the place is there yet, and they are written in different letters. Under
+        // rules that do not tell the letters apart they are one place; under rules that do, two.
+        let (dirs, places) = (paths(&["pkg/share"]), paths(&["pkg/SHARE/later/secret"]));
+        assert_eq!(
+            shown_by_default(&dirs, &places, &[], true),
+            Some((at("pkg/SHARE/later/secret"), at("pkg/share")))
+        );
+        assert_eq!(shown_by_default(&dirs, &places, &[], false), None);
+        // The same the other way up: the directory inside a place written in other letters.
+        let (dirs, places) = (paths(&["Pkg/Made/share"]), paths(&["pkg/made"]));
+        assert_eq!(
+            shown_by_default(&dirs, &places, &[], true),
+            Some((at("pkg/made"), at("Pkg/Made/share")))
+        );
+        assert_eq!(shown_by_default(&dirs, &places, &[], false), None);
         // A place that is not there yet, inside one of them.
         assert_eq!(
             judged(&["plain"], &["plain/later/secret"], &[]),

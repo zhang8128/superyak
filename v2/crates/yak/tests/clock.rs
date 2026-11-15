@@ -304,8 +304,13 @@ fn a_turn_out_of_time_is_judged_by_what_it_committed() {
     }
 }
 
-/// A lease the room calls stale mid-turn (here a lease of one second, so the first renewal is too late) ends the
-/// worker, hands in nothing and makes no ref; the next pass returns the item, until it is abandoned.
+/// A lease the room calls stale (here a lease of one second, so the first renewal is too late) ends the turn:
+/// nothing is handed in and no ref is made, and the next pass returns the item, until it is abandoned. A
+/// worker that had started is ended and not left to run.
+///
+/// On a busy machine a lease of one second can run out before the worker has started, and then there is no
+/// run to see. So this test does not ask that one was seen. The test after the next shows a lease running
+/// out while the worker runs, by holding the clock still, where nothing is left to how busy the machine is.
 #[test]
 fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     let mut world = World::new(1);
@@ -332,7 +337,6 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     assert_eq!(view.lease_no, MAX_ATTEMPTS);
     assert!(world.room_refs().is_empty());
     assert!(world.turns().is_empty());
-    assert!(!groups.is_empty(), "no pid file was seen");
     for group in groups {
         assert!(!group_alive(group), "the group {group} is still alive");
     }
@@ -596,6 +600,35 @@ fn a_scratch_directory_the_room_did_not_make_is_left_where_it_is() {
             .collect();
         names.sort();
         assert_eq!(world.turns(), names, "{ending}");
+    }
+}
+
+/// What is found at the scratch directory's place need not be a directory. A file there is left too, and a
+/// file can go by a second name in the same directory: both names are left, whichever the clock meets first.
+#[test]
+fn a_file_at_the_scratch_directorys_place_is_left_under_every_name_it_has() {
+    let mut world = World::new(1);
+    let fix = world.script("fix.sh", FIX);
+    let turns = world.room_dir.join("turns");
+    let mut planted = Vec::new();
+    let mut plant = |e: &Event| {
+        if let Event::Started { attempt, .. } = e {
+            fs::create_dir_all(&turns).unwrap();
+            let at = turns.join(format!("{}.scratch", attempt.0));
+            fs::write(&at, "KEEP").unwrap();
+            // Two more names for the same file, one sorting before the attempt's and one after.
+            for other in ["0-other-name", "zz-other-name"] {
+                let _ = fs::hard_link(&at, turns.join(other));
+            }
+            planted.push(at);
+        }
+    };
+    let (result, events) =
+        world.run_hooked(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS, &mut plant);
+    result.unwrap();
+    assert!(!planted.is_empty());
+    for at in &planted {
+        assert_eq!(fs::read_to_string(at).unwrap(), "KEEP", "{events:?}");
     }
 }
 
@@ -1316,10 +1349,62 @@ fn inner_a_clock_under_the_rooms_switches() {
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
         println!("WRAPPED {mode}");
     }
+    // With `YAK_INNER_ASLEEP` set, the clock is held still for eight seconds while a worker that waits for
+    // thirty is running, under a lease of six: the lease runs out while the worker runs, and no renewal could
+    // have kept it. Another program does the holding, since this one cannot move while it is held. It begins
+    // a second after the worker's record is there, however long the machine took to get that far.
+    let asleep = std::env::var_os("YAK_INNER_ASLEEP").is_some();
+    let waits = world.script("waits.sh", "#!/bin/sh\nsleep 30\n");
+    let mut holder = None;
+    if asleep {
+        world.room.set_lease_secs(6).unwrap();
+        workers = vec![waits.clone()];
+        let me = std::process::id();
+        let held = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                &format!(
+                    "until ls '{}'/*.pid >/dev/null 2>&1; do sleep 0.1; done; \
+                     sleep 1; kill -STOP {me}; sleep 8; kill -CONT {me}",
+                    world.room_dir.join("turns").display()
+                ),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        holder = Some(held);
+    }
+    let groups = asleep.then(|| Groups::watch(world.room_dir.join("turns")));
     let workers: Vec<&str> = workers.iter().map(String::as_str).collect();
     let began = Instant::now();
-    let (result, events) = world.run(&workers, Mode::OnceThrough, NEVER, TURN_SECS);
+    // The room is stopped when the first turn ends, so that the run is that one turn.
+    let stop = world.room_dir.join("STOP");
+    let mut after_one = |e: &Event| {
+        if asleep && matches!(e, Event::Ended { .. }) {
+            fs::write(&stop, "").unwrap();
+        }
+    };
+    let (result, events) = world.run_hooked(
+        &workers,
+        Mode::OnceThrough,
+        NEVER,
+        TURN_SECS,
+        &mut after_one,
+    );
     println!("TOOK {} s", began.elapsed().as_secs());
+    if let Some(mut holder) = holder {
+        let _ = holder.wait();
+    }
+    if let Some(groups) = groups {
+        let seen = groups.seen();
+        // A moment for the last signal to land.
+        thread::sleep(Duration::from_millis(500));
+        let alive = seen.iter().filter(|group| group_alive(**group)).count();
+        println!("GROUPS seen {} alive {alive}", seen.len());
+        println!("TURNS left {:?}", world.turns());
+    }
     match result {
         Ok(()) => println!("RAN {} turn(s)", started(&events).len()),
         Err(e) => println!("REFUSED {e}"),
@@ -1382,6 +1467,38 @@ fn with_git(mode: &str) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     printed
+}
+
+/// A lease that runs out while the worker runs ends the worker and the turn: nothing is handed in, no ref is
+/// made, and nothing of the turn is left. Seen with the clock held still for longer than its lease, once a
+/// worker that waits for thirty seconds is running.
+#[test]
+fn a_lease_that_runs_out_while_the_worker_runs_ends_the_worker() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inner_a_clock_under_the_rooms_switches",
+            "--nocapture",
+        ])
+        .env("YAK_INNER_WORKERS", "FIX")
+        .env("YAK_INNER_ASLEEP", "1")
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env_remove("YAK_JAIL")
+        .env_remove("YAK_SUPERVISION")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        printed.contains("ITEM "),
+        "the inner run did not report: {printed} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(printed.contains("FIRST Some(LeaseLost)"), "{printed}");
+    // The worker had started, and it is gone: not left to wait out its thirty seconds.
+    assert!(printed.contains("GROUPS seen 1 alive 0"), "{printed}");
+    assert!(took(&printed) < 25, "{printed}");
+    assert!(printed.contains("REFS 0"), "{printed}");
+    assert!(printed.contains("TURNS left []"), "{printed}");
 }
 
 /// How long the inner run's clock took, in whole seconds.

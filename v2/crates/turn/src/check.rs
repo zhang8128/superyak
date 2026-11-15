@@ -116,9 +116,15 @@ pub fn run_check(
     if let Err(e @ TurnError::Unended { .. }) = result {
         return Err(e);
     }
-    // What the removal left is said before anything else that went wrong: whoever called must not remove
-    // around it, whatever became of the check itself.
-    match (sandbox.destroy(), result) {
+    settle(sandbox.destroy(), result)
+}
+
+/// What a check gives back once its sandbox has been removed, or not. What the removal left is said before
+/// anything else that went wrong: whoever called must not remove around it, whatever became of the check
+/// itself. The check's own failure and the removal's are both kept beside it. With nothing left, the check's
+/// failure comes first, then the removal's.
+fn settle<T>(removed: Result<(), TurnError>, result: Result<T, TurnError>) -> Result<T, TurnError> {
+    match (removed, result) {
         (Err(TurnError::Left { paths, also }), result) => Err(TurnError::Left {
             paths,
             also: both(result.err().map(|e| e.to_string()), also),
@@ -375,6 +381,41 @@ fn write_new(at: &PathBuf, file: &CheckFile) -> Result<(), TurnError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ordering `run_check` ends with, for each way a check and its removal can turn out.
+    #[test]
+    fn what_a_removal_left_is_said_first_with_both_failures_beside_it() {
+        let left = |also: Option<&str>| TurnError::Left {
+            paths: vec![PathBuf::from("/kept")],
+            also: also.map(str::to_string),
+        };
+        let failed = || TurnError::Io("the check".into());
+        let unremoved = || TurnError::Io("the removal".into());
+        // Something was left, the check failed, and a removal failed: all three are in what comes back.
+        let said = settle::<()>(Err(left(Some("the removal"))), Err(failed()));
+        let Err(TurnError::Left { paths, also }) = said else {
+            panic!("{said:?}");
+        };
+        assert_eq!(paths, [PathBuf::from("/kept")]);
+        let also = also.unwrap();
+        assert!(
+            also.contains("the check") && also.contains("the removal"),
+            "{also}"
+        );
+        // Something was left and the check gave a verdict: still what was left, and no verdict.
+        assert!(matches!(
+            settle(Err(left(None)), Ok(7)),
+            Err(TurnError::Left { also: None, .. })
+        ));
+        // Nothing left: the check's failure, then the removal's, then the verdict.
+        assert!(
+            matches!(settle::<()>(Err(unremoved()), Err(failed())), Err(TurnError::Io(why)) if why == "the check")
+        );
+        assert!(
+            matches!(settle(Err(unremoved()), Ok(7)), Err(TurnError::Io(why)) if why == "the removal")
+        );
+        assert!(matches!(settle(Ok(()), Ok(7)), Ok(7)));
+    }
 
     #[test]
     fn what_went_wrong_besides_keeps_the_checks_failure_and_the_removals() {
