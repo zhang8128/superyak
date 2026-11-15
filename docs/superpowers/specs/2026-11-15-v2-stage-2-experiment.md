@@ -82,15 +82,51 @@ turn is kept.
 brings each returned commit into that same repository. A second turn at the same item can therefore hold the
 first one's answer as an object.
 
-- Every turn is cloned from its own copy of the item's source, made fresh from one frozen set of objects:
-  the base, the wrong commits, and what they reach. Nothing else. This holds for a run's second and third
-  turns as much as for another arm's.
-- Returned commits go to a repository that no later turn is cloned from.
-- Before a turn starts, its source copy is shown to hold no earlier answer and no reference fix, by object
-  id, beside a control object that has to be there. The answers of stage 1's own run are among those shown
-  absent.
+- Every turn's sandbox is made new: an empty repository, into which the base is fetched by its id. It holds
+  what the base reaches and no other object of the item's repository: not a later commit, not a wrong fix,
+  not an earlier answer. This holds for a run's second and third turns as much as for another arm's. An
+  earlier draft gave every turn a source copy of its own. The sandbox made this way is that copy.
+- Returned commits go into the item's repository. No sandbox is made from them, because a sandbox is
+  fetched by the base's id alone, and no worker's shell may read that repository, by the rule below.
+- Before a block of turns, a sandbox the room made is shown to hold no earlier answer and no reference fix,
+  by object id, beside a control object that has to be there. The answers of stage 1's own run are among
+  those shown absent.
 - Within a block of turns that will be compared, the worker's program and model, the rules, the check and
   the limits do not change, and their versions are recorded.
+
+**What a worker can read beside its sandbox.** Holding no earlier answer is not the same as being unable to
+read one. A model worker does not run in the room's jail. It runs in its own program's sandbox, as the room
+sets that. Another ship asked what such a worker can reach outside its clone, and nobody had measured it.
+
+- **Measured (2026-11-15, Claude Code 2.1.325 and codex-cli 0.163.0, on macOS),** with one script of probes
+  run as a worker's shell command, beside a run with no sandbox in which every probe succeeded. As stage 1
+  set the two programs, the shell of each could read a file in the directory beside its sandbox, list the
+  directory above it, and read a file of another checkout in the user's home. Each could read a file
+  another process had left in `/tmp`, and each could write in a temporary directory that every turn on the
+  machine shares. Neither could list other processes, reach the network, or write beside its sandbox. The
+  machine's search service answered neither: it found the probe's marker in no file, and in two with no
+  sandbox.
+- **So two turns could teach each other three ways:** an earlier answer read from the item's repository; a
+  finished fix read from another checkout on the machine; a file one turn left in a shared temporary
+  directory. Whether any turn ever did is not known: the record keeps no command's text.
+- **The rule is the jail's own.** A worker's shell is shown its sandbox, a temporary directory of the turn's
+  own, the system, and the directories named for tools. The home, the room's directory, the item's
+  repository and the shared temporary directories are hidden from it.
+- **Measured with the same probes,** each program can be set so, and was, through a live turn of Claude and
+  through Codex's own sandbox command: every read above was then refused, while the sandbox, the turn's own
+  temporary directory and a named toolchain could be used, a small program compiled and ran, and a script
+  could change directory. Three things had to be found on the way:
+  - Git stops when it may not read the home's settings, so a worker's git is told to use none.
+  - Claude gives a shell command a temporary directory of the program's choosing, shared by every session
+    on the machine, unless the one it is told to use has a short path. So a turn's own is made under the
+    system's temporary root, not beside the sandbox.
+  - For Codex, hiding the home alone breaks `cd` in a script run by `sh`. Hiding the whole disk and showing
+    the system, as the jail does, does not.
+- **What changes for a worker:** a bare `mktemp` fails in Codex's shell as it already did in Claude's,
+  because it goes to the machine's shared directory whatever `TMPDIR` says. With a template under `TMPDIR`
+  it works, and that is how the checks call it.
+- **Not shown:** any of this on Linux; for Claude, places outside the home, the room and the temporary
+  directories, which its shell reads as the machine lets it.
 
 **A turn's whole cost.**
 
@@ -113,7 +149,7 @@ first one's answer as an object.
 - Each step also keeps when its call was seen and when its result came.
 
 **What a record is tied to.** Enough to put a run's cost back together from its turns, and to say what was
-compared with what: the item, its source copy, base and check; the worker, its program's version, the model,
+compared with what: the item, its base and check; the worker, its program's version, the model,
 the rules and the limits; the arm, the seed and the order; the run and which of its turns this is; what was
 offered; the commit handed in; how the turn ended and its verdict; the token parts and whether they are
 complete; the durations. A run's cost is the sum over its turns.
@@ -174,6 +210,7 @@ after, as a smoke test: they are not expected to produce the rare cases by thems
 | The record's ties | Everything under "What a record is tied to" is written and read back |
 | No text of a turn | None in the store, or in any log or cache of the room's. The message file is not in the committed tree: it is gone before the commit is made |
 | Two turns at one item | Shown not to share an answer, with the control present |
+| What a worker's shell can read | Through a live turn of each program, as the room starts it: reads of the room's directory, the item's repository, another checkout, the home and a file left in a shared temporary directory are each refused; its sandbox, its own temporary directory and a named tool can be used; an earlier answer's object is absent from its sandbox and the base's tree is present |
 | Two turns given the same item | With the switch on, their prompts differ from the first line, and neither turn's line is kept in the store |
 | A turn's tokens | Fresh input, writes to memory and reads from memory are three numbers, for both programs where each reports them |
 
@@ -197,8 +234,8 @@ active seconds. If active seconds cannot be shown whole for every row either, th
 same turn differs from itself. It is a pilot. Its numbers do not by themselves fix the size of part 3.
 
 - **What is run:** each of the three items of the first run, five times, with nothing offered, each turn
-  from its own source copy, by the worker that may take it. Fifteen turns, each one launch, each kept whether
-  it passed or not, plus the three replays of part 0.
+  in a sandbox made new from its base, by the worker that may take it. Fifteen turns, each one launch, each
+  kept whether it passed or not, plus the three replays of part 0.
 - **What is read:** for each item and worker, the spread of the deciding outcome across its five turns, as a
   standard deviation of the logarithm. All three are kept and reported, with the worker beside each.
 - **First, what a program's memory does to a turn.** Before the fifteen: one item, four turns back to back,
@@ -260,9 +297,10 @@ that this can be checked afterwards.
   to change is reported, so a reader can tell a poor match from a walk that did not help.
 - **A fourth arm, stitched routes,** only if walks show a benefit over notes, and then on fresh items.
 
-**Assignment.** Every scored item is run under every arm. Each turn has its own source copy, so no turn can
-find another's answer. The order of an item's three arms is one of the six possible orders, drawn
-by a seeded draw. The seed and the order are recorded.
+**Assignment.** Every scored item is run under every arm. Each turn's sandbox is made new from its base, and
+no worker's shell can read the room or the item's repository, so no turn can find another's answer. The
+order of an item's three arms is one of the six possible orders, drawn by a seeded draw. The seed and the
+order are recorded.
 
 **Paired in time as well.** An item's three runs follow one another, with no other item's run between them.
 If seconds decide, a model's speed drifts with the hour, and three runs an hour apart would carry that drift
@@ -375,7 +413,7 @@ Read from the top. The first row that fits is the outcome.
 
 | Finding | Answer in this draft |
 | --- | --- |
-| 1. A fresh process on the same base is not isolation: a second turn's clone can hold the first one's answer | "Turns that cannot teach each other"; a source copy for every turn; "What nothing means here" |
+| 1. A fresh process on the same base is not isolation: a second turn's clone can hold the first one's answer | "Turns that cannot teach each other"; a sandbox made new for every turn; "What a worker can read beside its sandbox"; "What nothing means here" |
 | 2. A sum over steps is not a turn's whole cost | "A turn's whole cost"; the decision at the end of part 0 |
 | 3. An arm can win by failing cheaply | "An arm must finish the work to win on cost"; "One run, defined" |
 | 4. No benefit shown is not no benefit; walks over notes means nothing below nothing | The four readings; the order of comparisons; the outcome table |
