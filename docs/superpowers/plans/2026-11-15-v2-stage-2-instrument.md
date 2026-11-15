@@ -164,7 +164,7 @@ CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INT
 
   and two columns on `steps`: `seen_ms INTEGER`, `result_ms INTEGER`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `a_version_1_store_is_brought_forward_when_opened_for_writing`: build a version-1 store by running the
     stage 1 schema text (keep it in the test as a constant) and inserting one item, attempt, step and verdict;
     `Room::open` succeeds; `schema_version` is 2; every old row reads back; the new tables exist and are empty.
@@ -176,11 +176,11 @@ CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INT
     version 1 and opens with the stage 1 column list.
   - Erasing an item removes its rows from the three new tables (extend the table list in
     `erasing_an_item_removes_every_row_and_its_title_from_the_file`).
-- [ ] **Step 2:** Run them. Expected: FAIL (no such variant, version mismatch).
-- [ ] **Step 3: Implement.** One transaction: create the new tables, add the two columns, set the version.
+- [x] **Step 2:** Run them. Expected: FAIL (no such variant, version mismatch).
+- [x] **Step 3: Implement.** One transaction: create the new tables, add the two columns, set the version.
   `validate` prepares against every table and column of version 2. `erase_item` deletes from the new tables
   before their parents.
-- [ ] **Step 4:** `cargo test -p room` passes. Commit.
+- [x] **Step 4:** `cargo test -p room` passes. Commit.
 
 ---
 
@@ -221,7 +221,7 @@ pub struct TurnView {
 
 `record_walk`'s return changes meaning (it returned the number of steps). Its one caller is updated in Task 5.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `a_step_keeps_every_file_it_named_in_order`: a step with three `Named` reads back with the same three.
   - `a_name_that_is_not_a_plain_path_is_left_out_and_the_walk_is_kept`: three steps, the second naming
     `"a b.txt"` and `"ok.txt"`: all three steps are kept, the second has only `ok.txt`, and the call returns 1.
@@ -233,9 +233,9 @@ pub struct TurnView {
   - `changes_read_back_in_order`, and a path that is not plain is counted and not kept.
   - `the_store_holds_no_free_text` covers every TEXT column of the three new tables.
   - `turns_lists_an_items_attempts_with_what_was_measured`.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4:** `cargo test -p room` passes. Commit.
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4:** `cargo test -p room` passes. Commit.
 
 ---
 
@@ -251,7 +251,7 @@ pub struct TurnView {
   take the turn's start (`Instant`) at `new` and stamp each step's `seen_ms` and `result_ms`; `Seen` is filled
   line by line, so it holds what was seen when `run` returns an error.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `the_closing_total_is_the_turns_tokens`, on `tests/data/claude-stream-ids.jsonl`: `tokens()` is
     `{ fresh_in: 4, cache_write: 7287, cache_read: 29643, output: 286, complete: true }`, total 37,220. On
     `codex-json-sample.jsonl`: read `turn.completed.usage`. **First establish, from the two captured files and
@@ -273,10 +273,10 @@ pub struct TurnView {
     (Review Focus 2.)
   - The parsers' line filters (`"tool_"`, `"item`) no longer drop the closing lines:
     `a_closing_line_with_no_tool_word_in_it_is_read`.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.** Keep the two-hundred-megabyte and hundred-thousand-step tests passing: nothing
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.** Keep the two-hundred-megabyte and hundred-thousand-step tests passing: nothing
   new is held per line beyond what a step holds.
-- [ ] **Step 4:** `cargo test -p turn --test transcript --test worker` passes. Commit.
+- [x] **Step 4:** `cargo test -p turn --test transcript --test worker` passes. Commit.
 
 ---
 
@@ -290,7 +290,7 @@ pub struct TurnView {
 - Produces: `Sandbox::create` unchanged in signature. The clone holds the objects `base_commit` reaches and no
   other object of the item's repository. `seal` uses a worker's own message when it left one.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `a_sandbox_holds_nothing_its_base_does_not_reach`: the item's repository has the base, a later commit on
     another branch, and a dangling blob. In the sandbox, `git cat-file -e` fails for the later commit, its
     tree's new blob and the dangling blob, and succeeds for the base's tree (the control). The same for the
@@ -306,12 +306,12 @@ pub struct TurnView {
   - `a_message_file_that_is_not_a_plain_file_is_not_read`: a link, a directory, a pipe, or more than 16,384
     bytes: the room commits with its fixed message and removes what was there if it is a file or a link.
   - `the_prompt_says_where_to_leave_a_message`: `prompt(..)` holds the sentence below.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.** The clone is made by `git init` and a fetch of the base by its id from the item's
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.** The clone is made by `git init` and a fetch of the base by its id from the item's
   repository, with the room's safe git and no hard links. Add to `INTRO`, exactly: "If your tools cannot
   commit, leave your commit message in a file named `.yak-message` at the repository's root and the room will
   commit for you with it."
-- [ ] **Step 4:** `cargo test -p turn` passes where your sandbox allows. Say which tests it does not. Commit.
+- [x] **Step 4:** `cargo test -p turn` passes where your sandbox allows. Say which tests it does not. Commit.
 
 ---
 
@@ -326,7 +326,7 @@ pub struct TurnView {
   parsers then give `Tokens::none()`.
 - Produces: `yak item turns <id> [--json]`, printing `Room::turns`. No new MCP tool: the server keeps four.
 
-- [ ] **Step 1: Write the failing tests.** Each uses a script worker, so no model runs.
+- [x] **Step 1: Write the failing tests.** Each uses a script worker, so no model runs.
   - `every_way_a_turn_ends_leaves_a_measured_record`: one item each for: passes; fails its check; hands in
     nothing; times out; the room is stopped while it runs; its lease is lost; its clone is unusable. For each:
     `Room::measured` is `Some`, `ended` is the right word, and `active_ms` equals the sum of its parts.
@@ -340,12 +340,12 @@ pub struct TurnView {
     (assert on the code path by a unit test of the timer type you add, not by changing the machine's clock).
   - `item_turns_prints_what_was_measured` (the command line), and `the_mcp_server_lists_exactly_four_tools`
     still passes.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.** One `Instant` at the moment the room starts to make the sandbox. Phases are closed
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.** One `Instant` at the moment the room starts to make the sandbox. Phases are closed
   in order: sandbox, worker, seal, bring, check. A phase that did not happen is 0, or `None` for the check.
   The changed files come from `git diff --name-status -z --no-renames <base> <commit>` in the item's
   repository, by the room's safe git.
-- [ ] **Step 4:** `cargo test -p yak` passes where your sandbox allows. Say which tests it does not. Commit.
+- [x] **Step 4:** `cargo test -p yak` passes where your sandbox allows. Say which tests it does not. Commit.
 
 ---
 
@@ -382,7 +382,7 @@ same prompt share a program's memory of it, so the later one is cheaper and fast
 - [x] **Step 2:** Shown to fail by taking each condition out in turn: one mutant for each condition and
   constant added.
 - [x] **Step 3: Implement.**
-- [ ] **Step 4:** The whole suite on both machines. Commit.
+- [x] **Step 4:** The whole suite on both machines. Commit.
 
 ---
 
@@ -463,7 +463,7 @@ item's repository, and the temporary directories the machine shares.
       ended keeps its own end when its limit or the switch comes before the room looks again
       (`a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out`).
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `a_sandbox_hides_its_items_repository_from_a_worker`: after `create`, the list is the repository's real
     path; a relative path and a missing one are refused; a good one is added as a real path.
   - `a_turns_own_temporary_directory_is_short_private_and_removed_with_it`: its parent is the real `/tmp`;
@@ -481,10 +481,11 @@ item's repository, and the temporary directories the machine shares.
     program prints the three variables.
   - `a_clone_looks_for_no_ignore_or_attributes_file_in_a_home`.
   - `the_clock_hides_its_room_from_a_worker`: fails when the clock's call is taken out.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.** Bring the doc comments on both workers up to date: they say what a shell can read.
-- [ ] **Step 4:** `cargo test -p turn -p yak` where your sandbox allows. Say which tests it does not. Commit.
-- [ ] **Step 5 (the lead):** A live turn of each program in a throwaway room, on an item whose repository
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.** Bring the doc comments on both workers up to date: they say what a shell can read.
+- [x] **Step 4:** `cargo test -p turn -p yak` where your sandbox allows. Say which tests it does not. Commit.
+- [x] **Step 5 (the lead):** Done: six live turns and the three replays, in
+  `docs/reports/2026-11-15-v2-stage-2-part-0.md`. As planned: a live turn of each program in a throwaway room, on an item whose repository
   holds a script of probes and whose work is to run it and commit its output. Read the output in the commit
   handed in: the room's directory, the item's repository, another checkout, the home and a file left in
   `/tmp` refused; the sandbox, the turn's own temporary directory and a named tool used; an earlier answer's
@@ -496,10 +497,14 @@ item's repository, and the temporary directories the machine shares.
 
 ### Task 6: Each builder reads the other's work, then the lead runs the acceptance table
 
-- [ ] **Step 1:** The Codex builder reads Tasks 3 and 4; the Claude builder reads Tasks 1, 2 and 5. Each
+- [x] **Step 1:** The Codex builder reads Tasks 3 and 4; the Claude builder reads Tasks 1, 2 and 5. Each
   reports what it would change, by file and line, and whether any test would still pass with its change
   taken out.
-- [ ] **Step 2 (the lead):** Merge, run the whole suite on the Mac and the Pi as CI runs it, and CI.
-- [ ] **Step 3 (the lead):** Go down the table under "How we know part 0 is done" in the spec, row by row,
+- [x] **Step 2 (the lead):** Merge, run the whole suite on the Mac and the Pi as CI runs it, and CI.
+- [x] **Step 3 (the lead):** Go down the table under "How we know part 0 is done" in the spec, row by row,
   with the test or the measurement that shows each. The rows about the offer wait for the second plan.
-- [ ] **Step 4 (the lead):** Decide tokens or seconds by that table, publish it, and only then run the pilot.
+  Going down it showed that no test ran a stand-in of either worker program through the clock: records in
+  tests came from script workers. `v2/crates/yak/tests/part0.rs` is that test, one for each row.
+- [x] **Step 4 (the lead):** Decide tokens or seconds by that table, publish it, and only then run the pilot.
+  Seconds. The table, the evidence and what is not shown: `docs/reports/2026-11-15-v2-stage-2-part-0.md`.
+  The pilot's turns are `v2/probes/pilot/pilot.sh`.

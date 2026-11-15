@@ -223,10 +223,12 @@ in can leak into what they cost.
 - **So a first line of the prompt that is the turn's own is not enough,** though the room provides one: it
   cannot reach what the program sends ahead of it.
 - **What is done about it.** Reads from memory, writes to it and fresh input are kept as three numbers for
-  every turn, never added as equals without saying so. No measured turn is the first after the memory has
-  gone cold: a block of turns begins with one that is thrown away. And the pilot's first job is to measure
-  what is left: the same item, back to back, with and without the turn's own first line, read by those three
-  numbers and by the seconds. What the pilot finds decides whether the line is kept.
+  every turn, never added as equals without saying so. A turn of each worker is thrown away before its
+  first measured turn, and nothing checks that a program's memory stays warm after that. Before its
+  measured turns the pilot runs the same item back to back, with and without the turn's own first line, and
+  reports the later turn of each pair less the earlier, by those three numbers and by the seconds. That is
+  what was seen in one order, for one worker; it is not a measure of what the line does. The line is kept
+  either way. Part 1 says why, and what those turns cannot say.
 
 **A worker that cannot commit can still say what it did.** The room commits for Codex with a fixed message
 today. A worker may leave its message in one untracked file. The room uses it as the commit's message and
@@ -281,14 +283,47 @@ same turn differs from itself. It is a pilot. Its numbers do not by themselves f
 
 - **What is run:** each of the three items of the first run, five times, with nothing offered, each turn
   in a sandbox made new from its base, by the worker that may take it. Fifteen turns, each one launch, each
-  kept whether it passed or not, plus the three replays of part 0.
+  kept whether it passed or not, plus the three replays of part 0. With the memory test's four turns and
+  two that are thrown away, the pilot is 21 turns, in the order `v2/probes/pilot/pilot.sh` writes down
+  before the first.
+- **A turn that is lost stops the pilot.** Each turn must leave one usable observation: one attempt, by
+  the worker planned, whose program ran, with a verdict and a record whose parts add up. A turn that
+  failed its check or ran to its limit is one, and is kept with its whole cost. A turn that did not run, a
+  clock that died and a record that is missing are not: the pilot ends there, nothing is run a second
+  time, and no table is printed that passes over the gap. A pilot that stopped is not taken up again; what
+  it left is reported as partial, and a new pilot starts at its first turn.
+- **What a turn is tied to that the store does not hold** is written beside it before its clock starts:
+  the clock's command and its environment word for word, the limits in force, the room program's hash,
+  the worker's program and its version, the item's base and check. Part 0's report says why this is
+  beside the room and not in it.
+- **What the deciding outcome takes in.** Active seconds include the check and how busy the machine was.
+  So a result is about the whole of a turn as the room runs it, on this machine, and not about how fast a
+  model thinks. The worker's own seconds are reported beside it as a description. The deciding outcome
+  stays the active seconds, whatever the worker's own turn out to be.
 - **What is read:** for each item and worker, the spread of the deciding outcome across its five turns, as a
   standard deviation of the logarithm. All three are kept and reported, with the worker beside each.
-- **First, what a program's memory does to a turn.** Before the fifteen: one item, four turns back to back,
-  two with the turn's own first line and two without, after one turn that is thrown away. Read by fresh
-  input, writes, reads and seconds. If the later turn of a pair is cheaper or faster by more than the pair
-  without the line differs, the line is kept for the fifteen and for part 3.
-- **No measured turn is the first on a cold memory.** Each sitting begins with a turn that is thrown away.
+- **First, a look at what a program's memory does to a turn.** Before the fifteen: one item and the worker
+  that may take it, five turns back to back. The first is thrown away, and has a first line of its own so
+  that it does not send the bare prompt. Then two turns without the line, then two with it. Each is read by
+  fresh input, writes, reads and seconds. What is reported is the later turn of each pair less the earlier.
+  - **What these four turns can say:** what was seen, for one worker, in this one order. They cannot say
+    what the line does. Each turn's sandbox has a path of its own, which the program tells the model
+    before the room's prompt begins, so two turns may already part ways there. The pairs also differ in
+    when they ran, in what the memory held by then, in what the model chose to do, and in how many requests
+    a turn made; a turn's reads are those within the turn and those from earlier turns, added together.
+    One pair of each kind cannot take these apart, cannot show that a channel is closed, and says nothing
+    of the other worker.
+  - **The line is kept for the fifteen and for part 3 whatever these four turns show.** Changed by the lead
+    on 2026-11-15, before any pilot turn: this bullet had said the line is kept only if the later turn of a
+    pair came out cheaper or faster, in a sentence that could be read two ways. The line costs one line,
+    the same for every turn of every arm, and without it a later turn at an item is sent the very prompt
+    an earlier one was.
+- **A turn of each worker is thrown away before its first measured turn,** so that no worker's first
+  measured turn is the first its program has run in the sitting. That is all that is done about a cold
+  memory. Nothing checks that the memory stays warm afterwards: a turn at its limit, a long check or a slow
+  turn of the other worker leaves a gap. The time from the end of a worker's last clock to the start of
+  its next is recorded and reported. The program itself had been idle for longer than that, by the check
+  before and by the making of the turn after. Every measured turn is kept whatever the gap.
 - **An item's five turns are spread out,** not run back to back: one of each item, then round again. What an
   hour does to a model's speed then falls on every item alike.
 - **What it cannot say:** how turns differ on the work part 2 will choose, how an offer changes the spread,
@@ -439,8 +474,8 @@ Read from the top. The first row that fits is the outcome.
 
 ## What it costs, estimated
 
-- **Turns before any scored one:** 3 replays and 15 pilot turns, then one item's worth for each history item,
-  with their retries and second looks.
+- **Turns before any scored one:** 3 replays and the pilot's 21 turns (15 measured, 4 of the memory test, 2
+  thrown away), then one item's worth for each history item, with their retries and second looks.
 - **Scored turns:** three arms for each of `n` items, each up to three turns, plus second looks.
 - **Checks to write:** one for every history and scored item, each with a wrong fix, a reference fix and a
   read by the other family. At the first run's rate, three took two builders and a reader half an hour, and a
@@ -490,7 +525,7 @@ them; the lead takes the first to bear on the pilot as well.
 
 | Point | Answer in this draft |
 | --- | --- |
-| 1. A program's memory of its last prompt is a channel between turns: the second reads the first one's | "What turns share through a program's memory", in part 0: measured, and most of it lies before the prompt, so the line alone is not the answer; three numbers kept apart; a thrown-away turn first; the pilot measures the rest |
+| 1. A program's memory of its last prompt is a channel between turns: the second reads the first one's | "What turns share through a program's memory", in part 0: measured, and most of it lies before the prompt, so the line alone is not the answer; three numbers kept apart; a turn of each worker thrown away first; the pilot runs one pair with the line and one without, which shows what was seen and not what the line does |
 | 2. If seconds decide, a model's speed drifts with the hour | "Paired in time as well"; the pilot's turns spread across items |
 | 3. Titles in one repository share a few words, so the ranker would offer whichever turn came last | A word in more than half the history titles scores nothing; every offer's score is reported |
 | 4. Resampling about twenty items gives an interval that runs narrow | Two intervals, and the wider one decides |

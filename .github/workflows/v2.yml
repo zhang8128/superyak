@@ -50,6 +50,11 @@ jobs:
       - name: Tests, the acceptance suite with them
         if: success() || failure()
         run: cargo test --workspace --locked --no-fail-fast
+      - name: The pilot's scripts
+        # The scripts that run the pilot's turns and read what they leave, tried on records made by hand: no
+        # model, no clock, no room.
+        if: success() || failure()
+        run: python3 -I probes/pilot/test_records.py
       - name: The first run's three checks
         # The frozen checks of the first run with model workers. Its items are done, so the checks are regression
         # checks now: each builds yak offline from this checkout and drives `yak item add` from outside. They want
