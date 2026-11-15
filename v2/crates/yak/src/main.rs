@@ -56,6 +56,11 @@ enum ItemCommand {
         #[arg(long)]
         json: bool,
     },
+    Turns {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     Erase {
         id: String,
     },
@@ -154,6 +159,7 @@ async fn execute(cli: Cli) -> Result<()> {
             ItemCommand::Add(add) => add_item(&dir, add)?,
             ItemCommand::List(format) => print_view(&dir, View::ItemList, format.json)?,
             ItemCommand::Show { id, json } => print_view(&dir, View::ItemShow(ItemId(id)), json)?,
+            ItemCommand::Turns { id, json } => print_view(&dir, View::ItemTurns(ItemId(id)), json)?,
             ItemCommand::Erase { id } => Room::open(&dir)?.erase_item(&ItemId(id))?,
         },
         Command::Status(format) => print_view(&dir, View::Status, format.json)?,

@@ -60,38 +60,78 @@ fn a_walk_comes_back_in_order() {
     let want = steps();
     let mut shuffled = want.clone();
     shuffled.swap(0, 2);
-    assert_eq!(r.record_walk(&attempt, &shuffled).unwrap(), 3);
+    assert_eq!(r.record_walk(&attempt, &shuffled).unwrap(), 0);
     drop(r);
     let r = Room::open_read_only(d.path()).unwrap();
     assert_eq!(r.walk(&attempt).unwrap(), want);
 }
 
 #[test]
-fn a_path_that_is_not_a_plain_relative_path_is_refused() {
+fn a_step_keeps_every_file_it_named_in_order() {
     let d = tempfile::tempdir().unwrap();
     let mut r = Room::init(d.path()).unwrap();
     let attempt = attempt(&mut r);
+    let mut batch = steps();
+    batch[1].named = ["c.rs", "a.rs", "b.rs"]
+        .iter()
+        .map(|path| Named {
+            path: (*path).into(),
+            blob: "c".repeat(40),
+        })
+        .collect();
+    batch[1].seen_ms = Some(12);
+    batch[1].result_ms = Some(34);
+    r.record_walk(&attempt, &batch).unwrap();
+    assert_eq!(r.walk(&attempt).unwrap(), batch);
+}
+
+#[test]
+fn a_name_that_is_not_a_plain_path_is_left_out_and_the_walk_is_kept() {
     for path in [
-        "/etc/passwd".into(),
+        "a b.txt".into(),
+        "é".into(),
         "../x".into(),
-        "a\nb".into(),
+        "/x".into(),
         "x".repeat(513),
-        "a/../x".into(),
         "".into(),
-        "a b".into(),
+        "a/./b".into(),
+        "a//b".into(),
+        "a/../b".into(),
         "a\\b".into(),
     ] {
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Room::init(d.path()).unwrap();
+        let attempt = attempt(&mut r);
         let mut batch = steps();
-        batch[2].target = Target::TrackedFile {
-            path,
-            blob: "b".repeat(40),
-        };
-        assert!(matches!(
-            r.record_walk(&attempt, &batch),
-            Err(RoomError::Refused(_))
-        ));
-        assert!(r.walk(&attempt).unwrap().is_empty());
+        batch[1].named = vec![
+            Named {
+                path,
+                blob: "a".repeat(40),
+            },
+            Named {
+                path: "ok.txt".into(),
+                blob: "b".repeat(40),
+            },
+        ];
+        assert_eq!(r.record_walk(&attempt, &batch).unwrap(), 1);
+        batch[1].named.remove(0);
+        assert_eq!(r.walk(&attempt).unwrap(), batch);
     }
+}
+
+#[test]
+fn an_unplain_target_is_unknown_without_losing_the_walk() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = Room::init(d.path()).unwrap();
+    let attempt = attempt(&mut r);
+    let mut batch = steps();
+    batch[0].target = Target::TrackedFile {
+        path: "a b.txt".into(),
+        blob: "a".repeat(40),
+    };
+    assert_eq!(r.record_walk(&attempt, &batch).unwrap(), 1);
+    batch[0].target = Target::Outside;
+    assert_eq!(r.walk(&attempt).unwrap(), batch);
 }
 
 #[test]

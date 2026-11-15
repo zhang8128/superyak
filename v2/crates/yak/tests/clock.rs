@@ -12,6 +12,222 @@ use room::limits::{MAX_ATTEMPTS, TURN_SECS};
 use room::{DisagreementKind, ItemState, RoomError, Target, Tool};
 use yak::clock::{self, ClockError, Event, Mode, Options, Outcome};
 
+fn assert_measured(world: &World, events: &[Event], ended: room::Ended) {
+    let attempts = started(events);
+    assert!(!attempts.is_empty());
+    for (_, attempt, _, _) in attempts {
+        let m = world
+            .room
+            .measured(&attempt)
+            .unwrap()
+            .expect("every turn is measured");
+        assert_eq!(m.ended, ended);
+        assert_eq!(
+            m.active_ms,
+            m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
+        );
+        assert!(m.sandbox_ms > 0);
+        assert!(m.worker_ms > 0);
+    }
+}
+
+#[test]
+fn every_way_a_turn_ends_leaves_a_measured_record() {
+    for (body, limit, ended) in [
+        (FIX.to_string(), TURN_SECS, room::Ended::Exited),
+        (
+            "#!/bin/sh\necho 41 > answer1.txt\ngit commit -qam wrong\n".into(),
+            TURN_SECS,
+            room::Ended::Exited,
+        ),
+        ("#!/bin/sh\nexit 0\n".into(), TURN_SECS, room::Ended::Exited),
+        (format!("{FIX}sleep 600\n"), 1, room::Ended::TimedOut),
+        (
+            format!("{FIX}mv .git .git-old\nln -s .git-old .git\n"),
+            TURN_SECS,
+            room::Ended::Exited,
+        ),
+        (
+            "#!/bin/sh\nkill -TERM $$\n".into(),
+            TURN_SECS,
+            room::Ended::Signalled,
+        ),
+    ] {
+        let mut world = World::new(1);
+        let _bound = StopsWithin::for_a_test(&world.room_dir);
+        let script = world.script("worker.sh", &body);
+        let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, limit);
+        result.unwrap();
+        assert_measured(&world, &events, ended);
+        if ended == room::Ended::TimedOut {
+            let attempt = &started(&events)[0].1;
+            let m = world.room.measured(attempt).unwrap().unwrap();
+            assert!(!m.tokens.complete);
+            assert_eq!(world.room.walk(attempt).unwrap().len(), 1);
+            assert!(m.worker_ms >= 1000);
+        }
+    }
+    // These event-driven tests own a stop and also assert the measured records.
+    stop_ends_a_running_worker();
+    a_lease_that_goes_stale_mid_turn_is_left_to_expire();
+}
+
+#[test]
+fn a_turn_with_no_steps_still_has_a_record() {
+    let mut world = World::new(1);
+    let script = world.script("silent.sh", "#!/bin/sh\nexit 0\n");
+    let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    assert_measured(&world, &events, room::Ended::Exited);
+    for (_, attempt, _, _) in started(&events) {
+        let m = world.room.measured(&attempt).unwrap().unwrap();
+        assert_eq!(m.steps_seen, 0);
+        assert_eq!(m.unknown_steps, 0);
+        assert!(!m.tokens.complete);
+    }
+}
+
+#[test]
+fn a_turn_that_cannot_make_a_sandbox_is_measured_as_not_run() {
+    let mut world = World::new(1);
+    let worker = world.script("idle.sh", "#!/bin/sh\nexit 0\n");
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
+    let repo = world.repo.clone();
+    let removed = world.scratch("removed-repo");
+    let stop = world.room_dir.join("STOP");
+    let mut events = Vec::new();
+    let mut report = |event: &Event| {
+        if matches!(event, Event::Started { .. }) {
+            fs::rename(&repo, &removed).unwrap();
+            fs::write(&stop, "").unwrap();
+        }
+        events.push(event.clone());
+    };
+    clock::run_with(
+        &mut world.room,
+        &[worker],
+        Mode::OnceThrough,
+        &mut Fixed(NEVER),
+        Options {
+            report: Some(&mut report),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let attempt = &started(&events)[0].1;
+    let m = world.room.measured(attempt).unwrap().unwrap();
+    assert_eq!(m.ended, room::Ended::NotRun);
+    assert_eq!(
+        (m.worker_ms, m.seal_ms, m.bring_ms, m.check_ms),
+        (0, 0, 0, None)
+    );
+    assert_eq!(m.active_ms, m.sandbox_ms);
+    assert_eq!(m.exit_code, None);
+}
+
+#[test]
+fn a_turns_changes_are_the_difference_between_its_base_and_its_commit() {
+    let mut world = World::new(1);
+    let body = "#!/bin/sh\necho 42 > answer1.txt\necho new > added.txt\nrm answer2.txt\ngit add -A\ngit commit -qm change\n";
+    let script = world.script("changes.sh", body);
+    let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    let changes = world.room.changes(&started(&events)[0].1).unwrap();
+    assert_eq!(
+        changes,
+        vec![
+            room::ChangedFile {
+                path: "added.txt".into(),
+                change: room::Change::Added
+            },
+            room::ChangedFile {
+                path: "answer1.txt".into(),
+                change: room::Change::Changed
+            },
+            room::ChangedFile {
+                path: "answer2.txt".into(),
+                change: room::Change::Removed
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
+    let Some(dir) = std::env::var_os("YAK_DIFF_TEST_DIR") else {
+        let d = tempfile::tempdir().unwrap();
+        let wrapper = d.path().join("git");
+        let marker = d.path().join("diff-started");
+        fs::write(&wrapper, format!("#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = diff ]; then\n    : > '{}'\n    while :; do sleep 1; done\n  fi\ndone\nexec /usr/bin/git \"$@\"\n", marker.display())).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(d.path().to_path_buf())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_stop_during_the_changed_file_list_leaves_no_ref_or_check",
+                "--nocapture",
+            ])
+            .env("YAK_DIFF_TEST_DIR", d.path())
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return;
+    };
+    let mut world = World::new(1);
+    let worker = world.script("fix.sh", FIX);
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
+    let stop = world.room_dir.join("STOP");
+    let marker = std::path::PathBuf::from(dir).join("diff-started");
+    let stopper = thread::spawn(move || {
+        wait_until(Instant::now() + Duration::from_secs(60), || {
+            marker.exists() || stop.exists()
+        });
+        let began = marker.exists();
+        fs::write(stop, "").unwrap();
+        began
+    });
+    let (result, events) = world.run(&[&worker], Mode::OnceThrough, NEVER, TURN_SECS);
+    assert!(stopper.join().unwrap(), "the diff never started");
+    result.unwrap();
+    assert_eq!(outcomes(&events), [Outcome::Stopped]);
+    assert!(world.room_refs().is_empty());
+    let turn = world.room.turns(&world.items[0]).unwrap().remove(0);
+    assert_eq!(turn.passed, None);
+    assert_eq!(turn.measured.unwrap().ended, room::Ended::Stopped);
+}
+
+#[test]
+fn a_second_look_is_timed_beside_the_turn() {
+    let mut world = World::new(1);
+    let script = world.script("fix.sh", FIX);
+    let (result, events) = world.run(&[&script], Mode::OnceThrough, ALWAYS, TURN_SECS);
+    result.unwrap();
+    assert_measured(&world, &events, room::Ended::Exited);
+    let m = world
+        .room
+        .measured(&started(&events)[0].1)
+        .unwrap()
+        .unwrap();
+    assert!(m.recheck_ms.unwrap() > 0);
+    assert!(matches!(
+        outcomes(&events)[0],
+        Outcome::Judged {
+            recheck: Some(_),
+            ..
+        }
+    ));
+}
+
 fn state(world: &World, n: usize) -> ItemState {
     world.room.item(&world.items[n]).unwrap().state
 }
@@ -147,6 +363,7 @@ fn stop_ends_a_running_worker() {
     assert_eq!(state(&world, 1), ItemState::Open);
     assert!(world.room_refs().is_empty());
     assert!(world.turns().is_empty(), "left: {:?}", world.turns());
+    assert_measured(&world, &events, room::Ended::Stopped);
 }
 
 #[test]
@@ -347,6 +564,7 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     for group in groups {
         assert!(!group_alive(group), "the group {group} is still alive");
     }
+    assert_measured(&world, &events, room::Ended::LeaseLost);
 }
 
 /// After a restart the clock finds a dead clock's turn. It ends the run that turn's record describes, when that

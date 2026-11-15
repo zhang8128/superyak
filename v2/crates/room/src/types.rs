@@ -234,6 +234,10 @@ pub enum RoomError {
     Damaged(String),
     #[error("the room's store is version {found}, and this build knows version {known}")]
     NewerSchema { found: u32, known: u32 },
+    #[error(
+        "the room's store is version {found}, and this build knows version {known}; bring it forward by opening it once for writing"
+    )]
+    OlderSchema { found: u32, known: u32 },
     #[error("another process is writing to this room")]
     Locked,
     #[error("stale: lease {lease_no} is not the current lease {current}")]

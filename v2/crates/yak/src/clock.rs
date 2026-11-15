@@ -23,7 +23,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rand::Rng;
 use room::limits::{CLOCK_POLL_SECS, RECHECK_ONE_IN, TURN_SECS};
 use room::{
-    AttemptId, Frozen, ItemId, ItemSpec, ItemState, Lease, Room, RoomError, Step, Tokens, Ts,
+    AttemptId, Change, ChangedFile, Ended, Frozen, ItemId, ItemSpec, ItemState, Lease, Measured,
+    Room, RoomError, Tokens, Ts,
 };
 use turn::{RunStatus, Sandbox, Seen, TurnError, check, worker};
 
@@ -37,6 +38,142 @@ const FREEZE_RETRY: Duration = Duration::from_secs(3600);
 
 /// How often the clock looks at the stop file and the lease while a worker or a check runs.
 const WATCH: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Sandbox,
+    Worker,
+    Seal,
+    Bring,
+    Check,
+}
+
+/// All phase boundaries use one monotonic origin. Round the cumulative time, so the parts add up.
+struct Phases {
+    start: Instant,
+    last_ms: u64,
+    phase: Phase,
+}
+
+impl Phases {
+    fn at(start: Instant) -> Self {
+        Self {
+            start,
+            last_ms: 0,
+            phase: Phase::Sandbox,
+        }
+    }
+
+    fn close_at(&mut self, at: Instant, m: &mut Measured) {
+        let total = millis(at.duration_since(self.start));
+        let elapsed = total - self.last_ms;
+        match self.phase {
+            Phase::Sandbox => m.sandbox_ms += elapsed,
+            Phase::Worker => m.worker_ms += elapsed,
+            Phase::Seal => m.seal_ms += elapsed,
+            Phase::Bring => m.bring_ms += elapsed,
+            Phase::Check => m.check_ms = Some(m.check_ms.unwrap_or(0) + elapsed),
+        }
+        self.last_ms = total;
+        m.active_ms = total;
+    }
+
+    fn advance_to(&mut self, phase: Phase, at: Instant, m: &mut Measured) {
+        self.close_at(at, m);
+        self.phase = phase;
+    }
+}
+
+fn millis(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn empty_measured() -> Measured {
+    Measured {
+        ended: Ended::NotRun,
+        exit_code: None,
+        tokens: Tokens::none(),
+        steps_seen: 0,
+        unknown_steps: 0,
+        sandbox_ms: 0,
+        worker_ms: 0,
+        seal_ms: 0,
+        bring_ms: 0,
+        check_ms: None,
+        recheck_ms: None,
+        active_ms: 0,
+    }
+}
+
+struct TurnRecord {
+    timer: Option<Phases>,
+    seen: Seen,
+    measured: Measured,
+}
+
+impl TurnRecord {
+    fn new() -> Self {
+        Self {
+            timer: None,
+            seen: Seen {
+                steps: Vec::new(),
+                tokens: Tokens::none(),
+                steps_seen: 0,
+            },
+            measured: empty_measured(),
+        }
+    }
+
+    fn advance(&mut self, phase: Phase) {
+        if let Some(timer) = &mut self.timer {
+            timer.advance_to(phase, Instant::now(), &mut self.measured);
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(mut timer) = self.timer.take() {
+            timer.close_at(Instant::now(), &mut self.measured);
+        }
+    }
+
+    fn finish(&mut self, outcome: &Result<Outcome, ClockError>) {
+        self.close();
+        match outcome {
+            Ok(Outcome::Stopped) => self.measured.ended = Ended::Stopped,
+            Ok(Outcome::LeaseLost) => self.measured.ended = Ended::LeaseLost,
+            Ok(Outcome::NotRun { .. }) => self.measured.ended = Ended::NotRun,
+            _ => {}
+        }
+        self.measured.tokens = self.seen.tokens.clone();
+        self.measured.steps_seen = self.seen.steps_seen;
+    }
+}
+
+fn persist_turn(
+    room: &mut Room,
+    attempt: &AttemptId,
+    record: &mut TurnRecord,
+) -> Result<(), RoomError> {
+    room.record_walk(attempt, &record.seen.steps)?;
+    let kept = room.walk(attempt)?;
+    let by_seq: HashMap<_, _> = kept.iter().map(|step| (step.seq, step)).collect();
+    // A step is unknown if any of its names was omitted, or if it has no known file. Include dropped steps.
+    let known = record
+        .seen
+        .steps
+        .iter()
+        .filter(|seen| {
+            by_seq.get(&seen.seq).is_some_and(|kept| {
+                seen.named.len() == kept.named.len()
+                    && seen.target == kept.target
+                    && (!kept.named.is_empty()
+                        || matches!(kept.target, room::Target::TrackedFile { .. }))
+            })
+        })
+        .count() as u64;
+    record.measured.unknown_steps = record.seen.steps_seen.saturating_sub(known);
+    room.record_measured(attempt, &record.measured)
+}
 
 /// Below the room's directory: one sandbox per attempt, its pid file and its check's scratch space.
 const TURNS: &str = "turns";
@@ -357,6 +494,7 @@ fn fatal(e: &RoomError) -> bool {
         RoomError::Missing(_)
             | RoomError::Damaged(_)
             | RoomError::NewerSchema { .. }
+            | RoomError::OlderSchema { .. }
             | RoomError::Locked
             | RoomError::Db(_)
     )
@@ -391,7 +529,7 @@ struct Clock<'r, 'o> {
 /// What became of bringing a turn's commit into the item's repository.
 enum Brought {
     /// It is there, and the turn's ref names it.
-    Named,
+    Named(Vec<ChangedFile>),
     /// The room was stopped meanwhile. No ref of this turn's is left.
     Stopped,
     /// The lease is no longer this turn's. No ref of this turn's is left.
@@ -627,9 +765,22 @@ impl Clock<'_, '_> {
         taken_at: Ts,
         rng: &mut dyn Rng,
     ) -> Result<Outcome, ClockError> {
-        let (outcome, steps) = self.work(lease, taken_at)?;
-        // The walk is the turn's ledger, whatever became of its hand-in.
-        self.record_walk(lease, &steps)?;
+        let mut record = TurnRecord::new();
+        let outcome = self.work(lease, taken_at, &mut record, worker::from_name);
+        record.finish(&outcome);
+        let saved = persist_turn(self.room, &lease.attempt, &mut record);
+        // An unended process remains the primary error, even if its store failed too.
+        if let Err(error) = outcome {
+            if let Err(store) = saved {
+                self.tell(&Event::Problem {
+                    item: Some(lease.item.clone()),
+                    what: format!("the turn record could not be written: {store}"),
+                });
+            }
+            return Err(error);
+        }
+        saved?;
+        let outcome = outcome?;
         let Outcome::Judged {
             state,
             commit,
@@ -644,7 +795,11 @@ impl Clock<'_, '_> {
             && !self.room.stopped()
             && rng.next_u32().is_multiple_of(RECHECK_ONE_IN)
         {
-            self.recheck(lease, &commit)?
+            let start = Instant::now();
+            let result = self.recheck(lease, &commit);
+            self.room
+                .record_recheck_ms(&lease.attempt, millis(start.elapsed()))?;
+            result?
         } else {
             None
         };
@@ -657,23 +812,27 @@ impl Clock<'_, '_> {
         })
     }
 
-    /// Runs the worker and judges its commit. Returns how the turn ended and the steps its stream showed.
-    fn work(&mut self, lease: &Lease, taken_at: Ts) -> Result<(Outcome, Vec<Step>), ClockError> {
+    /// Runs the worker and judges its commit. The record stays with the caller across every return.
+    fn work(
+        &mut self,
+        lease: &Lease,
+        taken_at: Ts,
+        record: &mut TurnRecord,
+        make_worker: impl FnOnce(&str) -> Result<Box<dyn turn::Worker>, TurnError> + Send,
+    ) -> Result<Outcome, ClockError> {
         let title = self.room.item(&lease.item)?.title;
         let spec = self.room.item_spec(&lease.item)?;
         let Some(frozen) = spec.frozen.clone() else {
             // `take` never leases an item without a frozen check; this is not reached.
-            return Ok((
-                Outcome::NotRun {
-                    reason: "the item has no frozen check".into(),
-                },
-                Vec::new(),
-            ));
+            return Ok(Outcome::NotRun {
+                reason: "the item has no frozen check".into(),
+            });
         };
         let turns = self.room.dir().join(TURNS);
         fs::create_dir_all(&turns)
             .map_err(|e| ClockError::Io(format!("make {}: {e}", turns.display())))?;
         let branch = format!("room/{}/{}", lease.item.0, lease.lease_no);
+        record.timer = Some(Phases::at(Instant::now()));
         let mut sandbox = match Sandbox::create(
             &spec.repo,
             &spec.base_commit,
@@ -685,9 +844,10 @@ impl Clock<'_, '_> {
                 // A check of the base would fail the same way, since it clones the same repository at the same
                 // commit; so nothing is handed in, and the lease expires.
                 let reason = format!("no sandbox: {e}");
-                return Ok((Outcome::NotRun { reason }, Vec::new()));
+                return Ok(Outcome::NotRun { reason });
             }
         };
+        record.advance(Phase::Worker);
         // The pid file is for a clock that starts after this one died. This clock ends its own turn with the
         // sandbox's switch.
         sandbox.set_pid_file(turns.join(format!("{}.pid", lease.attempt.0)));
@@ -701,7 +861,8 @@ impl Clock<'_, '_> {
             turns: &turns,
             branch: &branch,
         };
-        let outcome = self.work_in(&turn);
+        let outcome = self.work_in(&turn, record, make_worker);
+        record.close();
         // A run that could not be ended may still be using the sandbox: it stays.
         if matches!(outcome, Err(ClockError::Unrecovered { .. })) {
             return outcome;
@@ -719,7 +880,12 @@ impl Clock<'_, '_> {
     }
 
     /// The turn itself, in a sandbox that `work` made and removes.
-    fn work_in(&mut self, turn: &Turn<'_>) -> Result<(Outcome, Vec<Step>), ClockError> {
+    fn work_in(
+        &mut self,
+        turn: &Turn<'_>,
+        record: &mut TurnRecord,
+        make_worker: impl FnOnce(&str) -> Result<Box<dyn turn::Worker>, TurnError> + Send,
+    ) -> Result<Outcome, ClockError> {
         let Turn {
             lease,
             taken_at,
@@ -733,21 +899,28 @@ impl Clock<'_, '_> {
         let stop = sandbox.stop_switch();
         let mut keeper = Keeper::new(lease, taken_at);
 
-        let mut seen = Seen {
-            steps: Vec::new(),
-            tokens: Tokens::none(),
-            steps_seen: 0,
-        };
         let ran = {
             let (name, limit) = (&lease.worker, self.turn_secs);
             let command = &spec.check.command;
-            let seen = &mut seen;
+            let seen = &mut record.seen;
             // A worker is not `Send`, so it is made where it runs.
             let job = move || -> Result<RunStatus, TurnError> {
-                worker::from_name(name)?.run(sandbox, title, command, limit, seen)
+                make_worker(name)?.run(sandbox, title, command, limit, seen)
             };
             self.watch(&mut keeper, Some(&stop), job)
         };
+        record.advance(Phase::Seal);
+        record.measured.ended = Ended::Exited;
+        if let Ok(status) = &ran.0 {
+            record.measured.exit_code = Some(status.exit_code);
+            record.measured.ended = if status.timed_out {
+                Ended::TimedOut
+            } else if status.exit_code >= 128 {
+                Ended::Signalled
+            } else {
+                Ended::Exited
+            };
+        }
         let (ran, watched, store_failed) = ran;
         if let Err(e) = &ran
             && let Some(stop) = unended(self.room.dir(), e)
@@ -759,16 +932,16 @@ impl Clock<'_, '_> {
         if let Some(e) = store_failed {
             return Err(e.into());
         }
-        let (steps, timed_out, failure) = match ran {
-            Ok(status) => (seen.steps, status.timed_out, None),
-            Err(e) => (Vec::new(), false, Some(e.to_string())),
+        let (timed_out, failure) = match ran {
+            Ok(status) => (status.timed_out, None),
+            Err(e) => (false, Some(e.to_string())),
         };
         let failure_said = failure.clone();
         if watched.stopped {
-            return self.stopped(lease, steps);
+            return self.stopped(lease);
         }
         if watched.lost {
-            return Ok((Outcome::LeaseLost, steps));
+            return Ok(Outcome::LeaseLost);
         }
 
         // What the turn hands in: its branch, read back after the clone is reclaimed from the worker; or its base,
@@ -789,6 +962,7 @@ impl Clock<'_, '_> {
                 what: format!("the worker failed after committing: {what}"),
             });
         }
+        record.advance(Phase::Bring);
         // The commit is brought into the item's repository before the hand-in, so that what is handed in is always
         // there for the check to clone; a commit that cannot be brought over is a turn that handed in nothing, and
         // fails. A renewal first makes sure the lease is still this turn's.
@@ -796,12 +970,14 @@ impl Clock<'_, '_> {
             match self.room.renew(lease, now()) {
                 Ok(_) => keeper.last = now(),
                 Err(e) if fatal(&e) => return Err(e.into()),
-                Err(_) => return Ok((Outcome::LeaseLost, steps)),
+                Err(_) => return Ok(Outcome::LeaseLost),
             }
             match self.bring(&mut keeper, turn, &commit)? {
-                Brought::Named => {}
-                Brought::Stopped => return self.stopped(lease, steps),
-                Brought::LeaseLost => return Ok((Outcome::LeaseLost, steps)),
+                Brought::Named(files) => {
+                    self.room.record_changes(&lease.attempt, &files)?;
+                }
+                Brought::Stopped => return self.stopped(lease),
+                Brought::LeaseLost => return Ok(Outcome::LeaseLost),
                 Brought::Failed(why) => {
                     nothing = Some(format!("its commit could not be fetched: {why}"));
                     commit = base.clone();
@@ -811,15 +987,16 @@ impl Clock<'_, '_> {
         match self.room.hand_in(lease, &commit, now()) {
             Ok(()) => {}
             Err(e) if fatal(&e) => return Err(e.into()),
-            Err(RoomError::Stale { .. }) => return Ok((Outcome::LeaseLost, steps)),
+            Err(RoomError::Stale { .. }) => return Ok(Outcome::LeaseLost),
             Err(e) => {
                 let reason = format!("the hand-in was refused: {e}");
-                return Ok((Outcome::Unchecked { reason }, steps));
+                return Ok(Outcome::Unchecked { reason });
             }
         }
 
         let checks = self.room.dir().join(CHECKS);
         let scratch = turns.join(format!("{}.check", lease.attempt.0));
+        record.advance(Phase::Check);
         let checked = {
             let (repo, check, hash) = (&spec.repo, &spec.check, &frozen.check_hash);
             let (commit, checks, scratch) = (&commit, &checks, &scratch);
@@ -853,7 +1030,7 @@ impl Clock<'_, '_> {
                 // (its frozen copies gone) would then be retried until the daily ceiling. Expiry counts it, and
                 // abandons the item after `MAX_ATTEMPTS`; use `release` here only for a cause known to pass.
                 let reason = format!("the check could not run: {e}");
-                return Ok((Outcome::Unchecked { reason }, steps));
+                return Ok(Outcome::Unchecked { reason });
             }
         };
         let state = match self
@@ -862,22 +1039,19 @@ impl Clock<'_, '_> {
         {
             Ok(state) => state,
             Err(e) if fatal(&e) => return Err(e.into()),
-            Err(RoomError::Stale { .. }) => return Ok((Outcome::LeaseLost, steps)),
+            Err(RoomError::Stale { .. }) => return Ok(Outcome::LeaseLost),
             Err(e) => {
                 let reason = format!("the verdict was refused: {e}");
-                return Ok((Outcome::Unchecked { reason }, steps));
+                return Ok(Outcome::Unchecked { reason });
             }
         };
-        Ok((
-            Outcome::Judged {
-                state,
-                commit,
-                nothing,
-                timed_out,
-                recheck: None,
-            },
-            steps,
-        ))
+        Ok(Outcome::Judged {
+            state,
+            commit,
+            nothing,
+            timed_out,
+            recheck: None,
+        })
     }
 
     /// Brings the turn's commit into the item's repository and names it `refs/heads/<branch>`: a fetch, which
@@ -905,8 +1079,13 @@ impl Clock<'_, '_> {
 
         let halt = AtomicBool::new(false);
         let (fetched, _, store_failed) = {
-            let halt = &halt;
-            let job = move || fetch(sandbox, repo, commit, limit, halt).map_err(|e| e.to_string());
+            let (halt, base) = (&halt, &turn.spec.base_commit);
+            // Both reads finish before publishing a ref. A stop during either leaves no name behind.
+            let job = move || {
+                fetch(sandbox, repo, commit, limit, halt)
+                    .and_then(|()| changed_files(repo, base, commit, limit, halt))
+                    .map_err(|e| e.to_string())
+            };
             self.watch(keeper, Some(halt), job)
         };
         // No ref yet, so nothing to take back.
@@ -916,9 +1095,10 @@ impl Clock<'_, '_> {
         if let Some(ended) = self.no_longer_ours(keeper, lease)? {
             return Ok(ended);
         }
-        if let Err(why) = fetched {
-            return Ok(Brought::Failed(why));
-        }
+        let files = match fetched {
+            Ok(files) => files,
+            Err(why) => return Ok(Brought::Failed(why)),
+        };
 
         let halt = AtomicBool::new(false);
         let ((free, named), _, store_failed) = {
@@ -953,7 +1133,7 @@ impl Clock<'_, '_> {
             }
         }
         Ok(match named {
-            Ok(()) => Brought::Named,
+            Ok(()) => Brought::Named(files),
             Err(why) => Brought::Failed(why),
         })
     }
@@ -1046,14 +1226,10 @@ impl Clock<'_, '_> {
     /// A turn the stop file ended. A person stopped the room, so the attempt does not count against the item, and
     /// the item does not wait out its lease. A release the room refuses (the lease just ran out) leaves that to
     /// expiry.
-    fn stopped(
-        &mut self,
-        lease: &Lease,
-        steps: Vec<Step>,
-    ) -> Result<(Outcome, Vec<Step>), ClockError> {
+    fn stopped(&mut self, lease: &Lease) -> Result<Outcome, ClockError> {
         match self.room.release(lease, now()) {
             Err(e) if fatal(&e) => Err(e.into()),
-            Ok(()) | Err(_) => Ok((Outcome::Stopped, steps)),
+            Ok(()) | Err(_) => Ok(Outcome::Stopped),
         }
     }
 
@@ -1100,24 +1276,6 @@ impl Clock<'_, '_> {
             };
             (value, watched, failure)
         })
-    }
-
-    fn record_walk(&mut self, lease: &Lease, steps: &[Step]) -> Result<(), ClockError> {
-        if steps.is_empty() {
-            return Ok(());
-        }
-        match self.room.record_walk(&lease.attempt, steps) {
-            Ok(_) => Ok(()),
-            Err(e) if fatal(&e) => Err(e.into()),
-            Err(e) => {
-                let what = format!("the walk was refused: {e}");
-                self.tell(&Event::Problem {
-                    item: Some(lease.item.clone()),
-                    what,
-                });
-                Ok(())
-            }
-        }
     }
 
     /// Checks a verified pass again, in a fresh clone of the item's repository, and records what it says.
@@ -1324,6 +1482,36 @@ where
     }
 }
 
+fn changed_files(
+    repo: &Path,
+    base: &str,
+    commit: &str,
+    limit: Duration,
+    stop: &AtomicBool,
+) -> Result<Vec<ChangedFile>, ClockError> {
+    let mut command = turn::sandbox::safe_git();
+    command
+        .arg("-C")
+        .arg(repo)
+        .args(["diff", "--name-status", "-z", "--no-renames", base, commit]);
+    let out =
+        turn::sandbox::safe_git_output_until(command, "the turn's changed files", limit, stop)?;
+    let mut fields = out.split(|b| *b == 0);
+    let mut files = Vec::new();
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        let change = match status {
+            b"A" => Change::Added,
+            b"D" => Change::Removed,
+            _ => Change::Changed,
+        };
+        files.push(ChangedFile {
+            path: String::from_utf8_lossy(path).into_owned(),
+            change,
+        });
+    }
+    Ok(files)
+}
+
 /// `path` with the directory it is in resolved and its own name kept as it is, so that two spellings of one
 /// place compare equal, and a link found at that place is named and not followed.
 fn placed(path: &Path) -> PathBuf {
@@ -1516,5 +1704,256 @@ mod tests {
         assert_eq!(every(2), 1);
         assert_eq!(every(1), 1);
         assert_eq!(every(0), 1);
+    }
+}
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::*;
+
+    #[test]
+    fn durations_do_not_depend_on_the_wall_clock() {
+        let start = Instant::now();
+        let mut timer = Phases::at(start);
+        let mut m = empty_measured();
+        timer.advance_to(Phase::Worker, start + Duration::from_millis(11), &mut m);
+        timer.advance_to(Phase::Seal, start + Duration::from_millis(34), &mut m);
+        timer.advance_to(Phase::Bring, start + Duration::from_millis(39), &mut m);
+        timer.advance_to(Phase::Check, start + Duration::from_millis(46), &mut m);
+        timer.close_at(start + Duration::from_millis(63), &mut m);
+        assert_eq!(
+            (
+                m.sandbox_ms,
+                m.worker_ms,
+                m.seal_ms,
+                m.bring_ms,
+                m.check_ms,
+                m.active_ms
+            ),
+            (11, 23, 5, 7, Some(17), 63)
+        );
+        assert_eq!(m.recheck_ms, None);
+        let mut timer = Phases::at(start);
+        let mut m = empty_measured();
+        timer.close_at(start + Duration::from_millis(2), &mut m);
+        assert_eq!(
+            (
+                m.sandbox_ms,
+                m.worker_ms,
+                m.seal_ms,
+                m.bring_ms,
+                m.check_ms,
+                m.active_ms
+            ),
+            (2, 0, 0, 0, None, 2)
+        );
+    }
+
+    #[test]
+    fn unknown_steps_count_an_omitted_name_once_and_include_unretained_steps() {
+        let d = tempfile::tempdir().unwrap();
+        let mut room = Room::init(d.path()).unwrap();
+        let item = room
+            .add_item(room::NewItem {
+                title: "fixture".into(),
+                repo: "/fixture".into(),
+                base_commit: "a".repeat(40),
+                after: vec![],
+                check: room::CheckSpec {
+                    command: "false".into(),
+                    files: vec![],
+                    timeout_secs: 1,
+                    origin: room::CheckOrigin::Outside,
+                    wrong_artifacts: vec!["b".repeat(40)],
+                    written_by: "person:test".into(),
+                },
+            })
+            .unwrap();
+        room.record_frozen(
+            &item,
+            Frozen {
+                check_hash: "c".repeat(64),
+                red_on_base: true,
+                red_on_wrong: vec![true],
+            },
+        )
+        .unwrap();
+        let lease = room.take("script:fixture", 100).unwrap().unwrap();
+        let mut record = TurnRecord::new();
+        let step = |seq, target, paths: &[&str]| room::Step {
+            seq,
+            target,
+            tool: room::Tool::Shell,
+            ok: true,
+            tokens_in: None,
+            tokens_out: None,
+            named: paths
+                .iter()
+                .map(|p| room::Named {
+                    path: (*p).into(),
+                    blob: "b".repeat(40),
+                })
+                .collect(),
+            seen_ms: None,
+            result_ms: None,
+        };
+        record.seen.steps = vec![
+            step(
+                0,
+                room::Target::TrackedFile {
+                    path: "a.rs".into(),
+                    blob: "b".repeat(40),
+                },
+                &[],
+            ),
+            step(1, room::Target::Outside, &["ok.rs", "a b.rs", "é.rs"]),
+            step(2, room::Target::Outside, &[]),
+            step(
+                3,
+                room::Target::TrackedFile {
+                    path: "a b.rs".into(),
+                    blob: "b".repeat(40),
+                },
+                &["ok.rs"],
+            ),
+            step(4, room::Target::Outside, &["known.rs"]),
+        ];
+        record.seen.steps_seen = 6;
+        record.seen.steps.swap(0, 3);
+        record.measured.ended = Ended::TimedOut;
+        record.seen.tokens = Tokens {
+            fresh_in: Some(1),
+            cache_write: Some(2),
+            cache_read: Some(3),
+            output: Some(4),
+            reasoning: None,
+            complete: true,
+        };
+        record.finish(&Ok(Outcome::Unchecked {
+            reason: "fixture".into(),
+        }));
+        persist_turn(&mut room, &lease.attempt, &mut record).unwrap();
+        let m = room.measured(&lease.attempt).unwrap().unwrap();
+        assert_eq!(m.unknown_steps, 4);
+        assert_eq!(m.steps_seen, 6);
+        assert_eq!(m.ended, Ended::TimedOut);
+        assert!(m.tokens.complete);
+        assert_eq!(m.tokens.total(), Some(10));
+    }
+
+    // The script streams two calls, then invalidates its clone. The wrapper performs the
+    // same post-run inspection a model worker's seal does, and returns its real error.
+    struct InspectAfterScript(Box<dyn turn::Worker>);
+    impl turn::Worker for InspectAfterScript {
+        fn name(&self) -> String {
+            self.0.name()
+        }
+        fn run(
+            &self,
+            sandbox: &Sandbox,
+            title: &str,
+            command: &str,
+            limit: u32,
+            seen: &mut Seen,
+        ) -> Result<RunStatus, TurnError> {
+            let status = self.0.run(sandbox, title, command, limit, seen)?;
+            sandbox.head()?;
+            Ok(status)
+        }
+    }
+
+    #[test]
+    fn a_turns_steps_are_kept_when_its_worker_ends_in_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = turn::sandbox::safe_git()
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{:?}", out.stderr);
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        fs::write(repo.join("a.rs"), "fixture").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        let script = d.path().join("worker.sh");
+        fs::write(&script, r#"#!/bin/sh
+printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"%s/a.rs"}},{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"%s/a.rs"}}]}}\n' "$PWD" "$PWD"
+mv .git .git-old
+ln -s .git-old .git
+"#).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut room = Room::init(&d.path().join("room")).unwrap();
+        let item = room
+            .add_item(room::NewItem {
+                title: "fixture".into(),
+                repo,
+                base_commit: base.clone(),
+                after: vec![],
+                check: room::CheckSpec {
+                    command: "false".into(),
+                    files: vec![],
+                    timeout_secs: 1,
+                    origin: room::CheckOrigin::Outside,
+                    wrong_artifacts: vec![base],
+                    written_by: "person:test".into(),
+                },
+            })
+            .unwrap();
+        room.record_frozen(
+            &item,
+            Frozen {
+                check_hash: "c".repeat(64),
+                red_on_base: true,
+                red_on_wrong: vec![true],
+            },
+        )
+        .unwrap();
+        let lease = room
+            .take(&format!("script:{}", script.display()), now())
+            .unwrap()
+            .unwrap();
+        let mut record = TurnRecord::new();
+        let mut clock = Clock {
+            room: &mut room,
+            workers: &[],
+            turn_secs: 5,
+            poll: WATCH,
+            report: None,
+            git_limit: Duration::from_secs(5),
+            next: 0,
+            unfreezable: HashMap::new(),
+            ceiling_day: None,
+            kept: Vec::new(),
+        };
+        let outcome = clock.work(&lease, now(), &mut record, |name| {
+            Ok(Box::new(InspectAfterScript(worker::from_name(name)?)))
+        });
+        record.finish(&outcome);
+        persist_turn(clock.room, &lease.attempt, &mut record).unwrap();
+        assert_eq!(clock.room.walk(&lease.attempt).unwrap().len(), 2);
+        let m = clock.room.measured(&lease.attempt).unwrap().unwrap();
+        assert_eq!(m.steps_seen, 2);
+        assert_eq!(m.ended, Ended::Exited);
+        assert_eq!(m.exit_code, None);
+        assert!(!m.tokens.complete);
+        assert_eq!(
+            m.active_ms,
+            m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
+        );
     }
 }
