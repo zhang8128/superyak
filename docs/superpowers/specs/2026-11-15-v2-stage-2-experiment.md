@@ -151,6 +151,13 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
   hidden (measured afterwards with Codex's sandbox command: a link that is granted opens what it leads to,
   by that place's real path); and a program that had already ended could be recorded as ended by the room
   when a stop came before the room looked again.
+- **Where the room reads for a worker, it reads no more than a worker could.** The room takes a worker's
+  message file with its own rights, which are wider than a worker's. So it reads that file only if it is a
+  plain file with one name, and only the very file it looked at: a second name for a file somewhere else is
+  removed and not read. Measured with the same kind of probe: neither program's sandbox nor the room's jail
+  lets a worker give a second name to a file it cannot read. The room does not rest on that for what it
+  reads itself. For any other file in a worker's tree it does: to git, a second name is a file like any
+  other.
 - **What would close the whole class:** a home for the worker programs that holds only the sign-in, as the
   same ship proposed. It means copying a person's sign-in, so it is a person's decision, and it is not
   taken here.

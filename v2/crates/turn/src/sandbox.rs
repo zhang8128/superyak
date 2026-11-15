@@ -71,6 +71,14 @@ const PLAIN_PATH: &str = "/usr/bin:/bin";
 /// ever, whatever a worker left in a repository the room reads.
 pub const ROOM_GIT_SECS: u64 = 600;
 
+/// How much of one git command's output the room keeps. It is large, for the list of a big commit's files;
+/// what matters is that it is not without end, whatever a worker left in a repository the room reads. A command
+/// that prints more is refused, whoever asked.
+pub const ROOM_GIT_OUTPUT_BYTES: usize = 64 << 20;
+
+/// How much the room keeps of what a git command says of its failure.
+const ROOM_GIT_COMPLAINT_BYTES: usize = 64 << 10;
+
 const POLL: Duration = Duration::from_millis(50);
 /// After a run ends, lines still in the pipe are handed over until none comes for this long.
 const DRAIN_IDLE: Duration = Duration::from_millis(500);
@@ -1298,15 +1306,24 @@ fn ended_within(
         .map_err(io("start git"))?;
     let group = child.id();
     // Each pipe is read on its own thread, so a full one never holds the program up, and hands over what it
-    // read when the pipe closes.
-    let read = |pipe: Option<Box<dyn Read + Send>>| {
-        let (done, wait) = mpsc::channel::<Vec<u8>>();
+    // read when the pipe closes. No more than `keep` bytes are kept, and the thread says whether there was more.
+    // Of the output, nothing past the limit is read, and the program is ended as soon as that is seen. Of what
+    // the program says of a failure, the rest is read and dropped: a program is not ended for having much to
+    // complain of.
+    let read = |pipe: Option<Box<dyn Read + Send>>, keep: usize, drop_the_rest: bool| {
+        let (done, wait) = mpsc::channel::<(Vec<u8>, bool)>();
         thread::spawn(move || {
             let mut bytes = Vec::new();
+            let mut more = false;
             if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
+                let _ = (&mut pipe).take(keep as u64).read_to_end(&mut bytes);
+                if drop_the_rest {
+                    let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+                } else {
+                    more = pipe.read(&mut [0u8; 1]).is_ok_and(|read| read > 0);
+                }
             }
-            let _ = done.send(bytes);
+            let _ = done.send((bytes, more));
         });
         wait
     };
@@ -1315,12 +1332,16 @@ fn ended_within(
             .stdout
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ROOM_GIT_OUTPUT_BYTES,
+        false,
     );
     let stderr = read(
         child
             .stderr
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ROOM_GIT_COMPLAINT_BYTES,
+        true,
     );
     let deadline = Instant::now() + limit;
     let late = |child: &mut Child| {
@@ -1335,9 +1356,29 @@ fn ended_within(
             limit.as_secs()
         ))
     };
+    let too_much = || {
+        TurnError::Git(format!(
+            "{what} printed more than {ROOM_GIT_OUTPUT_BYTES} bytes, and the room keeps no more of a git \
+             command's output than that"
+        ))
+    };
     // git usually answers in a few milliseconds, so the first looks come quickly and the later ones less often.
     let mut pause = Duration::from_millis(1);
+    let mut printed: Option<Vec<u8>> = None;
     let status = loop {
+        // Its output is looked at while it runs: a program that has printed too much is ended now, and not
+        // when it next writes or when its time is up.
+        if printed.is_none()
+            && let Ok((bytes, more)) = stdout.try_recv()
+        {
+            if more {
+                signal_group(group, "KILL");
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(too_much());
+            }
+            printed = Some(bytes);
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !stopped() => {
@@ -1348,7 +1389,7 @@ fn ended_within(
         }
     };
     // What a pipe held, waited for in short looks so that the switch is seen while waiting.
-    let read_out = |pipe: &mpsc::Receiver<Vec<u8>>| loop {
+    let read_out = |pipe: &mpsc::Receiver<(Vec<u8>, bool)>| loop {
         let now = Instant::now();
         if now >= deadline || stopped() {
             return None;
@@ -1359,10 +1400,19 @@ fn ended_within(
             Err(RecvTimeoutError::Disconnected) => return None,
         }
     };
-    let Some(stdout) = read_out(&stdout) else {
-        return Err(late(&mut child));
+    let stdout = match printed {
+        Some(bytes) => bytes,
+        None => match read_out(&stdout) {
+            Some((bytes, false)) => bytes,
+            Some((_, true)) => {
+                signal_group(group, "KILL");
+                return Err(too_much());
+            }
+            None => return Err(late(&mut child)),
+        },
     };
-    let Some(stderr) = read_out(&stderr) else {
+    // What it says of a failure is cut short where it is too long; that is no refusal.
+    let Some((stderr, _)) = read_out(&stderr) else {
         return Err(late(&mut child));
     };
     // The program is done and so is its output. Anything it left in its group goes with it.
@@ -1637,6 +1687,95 @@ mod tests {
         // With nothing left, a run still finds the system's own programs.
         assert_eq!(kept(""), PLAIN_PATH);
         assert_eq!(kept(".:bin"), PLAIN_PATH);
+    }
+
+    /// The room keeps no more of a git command's output than its limit. A command that prints more is refused
+    /// and ended at once: nothing past the limit is read. What a command says of a failure is cut short and the
+    /// rest dropped, and the command goes on to its own end.
+    #[test]
+    fn the_rooms_git_is_not_read_past_its_limit_of_output() {
+        let prints = |bytes: usize| {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &format!("head -c {bytes} /dev/zero")]);
+            command
+        };
+        // The limit itself, said once more here, so that a change to it is a change someone meant.
+        assert_eq!(ROOM_GIT_OUTPUT_BYTES, 67_108_864);
+        // The control: exactly the limit is read whole.
+        let whole = output_within(
+            prints(ROOM_GIT_OUTPUT_BYTES),
+            "a read",
+            Duration::from_secs(60),
+            None,
+        );
+        assert_eq!(whole.map(|out| out.len()).ok(), Some(ROOM_GIT_OUTPUT_BYTES));
+        // One byte more, and many more: refused, quickly, and not as a command that never finished. And a
+        // command that prints one byte too many and then waits is ended there and then, not when its time is up.
+        let mut idles = Command::new("/bin/sh");
+        idles.args([
+            "-c",
+            &format!("head -c {} /dev/zero; sleep 600", ROOM_GIT_OUTPUT_BYTES + 1),
+        ]);
+        let start = Instant::now();
+        let over = output_within(idles, "a read", Duration::from_secs(120), None);
+        assert!(
+            matches!(&over, Err(TurnError::Git(why)) if why.contains("a read printed more than")),
+            "{:?}",
+            over.map(|out| out.len())
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "{:?}",
+            start.elapsed()
+        );
+        // The same when the program itself is done at once and something it started prints too much after it:
+        // the program's own good end does not make that output acceptable.
+        let mut leaves_one = Command::new("/bin/sh");
+        leaves_one.args([
+            "-c",
+            &format!(
+                "(sleep 1; head -c {} /dev/zero) & exit 0",
+                ROOM_GIT_OUTPUT_BYTES + 1
+            ),
+        ]);
+        let over = output_within(leaves_one, "a read", Duration::from_secs(120), None);
+        assert!(
+            matches!(&over, Err(TurnError::Git(why)) if why.contains("a read printed more than")),
+            "{:?}",
+            over.map(|out| out.len())
+        );
+        for more in [1, 8 * ROOM_GIT_OUTPUT_BYTES] {
+            let start = Instant::now();
+            let over = output_within(
+                prints(ROOM_GIT_OUTPUT_BYTES + more),
+                "a read",
+                Duration::from_secs(60),
+                None,
+            );
+            assert!(
+                matches!(&over, Err(TurnError::Git(why)) if why.contains("a read printed more than")),
+                "{more}: {:?}",
+                over.map(|out| out.len())
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "{more}: {:?}",
+                start.elapsed()
+            );
+        }
+        // What a command says of its failure is cut short where it is too long, and is no refusal of itself:
+        // the command goes on to its own end, which is 3 only if all it had to say was taken from it (9 if the
+        // pipe was closed on it).
+        let mut complains = Command::new("/bin/sh");
+        complains.args([
+            "-c",
+            "{ head -c 3000000 /dev/zero | tr '\\000' x >&2; } && exit 3; exit 9",
+        ]);
+        let (status, stdout, stderr) =
+            ended_within(complains, "a read", Duration::from_secs(60), None).unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert!(stdout.is_empty());
+        assert_eq!(stderr.len(), ROOM_GIT_COMPLAINT_BYTES);
     }
 
     #[test]

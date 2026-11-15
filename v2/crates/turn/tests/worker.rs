@@ -315,7 +315,7 @@ fn the_codex_command_is_the_plans() {
     let args = worker.args(&sb).unwrap();
     // The table of what the shell may reach depends on this machine and its settings: it is compared whole in
     // `codex_is_given_a_profile_and_no_sandbox_mode`, under settings that test chose. Here, its frame.
-    let table = &args[7];
+    let table = &args[9];
     assert!(
         table.starts_with(
             "permissions.yak.filesystem={\":root\"=\"deny\", \":minimal\"=\"read\", \":slash_tmp\"=\"deny\", "
@@ -331,6 +331,9 @@ fn the_codex_command_is_the_plans() {
             "default_permissions=\"yak\"",
             "-c",
             "permissions.yak.extends=\":workspace\"",
+            // Said outright, though it is the profile's default: a worker's shell has no network.
+            "-c",
+            "permissions.yak.network.enabled=false",
             "-c",
             table,
             "-C",
@@ -927,13 +930,18 @@ fn a_worker_that_cannot_commit_leaves_its_message() {
 
 #[test]
 fn a_message_file_that_is_not_a_plain_file_is_not_read() {
-    let fixed = "Turn by codex:test, committed by the room.\n\nMade by codex:test.\nCo-Authored-By: Codex <noreply@openai.com>";
     // A link is removed and not followed; a file the room cannot use is removed and not read. A directory or a
     // pipe there stops the room's commit: `something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit`.
     let cases = [
         (
             "a link",
             "printf 'Read through a link\\n' > ../outside && ln -s ../outside .yak-message",
+        ),
+        // A second name for a file somewhere else. The room reads with its own rights, which are wider than a
+        // worker's: a name the worker made for a file it could not read must not be read for it.
+        (
+            "a second name for a file elsewhere",
+            "printf 'Read through a second name\\n' > ../outside && ln ../outside .yak-message",
         ),
         (
             "too long",
@@ -944,33 +952,51 @@ fn a_message_file_that_is_not_a_plain_file_is_not_read() {
         ("not UTF-8", "printf 'caf\\351\\n' > .yak-message"),
         ("a NUL", "printf 'a\\000b\\n' > .yak-message"),
     ];
-    for (what, leave) in cases {
-        let repo = Repo::new(&[("a.txt", "hello\n")]);
-        let sb = sandbox(&repo);
-        let fake = leaver(&repo, "codex", leave);
-        CodexWorker::with_program("test", fake.to_str().unwrap())
-            .run(&sb, "t", "true", 60, &mut seen())
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert_eq!(last_message(&sb), fixed, "{what}");
-        assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed", "{what}");
-        assert!(message_file(&sb).is_none(), "{what}: something is left");
-        assert!(
-            !committed(&sb).iter().any(|p| p.starts_with(".yak-message")),
-            "{what}"
+    for family in ["codex", "claude"] {
+        let coauthor = match family {
+            "codex" => "Codex <noreply@openai.com>",
+            _ => "Claude <noreply@anthropic.com>",
+        };
+        let fixed = format!(
+            "Turn by {family}:test, committed by the room.\n\nMade by {family}:test.\nCo-Authored-By: {coauthor}"
         );
+        for (what, leave) in cases {
+            let repo = Repo::new(&[("a.txt", "hello\n")]);
+            let sb = sandbox(&repo);
+            let fake = leaver(&repo, family, leave);
+            family_worker(family, &fake)
+                .run(&sb, "t", "true", 60, &mut seen())
+                .unwrap_or_else(|e| panic!("{family}, {what}: {e}"));
+            assert_eq!(last_message(&sb), fixed, "{family}, {what}");
+            assert_eq!(
+                git(&sb.dir, &["show", "HEAD:a.txt"]),
+                "changed",
+                "{family}, {what}"
+            );
+            assert!(
+                message_file(&sb).is_none(),
+                "{family}, {what}: something is left"
+            );
+            assert!(
+                !committed(&sb).iter().any(|p| p.starts_with(".yak-message")),
+                "{family}, {what}"
+            );
+            // What a link or a second name led to is untouched, and is in no commit's message.
+            let outside = sb.dir.with_file_name("outside");
+            if outside.exists() {
+                let kept = read(&outside);
+                assert!(
+                    kept.starts_with("Read through "),
+                    "{family}, {what}: {kept}"
+                );
+                assert!(
+                    !git(&sb.dir, &["log", "--all", "--format=%B"]).contains("Read through"),
+                    "{family}, {what}"
+                );
+            }
+        }
     }
-    // What the link pointed at is untouched.
-    let repo = Repo::new(&[("a.txt", "hello\n")]);
-    let sb = sandbox(&repo);
-    let fake = leaver(
-        &repo,
-        "codex",
-        "printf 'kept\\n' > ../outside && ln -s ../outside .yak-message",
-    );
-    CodexWorker::with_program("test", fake.to_str().unwrap())
-        .run(&sb, "t", "true", 60, &mut seen())
-        .unwrap();
-    assert_eq!(read(&sb.dir.with_file_name("outside")), "kept\n");
+    // The control: a plain file of its own, with one name, is read (`a_worker_that_cannot_commit_leaves_its_message`).
 }
 
 /// A model worker of each family whose program is `fake`.
@@ -1356,6 +1382,8 @@ fn codex_is_given_a_profile_and_no_sandbox_mode() {
             "default_permissions=\"yak\"",
             "-c",
             "permissions.yak.extends=\":workspace\"",
+            "-c",
+            "permissions.yak.network.enabled=false",
             "-c",
             &format!("permissions.yak.filesystem={table}"),
             "-C",

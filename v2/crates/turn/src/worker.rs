@@ -3,6 +3,7 @@
 //! becomes the turn's steps a line at a time.
 
 use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -613,6 +614,10 @@ impl CodexWorker {
             "default_permissions=\"yak\"",
             "-c",
             "permissions.yak.extends=\":workspace\"",
+            // The profile's own default, said outright: a worker's shell has no network. Measured with Codex's
+            // sandbox command: with this value a command could not reach the network, with `true` it could.
+            "-c",
+            "permissions.yak.network.enabled=false",
             "-c",
         ]
         .iter()
@@ -782,8 +787,10 @@ fn base_tracks_message(sandbox: &Sandbox) -> Result<bool, TurnError> {
 /// so that it is in no commit. When the base tracks something at that name (`tracked`), there is no message
 /// file for the turn: nothing there is read or removed, and it is committed as any tracked file is. Otherwise
 /// only a plain file is read, of at most `MESSAGE_BYTES`, holding text git can take as a message: UTF-8, with
-/// no NUL, and not blank. A link is removed as a file is, and is never followed. A directory, a pipe or anything
-/// else there is refused: the room does not commit for the worker with it there, and nothing of it is staged.
+/// no NUL, and not blank, and with no other name anywhere (a second name for a file is removed as a link is,
+/// and the file is not read). A link is removed as a file is, and is never followed. A directory, a pipe or
+/// anything else there is refused: the room does not commit for the worker with it there, and nothing of it is
+/// staged.
 /// The worker has ended, everything it started with it, so what was looked at is what is read.
 fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, TurnError> {
     if tracked {
@@ -808,15 +815,9 @@ fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, Turn
             path.display()
         )));
     }
+    // A link is not opened at all. A file is, and is read only if it has this one name (`read_what_was_looked_at`).
     let said = if meta.is_file() {
-        let mut bytes = Vec::new();
-        std::fs::File::open(&path)
-            .and_then(|file| file.take(MESSAGE_BYTES as u64 + 1).read_to_end(&mut bytes))
-            .map_err(io("read the message file"))?;
-        String::from_utf8(bytes)
-            .ok()
-            .filter(|text| text.len() <= MESSAGE_BYTES)
-            .filter(|text| !text.contains('\0') && !text.trim().is_empty())
+        read_what_was_looked_at(&path, &meta)?
     } else {
         None
     };
@@ -824,12 +825,66 @@ fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, Turn
     Ok(said)
 }
 
+/// The message in the file at `path`, when the file that opens there is the one `looked` was taken of, still a
+/// plain file with one name, and holds text the room can use. What is read is what was looked at: a path that
+/// has come to lead somewhere else since is not read.
+fn read_what_was_looked_at(
+    path: &Path,
+    looked: &std::fs::Metadata,
+) -> Result<Option<String>, TurnError> {
+    let file = std::fs::File::open(path).map_err(io("open the message file"))?;
+    let opened = file.metadata().map_err(io("look at the message file"))?;
+    if !own_plain_file(&opened) || (opened.dev(), opened.ino()) != (looked.dev(), looked.ino()) {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(MESSAGE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io("read the message file"))?;
+    Ok(String::from_utf8(bytes)
+        .ok()
+        .filter(|text| text.len() <= MESSAGE_BYTES)
+        .filter(|text| !text.contains('\0') && !text.trim().is_empty()))
+}
+
+/// Whether what is at a path is a plain file with this one name. A file with a second name may be one the
+/// worker could not read and made a name for: the room reads with its own rights, which are wider than a
+/// worker's, so it reads no file a worker could have named that way.
+fn own_plain_file(meta: &std::fs::Metadata) -> bool {
+    meta.is_file() && meta.nlink() == 1
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Reach, instructions_left_out, is_status_entry, plain, toml_key};
+    use super::{
+        Reach, instructions_left_out, is_status_entry, plain, read_what_was_looked_at, toml_key,
+    };
     use crate::TurnError;
+
+    /// The room reads a message only from the file it looked at. A path that leads to another file by the time it
+    /// is opened is not read, and neither is a file that has gained a second name.
+    #[test]
+    fn a_message_is_read_only_from_the_file_that_was_looked_at() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (looked_at, another) = (tmp.path().join("looked-at"), tmp.path().join("another"));
+        std::fs::write(&looked_at, "The message\n").unwrap();
+        std::fs::write(&another, "Another file's text\n").unwrap();
+        let looked = std::fs::symlink_metadata(&looked_at).unwrap();
+        // The control: the file that was looked at is read.
+        assert_eq!(
+            read_what_was_looked_at(&looked_at, &looked)
+                .unwrap()
+                .as_deref(),
+            Some("The message\n")
+        );
+        // The path has come to lead to another file: not read.
+        assert_eq!(read_what_was_looked_at(&another, &looked).unwrap(), None);
+        // The file has gained a second name since it was looked at: not read.
+        std::fs::hard_link(&looked_at, tmp.path().join("second-name")).unwrap();
+        assert_eq!(read_what_was_looked_at(&looked_at, &looked).unwrap(), None);
+    }
 
     /// Claude reads instruction files at its start from every directory above the one it works in, and from its
     /// own home. A worker is given none of them: each is named to be left out. The sandbox's own are not named:
