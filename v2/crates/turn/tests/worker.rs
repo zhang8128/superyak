@@ -307,6 +307,15 @@ fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
     assert_eq!(status.exit_code, 0);
     assert_eq!(oks(&seen.steps), [true, true, false]);
     assert_eq!(seen.steps[0].target, tracked(&repo, "a.txt"));
+    // The program's closing total, and when each step was seen and answered.
+    assert_eq!(seen.tokens.total(), Some(37_220));
+    assert_eq!(seen.steps_seen, 3);
+    for step in &seen.steps {
+        assert!(
+            step.seen_ms.is_some() && step.result_ms >= step.seen_ms,
+            "{step:?}"
+        );
+    }
 
     let args: Vec<String> = read(&repo.scratch("args.txt"))
         .lines()
@@ -362,6 +371,14 @@ fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
     assert_eq!(status.exit_code, 0);
     assert_eq!(oks(&seen.steps), [true, true, false]);
     assert_eq!(seen.steps[0].target, tracked(&repo, "a.txt"));
+    assert_eq!(seen.tokens.total(), Some(46_441 + 100));
+    assert_eq!(seen.steps_seen, 3);
+    for step in &seen.steps {
+        assert!(
+            step.seen_ms.is_some() && step.result_ms >= step.seen_ms,
+            "{step:?}"
+        );
+    }
     let args: Vec<String> = read(&repo.scratch("args.txt"))
         .lines()
         .map(str::to_string)
@@ -374,6 +391,67 @@ fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
     assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed");
     let message = git(&sb.dir, &["log", "-1", "--format=%B"]);
     assert!(message.contains("Made by codex:gpt-6.1-sol."), "{message}");
+}
+
+/// A stand-in that prints the lines of `fixture` a sed address list picks, changes a.txt, and then leaves the
+/// clone's git directory in a state the room refuses to commit in: a link among its refs.
+fn breaker(repo: &Repo, name: &str, fixture: &str, lines: &str) -> PathBuf {
+    let body = format!(
+        "#!/bin/sh\ncat > /dev/null\nsed -n '{lines}' '{fixture}' | sed \"s#/sandbox#$PWD#g\"\n\
+         echo changed > a.txt\nln -s /tmp .git/refs/broken\n",
+        fixture = data(fixture),
+    );
+    script(repo, name, &body)
+}
+
+#[test]
+fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
+    // Claude: Read a.txt and its result, the call to `ls`, and the closing total.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let fake = breaker(&repo, "claude", "claude-stream-ids.jsonl", "1,4p;13p");
+    let mut kept = seen();
+    let result = ClaudeWorker::with_program("opus", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut kept);
+    // The room's commit for it is refused.
+    assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
+    assert_eq!(kept.steps.len(), 2);
+    assert_eq!(kept.steps[0].target, tracked(&repo, "a.txt"));
+    assert_eq!(kept.steps_seen, 2);
+    assert_eq!(kept.tokens.total(), Some(37_220));
+    // Codex: two commands and the closing total.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let fake = breaker(&repo, "codex", "codex-json-sample.jsonl", "1,7p;11p");
+    let mut kept = seen();
+    let result = CodexWorker::with_program("test", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut kept);
+    assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
+    assert_eq!(oks(&kept.steps), [true, true]);
+    assert_eq!(kept.steps_seen, 2);
+    assert_eq!(kept.tokens.total(), Some(46_541));
+}
+
+#[test]
+fn a_script_workers_stream_gives_its_tokens() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    // The stream goes into the script itself, which is all of this tree a jailed script is shown.
+    let sample = read(Path::new(&data("claude-stream-ids.jsonl")));
+    assert!(!sample.contains("YAK_SAMPLE"));
+    let body = format!(
+        "#!/bin/sh\ncat > /dev/null\nsed \"s#/sandbox#$PWD#g\" <<'YAK_SAMPLE'\n{}\nYAK_SAMPLE\n",
+        sample.trim_end()
+    );
+    let path = script(&repo, "tokens.sh", &body);
+    let mut seen = seen();
+    from_name(&format!("script:{}", path.display()))
+        .unwrap()
+        .run(&sb, "t", "true", 60, &mut seen)
+        .unwrap();
+    assert_eq!(oks(&seen.steps), [true, true, false]);
+    assert_eq!(seen.tokens.total(), Some(37_220));
+    assert!(seen.tokens.complete);
 }
 
 #[test]
@@ -576,4 +654,176 @@ fn room_commits_leave_no_reflogs() {
         .unwrap();
     assert!(!head.exists());
     assert!(!branch.exists());
+}
+
+// --- A worker that cannot commit can still say what it did -------------------------------------------------
+
+/// A stand-in that changes a.txt, then runs `then` in the clone, and prints nothing.
+fn leaver(repo: &Repo, name: &str, then: &str) -> PathBuf {
+    script(
+        repo,
+        name,
+        &format!("#!/bin/sh\ncat > /dev/null\necho changed > a.txt\n{then}\n"),
+    )
+}
+
+fn last_message(sb: &Sandbox) -> String {
+    git(&sb.dir, &["log", "-1", "--format=%B"])
+}
+
+fn committed(sb: &Sandbox) -> Vec<String> {
+    git(&sb.dir, &["ls-tree", "-r", "--name-only", "HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn message_file(sb: &Sandbox) -> Option<std::fs::Metadata> {
+    std::fs::symlink_metadata(sb.dir.join(".yak-message")).ok()
+}
+
+#[test]
+fn a_worker_that_cannot_commit_leaves_its_message() {
+    let leave = "printf 'Make the greeting say bye\\n\\nIt said hello.\\n' > .yak-message";
+    for family in ["codex", "claude"] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let fake = leaver(&repo, family, leave);
+        let fake = fake.to_str().unwrap();
+        let (worker, coauthor): (Box<dyn Worker>, &str) = match family {
+            "codex" => (
+                Box::new(CodexWorker::with_program("test", fake)),
+                "Codex <noreply@openai.com>",
+            ),
+            _ => (
+                Box::new(ClaudeWorker::with_program("test", fake)),
+                "Claude <noreply@anthropic.com>",
+            ),
+        };
+        worker.run(&sb, "t", "true", 60, &mut seen()).unwrap();
+        assert_eq!(
+            last_message(&sb),
+            format!(
+                "Make the greeting say bye\n\nIt said hello.\n\nMade by {family}:test.\n\
+                 Co-Authored-By: {coauthor}"
+            )
+        );
+        assert_eq!(committed(&sb), ["a.txt"]);
+        assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed");
+        assert!(
+            message_file(&sb).is_none(),
+            "the message file is still there"
+        );
+    }
+    // At its limit it is still read.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let fake = leaver(
+        &repo,
+        "codex",
+        "head -c 16384 /dev/zero | tr '\\000' a > .yak-message",
+    );
+    CodexWorker::with_program("test", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut seen())
+        .unwrap();
+    assert!(last_message(&sb).starts_with(&"a".repeat(16_384)));
+    assert!(message_file(&sb).is_none());
+    // A message and no other change: nothing to commit, and the file is gone all the same.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let fake = script(
+        &repo,
+        "codex",
+        "#!/bin/sh\ncat > /dev/null\necho 'Nothing needed' > .yak-message\n",
+    );
+    CodexWorker::with_program("test", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut seen())
+        .unwrap();
+    assert_eq!(sb.head().unwrap(), repo.base);
+    assert!(message_file(&sb).is_none());
+}
+
+#[test]
+fn a_message_file_that_is_not_a_plain_file_is_not_read() {
+    let fixed = "Turn by codex:test, committed by the room.\n\nMade by codex:test.\nCo-Authored-By: Codex <noreply@openai.com>";
+    // What is left at `.yak-message` afterwards: nothing, or what the room does not remove.
+    #[derive(Debug, PartialEq)]
+    enum Left {
+        Nothing,
+        Directory,
+        Pipe,
+    }
+    let cases = [
+        (
+            "a link",
+            "printf 'Read through a link\\n' > ../outside && ln -s ../outside .yak-message",
+            Left::Nothing,
+        ),
+        (
+            "a directory",
+            "mkdir .yak-message && printf 'inside\\n' > .yak-message/note",
+            Left::Directory,
+        ),
+        ("a pipe", "mkfifo .yak-message", Left::Pipe),
+        (
+            "too long",
+            "head -c 16385 /dev/zero | tr '\\000' a > .yak-message",
+            Left::Nothing,
+        ),
+        ("empty", ": > .yak-message", Left::Nothing),
+        (
+            "blank",
+            "printf ' \\n\\n\\t\\n' > .yak-message",
+            Left::Nothing,
+        ),
+        (
+            "not UTF-8",
+            "printf 'caf\\351\\n' > .yak-message",
+            Left::Nothing,
+        ),
+        ("a NUL", "printf 'a\\000b\\n' > .yak-message", Left::Nothing),
+    ];
+    for (what, leave, left) in cases {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let fake = leaver(&repo, "codex", leave);
+        CodexWorker::with_program("test", fake.to_str().unwrap())
+            .run(&sb, "t", "true", 60, &mut seen())
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(last_message(&sb), fixed, "{what}");
+        assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed", "{what}");
+        let found = match message_file(&sb) {
+            None => Left::Nothing,
+            Some(meta) if meta.is_dir() => Left::Directory,
+            Some(meta) if std::os::unix::fs::FileTypeExt::is_fifo(&meta.file_type()) => Left::Pipe,
+            Some(meta) => panic!("{what}: left {meta:?}"),
+        };
+        assert_eq!(found, left, "{what}");
+        if left == Left::Nothing {
+            assert!(
+                !committed(&sb).iter().any(|p| p.starts_with(".yak-message")),
+                "{what}"
+            );
+        }
+    }
+    // What the link pointed at is untouched.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let fake = leaver(
+        &repo,
+        "codex",
+        "printf 'kept\\n' > ../outside && ln -s ../outside .yak-message",
+    );
+    CodexWorker::with_program("test", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut seen())
+        .unwrap();
+    assert_eq!(read(&sb.dir.with_file_name("outside")), "kept\n");
+}
+
+#[test]
+fn the_prompt_says_where_to_leave_a_message() {
+    assert!(prompt("t", "true").contains(
+        "If your tools cannot commit, leave your commit message in a file named `.yak-message` at the \
+         repository's root and the room will commit for you with it."
+    ));
 }
