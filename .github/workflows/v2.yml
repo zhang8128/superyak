@@ -58,6 +58,9 @@ jobs:
         working-directory: .
         run: |
           (cd v2 && cargo vendor --locked "$RUNNER_TEMP/vendor" > /dev/null)
+          # Each of the three reports, though one fails: the loop does not end at the first failure.
+          status=0
           for check in item-add-wrong-commit item-add-check-freezable item-add-title; do
-            TMPDIR="$RUNNER_TEMP" sh "v2/checks/$check.sh" "$RUNNER_TEMP/vendor"
+            TMPDIR="$RUNNER_TEMP" sh "v2/checks/$check.sh" "$RUNNER_TEMP/vendor" || status=1
           done
+          exit "$status"
