@@ -28,7 +28,9 @@ use crate::{TurnError, io};
 pub const MAX_LINE_BYTES: usize = 8 << 20;
 
 /// What a run's environment keeps from the clock's. Everything else (tokens, agent sockets, `GIT_*`, the
-/// room's own variables) is left out.
+/// room's own variables) is left out. `SDKROOT` and `DEVELOPER_DIR` say where the system's compiler kit is on
+/// macOS: without them the developer-tool shim asks on every call, and where it may not write its cache (the
+/// machine's own temporary directory, hidden from a worker) it complains on every `git` and every link.
 const ENV_KEPT: &[&str] = &[
     "PATH",
     "HOME",
@@ -43,6 +45,8 @@ const ENV_KEPT: &[&str] = &[
     "TZ",
     "CODEX_HOME",
     "CLAUDE_CONFIG_DIR",
+    "SDKROOT",
+    "DEVELOPER_DIR",
 ];
 
 /// Where the agent programs keep their settings and sign-ins. A model worker's run keeps these; a jailed run

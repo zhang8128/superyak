@@ -500,6 +500,20 @@ fn create_refuses_an_unknown_commit_and_a_bad_branch() {
 fn the_environment_is_scrubbed() {
     // A test cannot set variables in its own process without `unsafe`, so it runs this binary again with them
     // set, and the child reports what a run in its sandbox sees.
+    // Where the system's compiler kit is, on macOS: a run keeps these two. The child's own git reads them
+    // too, so on a machine that has the kit they are given as it has them, and elsewhere as any words.
+    let said = |program: &str, args: &[&str], otherwise: &str| -> String {
+        Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| otherwise.to_string())
+    };
+    let developer_dir = said("xcode-select", &["-p"], "/somewhere/developer");
+    let sdk = said("xcrun", &["--show-sdk-path"], "/somewhere/sdk");
     let out = Command::new(std::env::current_exe().unwrap())
         .args([
             "env_probe",
@@ -514,6 +528,8 @@ fn the_environment_is_scrubbed() {
         .env("SSH_AUTH_SOCK", "/tmp/agent.sock")
         .env("SUPERYAK_X", "secret")
         .env("GIT_DIR", "/nowhere")
+        .env("SDKROOT", &sdk)
+        .env("DEVELOPER_DIR", &developer_dir)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -539,6 +555,11 @@ fn the_environment_is_scrubbed() {
     ] {
         assert!(!names.contains(&hidden), "{hidden} reached the sandbox");
     }
+    // Without these two the macOS developer-tool shim asks where the compiler kit is on every call, and where
+    // it may not write its cache it complains on every `git` and every link.
+    for kept in ["SDKROOT", "DEVELOPER_DIR"] {
+        assert!(names.contains(&kept), "{kept} did not reach the sandbox");
+    }
 }
 
 #[test]
@@ -562,6 +583,9 @@ fn env_probe() {
         })
         .unwrap();
     assert_eq!(status.exit_code, 0);
+    // A line of its own first: the test harness prints this test's name with no line end, and the first name
+    // would otherwise follow it on that line and be missed.
+    println!();
     for name in names {
         println!("ENV:{name}");
     }

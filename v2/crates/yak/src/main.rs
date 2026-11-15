@@ -353,6 +353,9 @@ fn clean_clock_environment() -> Result<()> {
         "TZ",
         "CODEX_HOME",
         "CLAUDE_CONFIG_DIR",
+        // Where the system's compiler kit is, on macOS: a run keeps them too (`turn`'s `ENV_KEPT`).
+        "SDKROOT",
+        "DEVELOPER_DIR",
         "YAK_JAIL",
         "YAK_JAIL_READ",
         "YAK_SUPERVISION",

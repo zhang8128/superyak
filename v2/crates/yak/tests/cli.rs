@@ -461,9 +461,25 @@ fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
     let f = Fixture::new();
     let id = f.add();
     let script = f.script("env | sort > env.txt\necho green > answer\ngit add env.txt answer\ngit -c user.name=Test -c user.email=test@example.invalid commit -qm fix");
+    // Where the system's compiler kit is: kept, for the clock and for what it starts. A machine that has the
+    // kit gives its own path, since the worker's git reads the variable too.
+    let said = |program: &str, arg: &str, otherwise: &str| -> String {
+        std::process::Command::new(program)
+            .arg(arg)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| otherwise.to_string())
+    };
+    let sdk = said("xcrun", "--show-sdk-path", "/somewhere/sdk");
+    let developer_dir = said("xcode-select", "-p", "/somewhere/developer");
     let out = success(
         f.clock(&script)
             .env("YAK_TEST_CANARY", "task10-canary")
+            .env("SDKROOT", &sdk)
+            .env("DEVELOPER_DIR", &developer_dir)
             .output()
             .unwrap(),
     );
@@ -484,6 +500,15 @@ fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
         !worker_environment.contains("YAK_TEST_CANARY")
             && !worker_environment.contains("task10-canary")
     );
+    for kept in [
+        format!("SDKROOT={sdk}"),
+        format!("DEVELOPER_DIR={developer_dir}"),
+    ] {
+        assert!(
+            worker_environment.lines().any(|line| line == kept),
+            "{kept} is not in: {worker_environment}"
+        );
+    }
     assert_eq!(f.show(&id)["state"], "passed_verified");
     let mut clean = f.clock(&script);
     clean.env_clear();
@@ -501,6 +526,8 @@ fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
         "TZ",
         "CODEX_HOME",
         "CLAUDE_CONFIG_DIR",
+        "SDKROOT",
+        "DEVELOPER_DIR",
         "YAK_JAIL",
         "YAK_JAIL_READ",
         "YAK_SUPERVISION",
