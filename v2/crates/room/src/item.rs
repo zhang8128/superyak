@@ -29,6 +29,14 @@ pub struct ItemSpec {
 
 impl Room {
     pub fn add_item(&mut self, n: NewItem) -> Result<ItemId, RoomError> {
+        if n.title.trim().is_empty()
+            || n.title.contains(['\r', '\n'])
+            || n.title.chars().count() > 200
+        {
+            return Err(RoomError::Refused(
+                "item title must be nonblank, on one line, and at most 200 characters".into(),
+            ));
+        }
         let repo = n
             .repo
             .to_str()
