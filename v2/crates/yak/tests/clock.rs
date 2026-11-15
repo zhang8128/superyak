@@ -151,7 +151,8 @@ fn workers_take_turns() {
     let (result, events) = world.run(&[&a, &b], Mode::OnceThrough, NEVER, TURN_SECS);
     result.unwrap();
     let workers: Vec<String> = started(&events).into_iter().map(|s| s.3).collect();
-    assert_eq!(workers, [a.clone(), b.clone(), a, b]);
+    // When this fails, what the clock did is the first thing wanted, so it is said with the failure.
+    assert_eq!(workers, [a.clone(), b.clone(), a, b], "{events:#?}");
     for n in 0..4 {
         assert_eq!(state(&world, n), ItemState::PassedVerified);
     }
@@ -1364,7 +1365,8 @@ fn inner_a_clock_under_the_rooms_switches() {
             .args([
                 "-c",
                 &format!(
-                    "until ls '{}'/*.pid >/dev/null 2>&1; do sleep 0.1; done; \
+                    "tries=0; until ls '{}'/*.pid >/dev/null 2>&1; do \
+                     tries=$((tries + 1)); [ \"$tries\" -gt 900 ] && exit 3; sleep 0.1; done; \
                      sleep 1; kill -STOP {me}; sleep 8; kill -CONT {me}",
                     world.room_dir.join("turns").display()
                 ),
@@ -1395,6 +1397,9 @@ fn inner_a_clock_under_the_rooms_switches() {
     );
     println!("TOOK {} s", began.elapsed().as_secs());
     if let Some(mut holder) = holder {
+        // This line runs, so the clock is not being held: the holder is done, or has not begun. If it has
+        // not begun (no worker's record ever appeared) it is ended here, and nothing is left waiting.
+        let _ = holder.kill();
         let _ = holder.wait();
     }
     if let Some(groups) = groups {

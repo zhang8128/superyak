@@ -687,8 +687,9 @@ fn a_secrets_place_in_a_directory_every_run_is_shown_stops_the_jail_unless_it_is
 }
 
 /// On a disk where capital and small letters name the same file, a directory kept as `.Cargo` is where
-/// `~/.cargo/credentials.toml` would be made. Naming it to the jail is refused like `~/.cargo` itself. On a
-/// disk that tells the two apart they are two names, and `.Cargo` is an ordinary directory.
+/// `~/.cargo/credentials.toml` would be made. Naming it to the jail is refused like `~/.cargo` itself. On
+/// macOS it is refused on any disk, since the jail's rules there ignore letters. On Linux, on a disk that
+/// tells the two apart, they are two names, and `.Cargo` is an ordinary directory.
 #[test]
 fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
     let tmp = tempfile::tempdir().unwrap();
@@ -701,11 +702,17 @@ fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
         &[("HOME", &home), ("YAK_JAIL_READ", &kept)],
         true,
     );
-    if folds {
+    // Two different reasons to refuse. The disk may take the two spellings for one name. And on macOS the
+    // jail's own rules ignore letters whatever the disk does, so the room does too.
+    if folds || cfg!(target_os = "macos") {
         assert!(
             printed.contains("REFUSED ") && printed.contains("would also show"),
             "{printed}"
         );
+    } else {
+        assert!(printed.contains("SAID ran"), "{printed}");
+    }
+    if folds {
         // Written in small letters, it is the same directory and the same answer.
         let written = home.join(".cargo");
         let printed = under(
@@ -717,8 +724,6 @@ fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
             printed.contains("REFUSED ") && printed.contains("would also show"),
             "{printed}"
         );
-    } else {
-        assert!(printed.contains("SAID ran"), "{printed}");
     }
     // The control, on either kind of disk: the tool's own directory inside it can be named.
     let named = kept.join("bin");

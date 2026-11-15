@@ -437,8 +437,11 @@ fn shown_by_default(
         for at in [dir, &leads_to] {
             let shown = protected.iter().chain(hidden).find(|place| {
                 let touches = inside(place, at, folds) || inside(at, place, folds);
-                let covered =
-                    !elsewhere && hidden.iter().any(|hidden| inside(place, hidden, folds));
+                // This is the one comparison here that lets a place through, so it does not ignore letters. A
+                // hidden path is spelled as the disk has it, and so is every part of a place that is there.
+                // Where the rules might tell two spellings apart after all, a place is not called covered
+                // by a hidden path that only resembles it.
+                let covered = !elsewhere && hidden.iter().any(|hidden| place.starts_with(hidden));
                 touches && !covered
             });
             if let Some(place) = shown {
@@ -1089,6 +1092,19 @@ mod tests {
             Some((at("pkg/SHARE/later/secret"), at("pkg/share")))
         );
         assert_eq!(shown_by_default(&dirs, &places, &[], false), None);
+        // A place that is there and hidden covers what lies in it as spelled, and nothing spelled otherwise:
+        // being covered lets a place through, so that one comparison never ignores letters.
+        let shown = paths(&["plain"]);
+        let (hidden, same, other) = (
+            paths(&["plain/there"]),
+            paths(&["plain/there/later"]),
+            paths(&["plain/THERE/later"]),
+        );
+        assert_eq!(shown_by_default(&shown, &same, &hidden, true), None);
+        assert_eq!(
+            shown_by_default(&shown, &other, &hidden, true),
+            Some((at("plain/THERE/later"), at("plain")))
+        );
         // The same the other way up: the directory inside a place written in other letters.
         let (dirs, places) = (paths(&["Pkg/Made/share"]), paths(&["pkg/made"]));
         assert_eq!(
