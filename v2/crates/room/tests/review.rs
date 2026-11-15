@@ -123,6 +123,20 @@ fn erasing_an_item_removes_every_row_and_its_title_from_the_file() {
     assert_eq!(r.disagreements().unwrap().len(), 1);
     let keep = r.add_item(new_item()).unwrap();
     let c = rusqlite::Connection::open(d.path().join("room.sqlite3")).unwrap();
+
+    for attempt in &attempts {
+        c.execute(
+            "INSERT INTO step_files VALUES (?1,1,0,'src/lib.rs',?2)",
+            (&attempt.0, "5".repeat(40)),
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO changes VALUES (?1,0,'src/lib.rs','changed')",
+            [&attempt.0],
+        )
+        .unwrap();
+        c.execute("INSERT INTO measured VALUES (?1,'exited',0,0,NULL,NULL,NULL,NULL,NULL,1,0,1,2,3,4,5,NULL,15)", [&attempt.0]).unwrap();
+    }
     c.execute_batch("PRAGMA wal_checkpoint(FULL)").unwrap();
     assert!(contains_marker(&d.path().join("room.sqlite3"), MARKER));
     assert!(contains_marker(&d.path().join("room.sqlite3-wal"), MARKER));
@@ -154,6 +168,9 @@ fn erasing_an_item_removes_every_row_and_its_title_from_the_file() {
         "items",
         "checks",
         "attempts",
+        "step_files",
+        "measured",
+        "changes",
         "steps",
         "verdicts",
         "budget_days",

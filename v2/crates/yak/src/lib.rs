@@ -9,11 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use room::{ItemId, Room, RoomError, Ts};
 use serde_json::Value;
 
-/// The four room views. There is deliberately no mutation here.
+/// The room views shared by the read-only interfaces.
 pub enum View {
     Status,
     ItemList,
     ItemShow(ItemId),
+    ItemTurns(ItemId),
     Disagreements,
 }
 
@@ -24,6 +25,7 @@ pub fn read_view(dir: &Path, view: &View) -> Result<Value, RoomError> {
         View::Status => serde_json::to_value(room.status(now())?),
         View::ItemList => serde_json::to_value(room.items()?),
         View::ItemShow(id) => serde_json::to_value(room.item(id)?),
+        View::ItemTurns(id) => serde_json::to_value(room.turns(id)?),
         View::Disagreements => serde_json::to_value(room.disagreements()?),
     };
     value.map_err(|e| RoomError::Db(e.to_string()))

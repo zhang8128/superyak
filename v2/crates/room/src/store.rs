@@ -52,6 +52,8 @@ CREATE TABLE steps (
     ok INTEGER NOT NULL,
     tokens_in INTEGER,
     tokens_out INTEGER,
+    seen_ms INTEGER,
+    result_ms INTEGER,
     PRIMARY KEY(attempt, seq)
 );
 CREATE TABLE verdicts (
@@ -64,6 +66,17 @@ CREATE TABLE verdicts (
     output_sha256 TEXT NOT NULL,
     recorded INTEGER NOT NULL
 );
+CREATE TABLE step_files (attempt TEXT NOT NULL, seq INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+    path TEXT NOT NULL, blob TEXT NOT NULL, PRIMARY KEY(attempt, seq, ordinal),
+    FOREIGN KEY(attempt, seq) REFERENCES steps(attempt, seq));
+CREATE TABLE measured (attempt TEXT PRIMARY KEY REFERENCES attempts(id), ended TEXT NOT NULL,
+    exit_code INTEGER, tokens_complete INTEGER NOT NULL, fresh_in INTEGER, cache_write INTEGER,
+    cache_read INTEGER, output INTEGER, reasoning INTEGER, steps_seen INTEGER NOT NULL,
+    unknown_steps INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL, worker_ms INTEGER NOT NULL,
+    seal_ms INTEGER NOT NULL, bring_ms INTEGER NOT NULL, check_ms INTEGER, recheck_ms INTEGER,
+    active_ms INTEGER NOT NULL);
+CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INTEGER NOT NULL,
+    path TEXT NOT NULL, change TEXT NOT NULL, PRIMARY KEY(attempt, ordinal));
 CREATE TABLE budget_days (day INTEGER PRIMARY KEY, used INTEGER NOT NULL);
 CREATE TABLE disagreements (
     ordinal INTEGER PRIMARY KEY,
@@ -73,6 +86,22 @@ CREATE TABLE disagreements (
     UNIQUE(kind, item)
 );
 ";
+
+const MIGRATE_V1: &str = r#"CREATE TABLE step_files (attempt TEXT NOT NULL, seq INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+    path TEXT NOT NULL, blob TEXT NOT NULL, PRIMARY KEY(attempt, seq, ordinal),
+    FOREIGN KEY(attempt, seq) REFERENCES steps(attempt, seq));
+CREATE TABLE measured (attempt TEXT PRIMARY KEY REFERENCES attempts(id), ended TEXT NOT NULL,
+    exit_code INTEGER, tokens_complete INTEGER NOT NULL, fresh_in INTEGER, cache_write INTEGER,
+    cache_read INTEGER, output INTEGER, reasoning INTEGER, steps_seen INTEGER NOT NULL,
+    unknown_steps INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL, worker_ms INTEGER NOT NULL,
+    seal_ms INTEGER NOT NULL, bring_ms INTEGER NOT NULL, check_ms INTEGER, recheck_ms INTEGER,
+    active_ms INTEGER NOT NULL);
+CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INTEGER NOT NULL,
+    path TEXT NOT NULL, change TEXT NOT NULL, PRIMARY KEY(attempt, ordinal));
+ALTER TABLE steps ADD COLUMN seen_ms INTEGER;
+ALTER TABLE steps ADD COLUMN result_ms INTEGER;
+UPDATE meta SET schema_version=2;
+"#;
 
 impl Room {
     /// Create a new room; never replace an existing store, including a damaged one.
@@ -137,8 +166,22 @@ impl Room {
         } else {
             OpenFlags::SQLITE_OPEN_READ_WRITE
         };
-        let conn = Connection::open_with_flags(path, flags).map_err(damaged)?;
-        validate(&conn)?;
+        let mut conn = Connection::open_with_flags(path, flags).map_err(damaged)?;
+        let version = validate(&conn)?;
+        if version == 1 {
+            if read_only {
+                return Err(RoomError::OlderSchema {
+                    found: 1,
+                    known: limits::SCHEMA_VERSION,
+                });
+            }
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(db)?;
+            tx.execute_batch(MIGRATE_V1).map_err(db)?;
+            validate(&tx)?;
+            tx.commit().map_err(db)?;
+        }
         if !read_only {
             configure(&conn)?;
         }
@@ -192,6 +235,9 @@ impl Room {
         }
         tx.pragma_update(None, "secure_delete", true).map_err(db)?;
         for sql in [
+            "DELETE FROM step_files WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
+            "DELETE FROM measured WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
+            "DELETE FROM changes WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM steps WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM verdicts WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM attempts WHERE item=?1",
@@ -235,7 +281,7 @@ fn configure(conn: &Connection) -> Result<(), RoomError> {
         .map_err(db)
 }
 
-fn validate(conn: &Connection) -> Result<(), RoomError> {
+fn validate(conn: &Connection) -> Result<u32, RoomError> {
     let integrity: String = conn
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(damaged)?;
@@ -251,7 +297,7 @@ fn validate(conn: &Connection) -> Result<(), RoomError> {
             known: limits::SCHEMA_VERSION,
         });
     }
-    if version != limits::SCHEMA_VERSION {
+    if version != 1 && version != limits::SCHEMA_VERSION {
         return Err(RoomError::Damaged(format!(
             "unsupported schema version {version}"
         )));
@@ -264,7 +310,7 @@ fn validate(conn: &Connection) -> Result<(), RoomError> {
             "expected exactly one metadata row".into(),
         ));
     }
-    // Prepare against every table and column before accepting a version-1 store.
+    // Prepare against every table and column before accepting or migrating a store.
     for query in [
         "SELECT schema_version, daily_turns, concurrent FROM meta",
         "SELECT ordinal,id,title,repo,base_commit,after_ids,state,lease_no,attempts FROM items",
@@ -277,7 +323,17 @@ fn validate(conn: &Connection) -> Result<(), RoomError> {
     ] {
         conn.prepare(query).map_err(damaged)?;
     }
-    Ok(())
+    if version == 2 {
+        for query in [
+            "SELECT seen_ms,result_ms FROM steps",
+            "SELECT attempt,seq,ordinal,path,blob FROM step_files",
+            "SELECT attempt,ended,exit_code,tokens_complete,fresh_in,cache_write,cache_read,output,reasoning,steps_seen,unknown_steps,sandbox_ms,worker_ms,seal_ms,bring_ms,check_ms,recheck_ms,active_ms FROM measured",
+            "SELECT attempt,ordinal,path,change FROM changes",
+        ] {
+            conn.prepare(query).map_err(damaged)?;
+        }
+    }
+    Ok(version)
 }
 
 pub(crate) fn db(e: impl std::fmt::Display) -> RoomError {

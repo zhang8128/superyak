@@ -215,6 +215,31 @@ fn item_add_then_show_round_trips() {
 }
 
 #[test]
+fn item_turns_prints_what_was_measured() {
+    let f = Fixture::new();
+    let id = f.add();
+    let worker = f.script("echo green > answer\ngit commit -qam fix");
+    success(f.clock(&worker).output().unwrap());
+    let expected = serde_json::to_value(
+        Room::open_read_only(&f.room)
+            .unwrap()
+            .turns(&ItemId(id.clone()))
+            .unwrap(),
+    )
+    .unwrap();
+    for args in [
+        vec!["item", "turns", &id, "--json"],
+        vec!["item", "turns", &id],
+    ] {
+        let text = success(yak(&f.room).args(args).output().unwrap());
+        let actual: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual[0]["measured"]["ended"], "exited");
+        assert!(actual[0]["measured"]["active_ms"].as_u64().unwrap() > 0);
+    }
+}
+
+#[test]
 fn a_refusal_is_one_line_on_stderr_and_a_non_zero_exit() {
     let f = Fixture::new();
     refusal(

@@ -19,4 +19,4 @@ pub const RECHECK_ONE_IN: u32 = 5;
 /// How often the clock looks at the room, in seconds.
 pub const CLOCK_POLL_SECS: u32 = 5;
 /// The store's schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
