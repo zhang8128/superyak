@@ -22,8 +22,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
 use room::limits::{CLOCK_POLL_SECS, RECHECK_ONE_IN, TURN_SECS};
-use room::{AttemptId, Frozen, ItemId, ItemSpec, ItemState, Lease, Room, RoomError, Step, Ts};
-use turn::{Sandbox, TurnError, WorkerRun, check, worker};
+use room::{
+    AttemptId, Frozen, ItemId, ItemSpec, ItemState, Lease, Room, RoomError, Step, Tokens, Ts,
+};
+use turn::{RunStatus, Sandbox, Seen, TurnError, check, worker};
 
 /// The longest a lease goes without a renewal while its turn runs, in seconds. A shorter lease is renewed three
 /// times as often as it lasts, so a test's lease of a few seconds holds too.
@@ -731,12 +733,18 @@ impl Clock<'_, '_> {
         let stop = sandbox.stop_switch();
         let mut keeper = Keeper::new(lease, taken_at);
 
+        let mut seen = Seen {
+            steps: Vec::new(),
+            tokens: Tokens::none(),
+            steps_seen: 0,
+        };
         let ran = {
             let (name, limit) = (&lease.worker, self.turn_secs);
             let command = &spec.check.command;
+            let seen = &mut seen;
             // A worker is not `Send`, so it is made where it runs.
-            let job = move || -> Result<WorkerRun, TurnError> {
-                worker::from_name(name)?.run(sandbox, title, command, limit)
+            let job = move || -> Result<RunStatus, TurnError> {
+                worker::from_name(name)?.run(sandbox, title, command, limit, seen)
             };
             self.watch(&mut keeper, Some(&stop), job)
         };
@@ -752,7 +760,7 @@ impl Clock<'_, '_> {
             return Err(e.into());
         }
         let (steps, timed_out, failure) = match ran {
-            Ok(run) => (run.steps, run.timed_out, None),
+            Ok(status) => (seen.steps, status.timed_out, None),
             Err(e) => (Vec::new(), false, Some(e.to_string())),
         };
         let failure_said = failure.clone();

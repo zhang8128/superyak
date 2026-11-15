@@ -7,9 +7,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Repo, git, strings};
-use room::{Step, Target, Tool};
-use turn::worker::{ClaudeWorker, CodexWorker, RULES, Worker, from_name, prompt};
+use room::{Step, Target, Tokens, Tool};
+use turn::worker::{ClaudeWorker, CodexWorker, RULES, Seen, Worker, from_name, prompt};
 use turn::{Sandbox, TurnError};
+
+/// A fresh `Seen` to pass into `Worker::run`.
+fn seen() -> Seen {
+    Seen {
+        steps: Vec::new(),
+        tokens: Tokens::none(),
+        steps_seen: 0,
+    }
+}
 
 fn sandbox(repo: &Repo) -> Sandbox {
     Sandbox::create(
@@ -60,11 +69,11 @@ fn a_script_worker_can_commit_in_its_sandbox() {
     let name = format!("script:{}", path.display());
     let worker = from_name(&name).unwrap();
     assert_eq!(worker.name(), name);
-    let run = worker
-        .run(&sb, "Fix a.txt", "grep -q fixed a.txt", 60)
+    let status = worker
+        .run(&sb, "Fix a.txt", "grep -q fixed a.txt", 60, &mut seen())
         .unwrap();
-    assert_eq!(run.exit_code, 0);
-    assert!(!run.timed_out);
+    assert_eq!(status.exit_code, 0);
+    assert!(!status.timed_out);
     assert_ne!(sb.head().unwrap(), repo.base);
     assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "fixed");
 }
@@ -112,13 +121,14 @@ fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
     );
     let path = script(&repo, "reader.sh", &body);
     let worker = from_name(&format!("script:{}", path.display())).unwrap();
-    let run = worker
-        .run(&sb, "Read the source", "test -f src/a.txt", 60)
+    let mut seen = seen();
+    let status = worker
+        .run(&sb, "Read the source", "test -f src/a.txt", 60, &mut seen)
         .unwrap();
-    assert_eq!(run.exit_code, 0);
-    assert_eq!(run.steps.len(), 1);
-    assert_eq!(run.steps[0].tool, Tool::Read);
-    assert_eq!(run.steps[0].target, tracked(&repo, "src/a.txt"));
+    assert_eq!(status.exit_code, 0);
+    assert_eq!(seen.steps.len(), 1);
+    assert_eq!(seen.steps[0].tool, Tool::Read);
+    assert_eq!(seen.steps[0].target, tracked(&repo, "src/a.txt"));
     assert_eq!(
         read(&prompt_out),
         prompt("Read the source", "test -f src/a.txt")
@@ -145,12 +155,12 @@ fn a_worker_past_its_limit_is_timed_out() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
     let path = script(&repo, "slow.sh", "#!/bin/sh\nsleep 600\n");
-    let run = from_name(&format!("script:{}", path.display()))
+    let status = from_name(&format!("script:{}", path.display()))
         .unwrap()
-        .run(&sb, "t", "true", 1)
+        .run(&sb, "t", "true", 1, &mut seen())
         .unwrap();
-    assert!(run.timed_out);
-    assert_ne!(run.exit_code, 0);
+    assert!(status.timed_out);
+    assert_ne!(status.exit_code, 0);
 }
 
 #[test]
@@ -284,12 +294,19 @@ fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
     let fake = stand_in(&repo, "claude", "claude-stream-ids.jsonl");
     let worker = ClaudeWorker::with_program("opus", fake.to_str().unwrap());
     assert_eq!(worker.name(), "claude:opus");
-    let run = worker
-        .run(&sb, "Make the greeting say bye", "grep -q bye a.txt", 60)
+    let mut seen = seen();
+    let status = worker
+        .run(
+            &sb,
+            "Make the greeting say bye",
+            "grep -q bye a.txt",
+            60,
+            &mut seen,
+        )
         .unwrap();
-    assert_eq!(run.exit_code, 0);
-    assert_eq!(oks(&run.steps), [true, true, false]);
-    assert_eq!(run.steps[0].target, tracked(&repo, "a.txt"));
+    assert_eq!(status.exit_code, 0);
+    assert_eq!(oks(&seen.steps), [true, true, false]);
+    assert_eq!(seen.steps[0].target, tracked(&repo, "a.txt"));
 
     let args: Vec<String> = read(&repo.scratch("args.txt"))
         .lines()
@@ -332,12 +349,19 @@ fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
     let fake = stand_in(&repo, "codex", "codex-json-sample.jsonl");
     let worker = CodexWorker::with_program("gpt-6.1-sol", fake.to_str().unwrap());
     assert_eq!(worker.name(), "codex:gpt-6.1-sol");
-    let run = worker
-        .run(&sb, "Make the greeting say bye", "grep -q bye a.txt", 60)
+    let mut seen = seen();
+    let status = worker
+        .run(
+            &sb,
+            "Make the greeting say bye",
+            "grep -q bye a.txt",
+            60,
+            &mut seen,
+        )
         .unwrap();
-    assert_eq!(run.exit_code, 0);
-    assert_eq!(oks(&run.steps), [true, true, false]);
-    assert_eq!(run.steps[0].target, tracked(&repo, "a.txt"));
+    assert_eq!(status.exit_code, 0);
+    assert_eq!(oks(&seen.steps), [true, true, false]);
+    assert_eq!(seen.steps[0].target, tracked(&repo, "a.txt"));
     let args: Vec<String> = read(&repo.scratch("args.txt"))
         .lines()
         .map(str::to_string)
@@ -357,11 +381,12 @@ fn an_agent_that_changed_nothing_leaves_no_commit() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
     let quiet = script(&repo, "claude", "#!/bin/sh\ncat > /dev/null\n");
-    let run = ClaudeWorker::with_program("opus", quiet.to_str().unwrap())
-        .run(&sb, "t", "true", 60)
+    let mut seen = seen();
+    let status = ClaudeWorker::with_program("opus", quiet.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut seen)
         .unwrap();
-    assert_eq!(run.exit_code, 0);
-    assert!(run.steps.is_empty());
+    assert_eq!(status.exit_code, 0);
+    assert!(seen.steps.is_empty());
     assert_eq!(sb.head().unwrap(), repo.base);
 }
 
@@ -393,10 +418,10 @@ fn nothing_a_worker_plants_in_its_git_directory_runs_when_the_room_commits() {
         evil = evil.display(),
     );
     let fake = script(&repo, "claude", &body);
-    let run = ClaudeWorker::with_program("opus", fake.to_str().unwrap())
-        .run(&sb, "t", "true", 60)
+    let status = ClaudeWorker::with_program("opus", fake.to_str().unwrap())
+        .run(&sb, "t", "true", 60, &mut seen())
         .unwrap();
-    assert_eq!(run.exit_code, 0);
+    assert_eq!(status.exit_code, 0);
     for n in 1..=4 {
         assert!(!marker(n).exists(), "the room ran the worker's command {n}");
     }
@@ -434,8 +459,13 @@ fn the_room_requires_plain_git_metadata_at_every_depth() {
             "worker",
             "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
         );
-        let result =
-            CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+        let result = CodexWorker::with_program("test", fake.to_str().unwrap()).run(
+            &sb,
+            "t",
+            "true",
+            30,
+            &mut seen(),
+        );
         let intact = read(&canary) == "untouched\n";
         assert!(intact, "canary changed for {name}");
         assert!(
@@ -491,8 +521,13 @@ fn the_room_accepts_only_a_single_repository_tree() {
             "worker",
             "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
         );
-        let result =
-            CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+        let result = CodexWorker::with_program("test", fake.to_str().unwrap()).run(
+            &sb,
+            "t",
+            "true",
+            30,
+            &mut seen(),
+        );
         assert!(!marker.exists(), "the marker stays unwritten");
         assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
     }
@@ -512,8 +547,13 @@ fn the_room_requires_an_index_without_gitlinks() {
         ],
     );
     let fake = script(&repo, "worker", "#!/bin/sh\ncat >/dev/null\n");
-    let result =
-        CodexWorker::with_program("test", fake.to_str().unwrap()).run(&sb, "t", "true", 30);
+    let result = CodexWorker::with_program("test", fake.to_str().unwrap()).run(
+        &sb,
+        "t",
+        "true",
+        30,
+        &mut seen(),
+    );
     assert!(matches!(result, Err(TurnError::Refused(_))), "{result:?}");
 }
 
@@ -532,7 +572,7 @@ fn room_commits_leave_no_reflogs() {
         "#!/bin/sh\ncat >/dev/null\necho changed >a.txt\n",
     );
     CodexWorker::with_program("test", fake.to_str().unwrap())
-        .run(&sb, "t", "true", 30)
+        .run(&sb, "t", "true", 30, &mut seen())
         .unwrap();
     assert!(!head.exists());
     assert!(!branch.exists());

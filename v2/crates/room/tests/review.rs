@@ -108,6 +108,9 @@ fn erasing_an_item_removes_every_row_and_its_title_from_the_file() {
                 ok: true,
                 tokens_in: Some(10),
                 tokens_out: Some(20),
+                named: Vec::new(),
+                seen_ms: None,
+                result_ms: None,
             }],
         )
         .unwrap();

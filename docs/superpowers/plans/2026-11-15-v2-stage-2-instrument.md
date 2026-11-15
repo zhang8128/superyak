@@ -129,12 +129,12 @@ pub trait Worker {
 
 `WorkerRun` is removed: its `exit_code` and `timed_out` are `RunStatus`'s, and its `steps` are `Seen`'s.
 
-- [ ] **Step 1:** Add the types. `Tokens::total` is tested for: all parts present and complete; a part missing;
+- [x] **Step 1:** Add the types. `Tokens::total` is tested for: all parts present and complete; a part missing;
   not complete (None).
-- [ ] **Step 2:** Give every existing `Step` its new fields with nothing in them (`named` empty, both times
+- [x] **Step 2:** Give every existing `Step` its new fields with nothing in them (`named` empty, both times
   `None`), and move every `Worker::run` to the new signature with `Seen::tokens = Tokens::none()` and
   `steps_seen` the parser's `total_steps()`. No behaviour changes.
-- [ ] **Step 3:** The whole suite passes on the Mac and the Pi, as CI runs it. Commit.
+- [x] **Step 3:** The whole suite passes on the Mac and the Pi, as CI runs it. Commit.
 
 ---
 

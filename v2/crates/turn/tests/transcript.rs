@@ -71,6 +71,9 @@ fn a_read_of_a_tracked_file_is_a_tracked_step() {
             ok: true,
             tokens_in: Some(3 + 100 + 1000),
             tokens_out: Some(20),
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         }]
     );
 }

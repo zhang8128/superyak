@@ -12,7 +12,7 @@ pub mod transcript;
 pub mod worker;
 
 pub use sandbox::{RunStatus, Sandbox};
-pub use worker::{Worker, WorkerRun};
+pub use worker::{Seen, Worker};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TurnError {

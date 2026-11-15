@@ -279,6 +279,10 @@ impl Steps {
             ok: false,
             tokens_in: tokens.0,
             tokens_out: tokens.1,
+            // What a step named and when it was seen and answered are Task 3's.
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         });
         Some(index)
     }

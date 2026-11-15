@@ -76,6 +76,10 @@ impl Room {
                 ok: s.ok,
                 tokens_in: s.tokens_in,
                 tokens_out: s.tokens_out,
+                // The store has no place yet for a step's named files or its times (Task 2).
+                named: Vec::new(),
+                seen_ms: None,
+                result_ms: None,
             })
         })
         .collect()

@@ -109,6 +109,13 @@ pub enum Target {
     Outside,
 }
 
+/// A tracked file a step named: its path in the repository and its blob at the base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Named {
+    pub path: String,
+    pub blob: String,
+}
+
 /// One observed tool call of a turn. It has no free-text field, on purpose (spec rule 9).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
@@ -118,6 +125,90 @@ pub struct Step {
     pub ok: bool,
     pub tokens_in: Option<u32>,
     pub tokens_out: Option<u32>,
+    /// Every tracked file the step named, in the order named. Empty when it named none.
+    pub named: Vec<Named>,
+    /// Milliseconds from the turn's start to the call being seen, and to its result.
+    pub seen_ms: Option<u32>,
+    pub result_ms: Option<u32>,
+}
+
+/// What a worker's program reported for a whole turn. A part it did not report is `None`, never 0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tokens {
+    pub fresh_in: Option<u64>,
+    pub cache_write: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub output: Option<u64>,
+    pub reasoning: Option<u64>,
+    /// True only when the program gave its closing total.
+    pub complete: bool,
+}
+
+impl Tokens {
+    /// Every part `None`, not complete.
+    pub fn none() -> Tokens {
+        Tokens {
+            fresh_in: None,
+            cache_write: None,
+            cache_read: None,
+            output: None,
+            reasoning: None,
+            complete: false,
+        }
+    }
+
+    /// `fresh_in + cache_write + cache_read + output`, when the program gave its closing total and every one
+    /// of those parts. `reasoning` is not added.
+    pub fn total(&self) -> Option<u64> {
+        if !self.complete {
+            return None;
+        }
+        Some(self.fresh_in? + self.cache_write? + self.cache_read? + self.output?)
+    }
+}
+
+/// How a turn's worker ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ended {
+    Exited,
+    Signalled,
+    TimedOut,
+    Stopped,
+    LeaseLost,
+    NotRun,
+}
+
+/// A turn's measured record. Durations are milliseconds on a clock that does not jump.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Measured {
+    pub ended: Ended,
+    pub exit_code: Option<i32>,
+    pub tokens: Tokens,
+    pub steps_seen: u64,
+    pub unknown_steps: u64,
+    pub sandbox_ms: u64,
+    pub worker_ms: u64,
+    pub seal_ms: u64,
+    pub bring_ms: u64,
+    pub check_ms: Option<u64>,
+    pub recheck_ms: Option<u64>,
+    /// sandbox_ms + worker_ms + seal_ms + bring_ms + check_ms. A second look is not in it.
+    pub active_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Change {
+    Added,
+    Changed,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedFile {
+    pub path: String,
+    pub change: Change,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -162,4 +253,37 @@ pub enum RoomError {
 /// A worker's family is the part of its name before the colon: "claude:opus" is "claude".
 pub fn family(worker: &str) -> &str {
     worker.split(':').next().unwrap_or(worker)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Tokens;
+
+    fn tokens(complete: bool) -> Tokens {
+        Tokens {
+            fresh_in: Some(1),
+            cache_write: Some(2),
+            cache_read: Some(3),
+            output: Some(4),
+            reasoning: Some(100),
+            complete,
+        }
+    }
+
+    #[test]
+    fn total_is_the_sum_of_the_four_parts_without_reasoning_when_complete() {
+        assert_eq!(tokens(true).total(), Some(1 + 2 + 3 + 4));
+    }
+
+    #[test]
+    fn total_is_none_when_a_part_is_missing() {
+        let mut t = tokens(true);
+        t.cache_read = None;
+        assert_eq!(t.total(), None);
+    }
+
+    #[test]
+    fn total_is_none_when_not_complete() {
+        assert_eq!(tokens(false).total(), None);
+    }
 }

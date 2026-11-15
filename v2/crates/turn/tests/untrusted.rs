@@ -12,10 +12,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::Repo;
-use room::{CheckOrigin, CheckSpec};
+use room::{CheckOrigin, CheckSpec, Tokens};
 use turn::Sandbox;
 use turn::check::{freeze, run_check};
-use turn::worker;
+use turn::worker::{self, Seen};
 
 fn spec(command: String) -> CheckSpec {
     CheckSpec {
@@ -158,11 +158,16 @@ fn a_script_worker_cannot_write_outside_its_sandbox_and_its_commit_still_lands()
     let sandbox =
         Sandbox::create(&repo.path, &repo.base, &repo.scratch("turn"), "room/i1/1").unwrap();
     let before = sandbox.head().unwrap();
-    let run = worker::from_name(&format!("script:{}", script.display()))
+    let mut seen = Seen {
+        steps: Vec::new(),
+        tokens: Tokens::none(),
+        steps_seen: 0,
+    };
+    let status = worker::from_name(&format!("script:{}", script.display()))
         .unwrap()
-        .run(&sandbox, "an item", "true", 30)
+        .run(&sandbox, "an item", "true", 30, &mut seen)
         .unwrap();
-    assert_eq!(run.exit_code, 0);
+    assert_eq!(status.exit_code, 0);
     assert!(!canary.exists(), "the worker wrote outside its sandbox");
     assert_ne!(
         sandbox.head().unwrap(),

@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use room::Step;
+use room::{Step, Tokens};
 use serde_json::json;
 
-use crate::sandbox::{SAFE_GIT_ENV, SAFE_GIT_FLAGS};
+use crate::sandbox::{RunStatus, SAFE_GIT_ENV, SAFE_GIT_FLAGS};
 use crate::transcript::{ClaudeParser, CodexParser};
 use crate::{Sandbox, TurnError, io};
 
@@ -42,11 +42,12 @@ pub fn prompt(item_title: &str, check_command: &str) -> String {
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkerRun {
-    pub exit_code: i32,
-    pub timed_out: bool,
+/// What the room saw of a worker's run. It is filled as the run goes, so it holds whatever was seen when a
+/// run ends in an error.
+pub struct Seen {
     pub steps: Vec<Step>,
+    pub tokens: Tokens,
+    pub steps_seen: u64,
 }
 
 pub trait Worker {
@@ -58,7 +59,8 @@ pub trait Worker {
         item_title: &str,
         check_command: &str,
         limit_secs: u32,
-    ) -> Result<WorkerRun, TurnError>;
+        seen: &mut Seen,
+    ) -> Result<RunStatus, TurnError>;
 }
 
 /// The worker a name names: `script:<path>`, `claude:<model>` or `codex:<model>`.
@@ -117,7 +119,8 @@ impl Worker for ScriptWorker {
         item_title: &str,
         check_command: &str,
         limit_secs: u32,
-    ) -> Result<WorkerRun, TurnError> {
+        seen: &mut Seen,
+    ) -> Result<RunStatus, TurnError> {
         let program = self.path.to_str().ok_or_else(|| {
             TurnError::Refused(format!("{} is not a UTF-8 path", self.path.display()))
         })?;
@@ -130,11 +133,10 @@ impl Worker for ScriptWorker {
             limit_secs,
             &mut |line| parser.line(line),
         )?;
-        Ok(WorkerRun {
-            exit_code: status.exit_code,
-            timed_out: status.timed_out,
-            steps: parser.finish(),
-        })
+        seen.steps_seen = parser.total_steps();
+        seen.steps = parser.finish();
+        seen.tokens = Tokens::none();
+        Ok(status)
     }
 }
 
@@ -253,7 +255,8 @@ impl Worker for ClaudeWorker {
         item_title: &str,
         check_command: &str,
         limit_secs: u32,
-    ) -> Result<WorkerRun, TurnError> {
+        seen: &mut Seen,
+    ) -> Result<RunStatus, TurnError> {
         let path = ClaudeWorker::settings_path(sandbox);
         let text = serde_json::to_vec_pretty(&ClaudeWorker::settings(sandbox))
             .map_err(|e| TurnError::Io(e.to_string()))?;
@@ -268,11 +271,10 @@ impl Worker for ClaudeWorker {
             &mut |line| parser.line(line),
         )?;
         seal(sandbox, &self.name(), "Claude <noreply@anthropic.com>")?;
-        Ok(WorkerRun {
-            exit_code: status.exit_code,
-            timed_out: status.timed_out,
-            steps: parser.finish(),
-        })
+        seen.steps_seen = parser.total_steps();
+        seen.steps = parser.finish();
+        seen.tokens = Tokens::none();
+        Ok(status)
     }
 }
 
@@ -335,7 +337,8 @@ impl Worker for CodexWorker {
         item_title: &str,
         check_command: &str,
         limit_secs: u32,
-    ) -> Result<WorkerRun, TurnError> {
+        seen: &mut Seen,
+    ) -> Result<RunStatus, TurnError> {
         let mut parser = CodexParser::new(sandbox);
         let status = sandbox.run(
             &self.program,
@@ -345,11 +348,10 @@ impl Worker for CodexWorker {
             &mut |line| parser.line(line),
         )?;
         seal(sandbox, &self.name(), "Codex <noreply@openai.com>")?;
-        Ok(WorkerRun {
-            exit_code: status.exit_code,
-            timed_out: status.timed_out,
-            steps: parser.finish(),
-        })
+        seen.steps_seen = parser.total_steps();
+        seen.steps = parser.finish();
+        seen.tokens = Tokens::none();
+        Ok(status)
     }
 }
 

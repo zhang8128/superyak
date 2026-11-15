@@ -15,6 +15,9 @@ fn steps() -> Vec<Step> {
             ok: true,
             tokens_in: Some(10),
             tokens_out: None,
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         },
         Step {
             seq: 1,
@@ -23,6 +26,9 @@ fn steps() -> Vec<Step> {
             ok: false,
             tokens_in: None,
             tokens_out: Some(20),
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         },
         Step {
             seq: 2,
@@ -34,6 +40,9 @@ fn steps() -> Vec<Step> {
             ok: true,
             tokens_in: Some(0),
             tokens_out: Some(0),
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         },
     ]
 }
@@ -127,6 +136,9 @@ fn the_store_holds_no_free_text() {
             ok: true,
             tokens_in: None,
             tokens_out: None,
+            named: Vec::new(),
+            seen_ms: None,
+            result_ms: None,
         }];
         assert!(matches!(
             r.record_walk(&attempt, &invalid),
