@@ -4,6 +4,33 @@ use common::*;
 use room::{item::classify, *};
 
 #[test]
+fn titles_are_nonblank_single_lines_of_at_most_200_characters() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = Room::init(d.path()).unwrap();
+    for title in [
+        "",
+        "   ",
+        "\t\t",
+        "first\nsecond",
+        "first\rsecond",
+        "first\r\nsecond",
+    ] {
+        let mut n = new_item();
+        n.title = title.into();
+        assert!(matches!(r.add_item(n), Err(RoomError::Refused(_))));
+    }
+    for letter in ["a", "é", "😀"] {
+        let mut n = new_item();
+        n.title = letter.repeat(201);
+        assert!(matches!(r.add_item(n), Err(RoomError::Refused(_))));
+        n = new_item();
+        n.title = letter.repeat(200);
+        let id = r.add_item(n).unwrap();
+        assert_eq!(r.item(&id).unwrap().title, letter.repeat(200));
+    }
+}
+
+#[test]
 fn frozen_red_on_base_opens_the_item() {
     let d = tempfile::tempdir().unwrap();
     let mut r = Room::init(d.path()).unwrap();
