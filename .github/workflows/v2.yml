@@ -1,0 +1,52 @@
+name: v2 checks
+
+# Stage 1 plan, task 0: fmt, clippy and the tests under v2/, on x86_64 Linux and arm64 macOS, for pushes that touch
+# v2/**. The toolchain is v2/rust-toolchain.toml's (1.100.0, with rustfmt and clippy), installed by the runner's own
+# rustup: no third-party action. CI has the network, so it doesn't use v2/scripts/offline.sh.
+
+on:
+  push:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v2:
+    name: v2 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc --version && cargo --version
+      - name: The jail's tools (Linux)
+        # The room jails a worker and its check with bubblewrap on Linux. Ubuntu's runners restrict unprivileged user
+        # namespaces through AppArmor, which bwrap needs, so that restriction is lifted for the job.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        if: success() || failure()  # each of the three reports, though one fails
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Binaries
+        # cargo test leaves bins in the build dir; only cargo build puts yak in target/debug, where the suite finds it.
+        if: success() || failure()
+        run: cargo build --workspace --bins --locked
+      - name: Tests, the acceptance suite with them
+        if: success() || failure()
+        run: cargo test --workspace --locked --no-fail-fast
