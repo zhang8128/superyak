@@ -160,6 +160,11 @@ row above that speaks of a token cost shows a complete total: the normal turn, t
 failures, the timeout, the crash and the kill, for both programs. If any does not, the deciding outcome is
 active seconds. If active seconds cannot be shown whole for every row either, the experiment stops at part 0.
 
+- **Measured before the build, once for each program (2026-11-15).** Ended by TERM in the middle of a shell
+  command, the way the room ends a turn at its limit, neither program writes its closing total. Claude exits
+  with 143 and Codex with 0. So unless part 0's cases find a whole total some other way, seconds decide. A
+  first try at this measured nothing: Claude's own harness refused a bare `sleep`, ran it in the background
+  and finished its turn, so the program that was ended had already closed its books.
 - The choice, the version of the instrument and the evidence are published before the first pilot turn.
 - After that it does not change. A deciding cost that turns out incomplete in the pilot or the experiment is
   an instrument failure and stops the work. It is not an occasion to change the outcome.
