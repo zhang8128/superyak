@@ -73,7 +73,8 @@ pub const ROOM_GIT_SECS: u64 = 600;
 
 /// How much of one git command's output the room keeps. It is large, for the list of a big commit's files;
 /// what matters is that it is not without end, whatever a worker left in a repository the room reads. A command
-/// that prints more is refused, whoever asked.
+/// that prints more is refused, whoever asked. So it is a ceiling for honest work too: a check's file larger
+/// than this cannot be frozen, and a turn whose list of changed files is longer hands in nothing.
 pub const ROOM_GIT_OUTPUT_BYTES: usize = 64 << 20;
 /// The longest name a turn is given for its prompt's first line (`Sandbox::name_turn`).
 pub const TURN_NAME_CHARS: usize = 64;
@@ -1740,10 +1741,16 @@ mod tests {
         assert_eq!(whole.map(|out| out.len()).ok(), Some(ROOM_GIT_OUTPUT_BYTES));
         // One byte more, and many more: refused, quickly, and not as a command that never finished. And a
         // command that prints one byte too many and then waits is ended there and then, not when its time is up.
+        // What it started before that is ended with it: a sleeper, there before the first byte is printed, and
+        // named by this test's own process so that another run of it on this machine is not taken for it.
+        let own = std::process::id();
         let mut idles = Command::new("/bin/sh");
         idles.args([
             "-c",
-            &format!("head -c {} /dev/zero; sleep 600", ROOM_GIT_OUTPUT_BYTES + 1),
+            &format!(
+                "sleep 97.{own} & head -c {} /dev/zero; sleep 600",
+                ROOM_GIT_OUTPUT_BYTES + 1
+            ),
         ]);
         let start = Instant::now();
         let over = output_within(idles, "a read", Duration::from_secs(120), None);
@@ -1763,7 +1770,7 @@ mod tests {
         leaves_one.args([
             "-c",
             &format!(
-                "(sleep 1; head -c {} /dev/zero) & exit 0",
+                "sleep 98.{own} & (sleep 1; head -c {} /dev/zero) & exit 0",
                 ROOM_GIT_OUTPUT_BYTES + 1
             ),
         ]);
@@ -1773,6 +1780,20 @@ mod tests {
             "{:?}",
             over.map(|out| out.len())
         );
+        // Neither refusal left anything of the program's behind. Looked for by the whole command, as below.
+        thread::sleep(Duration::from_millis(300));
+        let all = Command::new("ps")
+            .args(["-Ao", "command="])
+            .output()
+            .unwrap();
+        let all = String::from_utf8_lossy(&all.stdout);
+        for sleeper in [format!("sleep 97.{own}"), format!("sleep 98.{own}")] {
+            let left = all
+                .lines()
+                .filter(|command| command.trim() == sleeper)
+                .count();
+            assert_eq!(left, 0, "`{sleeper}` is still running");
+        }
         for more in [1, 8 * ROOM_GIT_OUTPUT_BYTES] {
             let start = Instant::now();
             let over = output_within(

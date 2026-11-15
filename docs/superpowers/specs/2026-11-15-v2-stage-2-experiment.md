@@ -157,7 +157,12 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
   removed and not read. Measured with the same kind of probe: neither program's sandbox nor the room's jail
   lets a worker give a second name to a file it cannot read. The room does not rest on that for what it
   reads itself. For any other file in a worker's tree it does: to git, a second name is a file like any
-  other.
+  other. The file is opened without following a link and without waiting, so nothing put at its path after
+  the room looked can lead the room elsewhere or hold it up.
+- **The room keeps no git output without end.** It keeps at most 64 MiB of one git command's output and ends
+  a command that prints more, with all the command started. That is a ceiling for honest work too: a check's
+  file larger than that cannot be frozen, and a turn whose list of changed files is longer hands in nothing
+  and counts as a failed attempt. Nothing stage 2 runs is near either.
 - **What would close the whole class:** a home for the worker programs that holds only the sign-in, as the
   same ship proposed. It means copying a person's sign-in, so it is a person's decision, and it is not
   taken here.

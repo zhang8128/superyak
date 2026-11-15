@@ -3,7 +3,7 @@
 //! becomes the turn's steps a line at a time.
 
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -831,12 +831,22 @@ fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, Turn
 
 /// The message in the file at `path`, when the file that opens there is the one `looked` was taken of, still a
 /// plain file with one name, and holds text the room can use. What is read is what was looked at: a path that
-/// has come to lead somewhere else since is not read.
+/// has come to lead somewhere else since is not read. Opening follows no link and waits for nothing, so that
+/// a link or a named pipe put there since is neither followed nor waited on.
 fn read_what_was_looked_at(
     path: &Path,
     looked: &std::fs::Metadata,
 ) -> Result<Option<String>, TurnError> {
-    let file = std::fs::File::open(path).map_err(io("open the message file"))?;
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        // A link is there now, which is not what was looked at.
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
+        Err(e) => return Err(io("open the message file")(e)),
+    };
     let opened = file.metadata().map_err(io("look at the message file"))?;
     if !own_plain_file(&opened) || (opened.dev(), opened.ino()) != (looked.dev(), looked.ino()) {
         return Ok(None);
@@ -888,6 +898,55 @@ mod tests {
         // The file has gained a second name since it was looked at: not read.
         std::fs::hard_link(&looked_at, tmp.path().join("second-name")).unwrap();
         assert_eq!(read_what_was_looked_at(&looked_at, &looked).unwrap(), None);
+    }
+
+    /// What is at the path may have changed since it was looked at. A link there now is not followed, and a
+    /// named pipe is neither waited on nor read.
+    #[test]
+    fn a_link_or_a_named_pipe_put_at_the_path_since_is_not_followed_or_waited_on() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let looked_at = tmp.path().join("looked-at");
+        std::fs::write(&looked_at, "The message\n").unwrap();
+        let looked = std::fs::symlink_metadata(&looked_at).unwrap();
+        // A link to the very file that was looked at: the path is a link now, and a link is not followed.
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&looked_at, &link).unwrap();
+        assert_eq!(read_what_was_looked_at(&link, &looked).unwrap(), None);
+        // A named pipe nobody writes to: opening it to read would wait for a writer, with no end.
+        let pipe = tmp.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (said, heard) = std::sync::mpsc::channel();
+        let (at, was) = (pipe.clone(), looked.clone());
+        std::thread::spawn(move || {
+            let _ = said.send(read_what_was_looked_at(&at, &was));
+        });
+        let read = heard.recv_timeout(std::time::Duration::from_secs(10));
+        if read.is_err() {
+            // The reader is let go before this fails: a writer is what it waits for.
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&pipe);
+            panic!("the room waited on a named pipe");
+        }
+        assert_eq!(read.unwrap().unwrap(), None);
+        // A named pipe that is the very thing looked at, with a writer and words in it: one name and the same
+        // identity, and still not a plain file, so not read.
+        let piped = std::fs::symlink_metadata(&pipe).unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&pipe)
+            .unwrap();
+        writer.write_all(b"Words in a pipe\n").unwrap();
+        assert_eq!(read_what_was_looked_at(&pipe, &piped).unwrap(), None);
     }
 
     /// Claude reads instruction files at its start from every directory above the one it works in, and from its
