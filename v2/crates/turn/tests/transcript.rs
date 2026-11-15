@@ -127,22 +127,25 @@ fn a_read_of_a_tracked_file_is_a_tracked_step() {
 // --- What a whole turn cost --------------------------------------------------------------------------------
 
 /// Codex's `input_tokens` holds its `cached_input_tokens`: the cached tokens are a part of the input, not beside
-/// it. Measured by the lead on codex-cli 0.163.0, two turns on a throwaway repository:
+/// it. The stream the room reads gives one total for a turn, and two totals cannot show that by themselves: a
+/// reader of the other family said so of an earlier comment here, and was right. What shows it is the count for
+/// each request, which the program keeps in its session log. Measured by the lead on codex-cli 0.163.0, one
+/// turn of four shell commands, so five requests (the test after this one holds the numbers):
 ///
-/// - 3 shell commands, so 4 requests: `input_tokens` 53,624, `cached_input_tokens` 46,208, input - cached 7,416.
-/// - 12 shell commands, so 13 requests: `input_tokens` 179,626, `cached_input_tokens` 165,632, input - cached
-///   13,994.
+/// - A request's `input_tokens` is the one before it plus about 90: the whole prompt, sent again, a little
+///   longer each time. The second request gives input 13,189 and cached 12,928. Were the input the fresh part
+///   only, that request would have sent 26,117 tokens, twice the first one's 13,093, after one short command.
+/// - A request's `total_tokens` is its input plus its output. The cached part is not added, so it is inside.
+/// - The turn's closing total is the sum of its requests', to the token.
 ///
-/// Every request sends the whole conversation again, so the input count grows by about 13,500 a request, and
-/// the cached count never passes it. If the input were the fresh part only, beside the cached part, the cached
-/// count would be about twelve times it in the second turn, as twelve of its thirteen requests read the
-/// conversation so far from the cache. It is not, so the input includes the cached part, and the fresh part is
-/// input - cached - cache write. The capture in `codex-json-sample.jsonl` (input 46,441, cached 35,328, from a
-/// turn of three shell calls) fits the same reading.
+/// So the fresh part is input - cached - cache write. How much of a request comes from the cache is not
+/// steady: of those five, the third and the fifth read only the 9,856 tokens the first one did. The earlier
+/// captures agree with the reading and do not prove it: `codex-json-sample.jsonl` (input 46,441, cached
+/// 35,328), and two turns of 3 and 12 shell commands (53,624 and 46,208; 179,626 and 165,632).
 ///
 /// What is not established is `cache_write_input_tokens`: it is 0 in every capture, so nothing shows where a
-/// cache write falls. With one that is not 0 the fresh part is not known, and so neither is the total (the test
-/// after this one).
+/// cache write falls. With one that is not 0 the fresh part is not known, and so neither is the total
+/// (`a_codex_total_with_a_cache_write_leaves_the_fresh_part_unknown`).
 #[test]
 fn the_closing_total_is_the_turns_tokens() {
     let (_repo, sb) = sandbox();
@@ -174,6 +177,51 @@ fn the_closing_total_is_the_turns_tokens() {
     );
     // The whole input once, and the output.
     assert_eq!(codex.total(), Some(46_441 + 100));
+}
+
+/// The evidence for the reading above, kept as numbers: what codex-cli 0.163.0 wrote in its session log for each
+/// of the five requests of one turn, and the turn's closing total from the stream of that same turn.
+#[test]
+fn the_counts_of_each_codex_request_put_the_cached_part_inside_the_input() {
+    // (input_tokens, cached_input_tokens, output_tokens, total_tokens), as the program gave them.
+    let requests: [(u64, u64, u64, u64); 5] = [
+        (13_093, 9_856, 37, 13_130),
+        (13_189, 12_928, 23, 13_212),
+        (13_269, 9_856, 24, 13_293),
+        (13_350, 13_056, 22, 13_372),
+        (13_429, 9_856, 5, 13_434),
+    ];
+    let (closing_input, closing_cached, closing_output) = (66_330, 55_552, 111);
+    for (input, cached, output, total) in requests {
+        // The program's own sum for a request leaves the cached part out: it is inside the input.
+        assert_eq!(total, input + output);
+        assert!(cached <= input);
+    }
+    for pair in requests.windows(2) {
+        // Each request sends the one before it again and a little more. A fresh part alone could not do that
+        // while most of the request came from the cache.
+        let grew = pair[1].0 - pair[0].0;
+        assert!((1..200).contains(&grew), "{grew}");
+        assert!(
+            pair[1].1 * 2 > pair[1].0,
+            "most of a later request was cached"
+        );
+    }
+    // The closing total the room reads is the sum of the requests'.
+    assert_eq!(requests.iter().map(|r| r.0).sum::<u64>(), closing_input);
+    assert_eq!(requests.iter().map(|r| r.1).sum::<u64>(), closing_cached);
+    assert_eq!(requests.iter().map(|r| r.2).sum::<u64>(), closing_output);
+    // And the room reads that closing total as the reading says: the fresh part is what is left.
+    let (_repo, sb) = sandbox();
+    let line =
+        serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": closing_input,
+        "cached_input_tokens": closing_cached, "cache_write_input_tokens": 0,
+        "output_tokens": closing_output, "reasoning_output_tokens": 0}})
+        .to_string();
+    let tokens = codex_tokens(&[line], &sb);
+    assert_eq!(tokens.fresh_in, Some(closing_input - closing_cached));
+    assert_eq!(tokens.cache_read, Some(closing_cached));
+    assert_eq!(tokens.total(), Some(closing_input + closing_output));
 }
 
 #[test]
