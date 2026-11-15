@@ -593,6 +593,89 @@ fn env_probe() {
     }
 }
 
+/// Whether the process `pid` has ended and its parent has not yet looked: it is still in the table of processes,
+/// as one that is gone.
+fn has_ended_unseen(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim_start()
+                .starts_with('Z')
+        })
+        .unwrap_or(false)
+}
+
+/// A program that has ended by itself is not said to have been ended by the room, though the room's switch was
+/// set, or its limit passed, before the room looked at it again. The program prints its own process id and
+/// ends; the test, reading that line, holds the room's look back until the process is seen to have ended, so
+/// the order is certain.
+#[test]
+fn a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out() {
+    use std::sync::atomic::Ordering;
+    // A repository for each run: a test's sandbox has one place in its repository's scratch.
+    let repo = || Repo::new(&[("a.txt", "hello\n")]);
+    let own_end = turn::RunStatus {
+        exit_code: 3,
+        timed_out: false,
+        stopped: false,
+    };
+    let script = strings(&["-c", "echo $$; exit 3"]);
+    let seen_ended = |line: &str| -> bool {
+        let pid: u32 = line
+            .trim()
+            .parse()
+            .expect("the program prints its process id");
+        wait_until(Instant::now() + Duration::from_secs(30), || {
+            has_ended_unseen(pid)
+        })
+    };
+    // The switch is set once the program has ended, before the room has looked at it again.
+    let item = repo();
+    let sb = sandbox(&item);
+    let switch = sb.stop_switch();
+    let mut ended = false;
+    let status = sb
+        .run("sh", &script, "", 60, &mut |line| {
+            ended = seen_ended(line);
+            switch.store(true, Ordering::Relaxed);
+        })
+        .unwrap();
+    assert!(ended, "the program was never seen to have ended");
+    assert_eq!(status, own_end, "with the switch set after it ended");
+    // The limit of one second passes once the program has ended, before the room has looked at it again.
+    let item = repo();
+    let sb = sandbox(&item);
+    let began = Instant::now();
+    let mut ended = false;
+    let status = sb
+        .run("sh", &script, "", 1, &mut |line| {
+            ended = seen_ended(line);
+            while began.elapsed() < Duration::from_millis(1_500) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+        .unwrap();
+    assert!(ended, "the program was never seen to have ended");
+    assert_eq!(status, own_end, "with the limit passed after it ended");
+    // The controls: the same switch and the same limit end a program that is still running, and say so.
+    let still_running = strings(&["-c", "echo started; sleep 600"]);
+    let item = repo();
+    let sb = sandbox(&item);
+    let switch = sb.stop_switch();
+    let status = sb
+        .run("sh", &still_running, "", 60, &mut |_| {
+            switch.store(true, Ordering::Relaxed)
+        })
+        .unwrap();
+    assert!(status.stopped && !status.timed_out, "{status:?}");
+    let item = repo();
+    let sb = sandbox(&item);
+    let status = sb.run("sh", &still_running, "", 1, &mut |_| {}).unwrap();
+    assert!(status.timed_out && !status.stopped, "{status:?}");
+}
+
 #[test]
 fn a_run_past_its_limit_is_ended_with_its_children() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);

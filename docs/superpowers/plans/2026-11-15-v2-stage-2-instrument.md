@@ -434,14 +434,19 @@ item's repository, and the temporary directories the machine shares.
   - Added by the lead after the builder's work, from measurements made while it was built:
     - `SDKROOT` and `DEVELOPER_DIR` are among the variables a run keeps.
     - Claude's settings hold `autoMemoryEnabled: false`, and `claudeMdExcludes`: for the sandbox's parent and
-      every directory above it, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/CLAUDE.md` and
-      `.claude/rules/**`; and for each of the home's `.claude` and the directory `CLAUDE_CONFIG_DIR` names, as
-      it is named and as it really is, `CLAUDE.md` and `rules/**`. The names are read as patterns, so a
-      directory whose name a pattern would read as more than itself is refused. Tests:
+      every directory above it, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/CLAUDE.md`,
+      `.claude/AGENTS.md` and `.claude/rules/**`; and for each of the home's `.claude` and the directory
+      `CLAUDE_CONFIG_DIR` names, as it is named and as it really is, `CLAUDE.md` and `rules/**`. The names are
+      read as patterns, so a directory whose name a pattern would read as more than itself is refused. Tests:
       `claude_is_given_no_instruction_file_from_above_its_sandbox` (the whole list),
       `a_directory_a_pattern_would_misread_cannot_be_left_out_and_is_refused`,
       `claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is`, and the two settings in
       `the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox`.
+    - From the cross-family read of all of the above: a directory the shell is shown is checked against what
+      is hidden under its name and as what it really is
+      (`a_directory_that_leads_into_something_hidden_is_not_shown`); and a run whose program has already
+      ended keeps its own end when its limit or the switch comes before the room looks again
+      (`a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out`).
 
 - [ ] **Step 1: Write the failing tests.**
   - `a_sandbox_hides_its_items_repository_from_a_worker`: after `create`, the list is the repository's real

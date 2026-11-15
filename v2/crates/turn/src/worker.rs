@@ -243,6 +243,12 @@ impl Reach {
     /// it is or lies in something hidden by name. Claude's own rule is that the narrower path decides, so
     /// showing such a directory would show that part of what is hidden.
     fn hides(&self, path: &Path) -> bool {
+        // Under its name, and as what it really is: a link is a way into what it leads to.
+        self.hides_named(path)
+            || std::fs::canonicalize(path).is_ok_and(|real| real != path && self.hides_named(&real))
+    }
+
+    fn hides_named(&self, path: &Path) -> bool {
         self.shared.iter().any(|dir| path == dir)
             || self
                 .by_room
@@ -333,11 +339,12 @@ fn plain(path: &Path) -> Result<&str, TurnError> {
 }
 
 /// The names Claude reads instructions from at its start, in the directory it works in and in every one above it.
-const INSTRUCTIONS_IN_A_DIRECTORY: [&str; 5] = [
+const INSTRUCTIONS_IN_A_DIRECTORY: [&str; 6] = [
     "CLAUDE.md",
     "CLAUDE.local.md",
     "AGENTS.md",
     ".claude/CLAUDE.md",
+    ".claude/AGENTS.md",
     ".claude/rules/**",
 ];
 
@@ -389,12 +396,16 @@ fn exact(dir: &Path) -> Result<&str, TurnError> {
     Ok(text)
 }
 
-/// Where Claude keeps a person's own instructions: `.claude` in the home, as the room knows the home and as the
-/// environment names it, and the directory `CLAUDE_CONFIG_DIR` names, as it is named and as it really is. Each
+/// Where Claude keeps a person's own instructions: `.claude` in the home, as the room knows the home, as the
+/// environment names it and as that directory really is, and the directory `CLAUDE_CONFIG_DIR` names, as it is
+/// named and as it really is. Each
 /// is a full path: the jail's own reading of the settings (`jail::places`) has refused a home or a directory
 /// of an agent's that is not, before this is asked.
 fn claude_homes(home: &Path) -> Vec<PathBuf> {
     let mut homes = vec![home.join(".claude")];
+    if let Ok(real) = std::fs::canonicalize(home.join(".claude")) {
+        homes.push(real);
+    }
     if let Some(named) = std::env::var_os("HOME").map(PathBuf::from) {
         homes.push(named.join(".claude"));
     }
@@ -838,16 +849,19 @@ mod tests {
                 "/room dir/turns/CLAUDE.local.md",
                 "/room dir/turns/AGENTS.md",
                 "/room dir/turns/.claude/CLAUDE.md",
+                "/room dir/turns/.claude/AGENTS.md",
                 "/room dir/turns/.claude/rules/**",
                 "/room dir/CLAUDE.md",
                 "/room dir/CLAUDE.local.md",
                 "/room dir/AGENTS.md",
                 "/room dir/.claude/CLAUDE.md",
+                "/room dir/.claude/AGENTS.md",
                 "/room dir/.claude/rules/**",
                 "/CLAUDE.md",
                 "/CLAUDE.local.md",
                 "/AGENTS.md",
                 "/.claude/CLAUDE.md",
+                "/.claude/AGENTS.md",
                 "/.claude/rules/**",
                 "/home/someone/.claude/CLAUDE.md",
                 "/home/someone/.claude/rules/**",
@@ -965,6 +979,48 @@ mod tests {
              \"/private/tmp/yak-0123456789abcdef\"=\"write\", \
              \"/items/repo\"=\"deny\", \"/room\"=\"deny\", \"/home/someone/.ssh\"=\"deny\"}"
         );
+    }
+
+    /// A directory the shell would be shown is looked at under its name and as what it really is. One that leads,
+    /// through a link, into something hidden is not shown: a grant of it would open that part of what is hidden.
+    #[test]
+    fn a_directory_that_leads_into_something_hidden_is_not_shown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let (repo, tools) = (root.join("repo"), root.join("tools"));
+        std::fs::create_dir_all(repo.join("answers")).unwrap();
+        std::fs::create_dir(&tools).unwrap();
+        let (into_hidden, ordinary) = (root.join("system-share"), root.join("system-bin"));
+        std::os::unix::fs::symlink(repo.join("answers"), &into_hidden).unwrap();
+        std::os::unix::fs::symlink(&tools, &ordinary).unwrap();
+        let read = |path: &Path| format!("{}=\"read\"", toml_key(path).unwrap());
+        // As a system directory of Codex's table.
+        let mut reach = sample();
+        reach.by_room = vec![repo.clone()];
+        reach.system = vec![into_hidden.clone(), ordinary.clone()];
+        let table = reach.codex_table().unwrap();
+        assert!(!table.contains(&read(&into_hidden)), "{table}");
+        // The control: a link that leads somewhere ordinary is shown, under its name.
+        assert!(table.contains(&read(&ordinary)), "{table}");
+        // And as a directory named for tools, for both programs.
+        let mut reach = sample();
+        reach.by_room = vec![repo.clone()];
+        reach.shown = vec![into_hidden.clone(), ordinary.clone()];
+        let table = reach.codex_table().unwrap();
+        assert!(!table.contains(&read(&into_hidden)), "{table}");
+        assert!(table.contains(&read(&ordinary)), "{table}");
+        let allowed = reach.claude_filesystem().unwrap()["allowRead"].to_string();
+        assert!(
+            !allowed.contains(into_hidden.to_str().unwrap()),
+            "{allowed}"
+        );
+        assert!(allowed.contains(ordinary.to_str().unwrap()), "{allowed}");
+        // Hidden by the jail, the same.
+        let mut reach = sample();
+        reach.by_room = Vec::new();
+        reach.jail_hidden = vec![repo];
+        reach.system = vec![into_hidden.clone()];
+        assert!(!reach.codex_table().unwrap().contains(&read(&into_hidden)));
     }
 
     #[test]

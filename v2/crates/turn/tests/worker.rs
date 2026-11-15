@@ -282,7 +282,12 @@ fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
         .filter_map(|p| p.as_str())
         .collect();
     let above = sb.dir.parent().unwrap();
-    for name in ["CLAUDE.md", "AGENTS.md", ".claude/rules/**"] {
+    for name in [
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".claude/AGENTS.md",
+        ".claude/rules/**",
+    ] {
         let path = above.join(name);
         assert!(
             left_out.contains(&path.to_str().unwrap()),
@@ -1560,6 +1565,10 @@ fn claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is() {
     let (home_link, agent_link) = (at.root.join("home-link"), at.root.join("agent-link"));
     std::os::unix::fs::symlink(&at.home, &home_link).unwrap();
     std::os::unix::fs::symlink(&agent, &agent_link).unwrap();
+    // The program's own directory in the home is itself a link to somewhere else.
+    let kept_elsewhere = at.root.join("kept-elsewhere");
+    std::fs::create_dir(&kept_elsewhere).unwrap();
+    std::os::unix::fs::symlink(&kept_elsewhere, at.home.join(".claude")).unwrap();
     let report = reach(
         &repo,
         &[
@@ -1572,6 +1581,7 @@ fn claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is() {
     for dir in [
         at.home.join(".claude"),
         home_link.join(".claude"),
+        kept_elsewhere.clone(),
         agent.clone(),
         agent_link.clone(),
     ] {

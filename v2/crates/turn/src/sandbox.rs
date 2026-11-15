@@ -785,6 +785,20 @@ impl Sandbox {
             }
             let now = Instant::now();
             if now >= deadline || self.stop.load(Ordering::Relaxed) {
+                // A program that has already ended by itself was not ended by its limit or by the switch, though
+                // one of them came before the room looked again: it keeps its own end.
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        signal_group(group, "KILL");
+                        break status;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        end_group(&mut child, group);
+                        self.confirm_ended(&mut supervisor, &mut pid_file)?;
+                        return Err(io("wait for the run")(e));
+                    }
+                }
                 timed_out = now >= deadline;
                 stopped = !timed_out;
                 break end_group(&mut child, group);

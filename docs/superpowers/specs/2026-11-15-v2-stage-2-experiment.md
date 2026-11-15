@@ -141,8 +141,16 @@ sets that. Another ship asked what such a worker can reach outside its clone, an
   it works, and that is how the checks call it.
 - **Not shown:** any of this on Linux; for Claude, places outside the home, the room and the temporary
   directories, which its shell reads as the machine lets it; whether either program loads an instruction
-  file from its own home, since none is there on this machine. Before each block of turns the absence of
-  such a file is checked, in both programs' homes and in every directory above the room.
+  file from its own home, since none is there on this machine; an instruction file an organisation puts on
+  a machine for every user, which a program's settings cannot leave out, and of which there is none here.
+  Before each block of turns the absence of each is checked: in both programs' homes, in every directory
+  above the room, and in the place a machine-wide one would be.
+- **A reader of the other family found three more ways in, by reading, and each is closed:** a sixth name
+  Claude reads instructions from (`.claude/AGENTS.md`) was not among those left out; a directory the shell
+  is shown was looked at under its name and not as what it really is, so a link could lead into something
+  hidden (measured afterwards with Codex's sandbox command: a link that is granted opens what it leads to,
+  by that place's real path); and a program that had already ended could be recorded as ended by the room
+  when a stop came before the room looked again.
 - **What would close the whole class:** a home for the worker programs that holds only the sign-in, as the
   same ship proposed. It means copying a person's sign-in, so it is a person's decision, and it is not
   taken here.
@@ -230,7 +238,7 @@ after, as a smoke test: they are not expected to produce the rare cases by thems
 | Durations | Never negative, across every case above; a turn's parts add up to its active seconds; a run's cost is rebuilt from its turns |
 | An offer | Made again from what is kept, it has the same ids, length and hash |
 | The record's ties | Everything under "What a record is tied to" is written and read back |
-| No text of a turn | None in the store, or in any log or cache of the room's. The message file is not in the committed tree: it is gone before the commit is made |
+| No text of a turn | None in the store, or in any log or cache of the room's. A message file the room read is not in the commit the room makes: it is gone before that commit is made. A worker's own commit may hold a file of that name, and one the base tracks stays |
 | Two turns at one item | Shown not to share an answer, with the control present |
 | What a worker's shell can read | Through a live turn of each program, as the room starts it: reads of the room's directory, the item's repository, another checkout, the home and a file left in a shared temporary directory are each refused; its sandbox, its own temporary directory and a named tool can be used; an earlier answer's object is absent from its sandbox and an object of the base is present; it is given the word planted in its repository's instruction file and not the one planted above the room |
 | Two turns given the same item | With the switch on, their prompts differ from the first line, and neither turn's line is kept in the store |
