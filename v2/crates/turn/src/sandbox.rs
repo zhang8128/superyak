@@ -486,6 +486,13 @@ impl Sandbox {
             for name in AGENT_HOMES {
                 command.env_remove(name);
             }
+            // A jailed run's git reads no settings of the machine's. Its home is the scratch directory, so it
+            // has none of a person's either. A check then means the same on every machine; and git works where
+            // its own settings file is kept somewhere the jail does not show, which it otherwise takes for an
+            // error and stops at (Homebrew's git, whose settings are under `/opt/homebrew/etc`).
+            for (name, value) in JAILED_GIT_ENV {
+                command.env(name, value);
+            }
         }
         command
             .stdin(Stdio::piped())
@@ -744,19 +751,34 @@ impl Launch {
 /// The command that runs `program` in a transient user scope held to 2 GB and no swap, as runs.py does. The
 /// scope needs the session bus, which the program itself does not get.
 pub fn scope_command(program: &str, args: &[String], limit_secs: u32) -> (String, Vec<String>) {
-    let mut argv: Vec<String> = [
-        "--user",
-        "--scope",
-        "--quiet",
-        "-p",
-        "MemoryMax=2G",
-        "-p",
-        "MemorySwapMax=0",
-        "-p",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    scope_command_for(program, args, limit_secs, scope_can_be_told_not_to_expand())
+}
+
+/// `scope_command`, told whether this machine's `systemd-run` knows `--expand-environment`.
+///
+/// A newer `systemd-run` rewrites the command it is given before it runs it: `$$` becomes `$`, and `${NAME}`
+/// becomes whatever `NAME` is in its own environment, or nothing. The command is the room's: a check's, or a
+/// worker's. It must reach the program as it was written, so where the option is known it is turned off.
+/// Where it is not known, `systemd-run` is too old to rewrite anything. Seen on Ubuntu 26.04, where every run
+/// with a `$` in its command line went wrong; Debian 12 does not have the option and does not rewrite.
+fn scope_command_for(
+    program: &str,
+    args: &[String],
+    limit_secs: u32,
+    told_not_to_expand: bool,
+) -> (String, Vec<String>) {
+    let mut argv: Vec<String> = ["--user", "--scope", "--quiet"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if told_not_to_expand {
+        argv.push("--expand-environment=no".to_string());
+    }
+    argv.extend(
+        ["-p", "MemoryMax=2G", "-p", "MemorySwapMax=0", "-p"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
     argv.push(format!(
         "RuntimeMaxSec={}",
         u64::from(limit_secs) + SCOPE_SLACK_SECS
@@ -783,13 +805,36 @@ fn bus_env() -> Vec<(String, OsString)> {
         .collect()
 }
 
-/// Whether runs can be wrapped in a memory-capped systemd scope: Linux, `systemd-run` present, and a user
-/// manager that answers. Many CI machines have the program and no user manager, so it is tried once.
+/// Whether runs can be wrapped in a memory-capped systemd scope: Linux, `systemd-run` present, a user manager
+/// that answers, and a command line that comes through it unchanged. Many CI machines have the program and no
+/// user manager, so it is tried once.
+/// Whether this machine's `systemd-run` knows `--expand-environment`, asked of its own help once.
+#[cfg(target_os = "linux")]
+fn scope_can_be_told_not_to_expand() -> bool {
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| {
+        let mut help = scrubbed("systemd-run");
+        help.arg("--help").stdin(Stdio::null());
+        output_within(help, "systemd-run --help", Duration::from_secs(10), None)
+            .is_ok_and(|said| String::from_utf8_lossy(&said).contains("--expand-environment"))
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn scope_can_be_told_not_to_expand() -> bool {
+    false
+}
+
 #[cfg(target_os = "linux")]
 fn memory_cap_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let (program, args) = scope_command("true", &[], 30);
+        // The trial is a command that only succeeds if its words arrive as written: `test '$$' != '$'`. A
+        // scope that rewrote them would hand over `$` twice, and the test would fail. Then no run is put in a
+        // scope here: a run without the memory cap is still the run that was asked for, and a run whose
+        // command was rewritten is not.
+        let words = ["$$", "!=", "$"].map(String::from);
+        let (program, args) = scope_command("test", &words, 30);
         let mut probe = scrubbed(program);
         probe
             .args(args)
@@ -854,6 +899,10 @@ pub(crate) fn absolute_entries(path: &OsStr) -> OsString {
         .filter(|joined| !joined.is_empty())
         .unwrap_or_else(|| OsString::from(PLAIN_PATH))
 }
+
+/// What a jailed run's git is told: no settings file and no attributes file of the machine's.
+const JAILED_GIT_ENV: [(&str, &str); 2] =
+    [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_ATTR_NOSYSTEM", "1")];
 
 /// Flags for every git the room runs: no hooks, no filesystem monitor, no attributes file of the user's.
 pub(crate) const SAFE_GIT_FLAGS: [&str; 12] = [
@@ -1321,7 +1370,7 @@ mod tests {
 
     #[test]
     fn the_scope_caps_memory_and_hides_the_bus_from_the_program() {
-        let (program, args) = scope_command("claude", &["-p".to_string()], 1200);
+        let (program, args) = scope_command_for("claude", &["-p".to_string()], 1200, false);
         assert_eq!(program, "systemd-run");
         let joined = args.join(" ");
         assert!(joined.starts_with(
@@ -1330,6 +1379,27 @@ mod tests {
         assert!(
             joined.ends_with("-- env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR claude -p")
         );
+    }
+
+    /// Where `systemd-run` would rewrite the command it is given, it is told not to, before anything else it
+    /// is told about the scope; and the command's own words are not touched.
+    #[test]
+    fn the_scope_is_told_not_to_rewrite_the_command_where_it_would() {
+        let words = ["-c".to_string(), "echo $$ ${HOME}".to_string()];
+        let (_, args) = scope_command_for("sh", &words, 30, true);
+        let joined = args.join(" ");
+        assert!(
+            joined.starts_with("--user --scope --quiet --expand-environment=no -p MemoryMax=2G "),
+            "{joined}"
+        );
+        assert!(
+            joined.ends_with("XDG_RUNTIME_DIR sh -c echo $$ ${HOME}"),
+            "{joined}"
+        );
+        // What this machine is given is one of the two, by what its own `systemd-run` knows.
+        let (_, here) = scope_command("sh", &words, 30);
+        let told = here.iter().any(|word| word == "--expand-environment=no");
+        assert_eq!(told, scope_can_be_told_not_to_expand());
     }
 
     #[test]

@@ -870,3 +870,31 @@ fn a_secrets_place_is_known_however_an_accented_letter_is_written() {
     );
     assert!(printed.contains("SAID ran"), "{printed}");
 }
+
+/// A jailed run's git reads no settings of the machine's. Here git is told its machine-wide settings are in a
+/// file that is there, in a place the jail does not show. On macOS a git that went to look would be refused
+/// the file, take that for an error and stop (seen on a machine whose git keeps its settings under
+/// `/opt/homebrew/etc`). It does not look: the run's git works, and does not have the setting. With the jail
+/// off, the same run reads it.
+#[test]
+fn a_jailed_runs_git_reads_no_settings_of_the_machine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap().join("home");
+    fs::create_dir_all(home.join("etc-like")).unwrap();
+    let settings = home.join("etc-like/gitconfig");
+    fs::write(&settings, "[yak]\n\tprobe = from-the-machine\n").unwrap();
+    let script = format!(
+        "GIT_CONFIG_SYSTEM={at} git config --get yak.probe; echo \"git exits $?\"",
+        at = quote(&settings),
+    );
+    let variables: [(&str, &Path); 1] = [("HOME", &home)];
+    // The control: with the jail off the setting is read.
+    let free = under(&script, &variables, false);
+    assert!(free.contains("SAID from-the-machine"), "{free}");
+    assert!(free.contains("SAID git exits 0"), "{free}");
+    // In the jail git runs, finds no such setting, and says so in the ordinary way: 1, not an error.
+    let held = under(&script, &variables, true);
+    assert!(!held.contains("from-the-machine"), "{held}");
+    assert!(!held.contains("fatal"), "{held}");
+    assert!(held.contains("SAID git exits 1"), "{held}");
+}

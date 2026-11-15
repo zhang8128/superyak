@@ -984,3 +984,40 @@ fn a_removal_that_fails_is_said_beside_what_was_left() {
         "KEEP"
     );
 }
+
+/// A run's command reaches its program as it was written, dollars and all. On Linux a run is started through
+/// `systemd-run` where that can cap its memory, and a newer `systemd-run` rewrites the words it is given
+/// unless it is told not to: `$$` to `$`, `${NAME-otherwise}` to nothing. A check's command would then mean
+/// something else on one machine than on another.
+#[test]
+fn a_runs_command_reaches_its_program_as_written() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let script = r#"echo "$$"; echo "${YAK_TEST_NEVER_SET-otherwise}"; for word in one two; do echo "$word"; done; echo "$0""#;
+    for jailed in [false, true] {
+        let mut lines = Vec::new();
+        let args = strings(&["-c", script]);
+        let status = if jailed {
+            sb.run_untrusted("sh", &args, "", 30, &mut |line| {
+                lines.push(line.to_string())
+            })
+        } else {
+            sb.run("sh", &args, "", 30, &mut |line| {
+                lines.push(line.to_string())
+            })
+        }
+        .unwrap();
+        assert_eq!(status.exit_code, 0, "jailed {jailed}: {lines:?}");
+        assert_eq!(lines.len(), 5, "jailed {jailed}: {lines:?}");
+        assert!(
+            lines[0].parse::<u32>().is_ok(),
+            "the shell's own number did not arrive: jailed {jailed}: {lines:?}"
+        );
+        assert_eq!(
+            &lines[1..],
+            ["otherwise", "one", "two", "sh"],
+            "jailed {jailed}"
+        );
+    }
+    sb.destroy().unwrap();
+}
