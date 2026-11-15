@@ -456,6 +456,29 @@ fn a_successful_clock_prints_events_without_transcript_text() {
     assert_eq!(status.daily_ceiling, 7);
 }
 
+/// A room named by a relative path still has its turns run: the clock hides the room's directory from every
+/// worker's shell, and finds its real path to do so before it makes a turn's sandbox.
+#[test]
+fn a_clock_in_a_room_named_by_a_relative_path_runs_its_turns() {
+    let f = Fixture::new();
+    let id = f.add();
+    let script = f.script(
+        "echo green > answer\ngit -c user.name=Test -c user.email=test@example.invalid commit -qm fix -a",
+    );
+    assert_eq!(f.room, f.tmp.path().join("room"));
+    let out = yak(Path::new("room"))
+        .current_dir(f.tmp.path())
+        .args(["clock", "run", "--once-through", "--worker", &script])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(f.show(&id)["state"], "passed_verified");
+}
+
 #[test]
 fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
     let f = Fixture::new();

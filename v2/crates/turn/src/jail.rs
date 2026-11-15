@@ -16,7 +16,8 @@
 //! **Whom the jail holds, and whom it does not.** The jail is for code the room runs and did not write: a
 //! check's command, a script worker, and the room's own git in a tree a worker has had its hands on. A model
 //! worker (`claude:`, `codex:`) is not put in this jail. It runs under its own program's sandbox, which the room
-//! sets to let it write in its clone and nowhere else of the room's. The room's own files (`turns/`, `checks/`,
+//! sets to let it write in its clone and nowhere else of the room's, and to read what a jailed run is shown and
+//! no more (`places`, read for it by `worker.rs`). The room's own files (`turns/`, `checks/`,
 //! the store) are therefore safe from a jailed run by this module, and from a model worker only as far as that
 //! program's sandbox holds. Where the room trusts one of those files it says so: a run's record is acted on
 //! only for an attempt the room made, and a sandbox is removed only if it is still the directory the room made.
@@ -269,12 +270,49 @@ fn unknown_machine() -> TurnError {
     )
 }
 
+/// What the room's jail hides and shows on this machine, for a run the room puts in its own program's sandbox
+/// and not in the jail: a model worker's. Its shell is to be shown what a jailed run is shown, and no more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Places {
+    /// The home, as a real path.
+    pub home: PathBuf,
+    /// The home's keys and settings, and the agents' settings directories, that are there, as real paths.
+    pub hidden: Vec<PathBuf>,
+    /// Each directory named in `YAK_JAIL_READ`, as a real path.
+    pub shown: Vec<PathBuf>,
+    /// The system directories every jailed run on this machine is shown, those that are there, named as the
+    /// jail names them.
+    pub system: Vec<PathBuf>,
+}
+
+/// The jail's places, read as `for_checkout` reads them and refused where it refuses: one reading of the
+/// settings and the lists the jail already has, not a second copy of either.
+pub fn places() -> Result<Places, TurnError> {
+    let Settings {
+        home,
+        hidden,
+        shown,
+        system,
+    } = Settings::read()?;
+    Ok(Places {
+        home,
+        hidden,
+        shown,
+        system,
+    })
+}
+
 /// What the environment says the room's jail hides and shows, checked.
 struct Settings {
+    /// The home, as a real path.
+    home: PathBuf,
     /// The home's keys and tokens and the agents' settings directories: the ones that are there, as real paths.
     hidden: Vec<PathBuf>,
     /// Each path in `YAK_JAIL_READ`, as a real path.
     shown: Vec<PathBuf>,
+    /// The directories every run on this machine is shown, those that are there. None where the machine has no
+    /// jail tool, which a jail itself refuses (`Jail::new`).
+    system: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -298,7 +336,7 @@ impl Settings {
         let mut hidden = Vec::new();
         let mut hide = |path: &Path| -> Result<(), TurnError> {
             // Every place the name could come to be: a directory on the way to it may be a link.
-            protected.extend(places(path)?);
+            protected.extend(places_of(path)?);
             if path.exists() {
                 hidden.push(real_path(path)?);
             }
@@ -374,7 +412,19 @@ impl Settings {
                 shown.push(real_path(&real)?);
             }
         }
-        Ok(Settings { hidden, shown })
+        let system = match Jail::detect() {
+            Some((kind, _)) => always_shown(kind)
+                .into_iter()
+                .filter(|dir| dir.exists())
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok(Settings {
+            home,
+            hidden,
+            shown,
+            system,
+        })
     }
 }
 
@@ -473,7 +523,7 @@ const MAX_LINKS: usize = 40;
 ///
 /// A path that leads through more than `MAX_LINKS` links has no answer. That is an error, and a jail does not
 /// start beside a protected name it cannot place.
-fn places(path: &Path) -> Result<Vec<PathBuf>, TurnError> {
+fn places_of(path: &Path) -> Result<Vec<PathBuf>, TurnError> {
     use std::collections::VecDeque;
     use std::path::Component;
 
@@ -1160,7 +1210,7 @@ mod tests {
         }
         let tmp = tmp.canonicalize().unwrap();
         let link = |to: &str, at: &str| std::os::unix::fs::symlink(to, tmp.join(at)).unwrap();
-        let places = |path: &str| places(&tmp.join(path)).unwrap();
+        let places = |path: &str| places_of(&tmp.join(path)).unwrap();
         let at = |paths: &[&str]| -> Vec<PathBuf> { paths.iter().map(|p| tmp.join(p)).collect() };
 
         // home/outer leads to first, and first/inner leads to second.
@@ -1212,7 +1262,7 @@ mod tests {
         let ring = tmp.join("home/round-a/key");
         let (answer, wait) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = answer.send(super::places(&ring));
+            let _ = answer.send(super::places_of(&ring));
         });
         let lost = wait
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -1222,7 +1272,7 @@ mod tests {
             "{lost:?}"
         );
         // And a name that is not a full path is not placed at all.
-        assert!(super::places(Path::new("home/key")).is_err());
+        assert!(super::places_of(Path::new("home/key")).is_err());
 
         // Up out of a part that is not there, and on to a link that is: the walk looks again once it is out.
         // `third/redirect` leads to `grant`, and the links below lead to it by way of `third/missing/..`.
@@ -1276,7 +1326,7 @@ mod tests {
             tmp.join("home/outer/../third/end").to_str().unwrap(),
             "home/through-and-out",
         );
-        let lost = super::places(&tmp.join("home/through-and-out/key"));
+        let lost = super::places_of(&tmp.join("home/through-and-out/key"));
         assert!(
             matches!(&lost, Err(TurnError::Refused(why)) if why.contains("back up out of")),
             "{lost:?}"

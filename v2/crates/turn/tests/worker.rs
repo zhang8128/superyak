@@ -24,14 +24,36 @@ fn seen() -> Seen {
     }
 }
 
-fn sandbox(repo: &Repo) -> Sandbox {
-    Sandbox::create(
-        &repo.path,
-        &repo.base,
-        &repo.scratch("sandbox"),
-        "room/i1/1",
-    )
-    .unwrap()
+/// A test's sandbox, removed by the room's own `destroy` when the test is done with it. A model worker's run
+/// makes the turn's own temporary directory under `/tmp`, outside the repository's temporary directory, and it
+/// would otherwise be left there after every test.
+struct Made(Option<Sandbox>);
+
+impl std::ops::Deref for Made {
+    type Target = Sandbox;
+    fn deref(&self) -> &Sandbox {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        if let Some(sb) = self.0.take() {
+            let _ = sb.destroy();
+        }
+    }
+}
+
+fn sandbox(repo: &Repo) -> Made {
+    Made(Some(
+        Sandbox::create(
+            &repo.path,
+            &repo.base,
+            &repo.scratch("sandbox"),
+            "room/i1/1",
+        )
+        .unwrap(),
+    ))
 }
 
 /// An executable script beside the repository.
@@ -200,7 +222,8 @@ fn the_claude_command_is_the_plans() {
 fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
-    let settings = ClaudeWorker::settings(&sb);
+    let settings = ClaudeWorker::settings(&sb).unwrap();
+    let tmp = sb.worker_tmp().unwrap();
     let dir = sb.dir.to_str().unwrap();
     assert_eq!(settings["permissions"]["defaultMode"], "dontAsk");
     let allow = settings["permissions"]["allow"].as_array().unwrap();
@@ -226,16 +249,17 @@ fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
     }
     assert_eq!(settings["sandbox"]["enabled"], true);
     assert_eq!(settings["sandbox"]["allowUnsandboxedCommands"], false);
+    // The shell writes in the clone and in the turn's own temporary directory, and nowhere else.
     assert_eq!(
         settings["sandbox"]["filesystem"]["allowWrite"],
-        serde_json::json!([dir])
+        serde_json::json!([dir, tmp.to_str().unwrap()])
     );
     assert_eq!(
         settings["sandbox"]["network"]["allowedDomains"],
         serde_json::json!([])
     );
     assert_eq!(settings["disableAllHooks"], true);
-    // Keys and accounts on this machine are not readable from the shell, named as absolute paths.
+    // The home is not readable from the shell, as a whole and first, named as an absolute path.
     let deny_read: Vec<&str> = settings["sandbox"]["filesystem"]["denyRead"]
         .as_array()
         .unwrap()
@@ -246,10 +270,8 @@ fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
         deny_read.iter().all(|p| !p.starts_with('~')),
         "{deny_read:?}"
     );
-    if let Some(home) = std::env::var_os("HOME") {
-        let ssh = Path::new(&home).join(".ssh");
-        assert!(deny_read.contains(&ssh.to_str().unwrap()), "{deny_read:?}");
-    }
+    let home = turn::jail::places().unwrap().home;
+    assert_eq!(deny_read.first(), home.to_str().as_ref(), "{deny_read:?}");
 }
 
 #[test]
@@ -258,13 +280,27 @@ fn the_codex_command_is_the_plans() {
     let sb = sandbox(&repo);
     let worker = CodexWorker::new("gpt-6.1-sol");
     assert_eq!(worker.program(), "codex");
+    let args = worker.args(&sb).unwrap();
+    // The table of what the shell may reach depends on this machine and its settings: it is compared whole in
+    // `codex_is_given_a_profile_and_no_sandbox_mode`, under settings that test chose. Here, its frame.
+    let table = &args[7];
+    assert!(
+        table.starts_with(
+            "permissions.yak.filesystem={\":root\"=\"deny\", \":minimal\"=\"read\", \":slash_tmp\"=\"deny\", "
+        ) && table.ends_with('}'),
+        "{table}"
+    );
     assert_eq!(
-        worker.args(&sb),
+        args,
         strings(&[
             "exec",
             "--json",
-            "-s",
-            "workspace-write",
+            "-c",
+            "default_permissions=\"yak\"",
+            "-c",
+            "permissions.yak.extends=\":workspace\"",
+            "-c",
+            table,
             "-C",
             sb.dir.to_str().unwrap(),
             "-m",
@@ -341,7 +377,7 @@ fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
     );
     let seen: serde_json::Value =
         serde_json::from_str(&read(&repo.scratch("settings-seen.json"))).unwrap();
-    assert_eq!(seen, ClaudeWorker::settings(&sb));
+    assert_eq!(seen, ClaudeWorker::settings(&sb).unwrap());
     assert_eq!(
         read(&repo.scratch("prompt.txt")),
         prompt("Make the greeting say bye", "grep -q bye a.txt")
@@ -391,7 +427,7 @@ fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(args, worker.args(&sb));
+    assert_eq!(args, worker.args(&sb).unwrap());
     assert_eq!(
         read(&repo.scratch("prompt.txt")),
         prompt("Make the greeting say bye", "grep -q bye a.txt")
@@ -1042,4 +1078,515 @@ fn the_prompt_says_where_to_leave_a_message() {
         "If your tools cannot commit, leave your commit message in a file named `.yak-message` at the \
          repository's root and the room will commit for you with it."
     ));
+}
+
+// --- What a model worker's shell is shown (Task 4b) ----------------------------------------------------------
+
+/// The inner half of the tests below, and nothing by itself. What a model worker's shell is shown is read from
+/// the environment, as the room's jail reads it, and a test cannot change its own. So the outer half runs this
+/// test again in a child whose environment it chose, and reads the one line the child prints: the sandbox, what
+/// it hides and gives a worker, the jail's places, and both workers' settings, each as it came or as refused.
+#[test]
+fn inner_a_workers_reach_under_the_rooms_settings() {
+    let Some(dir) = std::env::var_os("YAK_INNER_SANDBOX") else {
+        return;
+    };
+    let repo = std::env::var_os("YAK_INNER_REPO").unwrap();
+    let base = std::env::var("YAK_INNER_BASE").unwrap();
+    let mut sb = Sandbox::create(Path::new(&repo), &base, Path::new(&dir), "room/i1/1").unwrap();
+    if let Some(path) = std::env::var_os("YAK_INNER_HIDE") {
+        sb.hide_from_worker(Path::new(&path)).unwrap();
+    }
+    let said = |answer: Result<serde_json::Value, TurnError>| match answer {
+        Ok(value) => serde_json::json!({ "ok": value }),
+        Err(e) => serde_json::json!({ "refused": e.to_string() }),
+    };
+    let places = turn::jail::places().map(|p| {
+        serde_json::json!({ "home": p.home, "hidden": p.hidden, "shown": p.shown, "system": p.system })
+    });
+    let report = serde_json::json!({
+        "dir": sb.dir,
+        "hidden_from_worker": sb.hidden_from_worker(),
+        "tmp": said(sb.worker_tmp().map(|tmp| serde_json::json!(tmp))),
+        "shared": Sandbox::shared_tmp(),
+        "places": said(places),
+        "claude": said(ClaudeWorker::settings(&sb)),
+        "codex": said(CodexWorker::new("m").args(&sb).map(|args| serde_json::json!(args))),
+    });
+    println!("REACH {report}");
+    sb.destroy().unwrap();
+}
+
+/// What the inner half printed, with `vars` set, `without` taken out, and the room's own variables otherwise
+/// taken out of the child's environment.
+fn reach_without(
+    repo: &Repo,
+    vars: &[(&str, &std::ffi::OsStr)],
+    without: &[&str],
+) -> serde_json::Value {
+    static SANDBOXES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SANDBOXES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "inner_a_workers_reach_under_the_rooms_settings",
+            "--nocapture",
+        ])
+        .env("YAK_INNER_SANDBOX", repo.scratch(&format!("reach-{n}")))
+        .env("YAK_INNER_REPO", &repo.path)
+        .env("YAK_INNER_BASE", &repo.base)
+        .env_remove("YAK_INNER_HIDE")
+        .env_remove("YAK_JAIL_READ")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME");
+    for (name, value) in vars {
+        child.env(name, value);
+    }
+    for name in without {
+        child.env_remove(name);
+    }
+    let out = child.output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let line = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("REACH "))
+        .unwrap_or_else(|| {
+            panic!(
+                "the inner half did not report: {printed} {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    serde_json::from_str(line).unwrap()
+}
+
+fn reach(repo: &Repo, vars: &[(&str, &std::ffi::OsStr)]) -> serde_json::Value {
+    reach_without(repo, vars, &[])
+}
+
+/// The value the inner half got for `key`, which must not have been refused.
+fn answer<'a>(report: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    report[key]
+        .get("ok")
+        .unwrap_or_else(|| panic!("{key} was refused: {}", report[key]))
+}
+
+/// Why the inner half's `key` was refused; it must have been.
+fn refusal<'a>(report: &'a serde_json::Value, key: &str) -> &'a str {
+    report[key]["refused"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{key} was not refused: {}", report[key]))
+}
+
+fn texts(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {value}"))
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The real form of a path that is there, as text.
+fn real(path: &Path) -> String {
+    path.canonicalize().unwrap().to_str().unwrap().to_string()
+}
+
+/// A home with a place where keys are kept in it, a tool directory beside it, and room for more, all in one
+/// temporary directory that is gone with it.
+struct Places {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    home: PathBuf,
+    tool: PathBuf,
+}
+
+fn places() -> Places {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let tool = root.join("tools/bin");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::create_dir_all(&tool).unwrap();
+    Places {
+        _tmp: tmp,
+        root,
+        home,
+        tool,
+    }
+}
+
+/// The permission table among Codex's arguments, as given: the value after its `-c`.
+fn table_of(args: &[String]) -> String {
+    let at = args
+        .iter()
+        .position(|a| a.starts_with("permissions.yak.filesystem="))
+        .unwrap_or_else(|| panic!("no permission table in {args:?}"));
+    assert_eq!(args[at - 1], "-c", "{args:?}");
+    args[at]["permissions.yak.filesystem=".len()..].to_string()
+}
+
+#[test]
+fn claudes_shell_is_shown_the_sandbox_its_own_tmp_and_the_named_tools_and_not_the_home() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let added = at.root.join("added");
+    std::fs::create_dir(&added).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_JAIL_READ", at.tool.as_os_str()),
+            ("YAK_INNER_HIDE", added.as_os_str()),
+        ],
+    );
+    let settings = answer(&report, "claude");
+    let filesystem = &settings["sandbox"]["filesystem"];
+    let dir = report["dir"].as_str().unwrap().to_string();
+    let tmp = answer(&report, "tmp").as_str().unwrap().to_string();
+    // The home first, then what the room hid, then the temporary directories every turn shares, then the home's
+    // keys and settings, then the files of secrets wherever they are.
+    let mut deny = vec![real(&at.home), real(&repo.path), real(&added)];
+    let shared = texts(&report["shared"]);
+    assert!(!shared.is_empty());
+    deny.extend(shared);
+    deny.push(real(&at.home.join(".ssh")));
+    deny.extend(["**/.env".to_string(), "**/.env.*".to_string()]);
+    assert_eq!(texts(&filesystem["denyRead"]), deny);
+    assert_eq!(
+        texts(&filesystem["allowRead"]),
+        [dir.clone(), tmp.clone(), real(&at.tool)]
+    );
+    assert_eq!(texts(&filesystem["allowWrite"]), [dir, tmp]);
+    // The rest is as it was.
+    assert_eq!(settings["sandbox"]["enabled"], true);
+    assert_eq!(settings["sandbox"]["failIfUnavailable"], true);
+    assert_eq!(settings["sandbox"]["allowUnsandboxedCommands"], false);
+    assert_eq!(
+        settings["sandbox"]["network"]["allowedDomains"],
+        serde_json::json!([])
+    );
+    assert_eq!(settings["permissions"]["defaultMode"], "dontAsk");
+    assert_eq!(settings["disableAllHooks"], true);
+}
+
+#[test]
+fn codex_is_given_a_profile_and_no_sandbox_mode() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let added = at.root.join("added");
+    std::fs::create_dir(&added).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_JAIL_READ", at.tool.as_os_str()),
+            ("YAK_INNER_HIDE", added.as_os_str()),
+        ],
+    );
+    let args = texts(answer(&report, "codex"));
+    // A sandbox mode makes Codex ignore a permission profile, so there is none, by any of its names.
+    for word in ["-s", "--sandbox", "workspace-write", "read-only"] {
+        assert!(!args.iter().any(|a| a == word), "{word}: {args:?}");
+    }
+    assert!(
+        !args
+            .iter()
+            .any(|a| a.contains("sandbox_mode") || a.contains("workspace-write")),
+        "{args:?}"
+    );
+    let dir = report["dir"].as_str().unwrap();
+    let tmp = answer(&report, "tmp").as_str().unwrap();
+    let system = texts(&answer(&report, "places")["system"]);
+    assert!(system.iter().any(|dir| dir == "/usr/bin"), "{system:?}");
+    // The whole table, in the plan's order: the three named places, the system, the named tools, the turn's
+    // own temporary directory to write in, then what the room hid and the home's keys.
+    let mut entries = vec![
+        "\":root\"=\"deny\"".to_string(),
+        "\":minimal\"=\"read\"".to_string(),
+        "\":slash_tmp\"=\"deny\"".to_string(),
+    ];
+    entries.extend(system.iter().map(|dir| format!("\"{dir}\"=\"read\"")));
+    entries.push(format!("\"{}\"=\"read\"", real(&at.tool)));
+    entries.push(format!("\"{tmp}\"=\"write\""));
+    for hidden in [real(&repo.path), real(&added), real(&at.home.join(".ssh"))] {
+        entries.push(format!("\"{hidden}\"=\"deny\""));
+    }
+    let table = format!("{{{}}}", entries.join(", "));
+    assert_eq!(
+        args,
+        strings(&[
+            "exec",
+            "--json",
+            "-c",
+            "default_permissions=\"yak\"",
+            "-c",
+            "permissions.yak.extends=\":workspace\"",
+            "-c",
+            &format!("permissions.yak.filesystem={table}"),
+            "-C",
+            dir,
+            "-m",
+            "m",
+            "--ephemeral",
+            "--ignore-user-config",
+            "-c",
+            "approval_policy=\"never\"",
+            "-c",
+            "web_search=\"disabled\"",
+            "-",
+        ])
+    );
+}
+
+#[test]
+fn a_path_with_a_quote_or_a_backslash_is_written_as_toml() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let odd = at.root.join("say \"hi\" \\ there");
+    std::fs::create_dir(&odd).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_INNER_HIDE", odd.as_os_str()),
+        ],
+    );
+    let real = real(&odd);
+    let table = table_of(&texts(answer(&report, "codex")));
+    let escaped = real.replace('\\', "\\\\").replace('"', "\\\"");
+    assert!(
+        table.contains(&format!(", \"{escaped}\"=\"deny\"")),
+        "{table}"
+    );
+    assert!(!table.contains(&real), "written as it is: {table}");
+    // Claude's settings are JSON, which is its own quoting: the path is there as it is.
+    let deny = texts(&answer(&report, "claude")["sandbox"]["filesystem"]["denyRead"]);
+    assert!(deny.contains(&real), "{deny:?}");
+}
+
+#[test]
+fn a_path_with_a_control_character_is_refused() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    // A tab, a character below it, and the one control character above the space.
+    for (name, shown) in [
+        ("tab\there", "tab\\there"),
+        ("bell\x07", "bell\\u{7}"),
+        ("delete\x7f", "delete\\u{7f}"),
+    ] {
+        let odd = at.root.join(name);
+        std::fs::create_dir(&odd).unwrap();
+        let report = reach(
+            &repo,
+            &[
+                ("HOME", at.home.as_os_str()),
+                ("YAK_INNER_HIDE", odd.as_os_str()),
+            ],
+        );
+        for worker in ["claude", "codex"] {
+            let why = refusal(&report, worker);
+            // The path is named, as best it can be shown: with the character written out.
+            assert!(why.contains(shown), "{worker} {name:?}: {why}");
+        }
+    }
+}
+
+#[test]
+fn a_tool_directory_that_is_also_hidden_is_not_shown() {
+    let repo = Repo::new(&[("a.txt", "x\n"), ("tools/run.sh", "#!/bin/sh\n")]);
+    let at = places();
+    let inside = repo.path.join("tools");
+    // The item's repository named for tools, a directory inside it, and a system directory named as well. The
+    // repository is also hidden a second time, by name.
+    let named =
+        std::env::join_paths([repo.path.as_path(), &inside, Path::new("/usr/bin")]).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_JAIL_READ", &named),
+            ("YAK_INNER_HIDE", repo.path.as_os_str()),
+        ],
+    );
+    let (repo_real, inside_real) = (real(&repo.path), real(&inside));
+    let dir = report["dir"].as_str().unwrap().to_string();
+    let tmp = answer(&report, "tmp").as_str().unwrap().to_string();
+    let filesystem = &answer(&report, "claude")["sandbox"]["filesystem"];
+    assert_eq!(
+        texts(&filesystem["allowRead"]),
+        [dir, tmp, "/usr/bin".to_string()]
+    );
+    let deny = texts(&filesystem["denyRead"]);
+    assert_eq!(
+        deny.iter().filter(|p| **p == repo_real).count(),
+        1,
+        "{deny:?}"
+    );
+    let table = table_of(&texts(answer(&report, "codex")));
+    assert!(!table.contains(&inside_real), "{table}");
+    assert!(
+        !table.contains(&format!("\"{repo_real}\"=\"read\"")),
+        "{table}"
+    );
+    assert_eq!(
+        table.matches(&format!("\"{repo_real}\"")).count(),
+        1,
+        "{table}"
+    );
+    assert!(
+        table.contains(&format!("\"{repo_real}\"=\"deny\"")),
+        "{table}"
+    );
+    // No path is written twice: a system directory that is also named is shown once.
+    assert_eq!(table.matches("\"/usr/bin\"").count(), 1, "{table}");
+
+    // A system directory the room hides is not shown either.
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_INNER_HIDE", std::ffi::OsStr::new("/usr/bin")),
+        ],
+    );
+    let table = table_of(&texts(answer(&report, "codex")));
+    assert!(table.contains("\"/usr/bin\"=\"deny\""), "{table}");
+    assert_eq!(table.matches("\"/usr/bin\"").count(), 1, "{table}");
+
+    // Nor is a temporary directory every turn shares, named for tools: here the clock's own.
+    let shared = at.root.join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("TMPDIR", shared.as_os_str()),
+            ("YAK_JAIL_READ", shared.as_os_str()),
+        ],
+    );
+    let shared_real = real(&shared);
+    assert!(texts(&report["shared"]).contains(&shared_real));
+    let filesystem = &answer(&report, "claude")["sandbox"]["filesystem"];
+    assert!(!texts(&filesystem["allowRead"]).contains(&shared_real));
+    let table = table_of(&texts(answer(&report, "codex")));
+    assert!(!table.contains(&shared_real), "{table}");
+}
+
+#[test]
+fn a_workers_program_is_given_its_own_tmp_and_no_global_git_settings() {
+    for family in ["claude", "codex"] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let said = repo.scratch("variables.txt");
+        let body = format!(
+            "#!/bin/sh\ncat > /dev/null\n\
+             printf 'TMPDIR=%s\\nCLAUDE_CODE_TMPDIR=%s\\nGIT_CONFIG_GLOBAL=%s\\n' \
+             \"$TMPDIR\" \"$CLAUDE_CODE_TMPDIR\" \"$GIT_CONFIG_GLOBAL\" > '{}'\n",
+            said.display()
+        );
+        let fake = script(&repo, family, &body);
+        family_worker(family, &fake)
+            .run(&sb, "t", "true", 60, &mut seen())
+            .unwrap();
+        let tmp = sb.worker_tmp().unwrap();
+        assert_eq!(
+            read(&said),
+            format!(
+                "TMPDIR={t}\nCLAUDE_CODE_TMPDIR={t}\nGIT_CONFIG_GLOBAL=/dev/null\n",
+                t = tmp.display()
+            ),
+            "{family}"
+        );
+    }
+    // The control: another run in a sandbox is told none of it.
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let mut lines = Vec::new();
+    sb.run(
+        "sh",
+        &strings(&[
+            "-c",
+            "echo \"[${CLAUDE_CODE_TMPDIR-unset}] [${GIT_CONFIG_GLOBAL-unset}]\"",
+        ]),
+        "",
+        30,
+        &mut |line| lines.push(line.to_string()),
+    )
+    .unwrap();
+    assert_eq!(lines, ["[unset] [unset]"]);
+}
+
+/// `jail::places` is the jail's own reading of the settings: the home, its keys and the agents' settings
+/// directories that are there, the named tool directories, the system directories that are there, each as a
+/// real path; and refused as the jail refuses.
+#[test]
+fn the_jails_places_are_its_own_reading_of_the_settings() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let agent = at.root.join("agent");
+    std::fs::create_dir(&agent).unwrap();
+    let never = at.root.join("never-made");
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_JAIL_READ", at.tool.as_os_str()),
+            ("CLAUDE_CONFIG_DIR", agent.as_os_str()),
+            ("CODEX_HOME", never.as_os_str()),
+        ],
+    );
+    let places = answer(&report, "places");
+    assert_eq!(places["home"], real(&at.home));
+    assert_eq!(
+        texts(&places["hidden"]),
+        [real(&at.home.join(".ssh")), real(&agent)]
+    );
+    assert_eq!(texts(&places["shown"]), [real(&at.tool)]);
+    let system = texts(&places["system"]);
+    assert!(system.iter().any(|dir| dir == "/usr/bin"), "{system:?}");
+    for dir in &system {
+        assert!(Path::new(dir).exists(), "{dir} is not there");
+    }
+    // A tool directory that holds the home is refused, by the jail's own words, and so is every worker's reach.
+    let report = reach(
+        &repo,
+        &[
+            ("HOME", at.home.as_os_str()),
+            ("YAK_JAIL_READ", at.root.as_os_str()),
+        ],
+    );
+    assert!(
+        refusal(&report, "places").contains("holds the home directory"),
+        "{report}"
+    );
+    for worker in ["claude", "codex"] {
+        assert!(refusal(&report, worker).contains("holds the home directory"));
+    }
+}
+
+/// The temporary directories every turn on the machine shares: the real `/tmp`, and the clock's own `TMPDIR`
+/// when that is set, is there, is a directory and is another one.
+#[test]
+fn the_shared_temporary_directories_are_tmp_and_the_clocks_own() {
+    let repo = Repo::new(&[("a.txt", "x\n")]);
+    let at = places();
+    let slash_tmp = real(Path::new("/tmp"));
+    let file = at.root.join("a-file");
+    std::fs::write(&file, "").unwrap();
+    let shared = |tmpdir: Option<&Path>| {
+        let report = match tmpdir {
+            Some(dir) => reach(
+                &repo,
+                &[("HOME", at.home.as_os_str()), ("TMPDIR", dir.as_os_str())],
+            ),
+            None => reach_without(&repo, &[("HOME", at.home.as_os_str())], &["TMPDIR"]),
+        };
+        texts(&report["shared"])
+    };
+    assert_eq!(shared(Some(&at.root)), [slash_tmp.clone(), real(&at.root)]);
+    let alone = std::slice::from_ref(&slash_tmp);
+    assert_eq!(shared(Some(&at.root.join("missing"))), alone);
+    assert_eq!(shared(Some(&file)), alone);
+    assert_eq!(shared(Some(Path::new("/tmp"))), alone);
+    assert_eq!(shared(None), alone);
 }
