@@ -1526,11 +1526,43 @@ fn inner_a_clock_under_the_rooms_switches() {
     };
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
-    // A worker that hands in a commit the repository had all along: the wrong one.
-    let old = world.script(
-        "old.sh",
-        &format!("#!/bin/sh\ngit reset -q --hard {}\n", world.wrong),
+    // A worker that hands in a commit the repository had all along. A sandbox holds only what its base reaches,
+    // so the worker cannot be pointed at a commit that lies elsewhere in the repository. It makes one that can
+    // be made beforehand bit for bit: the same change, the turn's own name, fixed dates and the same word.
+    const SAME_DATE: &str = "2026-01-01T00:00:00Z";
+    let same = world.script(
+        "same.sh",
+        &format!(
+            "#!/bin/sh\nfor f in answer*.txt; do echo 41 > \"$f\"; done\n\
+             GIT_AUTHOR_DATE={SAME_DATE} GIT_COMMITTER_DATE={SAME_DATE} git commit -q -am same\n"
+        ),
     );
+    // That commit, made here in the item's repository without touching its files: the tree of the `wrong`
+    // branch (every answer 41) on top of the base, by the name every turn commits under.
+    let already = {
+        let tree = git(
+            &world.repo,
+            &["rev-parse", &format!("{}^{{tree}}", world.wrong)],
+        );
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&world.repo)
+            .args(["commit-tree", &tree, "-p", &world.base, "-m", "same"])
+            .env("GIT_AUTHOR_NAME", "yak turn")
+            .env("GIT_AUTHOR_EMAIL", "turn@yak.invalid")
+            .env("GIT_COMMITTER_NAME", "yak turn")
+            .env("GIT_COMMITTER_EMAIL", "turn@yak.invalid")
+            .env("GIT_AUTHOR_DATE", SAME_DATE)
+            .env("GIT_COMMITTER_DATE", SAME_DATE)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
     let mut workers: Vec<String> = workers
         .to_str()
         .unwrap()
@@ -1547,7 +1579,8 @@ fn inner_a_clock_under_the_rooms_switches() {
     // With `YAK_INNER_GIT_DIR` naming a directory that is first on this process's search path, a `git` is put
     // there that is the real git except where the mode says otherwise: at the clock's fetch, where the clock
     // looks whether the ref's name is free, or where it makes the ref. Taking a ref back (`update-ref -d`) is
-    // always the real git's.
+    // always the real git's. The clock's fetch is the one whose source is a sandbox, under the room's `turns`:
+    // a sandbox is itself made by a fetch, from the item's repository, and that one is left alone.
     if let Some(dir) = std::env::var_os("YAK_INNER_GIT_DIR") {
         let dir = std::path::PathBuf::from(dir);
         let mode = std::env::var("YAK_INNER_GIT_MODE").unwrap();
@@ -1610,6 +1643,7 @@ fn inner_a_clock_under_the_rooms_switches() {
             // stopped, or the lease runs out, as the clock looks at the name.
             "taken-ref-stop" => (nothing(), stop.clone(), nothing()),
             "taken-ref-asleep" => (nothing(), asleep(":"), nothing()),
+            "same-commit" => (nothing(), nothing(), nothing()),
             other => panic!("unknown mode {other}"),
         };
         if matches!(
@@ -1623,8 +1657,14 @@ fn inner_a_clock_under_the_rooms_switches() {
             world.git_secs = 2;
         }
         if mode.starts_with("taken-ref") {
-            git(&world.repo, &["update-ref", &first_ref, &world.wrong]);
-            workers = vec![old.clone()];
+            git(&world.repo, &["update-ref", &first_ref, &already]);
+            workers = vec![same.clone()];
+        }
+        // The control for that: with no ref in the way, the same worker's turn is given the name, and the
+        // commit it names is the one made beforehand. Without this, the two modes above could pass with a
+        // worker whose commit was some other one.
+        if mode == "same-commit" {
+            workers = vec![same.clone()];
         }
         let wrapper = dir.join("git");
         fs::write(
@@ -1632,7 +1672,7 @@ fn inner_a_clock_under_the_rooms_switches() {
             format!(
                 "#!/bin/sh\ncase \" $* \" in\n*\" update-ref --no-deref -d \"*) ;;\n\
                  *\" for-each-ref --format=%(refname) refs/heads/room/\"*) {at_look};;\n\
-                 *\" fetch \"*) {at_fetch};;\n*\" update-ref \"*) {at_ref};;\nesac\nexec {real}\n"
+                 *\" fetch \"*\"/turns/\"*) {at_fetch};;\n*\" update-ref \"*) {at_ref};;\nesac\nexec {real}\n"
             ),
         )
         .unwrap();
@@ -1708,6 +1748,7 @@ fn inner_a_clock_under_the_rooms_switches() {
     let named = if world.room_refs().contains(&first_ref) {
         let commit = git(&world.repo, &["rev-parse", &first_ref]);
         match commit {
+            c if c == already => "the commit made beforehand".to_string(),
             c if c == world.wrong => "the wrong commit".to_string(),
             c if c == world.base => "the base".to_string(),
             _ => "the turn's commit".to_string(),
@@ -1890,6 +1931,13 @@ fn a_ref_is_made_only_under_a_lease_the_turn_holds_in_a_room_that_is_not_stopped
 /// for a stop or for a lease that ran out as the clock looked at the name, and the ref is as it was.
 #[test]
 fn a_ref_that_was_already_there_is_left_when_the_turn_ends_without_a_hand_in() {
+    // The control: the worker's commit is the very one made beforehand. Its turn fails the check (every answer
+    // is 41), and the ref the clock made for it names that commit.
+    let control = with_git("same-commit");
+    assert!(
+        control.contains("REF1 names the commit made beforehand"),
+        "{control}"
+    );
     for (mode, ended) in [
         ("taken-ref-stop", "FIRST Some(Stopped)"),
         ("taken-ref-asleep", "FIRST Some(LeaseLost)"),
@@ -1898,7 +1946,7 @@ fn a_ref_that_was_already_there_is_left_when_the_turn_ends_without_a_hand_in() {
         assert!(taken.contains(ended), "{mode}: {taken}");
         assert!(taken.contains("REFS 1"), "{mode}: {taken}");
         assert!(
-            taken.contains("REF1 names the wrong commit"),
+            taken.contains("REF1 names the commit made beforehand"),
             "{mode}: {taken}"
         );
         assert!(taken.contains("PROBLEMS 0"), "{mode}: {taken}");
