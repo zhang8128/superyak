@@ -101,20 +101,26 @@ fn stop_ends_a_running_worker() {
     let slow = world.script("slow.sh", "#!/bin/sh\ntrap '' TERM\nsleep 600\n");
     let turns = world.room_dir.join("turns");
     let room_dir = world.room_dir.clone();
+    // Only the stopper stops this clock, and it does so once a worker's record is there. If none appears, the
+    // clock is stopped all the same, and the test fails below and does not wait for ever.
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
     let stopper = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(60);
+        let stop = room_dir.join("STOP");
         let mut pid_file = None;
-        assert!(wait_until(deadline, || {
+        // It waits for the record, and no longer once the room has been stopped without one.
+        wait_until(deadline, || {
             pid_file = fs::read_dir(&turns).ok().and_then(|entries| {
                 entries
                     .flatten()
                     .map(|e| e.path())
                     .find(|p| p.extension().is_some_and(|x| x == "pid"))
             });
-            pid_file.is_some()
-        }));
-        let group = read_group(&pid_file.unwrap(), deadline);
-        fs::write(room_dir.join("STOP"), "").unwrap();
+            pid_file.is_some() || stop.exists()
+        });
+        let pid_file = pid_file.expect("a worker's record appears before the room is stopped");
+        let group = read_group(&pid_file, deadline);
+        fs::write(stop, "").unwrap();
         (group, Instant::now())
     });
     let (result, events) = world.run(&[&slow], Mode::Forever, NEVER, TURN_SECS);
@@ -1170,6 +1176,9 @@ fn in_forever_the_ceiling_waits_and_says_so_once() {
     world.room.set_ceiling(1, 1).unwrap();
     let fix = world.script("fix.sh", FIX);
     let stop = world.room_dir.join("STOP");
+    // This clock is stopped once it has said the ceiling was reached. If it never says so, it is stopped all
+    // the same, and the test fails below and does not wait for ever.
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
     let mut ceilings = 0;
     let mut turns = 0;
     let mut report = |e: &Event| match e {
@@ -1202,6 +1211,68 @@ fn in_forever_the_ceiling_waits_and_says_so_once() {
     assert_eq!((ceilings, turns), (1, 1));
     assert_eq!(state(&world, 0), ItemState::PassedVerified);
     assert_eq!(state(&world, 1), ItemState::Open);
+}
+
+/// Where a clock cannot look at processes (inside another program's sandbox, say) no check is frozen and no
+/// turn starts. The two tests above whose clock only a helper stops must still end there. Found by the first
+/// run with model workers: a worker ran these tests in its own sandbox, and they never ended.
+///
+/// Each is run here by itself with a `ps` that fails first on its search path. It fails, since nothing it
+/// waits for can happen, and that is right. What is asked is that it ends.
+#[test]
+fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let ps = dir.path().join("ps");
+    fs::write(
+        &ps,
+        "#!/bin/sh\necho 'ps: Operation not permitted' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&ps, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(dir.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for name in [
+        "stop_ends_a_running_worker",
+        "in_forever_the_ceiling_waits_and_says_so_once",
+    ] {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--test-threads=1"])
+            .env("PATH", &path)
+            .env("YAK_TEST_STOPS_WITHIN_SECS", "3")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let ended = wait_until(deadline, || child.try_wait().unwrap().is_some());
+        if !ended {
+            let _ = child.kill();
+        }
+        let status = child.wait().unwrap();
+        assert!(ended, "{name} did not end where no turn can start");
+        assert!(!status.success(), "{name} passed with a ps that fails");
+    }
+}
+
+/// The stop a test owns: it stops the room at its limit, and never once it has been dropped.
+#[test]
+fn a_tests_own_stop_acts_at_its_limit_and_not_after_it_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = dir.path().join("STOP");
+    let bound = StopsWithin::new(dir.path(), Duration::from_millis(200));
+    assert!(wait_until(Instant::now() + Duration::from_secs(30), || {
+        stop.exists()
+    }));
+    drop(bound);
+    fs::remove_file(&stop).unwrap();
+    // Dropped at once, long before its limit: its watcher has gone by the time `drop` returns, without having
+    // stopped the room, and nothing is left that could stop it later.
+    drop(StopsWithin::new(dir.path(), Duration::from_secs(5)));
+    assert!(!stop.exists());
 }
 
 /// A worker whose program is not there would fail every item it took: it is refused before any is taken.

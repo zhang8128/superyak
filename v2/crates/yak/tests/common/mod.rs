@@ -386,6 +386,56 @@ impl Groups {
     }
 }
 
+/// Stops a room after `limit`, unless it is dropped first. A test that runs a clock with no end of its own
+/// has one. What such a test waits for may never happen: where a clock cannot look at processes (inside
+/// another program's sandbox, say), no check is frozen and no turn starts, and a clock that waits for work
+/// waits for ever. With this, the test fails where it asserts and does not hang.
+pub struct StopsWithin {
+    done: Arc<AtomicBool>,
+    watcher: Option<JoinHandle<()>>,
+}
+
+impl StopsWithin {
+    /// The limit such a test gives its clock: two minutes, or the seconds `YAK_TEST_STOPS_WITHIN_SECS` says.
+    /// The test of these tests sets it, so that it need not wait two minutes for each.
+    pub fn for_a_test(room_dir: &Path) -> StopsWithin {
+        let secs = std::env::var("YAK_TEST_STOPS_WITHIN_SECS")
+            .ok()
+            .and_then(|secs| secs.parse().ok())
+            .unwrap_or(120);
+        StopsWithin::new(room_dir, Duration::from_secs(secs))
+    }
+
+    pub fn new(room_dir: &Path, limit: Duration) -> StopsWithin {
+        let done = Arc::new(AtomicBool::new(false));
+        let over = done.clone();
+        let stop = room_dir.join("STOP");
+        let until = Instant::now() + limit;
+        let watcher = std::thread::spawn(move || {
+            while !over.load(Ordering::SeqCst) {
+                if Instant::now() >= until {
+                    let _ = fs::write(&stop, "");
+                    return;
+                }
+                sleep(Duration::from_millis(50));
+            }
+        });
+        StopsWithin {
+            done,
+            watcher: Some(watcher),
+        }
+    }
+}
+
+impl Drop for StopsWithin {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
+    }
+}
+
 /// A process that leads its own group and is nobody's child here, as a run is whose clock has died: it was
 /// started by a process that has already gone. Ended when this is dropped.
 pub struct Orphan(pub u32);
