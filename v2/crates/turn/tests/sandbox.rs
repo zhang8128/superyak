@@ -644,15 +644,17 @@ fn a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out() {
         .unwrap();
     assert!(ended, "the program was never seen to have ended");
     assert_eq!(status, own_end, "with the switch set after it ended");
-    // The limit of one second passes once the program has ended, before the room has looked at it again.
+    // The limit of one second passes once the program has ended, before the room has looked at it again. The
+    // limit runs from when the program was started, which was before it printed anything: a second and a half
+    // after its line was read, the limit has passed, however long the start took.
     let item = repo();
     let sb = sandbox(&item);
-    let began = Instant::now();
     let mut ended = false;
     let status = sb
         .run("sh", &script, "", 1, &mut |line| {
             ended = seen_ended(line);
-            while began.elapsed() < Duration::from_millis(1_500) {
+            let seen = Instant::now();
+            while seen.elapsed() < Duration::from_millis(1_500) {
                 std::thread::sleep(Duration::from_millis(20));
             }
         })
