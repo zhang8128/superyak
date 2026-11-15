@@ -160,11 +160,15 @@ fn a_sandbox_holds_nothing_its_base_does_not_reach() {
 #[test]
 fn a_sandbox_of_a_repository_in_one_pack_holds_nothing_its_base_does_not_reach() {
     let (repo, later, later_blob, dangling, tree) = item_with_strangers();
-    // Everything into one pack, the unreachable blob included, and no loose object left.
-    git(
-        &repo.path,
-        &["repack", "-a", "-d", "-q", "--keep-unreachable"],
-    );
+    // Everything into one pack, the unreachable blob included, and no loose object left. Twice: git 2.39 packs
+    // a loose object nothing names only when a pack is already there, so its first repack leaves that blob
+    // loose and its second packs it. A newer git does it in one, and its second changes nothing.
+    for _ in 0..2 {
+        git(
+            &repo.path,
+            &["repack", "-a", "-d", "-q", "--keep-unreachable"],
+        );
+    }
     git(&repo.path, &["prune-packed"]);
     let packs: Vec<_> = std::fs::read_dir(repo.path.join(".git/objects/pack"))
         .unwrap()
