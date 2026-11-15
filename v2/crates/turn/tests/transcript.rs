@@ -3,9 +3,10 @@
 mod common;
 
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use common::{Repo, git};
-use room::{Step, Target, Tool};
+use room::{Named, Step, Target, Tokens, Tool};
 use turn::Sandbox;
 use turn::sandbox::MAX_LINE_BYTES;
 use turn::transcript::{ClaudeParser, CodexParser, claude_steps, codex_steps};
@@ -58,10 +59,53 @@ fn oks(steps: &[Step]) -> Vec<bool> {
     steps.iter().map(|s| s.ok).collect()
 }
 
+fn named(repo: &Repo, path: &str) -> Named {
+    Named {
+        path: path.to_string(),
+        blob: blob(repo, path),
+    }
+}
+
+fn nameds(steps: &[Step]) -> Vec<Vec<String>> {
+    steps
+        .iter()
+        .map(|s| s.named.iter().map(|n| n.path.clone()).collect())
+        .collect()
+}
+
+/// Feeds `lines` to a fresh Claude parser, line `i` at `i` tenths of a second after the turn's start.
+fn claude_at(lines: &[String], sb: &Sandbox) -> ClaudeParser {
+    let start = Instant::now();
+    let mut parser = ClaudeParser::new(sb, start);
+    for (i, line) in lines.iter().enumerate() {
+        parser.line_at(line, start + Duration::from_millis(100 * i as u64));
+    }
+    parser
+}
+
+/// The same for Codex.
+fn codex_at(lines: &[String], sb: &Sandbox) -> CodexParser {
+    let start = Instant::now();
+    let mut parser = CodexParser::new(sb, start);
+    for (i, line) in lines.iter().enumerate() {
+        parser.line_at(line, start + Duration::from_millis(100 * i as u64));
+    }
+    parser
+}
+
+fn claude_tokens(lines: &[String], sb: &Sandbox) -> Tokens {
+    claude_at(lines, sb).tokens()
+}
+
+fn codex_tokens(lines: &[String], sb: &Sandbox) -> Tokens {
+    codex_at(lines, sb).tokens()
+}
+
 #[test]
 fn a_read_of_a_tracked_file_is_a_tracked_step() {
     let (repo, sb) = sandbox();
-    let steps = claude_steps(fixture("claude-read-src.jsonl", &sb).into_iter(), &sb);
+    let lines = fixture("claude-read-src.jsonl", &sb);
+    let steps = claude_at(&lines, &sb).finish();
     assert_eq!(
         steps,
         [Step {
@@ -71,11 +115,402 @@ fn a_read_of_a_tracked_file_is_a_tracked_step() {
             ok: true,
             tokens_in: Some(3 + 100 + 1000),
             tokens_out: Some(20),
-            named: Vec::new(),
-            seen_ms: None,
-            result_ms: None,
+            // A file tool names the one file it was given, the same as its target.
+            named: vec![named(&repo, "src/a.txt")],
+            // Its call was the fixture's second line and its result the third.
+            seen_ms: Some(100),
+            result_ms: Some(200),
         }]
     );
+}
+
+// --- What a whole turn cost --------------------------------------------------------------------------------
+
+/// Codex's `input_tokens` holds its `cached_input_tokens`: the cached tokens are a part of the input, not beside
+/// it. Nothing in this repository documents Codex's fields, so this rests on the one real capture,
+/// `codex-json-sample.jsonl`: input 46,441, cached 35,328, output 100, from a turn of three shell calls, so four
+/// model requests (the plan and `cat a.txt`; `ls`; `cat missing.txt`; "done"). Every request sends the whole
+/// conversation again, and the conversation hardly grows (a hundred tokens of output, a few lines of tool
+/// output), so the requests are nearly the same size P, and caching is by prefix: a request reads from the
+/// cache what an earlier request already sent, and pays fresh for only its new end.
+///
+/// - If input holds cached: P is about 46,441 / 4 = 11,600; the first request is fresh (11,113 = 46,441 -
+///   35,328, about one P) and the next three read about one P each from the cache (35,328, about 3P). It fits.
+/// - If input were beside cached: the fresh part, 46,441, is four times what three cache-hitting requests can
+///   leave fresh (a few hundred tokens each, beyond the first). The first request would have to be about 45,000
+///   tokens, and then the three that follow would read about 135,000 from the cache, not 35,328. It fits only
+///   if the cache missed on most of the requests.
+///
+/// So the capture settles it unless the cache mostly missed; the report says so. A wrong reading would show:
+/// with input beside cached, a long turn's cached count soon exceeds its input, which cannot happen if input
+/// holds cached, and the parser then records the fresh part as unknown (see the test after this one). The
+/// cache-write count is taken to be a part of the input in the same way; it is 0 in the only capture, so no
+/// number here rests on that.
+#[test]
+fn the_closing_total_is_the_turns_tokens() {
+    let (_repo, sb) = sandbox();
+    let claude = claude_tokens(&fixture("claude-stream-ids.jsonl", &sb), &sb);
+    assert_eq!(
+        claude,
+        Tokens {
+            fresh_in: Some(4),
+            cache_write: Some(7287),
+            cache_read: Some(29643),
+            output: Some(286),
+            // `output_tokens_details.thinking_tokens`: a part of the output, so not added to the total.
+            reasoning: Some(74),
+            complete: true,
+        }
+    );
+    assert_eq!(claude.total(), Some(37_220));
+    let codex = codex_tokens(&fixture("codex-json-sample.jsonl", &sb), &sb);
+    assert_eq!(
+        codex,
+        Tokens {
+            fresh_in: Some(46_441 - 35_328),
+            cache_write: Some(0),
+            cache_read: Some(35_328),
+            output: Some(100),
+            reasoning: Some(0),
+            complete: true,
+        }
+    );
+    // The whole input once, and the output.
+    assert_eq!(codex.total(), Some(46_441 + 100));
+}
+
+#[test]
+fn a_codex_total_whose_cached_part_exceeds_its_input_leaves_the_fresh_part_unknown() {
+    let (_repo, sb) = sandbox();
+    let line = |input: u64, cached: u64, write: u64| {
+        serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": input,
+            "cached_input_tokens": cached, "cache_write_input_tokens": write, "output_tokens": 5,
+            "reasoning_output_tokens": 1}})
+        .to_string()
+    };
+    for (input, cached, write) in [(10, 11, 0), (10, 5, 6)] {
+        let tokens = codex_tokens(&[line(input, cached, write)], &sb);
+        assert_eq!(tokens.fresh_in, None, "{input} {cached} {write}");
+        assert_eq!(
+            (tokens.cache_read, tokens.cache_write, tokens.output),
+            (Some(cached), Some(write), Some(5))
+        );
+        // The program did give its closing total; it is the split that is not known.
+        assert!(tokens.complete);
+        assert_eq!(tokens.total(), None);
+    }
+    // At the edge, all of the input came from the cache or went to it.
+    assert_eq!(codex_tokens(&[line(10, 4, 6)], &sb).fresh_in, Some(0));
+    // A count it did not give is not known, and neither is the fresh part, which needs every part of the input.
+    let partial = serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": 10,
+        "cached_input_tokens": 4, "output_tokens": 2}})
+    .to_string();
+    let tokens = codex_tokens(&[partial], &sb);
+    assert_eq!(
+        (tokens.fresh_in, tokens.cache_write, tokens.cache_read),
+        (None, None, Some(4))
+    );
+    assert!(tokens.complete);
+    assert_eq!(tokens.total(), None);
+}
+
+#[test]
+fn a_stream_cut_off_before_its_closing_total_is_not_complete() {
+    let (_repo, sb) = sandbox();
+    for name in ["claude-stream-ids.jsonl", "claude-stream-sample.jsonl"] {
+        let mut lines = fixture(name, &sb);
+        lines.pop();
+        // Every message before the end gave its own usage; none of it is summed into a total.
+        assert_eq!(claude_tokens(&lines, &sb), Tokens::none(), "{name}");
+    }
+    let mut lines = fixture("codex-json-sample.jsonl", &sb);
+    lines.pop();
+    assert_eq!(codex_tokens(&lines, &sb), Tokens::none());
+}
+
+#[test]
+fn a_closing_total_that_arrives_twice_is_counted_once() {
+    let (_repo, sb) = sandbox();
+    let mut claude = fixture("claude-stream-ids.jsonl", &sb);
+    let once = claude_tokens(&claude, &sb);
+    claude.push(claude.last().unwrap().clone());
+    assert_eq!(claude_tokens(&claude, &sb), once);
+    let mut codex = fixture("codex-json-sample.jsonl", &sb);
+    let once = codex_tokens(&codex, &sb);
+    codex.push(codex.last().unwrap().clone());
+    assert_eq!(codex_tokens(&codex, &sb), once);
+    // Two that differ: the later is what the program said last, and it stands alone.
+    let total = |n: u64| {
+        serde_json::json!({"type": "result", "usage": {"input_tokens": n,
+            "cache_creation_input_tokens": n, "cache_read_input_tokens": n, "output_tokens": n}})
+        .to_string()
+    };
+    let tokens = claude_tokens(&[total(1), total(7)], &sb);
+    assert_eq!(tokens.total(), Some(28));
+    assert_eq!(tokens.reasoning, None);
+}
+
+#[test]
+fn a_turn_with_no_tool_call_still_has_its_tokens() {
+    let (_repo, sb) = sandbox();
+    // The real streams with their tool calls and results taken out: the start, the thinking and the text, the
+    // closing total.
+    let claude: Vec<String> = fixture("claude-stream-ids.jsonl", &sb)
+        .into_iter()
+        .filter(|l| !l.contains("\"tool_use\"") && !l.contains("\"tool_result\""))
+        .collect();
+    assert_eq!(claude.len(), 7);
+    let parser = claude_at(&claude, &sb);
+    assert_eq!(parser.tokens().total(), Some(37_220));
+    assert_eq!(parser.total_steps(), 0);
+    assert!(parser.finish().is_empty());
+    let codex: Vec<String> = fixture("codex-json-sample.jsonl", &sb)
+        .into_iter()
+        .filter(|l| !l.contains("command_execution"))
+        .collect();
+    assert_eq!(codex.len(), 5);
+    let parser = codex_at(&codex, &sb);
+    assert_eq!(parser.tokens().total(), Some(46_541));
+    assert!(parser.finish().is_empty());
+}
+
+#[test]
+fn a_closing_line_with_no_tool_word_in_it_is_read() {
+    let (_repo, sb) = sandbox();
+    // Claude's closing line passed the old filter only because its usage happens to hold `server_tool_use`.
+    let last = fixture("claude-stream-ids.jsonl", &sb).pop().unwrap();
+    let bare = last.replace(
+        r#""server_tool_use":{"web_fetch_requests":0,"web_search_requests":0},"#,
+        "",
+    );
+    assert!(!bare.contains("tool_"), "{bare}");
+    assert_eq!(claude_tokens(&[bare], &sb).total(), Some(37_220));
+    // Spaced as another writer of JSON might space it.
+    let spaced = r#"{"type": "result", "usage": {"input_tokens": 1, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 4}}"#;
+    assert_eq!(claude_tokens(&[spaced.to_string()], &sb).total(), Some(10));
+    // Codex's closing line has no item in it.
+    let last = fixture("codex-json-sample.jsonl", &sb).pop().unwrap();
+    assert!(!last.contains("\"item"), "{last}");
+    assert!(codex_tokens(&[last], &sb).complete);
+}
+
+#[test]
+fn a_closing_line_that_is_not_a_total_is_not_complete() {
+    let (_repo, sb) = sandbox();
+    for line in [
+        r#"{"type":"result","subtype":"error_during_execution"}"#,
+        r#"{"type":"result","usage":"x"}"#,
+        r#"{"type":"result","usage":[1,2]}"#,
+        r#"{"type":"assistant","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":2},"content":[{"type":"text","text":"result"}]}}"#,
+    ] {
+        assert_eq!(
+            claude_tokens(&[line.to_string()], &sb),
+            Tokens::none(),
+            "{line}"
+        );
+    }
+    for line in [
+        r#"{"type":"turn.completed"}"#,
+        r#"{"type":"turn.completed","usage":null}"#,
+        r#"{"type":"turn.failed","usage":{"input_tokens":1}}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"turn.completed"},"usage":{"input_tokens":1}}"#,
+    ] {
+        assert_eq!(
+            codex_tokens(&[line.to_string()], &sb),
+            Tokens::none(),
+            "{line}"
+        );
+    }
+    // Counts that are not whole numbers a program could report are not taken as counts.
+    let odd = r#"{"type":"result","usage":{"input_tokens":-4,"cache_creation_input_tokens":1e30,"cache_read_input_tokens":"3","output_tokens":2.5}}"#;
+    let tokens = claude_tokens(&[odd.to_string()], &sb);
+    assert!(tokens.complete);
+    assert_eq!(
+        (
+            tokens.fresh_in,
+            tokens.cache_write,
+            tokens.cache_read,
+            tokens.output
+        ),
+        (None, None, None, None)
+    );
+}
+
+// --- When each step happened ---------------------------------------------------------------------------------
+
+#[test]
+fn a_step_has_the_time_it_was_seen_and_the_time_of_its_result() {
+    let (_repo, sb) = sandbox();
+    let times = |steps: &[Step]| -> Vec<(Option<u32>, Option<u32>)> {
+        steps.iter().map(|s| (s.seen_ms, s.result_ms)).collect()
+    };
+    // Line i at i tenths of a second. Claude: Read a.txt called on line 1 and answered on 2; `ls` called on 3
+    // and answered on 7; Read missing.txt called on 4 and answered on 5.
+    let claude = claude_at(&fixture("claude-stream-ids.jsonl", &sb), &sb).finish();
+    assert_eq!(
+        times(&claude),
+        [
+            (Some(100), Some(200)),
+            (Some(300), Some(700)),
+            (Some(400), Some(500))
+        ]
+    );
+    // Codex: each command starts on one line and completes on the next.
+    let codex = codex_at(&fixture("codex-json-sample.jsonl", &sb), &sb).finish();
+    assert_eq!(
+        times(&codex),
+        [
+            (Some(300), Some(400)),
+            (Some(500), Some(600)),
+            (Some(700), Some(800))
+        ]
+    );
+    // A call with no result has no time for one.
+    let mut cut = fixture("claude-stream-ids.jsonl", &sb);
+    cut.truncate(4);
+    assert_eq!(
+        times(&claude_at(&cut, &sb).finish()),
+        [(Some(100), Some(200)), (Some(300), None)]
+    );
+    let mut cut = fixture("codex-json-sample.jsonl", &sb);
+    cut.truncate(4);
+    assert_eq!(times(&codex_at(&cut, &sb).finish()), [(Some(300), None)]);
+    // A Codex item first seen completed was seen when its result came; one with no id is its own step.
+    let lines: Vec<String> = [
+        r#"{"type":"item.completed","item":{"id":"i9","type":"command_execution","command":"ls","status":"completed","exit_code":0}}"#,
+        r#"{"type":"item.started","item":{"type":"web_search"}}"#,
+        r#"{"type":"item.completed","item":{"type":"web_search"}}"#,
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(
+        times(&codex_at(&lines, &sb).finish()),
+        [
+            (Some(0), Some(0)),
+            (Some(100), None),
+            (Some(200), Some(200))
+        ]
+    );
+    // A moment before the turn's start is the start, and one too far for the record is the most it holds.
+    let start = Instant::now() + Duration::from_secs(10);
+    let mut parser = ClaudeParser::new(&sb, start);
+    let mut lines = fixture("claude-read-src.jsonl", &sb).into_iter();
+    parser.line_at(&lines.next().unwrap(), start);
+    parser.line_at(&lines.next().unwrap(), start - Duration::from_secs(5));
+    parser.line_at(
+        &lines.next().unwrap(),
+        start + Duration::from_millis(u64::from(u32::MAX) + 1),
+    );
+    assert_eq!(times(&parser.finish()), [(Some(0), Some(u32::MAX))]);
+    // Fed by `line`, at the moment each line arrives: still in order.
+    let mut parser = ClaudeParser::new(&sb, Instant::now());
+    for line in fixture("claude-stream-ids.jsonl", &sb) {
+        parser.line(&line);
+    }
+    for (seen, result) in times(&parser.finish()) {
+        assert!(seen.unwrap() <= result.unwrap());
+    }
+}
+
+// --- What each step named ------------------------------------------------------------------------------------
+
+#[test]
+fn a_shell_step_names_every_tracked_file_in_order() {
+    let (repo, sb) = sandbox();
+    let commands = [
+        "cat a.txt b.txt",
+        "cat b.txt a.txt",
+        // Named twice, once with ./ before it: once, at its first place.
+        "cat a.txt ./b.txt a.txt b.txt",
+        // A script inside the command names its files where the script stands.
+        "cat a.txt && bash -c 'cat src/a.txt b.txt'",
+        "cat src/a.txt",
+        "ls",
+        "cat untracked.txt",
+    ];
+    let steps = claude_steps(bash_stream(&commands).into_iter(), &sb);
+    assert_eq!(
+        nameds(&steps),
+        [
+            vec!["a.txt", "b.txt"],
+            vec!["b.txt", "a.txt"],
+            vec!["a.txt", "b.txt"],
+            vec!["a.txt", "src/a.txt", "b.txt"],
+            vec!["src/a.txt"],
+            vec![],
+            vec![],
+        ]
+    );
+    // Each name has its blob at the base.
+    assert_eq!(
+        steps[0].named,
+        [named(&repo, "a.txt"), named(&repo, "b.txt")]
+    );
+    // `target` keeps its meaning: a tracked file only when the command names exactly one.
+    assert_eq!(
+        targets(&steps),
+        [
+            Target::Outside,
+            Target::Outside,
+            Target::Outside,
+            Target::Outside,
+            tracked(&repo, "src/a.txt"),
+            Target::Outside,
+            Target::Outside,
+        ]
+    );
+    // Codex gives a command as one string, or as its words; a script among the words is read too.
+    let command = |id: &str, command: serde_json::Value| {
+        serde_json::json!({"type": "item.completed", "item": {"id": id, "type": "command_execution",
+            "command": command, "status": "completed", "exit_code": 0}})
+        .to_string()
+    };
+    let lines = vec![
+        command("i1", serde_json::json!("/bin/zsh -lc 'cat b.txt a.txt'")),
+        command("i2", serde_json::json!(["bash", "-lc", "cat b.txt a.txt"])),
+        command("i3", serde_json::json!(["cat", "a.txt", "src/a.txt"])),
+        command("i4", serde_json::json!(["bash", "-lc", "cat a.txt"])),
+    ];
+    let steps = codex_steps(lines.into_iter(), &sb);
+    assert_eq!(
+        nameds(&steps),
+        [
+            vec!["b.txt", "a.txt"],
+            vec!["b.txt", "a.txt"],
+            vec!["a.txt", "src/a.txt"],
+            vec!["a.txt"],
+        ]
+    );
+    // As before, a command given as words is not split further for its target.
+    assert!(steps.iter().all(|s| s.target == Target::Outside));
+}
+
+#[test]
+fn a_file_step_names_its_tracked_file_and_nothing_else() {
+    let (repo, sb) = sandbox();
+    // Read a.txt, `ls`, Read missing.txt.
+    let claude = claude_steps(fixture("claude-stream-ids.jsonl", &sb).into_iter(), &sb);
+    assert_eq!(nameds(&claude), [vec!["a.txt"], vec![], vec![]]);
+    assert_eq!(claude[0].named, [named(&repo, "a.txt")]);
+    // Everything outside names nothing.
+    let outside = claude_steps(fixture("claude-outside.jsonl", &sb).into_iter(), &sb);
+    assert!(outside.iter().all(|s| s.named.is_empty()), "{outside:?}");
+    // Codex's file changes name the file each changes, when it is tracked.
+    let codex = codex_steps(fixture("codex-marker.jsonl", &sb).into_iter(), &sb);
+    for step in &codex {
+        match &step.target {
+            Target::TrackedFile { path, blob } => assert_eq!(
+                step.named,
+                [Named {
+                    path: path.clone(),
+                    blob: blob.clone()
+                }]
+            ),
+            Target::Outside if step.tool != Tool::Shell => assert!(step.named.is_empty()),
+            Target::Outside => {}
+        }
+    }
+    assert_eq!(codex[2].named, [named(&repo, "src/a.txt")]);
 }
 
 #[test]
@@ -381,8 +816,8 @@ fn odd_lines_are_passed_over_without_a_panic() {
 #[test]
 fn parsers_retain_at_most_one_hundred_thousand_steps_and_keep_counting() {
     let (_repo, sb) = sandbox();
-    let mut claude = ClaudeParser::new(&sb);
-    let mut codex = CodexParser::new(&sb);
+    let mut claude = ClaudeParser::new(&sb, Instant::now());
+    let mut codex = CodexParser::new(&sb, Instant::now());
     for n in 0..100_005 {
         claude.line(&format!(r#"{{"type":"assistant","message":{{"id":"m{n}","content":[{{"type":"tool_use","id":"t{n}","name":"Read","input":{{"file_path":"a.txt"}}}}]}}}}"#));
         codex.line(&format!(r#"{{"type":"item.completed","item":{{"id":"i{n}","type":"command_execution","command":"cat a.txt","status":"completed","exit_code":0}}}}"#));
@@ -499,7 +934,7 @@ fn rss_probe() {
         }
         print "STREAM_PAIRS=$n\n";
     "#;
-    let mut parser = ClaudeParser::new(&sb);
+    let mut parser = ClaudeParser::new(&sb, Instant::now());
     let mut pairs = None;
     let mut longest = 0;
     let status = sb

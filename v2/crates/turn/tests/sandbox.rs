@@ -112,6 +112,273 @@ fn a_push_from_the_sandbox_fails_even_to_a_path() {
     assert_eq!(repo.refs(), before);
 }
 
+/// Whether the repository at `dir` holds the object `id`.
+fn holds(dir: &std::path::Path, id: &str) -> bool {
+    common::git_raw(dir, &["cat-file", "-e", id])
+        .status
+        .success()
+}
+
+/// Writes `content` into the repository's objects, named by nothing, and returns its id.
+fn dangling_blob(repo: &Repo, content: &str) -> String {
+    let file = repo.scratch("dangling-content");
+    std::fs::write(&file, content).unwrap();
+    git(&repo.path, &["hash-object", "-w", file.to_str().unwrap()])
+}
+
+/// An item whose repository holds its base, a later commit on another branch with a blob of its own, and a blob
+/// nothing names. Returns the repository, the later commit, its new blob, the dangling blob and the base's tree.
+fn item_with_strangers() -> (Repo, String, String, String, String) {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let base = repo.base.clone();
+    let later = repo.branch_commit("other", &base, |r| {
+        r.write("b.txt", "only on the other branch\n")
+    });
+    let later_blob = git(&repo.path, &["rev-parse", &format!("{later}:b.txt")]);
+    let dangling = dangling_blob(&repo, "named by nothing\n");
+    let tree = git(&repo.path, &["rev-parse", &format!("{base}^{{tree}}")]);
+    // The control: the item's repository holds every one of them.
+    for id in [&later, &later_blob, &dangling, &tree] {
+        assert!(holds(&repo.path, id), "{id}");
+    }
+    (repo, later, later_blob, dangling, tree)
+}
+
+#[test]
+fn a_sandbox_holds_nothing_its_base_does_not_reach() {
+    let (repo, later, later_blob, dangling, tree) = item_with_strangers();
+    let sb = sandbox(&repo);
+    assert!(holds(&sb.dir, &tree), "the base's tree is missing");
+    assert!(holds(&sb.dir, &repo.base));
+    for id in [&later, &later_blob, &dangling] {
+        assert!(!holds(&sb.dir, id), "the sandbox holds {id}");
+    }
+}
+
+#[test]
+fn a_checks_clone_holds_nothing_its_commit_does_not_reach() {
+    use room::{CheckOrigin, CheckSpec};
+    let (repo, later, later_blob, dangling, tree) = item_with_strangers();
+    // The check runs where the room runs every check, and asks git there about each object. It passes only if
+    // the base's tree is there and none of the others is.
+    let command = format!(
+        "git cat-file -e {tree} && ! git cat-file -e {later} && ! git cat-file -e {later_blob} && \
+         ! git cat-file -e {dangling}"
+    );
+    let spec = CheckSpec {
+        command,
+        files: Vec::new(),
+        timeout_secs: 60,
+        origin: CheckOrigin::Outside,
+        wrong_artifacts: Vec::new(),
+        written_by: "person:test".to_string(),
+    };
+    let checks = repo.scratch("checks");
+    let frozen = turn::check::freeze(&repo.path, &repo.base, &spec, &checks).unwrap();
+    let verdict = turn::check::run_check(
+        &repo.path,
+        &repo.base,
+        &spec,
+        &frozen.check_hash,
+        &checks,
+        &repo.scratch("work"),
+    )
+    .unwrap();
+    assert!(verdict.passed, "{verdict:?}");
+    // The control: the same question asked at the later commit finds its own tree there, and so fails.
+    let at_later = turn::check::run_check(
+        &repo.path,
+        &later,
+        &spec,
+        &frozen.check_hash,
+        &checks,
+        &repo.scratch("work"),
+    )
+    .unwrap();
+    assert!(!at_later.passed, "{at_later:?}");
+}
+
+#[test]
+fn two_turns_at_one_item_do_not_share_an_answer() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let first =
+        Sandbox::create(&repo.path, &repo.base, &repo.scratch("first"), "room/i1/1").unwrap();
+    std::fs::write(first.dir.join("a.txt"), "the answer\n").unwrap();
+    git(&first.dir, &["commit", "-qam", "the answer"]);
+    let answer = first.head().unwrap();
+    let answer_blob = git(&first.dir, &["rev-parse", "HEAD:a.txt"]);
+    // Brought into the item's repository as the clock brings a turn's commit: fetched by its id, then named.
+    git(
+        &repo.path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "fetch",
+            "-q",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--no-recurse-submodules",
+            "--no-auto-maintenance",
+            "--",
+            first.dir.to_str().unwrap(),
+            &answer,
+        ],
+    );
+    git(
+        &repo.path,
+        &[
+            "update-ref",
+            "--no-deref",
+            "refs/heads/room/i1/1",
+            &answer,
+            "",
+        ],
+    );
+    // The control: the item's repository holds the answer now.
+    assert!(holds(&repo.path, &answer) && holds(&repo.path, &answer_blob));
+    let second =
+        Sandbox::create(&repo.path, &repo.base, &repo.scratch("second"), "room/i1/2").unwrap();
+    assert!(holds(&second.dir, &repo.base));
+    assert!(
+        !holds(&second.dir, &answer),
+        "the second turn holds the first's commit"
+    );
+    assert!(
+        !holds(&second.dir, &answer_blob),
+        "the second turn holds the first's answer"
+    );
+}
+
+#[test]
+fn a_base_that_is_not_a_branch_tip_can_still_be_cloned() {
+    let repo = Repo::new(&[("a.txt", "one\n")]);
+    repo.write("a.txt", "two\n");
+    let older = repo.commit("two");
+    repo.write("a.txt", "three\n");
+    let tip = repo.commit("three");
+    let sb = Sandbox::create(&repo.path, &older, &repo.scratch("sandbox"), "room/i1/1").unwrap();
+    assert_eq!(sb.base(), older);
+    assert_eq!(sb.head().unwrap(), older);
+    assert_eq!(
+        std::fs::read_to_string(sb.dir.join("a.txt")).unwrap(),
+        "two\n"
+    );
+    // It holds what the older commit reaches, its parent among it, and not what came after.
+    assert!(holds(&sb.dir, &repo.base));
+    assert!(!holds(&sb.dir, &tip));
+    // A name means what it means in the item's repository.
+    let named = Sandbox::create(&repo.path, "main~1", &repo.scratch("named"), "room/i1/2").unwrap();
+    assert_eq!(named.base(), older);
+}
+
+#[test]
+fn a_sandbox_of_a_sha256_repository_is_one_too() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("repo");
+    std::fs::create_dir(&path).unwrap();
+    git(
+        &path,
+        &["init", "-q", "-b", "main", "--object-format=sha256"],
+    );
+    std::fs::write(path.join("a.txt"), "hello\n").unwrap();
+    git(&path, &["add", "a.txt"]);
+    git(&path, &["commit", "-qm", "base"]);
+    let base = git(&path, &["rev-parse", "HEAD"]);
+    assert_eq!(base.len(), 64);
+    let sb = Sandbox::create(&path, &base, &tmp.path().join("sandbox"), "room/i1/1").unwrap();
+    assert_eq!(sb.head().unwrap(), base);
+    assert_eq!(
+        git(&sb.dir, &["rev-parse", "--show-object-format"]),
+        "sha256"
+    );
+}
+
+#[test]
+fn a_repository_named_by_a_relative_path_is_cloned_from_where_it_is() {
+    // The repository and the sandbox sit deeper than this process's working directory, so a path that climbs
+    // from here to the top and down again, read from the sandbox instead, would stop short of the top and name
+    // nothing.
+    let here = std::env::current_dir().unwrap();
+    let up = here.components().count() - 1;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut deep = tmp.path().to_path_buf();
+    for n in 0..=up {
+        deep.push(format!("d{n}"));
+    }
+    let path = deep.join("repo");
+    std::fs::create_dir_all(&path).unwrap();
+    git(&path, &["init", "-q", "-b", "main"]);
+    std::fs::write(path.join("a.txt"), "hello\n").unwrap();
+    git(&path, &["add", "a.txt"]);
+    git(&path, &["commit", "-qm", "base"]);
+    let base = git(&path, &["rev-parse", "HEAD"]);
+    let relative = std::path::PathBuf::from(format!(
+        "{}{}",
+        "../".repeat(up),
+        path.to_str().unwrap().trim_start_matches('/')
+    ));
+    assert!(relative.is_relative() && relative.join("a.txt").exists());
+    // Made empty beforehand, which `create` takes, so that the control can look from inside it: from there the
+    // same words name nothing.
+    let sandbox_dir = deep.join("sandbox");
+    std::fs::create_dir(&sandbox_dir).unwrap();
+    assert!(!sandbox_dir.join(&relative).exists());
+    let sb = Sandbox::create(&relative, &base, &sandbox_dir, "room/i1/1").unwrap();
+    assert_eq!(sb.head().unwrap(), base);
+}
+
+/// What a clone's own settings must say: who commits, and that it runs nothing and reaches nothing.
+const ROOM_SETTINGS: [(&str, &str); 9] = [
+    ("user.name", "yak turn"),
+    ("user.email", "turn@yak.invalid"),
+    ("commit.gpgsign", "false"),
+    ("tag.gpgsign", "false"),
+    ("core.hooksPath", "/dev/null"),
+    ("protocol.allow", "never"),
+    ("credential.helper", ""),
+    ("maintenance.auto", "false"),
+    ("gc.auto", "0"),
+];
+
+#[test]
+fn a_sandbox_has_the_rooms_settings_its_branch_and_nothing_else() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    repo.branch_commit("other", &repo.base.clone(), |r| r.write("b.txt", "b\n"));
+    // A tag on the base itself, annotated and not, is the item's name for it, and not the turn's.
+    git(&repo.path, &["tag", "plain", &repo.base]);
+    git(
+        &repo.path,
+        &["tag", "-a", "-m", "annotated", "annotated", &repo.base],
+    );
+    let sb = sandbox(&repo);
+    let local = |key: &str| git(&sb.dir, &["config", "--local", "--get", key]);
+    for (key, value) in ROOM_SETTINGS {
+        assert_eq!(local(key), value, "{key}");
+    }
+    // No remote and nothing that tracks one; one branch, the turn's, and no other name for anything.
+    let all = git(&sb.dir, &["config", "--local", "--list"]);
+    assert!(
+        !all.contains("remote.") && !all.contains("branch."),
+        "{all}"
+    );
+    assert_eq!(
+        git(&sb.dir, &["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/room/i1/1"
+    );
+    // A worker that rewrites them all has them put back by `reclaim`.
+    for (key, _) in ROOM_SETTINGS {
+        let mut set = Command::new("git");
+        set.arg("-C")
+            .arg(&sb.dir)
+            .args(["config", key, "worker's own"]);
+        assert!(set.status().unwrap().success());
+    }
+    sb.reclaim().unwrap();
+    for (key, value) in ROOM_SETTINGS {
+        assert_eq!(local(key), value, "{key} after reclaim");
+    }
+}
+
 #[test]
 fn create_refuses_an_unknown_commit_and_a_bad_branch() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);

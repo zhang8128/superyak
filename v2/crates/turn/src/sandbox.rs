@@ -210,8 +210,9 @@ pub struct RunStatus {
 
 impl Sandbox {
     /// Clones `repo` into `dir` (which must not exist, or be empty) and checks out a new `branch` at
-    /// `base_commit`. The clone has no remote, cannot fetch or push over any transport, runs no hooks and
-    /// commits as the turn.
+    /// `base_commit`. The clone holds the objects `base_commit` reaches and no other object of `repo`: not
+    /// another turn's commit brought into it, not another branch, not an object nothing names. It has no remote,
+    /// cannot fetch or push over any transport, runs no hooks and commits as the turn.
     pub fn create(
         repo: &Path,
         base_commit: &str,
@@ -237,21 +238,40 @@ impl Sandbox {
                 )));
             }
         }
-        // A name means what it means in the item's repository: the clone loses the remote's branch names.
+        // A name means what it means in the item's repository.
         let base = rev_parse(repo, &format!("{base_commit}^{{commit}}"))?;
+        let repo = std::path::absolute(repo).map_err(io("find the item's repository"))?;
         let mut made = Remove(Some(dir.to_path_buf()));
-        let mut clone = git_command();
-        clone.args([
-            "clone",
-            "-q",
-            "--no-hardlinks",
-            "--local",
-            "--no-checkout",
-            "--",
-        ]);
-        clone.arg(repo).arg(dir);
-        output(clone, "clone")?;
-        git(dir, &["remote", "remove", "origin"])?;
+        // An empty repository of the item's kind of object id, given the base by its id: git sends a commit asked
+        // for with what it reaches, and nothing else. A clone would copy every object the repository holds.
+        let format = if base.len() == 64 { "sha256" } else { "sha1" };
+        let mut init = git_command();
+        init.args(["init", "-q", &format!("--object-format={format}"), "--"])
+            .arg(dir);
+        output(init, "init")?;
+        let mut fetch = git_command();
+        fetch
+            .arg("-C")
+            .arg(dir)
+            // Version 2 of git's protocol sends any object asked for by its id, a base that is no branch's tip
+            // among them; the file protocol is allowed for this one fetch, before the clone's own settings
+            // forbid every protocol.
+            .args([
+                "-c",
+                "protocol.version=2",
+                "-c",
+                "protocol.file.allow=always",
+                "fetch",
+                "-q",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--no-recurse-submodules",
+                "--no-auto-maintenance",
+                "--",
+            ])
+            .arg(&repo)
+            .arg(&base);
+        output(fetch, "fetch the base")?;
         for (key, value) in [
             ("user.name", TURN_NAME),
             ("user.email", TURN_EMAIL),

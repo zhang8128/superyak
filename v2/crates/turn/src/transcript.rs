@@ -2,13 +2,15 @@
 //! read.
 //!
 //! Nothing from the stream survives as text (spec rule 9). A step keeps its kind of tool, whether the call
-//! worked, its cost, and one name at most: a file tracked at the sandbox's base commit, with that file's blob
-//! id. Any other target is `Outside`, with no name. The parsers take one line at a time and keep only the steps
-//! and the calls still waiting for their results.
+//! worked, its cost, when it was called and answered, its target (a file tracked at the sandbox's base commit,
+//! with that file's blob id, or `Outside`, with no name), and every tracked file it named. The parsers take one
+//! line at a time and keep only the steps, the calls still waiting for their results, and the program's closing
+//! total for the whole turn.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
-use room::{Step, Target, Tool};
+use room::{Named, Step, Target, Tokens, Tool};
 use serde_json::Value;
 
 use crate::Sandbox;
@@ -22,7 +24,7 @@ pub const MAX_STEPS: usize = 100_000;
 
 /// The Claude stream's steps (`claude -p --output-format stream-json --verbose`).
 pub fn claude_steps(lines: impl Iterator<Item = String>, sandbox: &Sandbox) -> Vec<Step> {
-    let mut parser = ClaudeParser::new(sandbox);
+    let mut parser = ClaudeParser::new(sandbox, Instant::now());
     for line in lines {
         parser.line(&line);
     }
@@ -31,7 +33,7 @@ pub fn claude_steps(lines: impl Iterator<Item = String>, sandbox: &Sandbox) -> V
 
 /// The Codex stream's steps (`codex exec --json`).
 pub fn codex_steps(lines: impl Iterator<Item = String>, sandbox: &Sandbox) -> Vec<Step> {
-    let mut parser = CodexParser::new(sandbox);
+    let mut parser = CodexParser::new(sandbox, Instant::now());
     for line in lines {
         parser.line(&line);
     }
@@ -98,6 +100,29 @@ impl Tracked {
         self.words_target(&command_words(command))
     }
 
+    /// Every tracked file the words name, in the order named, each once, at its first place.
+    fn words_named(&self, words: &[String]) -> Vec<Named> {
+        let mut seen = HashSet::new();
+        let mut named = Vec::new();
+        for word in words {
+            if let Some((path, blob)) = self.resolve(word)
+                && seen.insert(path)
+            {
+                named.push(Named {
+                    path: path.to_string(),
+                    blob: blob.to_string(),
+                });
+            }
+        }
+        named
+    }
+
+    /// What a shell command given as one string touched: its target, and every tracked file it named.
+    fn shell(&self, command: &str) -> (Target, Vec<Named>) {
+        let words = command_words(command);
+        (self.words_target(&words), self.words_named(&words))
+    }
+
     fn words_target(&self, words: &[String]) -> Target {
         let mut found: Option<(&str, &str)> = None;
         for word in words {
@@ -151,29 +176,103 @@ impl Tracked {
 /// the script's words.
 fn command_words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
-    expand(command, 0, &mut words);
+    expand(split_words(command), 0, &mut words);
     words
 }
 
-fn expand(command: &str, depth: u32, out: &mut Vec<String>) {
-    let words = split_words(command);
-    for (i, word) in words.iter().enumerate() {
-        let shell = word
-            .rsplit('/')
-            .next()
-            .is_some_and(|n| matches!(n, "sh" | "bash" | "zsh" | "dash" | "ksh"));
-        let flag = words
-            .get(i + 1)
-            .is_some_and(|f| f.starts_with('-') && !f.starts_with("--") && f.contains('c'));
-        if shell
-            && flag
-            && depth < SHELL_DEPTH
-            && let Some(script) = words.get(i + 2)
-        {
-            expand(script, depth + 1, out);
+/// `words` into `out`, each script that a shell is given with `-c` followed at once by the script's own words, so
+/// that the words come in the order the command names things in.
+fn expand(words: Vec<String>, depth: u32, out: &mut Vec<String>) {
+    let script: Vec<bool> = (0..words.len())
+        .map(|i| {
+            let shell = i >= 2
+                && words[i - 2]
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|n| matches!(n, "sh" | "bash" | "zsh" | "dash" | "ksh"));
+            let flag = i >= 1 && {
+                let f = &words[i - 1];
+                f.starts_with('-') && !f.starts_with("--") && f.contains('c')
+            };
+            shell && flag && depth < SHELL_DEPTH
+        })
+        .collect();
+    for (word, script) in words.into_iter().zip(script) {
+        if script {
+            let inner = split_words(&word);
+            out.push(word);
+            expand(inner, depth + 1, out);
+        } else {
+            out.push(word);
         }
     }
-    out.extend(words);
+}
+
+/// A file tool's names: the one file it was given, when that is tracked.
+fn named_of(target: &Target) -> Vec<Named> {
+    match target {
+        Target::TrackedFile { path, blob } => vec![Named {
+            path: path.clone(),
+            blob: blob.clone(),
+        }],
+        Target::Outside => Vec::new(),
+    }
+}
+
+/// Milliseconds from the turn's start to `at`: 0 for a moment before the start, and at most what a step holds.
+fn ms(start: Instant, at: Instant) -> u32 {
+    clamp(u64::try_from(at.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX))
+}
+
+/// A count in a closing total: a whole number a program could report, or nothing.
+fn count(usage: &Value, key: &str) -> Option<u64> {
+    usage.get(key).and_then(Value::as_u64)
+}
+
+/// Claude's closing total, the `usage` of its `result` line. Its input is three parts, none inside another:
+/// fresh input (`input_tokens`), cache writes and cache reads. Thinking is a part of the output, and is kept as
+/// the reasoning part.
+fn claude_total(usage: &Value) -> Tokens {
+    Tokens {
+        fresh_in: count(usage, "input_tokens"),
+        cache_write: count(usage, "cache_creation_input_tokens"),
+        cache_read: count(usage, "cache_read_input_tokens"),
+        output: count(usage, "output_tokens"),
+        reasoning: usage
+            .get("output_tokens_details")
+            .and_then(|d| count(d, "thinking_tokens")),
+        complete: true,
+    }
+}
+
+/// Codex's closing total, the `usage` of its `turn.completed` line. Its `input_tokens` is the whole input, and
+/// holds the cached part and the cache-write part (see `the_closing_total_is_the_turns_tokens` in the tests for
+/// how that was established, and how far). The fresh part is what is left, and is unknown unless all three were
+/// given; when the parts come to more than the whole, the reading is wrong for that line, and the fresh part is
+/// unknown rather than a guess. Reasoning is a part of the output.
+fn codex_total(usage: &Value) -> Tokens {
+    let input = count(usage, "input_tokens");
+    let cache_read = count(usage, "cached_input_tokens");
+    let cache_write = count(usage, "cache_write_input_tokens");
+    let fresh_in = match (input, cache_read, cache_write) {
+        (Some(input), Some(read), Some(write)) => {
+            input.checked_sub(read).and_then(|n| n.checked_sub(write))
+        }
+        _ => None,
+    };
+    Tokens {
+        fresh_in,
+        cache_write,
+        cache_read,
+        output: count(usage, "output_tokens"),
+        reasoning: count(usage, "reasoning_output_tokens"),
+        complete: true,
+    }
+}
+
+/// The `usage` of a closing line, when it has one that can hold counts.
+fn usage(event: &Value) -> Option<&Value> {
+    event.get("usage").filter(|u| u.is_object())
 }
 
 /// Splits like a POSIX shell, roughly: quotes and backslashes are honoured, and `|&;<>()` end a word.
@@ -263,8 +362,9 @@ impl Steps {
     fn push(
         &mut self,
         tool: Tool,
-        target: Target,
+        (target, named): (Target, Vec<Named>),
         tokens: (Option<u32>, Option<u32>),
+        seen_ms: u32,
     ) -> Option<usize> {
         self.count(1);
         if self.full() {
@@ -279,12 +379,18 @@ impl Steps {
             ok: false,
             tokens_in: tokens.0,
             tokens_out: tokens.1,
-            // What a step named and when it was seen and answered are Task 3's.
-            named: Vec::new(),
-            seen_ms: None,
+            named,
+            seen_ms: Some(seen_ms),
             result_ms: None,
         });
         Some(index)
+    }
+
+    /// The step at `index` was answered at `result_ms`, and worked or not.
+    fn settle(&mut self, index: usize, ok: bool, result_ms: u32) {
+        let step = &mut self.items[index];
+        step.ok = ok;
+        step.result_ms = Some(result_ms);
     }
 }
 
@@ -292,33 +398,57 @@ impl Steps {
 /// whose result never comes is not ok.
 pub struct ClaudeParser {
     tracked: Tracked,
+    start: Instant,
     steps: Steps,
     waiting: HashMap<String, VecDeque<usize>>,
     counted: HashSet<String>,
+    tokens: Tokens,
 }
 
 impl ClaudeParser {
-    pub fn new(sandbox: &Sandbox) -> ClaudeParser {
+    /// A parser for a turn that started at `start`: each step's times are counted from it.
+    pub fn new(sandbox: &Sandbox, start: Instant) -> ClaudeParser {
         ClaudeParser {
             tracked: Tracked::of(sandbox),
+            start,
             steps: Steps::default(),
             waiting: HashMap::new(),
             counted: HashSet::new(),
+            tokens: Tokens::none(),
         }
     }
 
+    /// The program's closing total for the whole turn, the last one it gave, and `Tokens::none()` if it gave
+    /// none: what each message cost on the way is not summed in its place.
+    pub fn tokens(&self) -> Tokens {
+        self.tokens.clone()
+    }
+
+    /// One line of the stream, as it arrives.
     pub fn line(&mut self, line: &str) {
-        // Every line that matters carries a tool_use block or a tool_result; most of a long stream does not.
-        if !line.contains("tool_") {
+        self.line_at(line, Instant::now());
+    }
+
+    /// One line of the stream, which arrived at `at`.
+    pub fn line_at(&mut self, line: &str, at: Instant) {
+        // Every line that matters carries a tool_use block, a tool_result, or is the closing `result`; most of a
+        // long stream is none of them.
+        if !line.contains("tool_") && !line.contains("\"result\"") {
             return;
         }
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             return;
         };
         let message = event.get("message").unwrap_or(&Value::Null);
+        let at = ms(self.start, at);
         match text(&event, "type") {
-            Some("assistant") => self.calls(message),
-            Some("user") => self.results(message),
+            Some("assistant") => self.calls(message, at),
+            Some("user") => self.results(message, at),
+            Some("result") => {
+                if let Some(usage) = usage(&event) {
+                    self.tokens = claude_total(usage);
+                }
+            }
             _ => {}
         }
     }
@@ -332,7 +462,12 @@ impl ClaudeParser {
         self.steps.items
     }
 
-    fn calls(&mut self, message: &Value) {
+    /// The steps so far, taken out: for the worker, which hands them on however its run ends.
+    pub(crate) fn take_steps(&mut self) -> Vec<Step> {
+        std::mem::take(&mut self.steps.items)
+    }
+
+    fn calls(&mut self, message: &Value, at: u32) {
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return;
         };
@@ -346,7 +481,7 @@ impl ClaudeParser {
                 continue;
             }
             let input = block.get("input").unwrap_or(&Value::Null);
-            let (tool, target) =
+            let (tool, touched) =
                 claude_call(text(block, "name").unwrap_or(""), input, &self.tracked);
             let cost = if first {
                 self.cost(message)
@@ -354,7 +489,7 @@ impl ClaudeParser {
                 (None, None)
             };
             first = false;
-            let index = self.steps.push(tool, target, cost);
+            let index = self.steps.push(tool, touched, cost, at);
             if let (Some(id), Some(index)) = (text(block, "id"), index) {
                 self.waiting
                     .entry(id.to_string())
@@ -388,7 +523,7 @@ impl ClaudeParser {
         (tokens_in, n("output_tokens").map(clamp))
     }
 
-    fn results(&mut self, message: &Value) {
+    fn results(&mut self, message: &Value, at: u32) {
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return;
         };
@@ -407,16 +542,17 @@ impl ClaudeParser {
                 self.waiting.remove(id);
             }
             if let Some(index) = index {
-                self.steps.items[index].ok =
-                    block.get("is_error").and_then(Value::as_bool) != Some(true);
+                let ok = block.get("is_error").and_then(Value::as_bool) != Some(true);
+                self.steps.settle(index, ok, at);
             }
         }
     }
 }
 
-fn claude_call(name: &str, input: &Value, tracked: &Tracked) -> (Tool, Target) {
+/// A Claude tool call's kind, its target and the tracked files it named.
+fn claude_call(name: &str, input: &Value, tracked: &Tracked) -> (Tool, (Target, Vec<Named>)) {
     let path = |key: &str| text(input, key).map_or(Target::Outside, |p| tracked.target(p));
-    match name {
+    let (tool, target) = match name {
         "Read" => (Tool::Read, path("file_path")),
         "NotebookRead" => (Tool::Read, path("notebook_path")),
         "Edit" | "MultiEdit" => (Tool::Edit, path("file_path")),
@@ -424,42 +560,69 @@ fn claude_call(name: &str, input: &Value, tracked: &Tracked) -> (Tool, Target) {
         "Write" => (Tool::Write, path("file_path")),
         "Grep" => (Tool::Search, path("path")),
         "Glob" | "LS" => (Tool::Search, Target::Outside),
-        "Bash" => (
-            Tool::Shell,
-            text(input, "command").map_or(Target::Outside, |c| tracked.shell_target(c)),
-        ),
+        "Bash" => {
+            let touched =
+                text(input, "command").map_or((Target::Outside, Vec::new()), |c| tracked.shell(c));
+            return (Tool::Shell, touched);
+        }
         "WebFetch" => (Tool::Read, Target::Outside),
         "WebSearch" => (Tool::Search, Target::Outside),
         _ => (Tool::Other, Target::Outside),
-    }
+    };
+    let named = named_of(&target);
+    (tool, (target, named))
 }
 
 /// Codex's stream, a line at a time. An item becomes its steps when first seen and is settled when completed.
 /// Codex gives tokens only for a whole turn, so its steps carry none.
 pub struct CodexParser {
     tracked: Tracked,
+    start: Instant,
     steps: Steps,
     open: HashMap<String, Vec<usize>>,
     closed: HashSet<String>,
+    tokens: Tokens,
 }
 
 impl CodexParser {
-    pub fn new(sandbox: &Sandbox) -> CodexParser {
+    /// A parser for a turn that started at `start`: each step's times are counted from it.
+    pub fn new(sandbox: &Sandbox, start: Instant) -> CodexParser {
         CodexParser {
             tracked: Tracked::of(sandbox),
+            start,
             steps: Steps::default(),
             open: HashMap::new(),
             closed: HashSet::new(),
+            tokens: Tokens::none(),
         }
     }
 
+    /// The program's closing total for the whole turn, the last one it gave, and `Tokens::none()` if it gave
+    /// none.
+    pub fn tokens(&self) -> Tokens {
+        self.tokens.clone()
+    }
+
+    /// One line of the stream, as it arrives.
     pub fn line(&mut self, line: &str) {
-        if !line.contains("\"item") {
+        self.line_at(line, Instant::now());
+    }
+
+    /// One line of the stream, which arrived at `at`.
+    pub fn line_at(&mut self, line: &str, at: Instant) {
+        if !line.contains("\"item") && !line.contains("turn.completed") {
             return;
         }
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             return;
         };
+        if text(&event, "type") == Some("turn.completed") {
+            if let Some(usage) = usage(&event) {
+                self.tokens = codex_total(usage);
+            }
+            return;
+        }
+        let at = ms(self.start, at);
         let Some(kind) = text(&event, "type").and_then(|t| t.strip_prefix("item.")) else {
             return;
         };
@@ -488,10 +651,12 @@ impl CodexParser {
         }
         let Some(id) = id.map(str::to_string) else {
             // An item with no id cannot be told from the next one: each such event is its own step.
-            let indices = self.start(what, item);
-            let ok = kind == "completed" && codex_ok(what, item);
-            for index in indices {
-                self.steps.items[index].ok = ok;
+            let indices = self.start(what, item, at);
+            if kind == "completed" {
+                let ok = codex_ok(what, item);
+                for index in indices {
+                    self.steps.settle(index, ok, at);
+                }
             }
             return;
         };
@@ -501,7 +666,7 @@ impl CodexParser {
         let indices = match self.open.get(&id) {
             Some(indices) => indices.clone(),
             None => {
-                let indices = self.start(what, item);
+                let indices = self.start(what, item, at);
                 self.open.insert(id.clone(), indices.clone());
                 indices
             }
@@ -509,7 +674,7 @@ impl CodexParser {
         if kind == "completed" {
             let ok = codex_ok(what, item);
             for index in indices {
-                self.steps.items[index].ok = ok;
+                self.steps.settle(index, ok, at);
             }
             self.open.remove(&id);
             self.closed.insert(id);
@@ -525,24 +690,36 @@ impl CodexParser {
         self.steps.items
     }
 
-    fn start(&mut self, what: &str, item: &Value) -> Vec<usize> {
+    /// The steps so far, taken out: for the worker, which hands them on however its run ends.
+    pub(crate) fn take_steps(&mut self) -> Vec<Step> {
+        std::mem::take(&mut self.steps.items)
+    }
+
+    /// An item's steps, first seen at `at`.
+    fn start(&mut self, what: &str, item: &Value, at: u32) -> Vec<usize> {
         let none = (None, None);
+        let nothing = || (Target::Outside, Vec::new());
         match what {
             "command_execution" => {
-                let target = match item.get("command") {
-                    Some(Value::String(command)) => self.tracked.shell_target(command),
+                let touched = match item.get("command") {
+                    Some(Value::String(command)) => self.tracked.shell(command),
                     Some(Value::Array(argv)) => {
                         let words: Vec<String> = argv
                             .iter()
                             .filter_map(Value::as_str)
                             .map(str::to_string)
                             .collect();
-                        self.tracked.words_target(&words)
+                        // Its target is read from the words as given, as it always was; what it named also
+                        // from any script among them.
+                        let target = self.tracked.words_target(&words);
+                        let mut expanded = Vec::new();
+                        expand(words, 0, &mut expanded);
+                        (target, self.tracked.words_named(&expanded))
                     }
-                    _ => Target::Outside,
+                    _ => nothing(),
                 };
                 self.steps
-                    .push(Tool::Shell, target, none)
+                    .push(Tool::Shell, touched, none, at)
                     .into_iter()
                     .collect()
             }
@@ -555,7 +732,7 @@ impl CodexParser {
                 if changes.is_empty() {
                     return self
                         .steps
-                        .push(Tool::Edit, Target::Outside, none)
+                        .push(Tool::Edit, nothing(), none, at)
                         .into_iter()
                         .collect();
                 }
@@ -569,18 +746,19 @@ impl CodexParser {
                         };
                         let target = text(change, "path")
                             .map_or(Target::Outside, |p| self.tracked.target(p));
-                        self.steps.push(tool, target, none)
+                        let named = named_of(&target);
+                        self.steps.push(tool, (target, named), none, at)
                     })
                     .collect()
             }
             "web_search" => self
                 .steps
-                .push(Tool::Search, Target::Outside, none)
+                .push(Tool::Search, nothing(), none, at)
                 .into_iter()
                 .collect(),
             _ => self
                 .steps
-                .push(Tool::Other, Target::Outside, none)
+                .push(Tool::Other, nothing(), none, at)
                 .into_iter()
                 .collect(),
         }
@@ -610,9 +788,28 @@ mod tests {
             ["cat", "a b", "c \"d\"", "e f", "g", "h", "i"]
         );
         assert_eq!(split_words(r#"echo "a\nb" ''"#), ["echo", "a\\nb", ""]);
+        // A script's words follow it at once, so the words keep the order the command names things in.
         assert_eq!(
             command_words("/bin/zsh -lc 'cat a.txt'"),
-            ["cat", "a.txt", "/bin/zsh", "-lc", "cat a.txt"]
+            ["/bin/zsh", "-lc", "cat a.txt", "cat", "a.txt"]
+        );
+        assert_eq!(
+            command_words("cat a && sh -c 'cat b; bash -c \"cat c\"' d"),
+            [
+                "cat",
+                "a",
+                "sh",
+                "-c",
+                "cat b; bash -c \"cat c\"",
+                "cat",
+                "b",
+                "bash",
+                "-c",
+                "cat c",
+                "cat",
+                "c",
+                "d"
+            ]
         );
     }
 }
