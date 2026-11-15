@@ -453,7 +453,9 @@ fn a_killed_clock_recovers() {
     kill_groups(&worker_groups(&r));
     clock.kill_group();
     sleep(Duration::from_secs(4)); // past the first lease
-    ok(&once_through(&r, &[&fix], &["--lease-secs", "3"]));
+    // The restart's own lease is the default: a 3 s lease can run out during the fixer's turn on a loaded
+    // machine, and the item would then pass as lease 3 (the Mac, under other load; Serenity 5aeea6c9).
+    ok(&once_through(&r, &[&fix], &[]));
     assert_eq!(state(&r, &id), "passed_verified");
     // What the repository's refs are is said with a failure: once, on a machine under load, the item passed and
     // not on lease 2, and this test's words alone could not say on which.
