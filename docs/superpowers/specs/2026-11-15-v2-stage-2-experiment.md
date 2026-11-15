@@ -105,8 +105,11 @@ first one's answer as an object.
   room starts making its sandbox to the moment its verdict is recorded. They hold the worker's whole run, the
   room's commit on a worker's behalf, bringing the commit in, and the check. A second look at a pass is timed
   and kept beside them, not in them: it is the room's sampling, not the turn's work. Time between turns, and
-  time waiting on the day's ceiling, is in no turn. A turn with no check, because it handed in nothing, ends
-  when that is recorded.
+  time waiting on the day's ceiling, is in no turn.
+- **A turn that hands in nothing is still checked,** on its base, as stage 1 built the room, and fails. That
+  check's time is in the turn's active seconds, because the room really spent it. An earlier draft said such
+  a turn had no check. A reader of the clock's code found that it has one. Whether the room should skip a
+  check it already knows will fail is a question for the room, not for this experiment.
 - Each step also keeps when its call was seen and when its result came.
 
 **What a record is tied to.** Enough to put a run's cost back together from its turns, and to say what was
