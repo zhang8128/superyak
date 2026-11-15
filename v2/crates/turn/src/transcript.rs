@@ -246,18 +246,18 @@ fn claude_total(usage: &Value) -> Tokens {
 }
 
 /// Codex's closing total, the `usage` of its `turn.completed` line. Its `input_tokens` is the whole input, and
-/// holds the cached part and the cache-write part (see `the_closing_total_is_the_turns_tokens` in the tests for
-/// how that was established, and how far). The fresh part is what is left, and is unknown unless all three were
-/// given; when the parts come to more than the whole, the reading is wrong for that line, and the fresh part is
-/// unknown rather than a guess. Reasoning is a part of the output.
+/// holds the cached part (see `the_closing_total_is_the_turns_tokens` in the tests for the measurement that
+/// shows it). The fresh part is what is left: input - cached - cache write. Where a cache write falls is not
+/// established, since every capture has it 0, so the fresh part is known only when the cache write was given
+/// and is 0; it is unknown unless all three were given, and when the cached part comes to more than the whole,
+/// the reading is wrong for that line, and the fresh part is unknown rather than a guess. Reasoning is a part of
+/// the output.
 fn codex_total(usage: &Value) -> Tokens {
     let input = count(usage, "input_tokens");
     let cache_read = count(usage, "cached_input_tokens");
     let cache_write = count(usage, "cache_write_input_tokens");
     let fresh_in = match (input, cache_read, cache_write) {
-        (Some(input), Some(read), Some(write)) => {
-            input.checked_sub(read).and_then(|n| n.checked_sub(write))
-        }
+        (Some(input), Some(read), Some(0)) => input.checked_sub(read),
         _ => None,
     };
     Tokens {

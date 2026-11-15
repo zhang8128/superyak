@@ -4,10 +4,13 @@ use serde::Serialize;
 use crate::{
     AttemptId, ChangedFile, ItemId, Measured, Room, RoomError, Tokens,
     item::{from_key, key},
+    limits,
     store::db,
     walk::plain_path,
 };
 
+/// One attempt of an item, with what was measured of it. A turn can have changes and no commit: its commit was
+/// brought in and its changes kept, and then its hand-in was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TurnView {
     pub attempt: AttemptId,
@@ -26,10 +29,10 @@ impl Room {
     /// Keep a whole turn once. Missing costs remain NULL, rather than zero.
     pub fn record_measured(&mut self, attempt: &AttemptId, m: &Measured) -> Result<(), RoomError> {
         self.conn.execute(
-            "INSERT INTO measured VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            "INSERT INTO measured VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![attempt.0, key(&m.ended)?, m.exit_code, m.tokens.complete,
                 m.tokens.fresh_in.map(integer).transpose()?, m.tokens.cache_write.map(integer).transpose()?, m.tokens.cache_read.map(integer).transpose()?, m.tokens.output.map(integer).transpose()?,
-                m.tokens.reasoning.map(integer).transpose()?, integer(m.steps_seen)?, integer(m.unknown_steps)?, integer(m.sandbox_ms)?, integer(m.worker_ms)?,
+                m.tokens.reasoning.map(integer).transpose()?, integer(m.steps_seen)?, integer(m.unknown_steps)?, integer(m.unknown_changes)?, integer(m.sandbox_ms)?, integer(m.worker_ms)?,
                 integer(m.seal_ms)?, integer(m.bring_ms)?, m.check_ms.map(integer).transpose()?, m.recheck_ms.map(integer).transpose()?, integer(m.active_ms)?],
         ).map_err(db)?;
         Ok(())
@@ -54,14 +57,15 @@ impl Room {
 
     pub fn measured(&self, attempt: &AttemptId) -> Result<Option<Measured>, RoomError> {
         let row = self.conn.query_row(
-            "SELECT ended,exit_code,tokens_complete,fresh_in,cache_write,cache_read,output,reasoning,steps_seen,unknown_steps,sandbox_ms,worker_ms,seal_ms,bring_ms,check_ms,recheck_ms,active_ms FROM measured WHERE attempt=?1",
+            "SELECT ended,exit_code,tokens_complete,fresh_in,cache_write,cache_read,output,reasoning,steps_seen,unknown_steps,unknown_changes,sandbox_ms,worker_ms,seal_ms,bring_ms,check_ms,recheck_ms,active_ms FROM measured WHERE attempt=?1",
             [&attempt.0], |r| Ok((r.get::<_,String>(0)?, Measured {
                 ended: crate::Ended::NotRun, exit_code: r.get(1)?,
                 tokens: Tokens { complete: r.get(2)?, fresh_in: read_optional(r, 3)?, cache_write: read_optional(r, 4)?,
                     cache_read: read_optional(r, 5)?, output: read_optional(r, 6)?, reasoning: read_optional(r, 7)? },
-                steps_seen: read_number(r, 8)?, unknown_steps: read_number(r, 9)?, sandbox_ms: read_number(r, 10)?,
-                worker_ms: read_number(r, 11)?, seal_ms: read_number(r, 12)?, bring_ms: read_number(r, 13)?,
-                check_ms: read_optional(r, 14)?, recheck_ms: read_optional(r, 15)?, active_ms: read_number(r, 16)?,
+                steps_seen: read_number(r, 8)?, unknown_steps: read_number(r, 9)?, unknown_changes: read_number(r, 10)?,
+                sandbox_ms: read_number(r, 11)?, worker_ms: read_number(r, 12)?, seal_ms: read_number(r, 13)?,
+                bring_ms: read_number(r, 14)?, check_ms: read_optional(r, 15)?, recheck_ms: read_optional(r, 16)?,
+                active_ms: read_number(r, 17)?,
             })),
         ).optional().map_err(db)?;
         row.map(|(ended, mut m)| {
@@ -71,19 +75,21 @@ impl Room {
         .transpose()
     }
 
-    /// Keep only plain paths, preserving their order. Returns how many names were omitted.
+    /// Keep only plain paths, preserving their order, and at most `limits::MAX_CHANGES` of them. Returns how many
+    /// were omitted: those not plain, and those past the limit.
     pub fn record_changes(
         &mut self,
         attempt: &AttemptId,
         files: &[ChangedFile],
     ) -> Result<usize, RoomError> {
         let tx = self.conn.transaction().map_err(db)?;
-        let mut omitted = 0;
+        let (mut omitted, mut kept) = (0, 0);
         for (ordinal, file) in files.iter().enumerate() {
-            if !plain_path(&file.path) {
+            if !plain_path(&file.path) || kept == limits::MAX_CHANGES {
                 omitted += 1;
                 continue;
             }
+            kept += 1;
             tx.execute(
                 "INSERT INTO changes VALUES (?1,?2,?3,?4)",
                 (&attempt.0, ordinal as i64, &file.path, key(&file.change)?),

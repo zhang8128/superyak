@@ -127,25 +127,22 @@ fn a_read_of_a_tracked_file_is_a_tracked_step() {
 // --- What a whole turn cost --------------------------------------------------------------------------------
 
 /// Codex's `input_tokens` holds its `cached_input_tokens`: the cached tokens are a part of the input, not beside
-/// it. Nothing in this repository documents Codex's fields, so this rests on the one real capture,
-/// `codex-json-sample.jsonl`: input 46,441, cached 35,328, output 100, from a turn of three shell calls, so four
-/// model requests (the plan and `cat a.txt`; `ls`; `cat missing.txt`; "done"). Every request sends the whole
-/// conversation again, and the conversation hardly grows (a hundred tokens of output, a few lines of tool
-/// output), so the requests are nearly the same size P, and caching is by prefix: a request reads from the
-/// cache what an earlier request already sent, and pays fresh for only its new end.
+/// it. Measured by the lead on codex-cli 0.163.0, two turns on a throwaway repository:
 ///
-/// - If input holds cached: P is about 46,441 / 4 = 11,600; the first request is fresh (11,113 = 46,441 -
-///   35,328, about one P) and the next three read about one P each from the cache (35,328, about 3P). It fits.
-/// - If input were beside cached: the fresh part, 46,441, is four times what three cache-hitting requests can
-///   leave fresh (a few hundred tokens each, beyond the first). The first request would have to be about 45,000
-///   tokens, and then the three that follow would read about 135,000 from the cache, not 35,328. It fits only
-///   if the cache missed on most of the requests.
+/// - 3 shell commands, so 4 requests: `input_tokens` 53,624, `cached_input_tokens` 46,208, input - cached 7,416.
+/// - 12 shell commands, so 13 requests: `input_tokens` 179,626, `cached_input_tokens` 165,632, input - cached
+///   13,994.
 ///
-/// So the capture settles it unless the cache mostly missed; the report says so. A wrong reading would show:
-/// with input beside cached, a long turn's cached count soon exceeds its input, which cannot happen if input
-/// holds cached, and the parser then records the fresh part as unknown (see the test after this one). The
-/// cache-write count is taken to be a part of the input in the same way; it is 0 in the only capture, so no
-/// number here rests on that.
+/// Every request sends the whole conversation again, so the input count grows by about 13,500 a request, and
+/// the cached count never passes it. If the input were the fresh part only, beside the cached part, the cached
+/// count would be about twelve times it in the second turn, as twelve of its thirteen requests read the
+/// conversation so far from the cache. It is not, so the input includes the cached part, and the fresh part is
+/// input - cached - cache write. The capture in `codex-json-sample.jsonl` (input 46,441, cached 35,328, from a
+/// turn of three shell calls) fits the same reading.
+///
+/// What is not established is `cache_write_input_tokens`: it is 0 in every capture, so nothing shows where a
+/// cache write falls. With one that is not 0 the fresh part is not known, and so neither is the total (the test
+/// after this one).
 #[test]
 fn the_closing_total_is_the_turns_tokens() {
     let (_repo, sb) = sandbox();
@@ -180,6 +177,32 @@ fn the_closing_total_is_the_turns_tokens() {
 }
 
 #[test]
+fn a_codex_total_with_a_cache_write_leaves_the_fresh_part_unknown() {
+    let (_repo, sb) = sandbox();
+    let line = |write: u64| {
+        serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": 100,
+            "cached_input_tokens": 40, "cache_write_input_tokens": write, "output_tokens": 5,
+            "reasoning_output_tokens": 1}})
+        .to_string()
+    };
+    for write in [1, 10, 60] {
+        let tokens = codex_tokens(&[line(write)], &sb);
+        assert_eq!(tokens.fresh_in, None, "{write}");
+        // The parts the program gave are kept as it gave them.
+        assert_eq!(
+            (tokens.cache_write, tokens.cache_read, tokens.output),
+            (Some(write), Some(40), Some(5))
+        );
+        assert!(tokens.complete);
+        assert_eq!(tokens.total(), None);
+    }
+    // The control: the same line with a cache write of 0, as in every capture, has its fresh part and total.
+    let tokens = codex_tokens(&[line(0)], &sb);
+    assert_eq!(tokens.fresh_in, Some(60));
+    assert_eq!(tokens.total(), Some(100 + 5));
+}
+
+#[test]
 fn a_codex_total_whose_cached_part_exceeds_its_input_leaves_the_fresh_part_unknown() {
     let (_repo, sb) = sandbox();
     let line = |input: u64, cached: u64, write: u64| {
@@ -199,8 +222,8 @@ fn a_codex_total_whose_cached_part_exceeds_its_input_leaves_the_fresh_part_unkno
         assert!(tokens.complete);
         assert_eq!(tokens.total(), None);
     }
-    // At the edge, all of the input came from the cache or went to it.
-    assert_eq!(codex_tokens(&[line(10, 4, 6)], &sb).fresh_in, Some(0));
+    // At the edge, all of the input came from the cache.
+    assert_eq!(codex_tokens(&[line(10, 10, 0)], &sb).fresh_in, Some(0));
     // A count it did not give is not known, and neither is the fresh part, which needs every part of the input.
     let partial = serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": 10,
         "cached_input_tokens": 4, "output_tokens": 2}})
@@ -248,6 +271,36 @@ fn a_closing_total_that_arrives_twice_is_counted_once() {
     let tokens = claude_tokens(&[total(1), total(7)], &sb);
     assert_eq!(tokens.total(), Some(28));
     assert_eq!(tokens.reasoning, None);
+    // The same for Codex.
+    let total = |n: u64| {
+        serde_json::json!({"type": "turn.completed", "usage": {"input_tokens": 10 * n,
+            "cached_input_tokens": n, "cache_write_input_tokens": 0, "output_tokens": n}})
+        .to_string()
+    };
+    let tokens = codex_tokens(&[total(1), total(7)], &sb);
+    assert_eq!(
+        (tokens.fresh_in, tokens.cache_read, tokens.output),
+        (Some(63), Some(7), Some(7))
+    );
+    assert_eq!(tokens.total(), Some(77));
+}
+
+/// A `result` line that says the run went wrong (a subtype other than success, or `is_error` true) is still the
+/// program's closing total when it carries a usage: what the turn cost is what it says, and it is complete.
+#[test]
+fn a_claude_result_that_reports_an_error_is_still_the_complete_closing_total() {
+    let (_repo, sb) = sandbox();
+    let usage = r#""usage": {"input_tokens": 1, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 4}"#;
+    for head in [
+        r#""subtype": "error_during_execution", "is_error": true"#,
+        r#""subtype": "error_max_turns", "is_error": false"#,
+        r#""subtype": "success", "is_error": true"#,
+    ] {
+        let line = format!(r#"{{"type": "result", {head}, {usage}}}"#);
+        let tokens = claude_tokens(&[line], &sb);
+        assert!(tokens.complete, "{head}");
+        assert_eq!(tokens.total(), Some(10), "{head}");
+    }
 }
 
 #[test]

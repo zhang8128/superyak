@@ -135,7 +135,7 @@ fn erasing_an_item_removes_every_row_and_its_title_from_the_file() {
             [&attempt.0],
         )
         .unwrap();
-        c.execute("INSERT INTO measured VALUES (?1,'exited',0,0,NULL,NULL,NULL,NULL,NULL,1,0,1,2,3,4,5,NULL,15)", [&attempt.0]).unwrap();
+        c.execute("INSERT INTO measured VALUES (?1,'exited',0,0,NULL,NULL,NULL,NULL,NULL,1,0,0,1,2,3,4,5,NULL,15)", [&attempt.0]).unwrap();
     }
     c.execute_batch("PRAGMA wal_checkpoint(FULL)").unwrap();
     assert!(contains_marker(&d.path().join("room.sqlite3"), MARKER));

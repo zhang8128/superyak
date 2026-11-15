@@ -18,5 +18,7 @@ pub const CHECK_TIMEOUT_SECS: u32 = 900;
 pub const RECHECK_ONE_IN: u32 = 5;
 /// How often the clock looks at the room, in seconds.
 pub const CLOCK_POLL_SECS: u32 = 5;
+/// The most changed files kept for one turn. The rest are counted, as `Measured::unknown_changes`.
+pub const MAX_CHANGES: usize = 10_000;
 /// The store's schema version.
 pub const SCHEMA_VERSION: u32 = 2;

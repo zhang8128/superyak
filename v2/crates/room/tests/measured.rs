@@ -25,6 +25,7 @@ fn measured() -> Measured {
         },
         steps_seen: 10,
         unknown_steps: 3,
+        unknown_changes: 2,
         sandbox_ms: 11,
         worker_ms: 12,
         seal_ms: 13,

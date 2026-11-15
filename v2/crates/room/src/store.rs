@@ -72,7 +72,8 @@ CREATE TABLE step_files (attempt TEXT NOT NULL, seq INTEGER NOT NULL, ordinal IN
 CREATE TABLE measured (attempt TEXT PRIMARY KEY REFERENCES attempts(id), ended TEXT NOT NULL,
     exit_code INTEGER, tokens_complete INTEGER NOT NULL, fresh_in INTEGER, cache_write INTEGER,
     cache_read INTEGER, output INTEGER, reasoning INTEGER, steps_seen INTEGER NOT NULL,
-    unknown_steps INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL, worker_ms INTEGER NOT NULL,
+    unknown_steps INTEGER NOT NULL, unknown_changes INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL,
+    worker_ms INTEGER NOT NULL,
     seal_ms INTEGER NOT NULL, bring_ms INTEGER NOT NULL, check_ms INTEGER, recheck_ms INTEGER,
     active_ms INTEGER NOT NULL);
 CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INTEGER NOT NULL,
@@ -93,7 +94,8 @@ const MIGRATE_V1: &str = r#"CREATE TABLE step_files (attempt TEXT NOT NULL, seq 
 CREATE TABLE measured (attempt TEXT PRIMARY KEY REFERENCES attempts(id), ended TEXT NOT NULL,
     exit_code INTEGER, tokens_complete INTEGER NOT NULL, fresh_in INTEGER, cache_write INTEGER,
     cache_read INTEGER, output INTEGER, reasoning INTEGER, steps_seen INTEGER NOT NULL,
-    unknown_steps INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL, worker_ms INTEGER NOT NULL,
+    unknown_steps INTEGER NOT NULL, unknown_changes INTEGER NOT NULL, sandbox_ms INTEGER NOT NULL,
+    worker_ms INTEGER NOT NULL,
     seal_ms INTEGER NOT NULL, bring_ms INTEGER NOT NULL, check_ms INTEGER, recheck_ms INTEGER,
     active_ms INTEGER NOT NULL);
 CREATE TABLE changes (attempt TEXT NOT NULL REFERENCES attempts(id), ordinal INTEGER NOT NULL,
@@ -168,6 +170,10 @@ impl Room {
         };
         let mut conn = Connection::open_with_flags(path, flags).map_err(damaged)?;
         let version = validate(&conn)?;
+        // The room's settings hold for everything this connection writes, the migration first of all.
+        if !read_only {
+            configure(&conn)?;
+        }
         if version == 1 {
             if read_only {
                 return Err(RoomError::OlderSchema {
@@ -181,9 +187,6 @@ impl Room {
             tx.execute_batch(MIGRATE_V1).map_err(db)?;
             validate(&tx)?;
             tx.commit().map_err(db)?;
-        }
-        if !read_only {
-            configure(&conn)?;
         }
         Ok(Self {
             conn,
@@ -327,7 +330,7 @@ fn validate(conn: &Connection) -> Result<u32, RoomError> {
         for query in [
             "SELECT seen_ms,result_ms FROM steps",
             "SELECT attempt,seq,ordinal,path,blob FROM step_files",
-            "SELECT attempt,ended,exit_code,tokens_complete,fresh_in,cache_write,cache_read,output,reasoning,steps_seen,unknown_steps,sandbox_ms,worker_ms,seal_ms,bring_ms,check_ms,recheck_ms,active_ms FROM measured",
+            "SELECT attempt,ended,exit_code,tokens_complete,fresh_in,cache_write,cache_read,output,reasoning,steps_seen,unknown_steps,unknown_changes,sandbox_ms,worker_ms,seal_ms,bring_ms,check_ms,recheck_ms,active_ms FROM measured",
             "SELECT attempt,ordinal,path,change FROM changes",
         ] {
             conn.prepare(query).map_err(damaged)?;
