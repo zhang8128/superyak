@@ -120,6 +120,28 @@ fn a_name_that_is_not_a_plain_path_is_left_out_and_the_walk_is_kept() {
 }
 
 #[test]
+fn a_path_left_out_as_both_target_and_name_is_counted_once_for_its_step() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = Room::init(d.path()).unwrap();
+    let id = attempt(&mut r);
+    let named = |path: &str| Named {
+        path: path.into(),
+        blob: "c".repeat(40),
+    };
+    let mut both = steps().remove(0);
+    both.target = Target::TrackedFile {
+        path: "a b.txt".into(),
+        blob: "c".repeat(40),
+    };
+    both.named = vec![named("a b.txt"), named("ok.txt")];
+    // Two different paths left out of one step are two, and the same path in another step counts again.
+    let mut two = steps().remove(1);
+    two.named = vec![named("a b.txt"), named("é.txt")];
+    assert_eq!(r.record_walk(&id, &[both, two]).unwrap(), 1 + 2);
+    assert_eq!(r.walk(&id).unwrap()[0].named, [named("ok.txt")]);
+}
+
+#[test]
 fn an_unplain_target_is_unknown_without_losing_the_walk() {
     let d = tempfile::tempdir().unwrap();
     let mut r = Room::init(d.path()).unwrap();

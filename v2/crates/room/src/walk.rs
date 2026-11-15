@@ -5,7 +5,8 @@ use crate::{
 };
 
 impl Room {
-    /// Admit a batch atomically, omitting unplain names and returning the number omitted.
+    /// Admit a batch atomically, omitting unplain names and returning the number omitted: each path left out of a
+    /// step once for that step, though it was its target and a name both.
     pub fn record_walk(&mut self, attempt: &AttemptId, steps: &[Step]) -> Result<usize, RoomError> {
         let tx = self.conn.transaction().map_err(db)?;
         let exists: bool = tx
@@ -20,6 +21,7 @@ impl Room {
         }
         let mut omitted = 0;
         for step in steps {
+            let mut left_out: Vec<&str> = Vec::new();
             if let Target::TrackedFile { blob, .. } = &step.target
                 && !hex_hash(blob, &[40, 64])
             {
@@ -32,8 +34,8 @@ impl Room {
                     ("tracked_file", Some(path.as_str()), Some(blob.as_str()))
                 }
                 Target::Outside => ("outside", None, None),
-                Target::TrackedFile { .. } => {
-                    omitted += 1;
+                Target::TrackedFile { path, .. } => {
+                    left_out.push(path);
                     ("outside", None, None)
                 }
             };
@@ -46,7 +48,9 @@ impl Room {
                     ));
                 }
                 if !plain_path(&name.path) {
-                    omitted += 1;
+                    if !left_out.contains(&name.path.as_str()) {
+                        left_out.push(&name.path);
+                    }
                     continue;
                 }
                 tx.execute(
@@ -55,6 +59,7 @@ impl Room {
                 )
                 .map_err(db)?;
             }
+            omitted += left_out.len();
         }
         tx.commit().map_err(db)?;
         Ok(omitted)

@@ -155,6 +155,103 @@ fn a_sandbox_holds_nothing_its_base_does_not_reach() {
     }
 }
 
+/// The same when the item's repository keeps every object in one pack, those its base reaches and those it does
+/// not alike: what is fetched is made for the base, not copied from the pack.
+#[test]
+fn a_sandbox_of_a_repository_in_one_pack_holds_nothing_its_base_does_not_reach() {
+    let (repo, later, later_blob, dangling, tree) = item_with_strangers();
+    // Everything into one pack, the unreachable blob included, and no loose object left.
+    git(
+        &repo.path,
+        &["repack", "-a", "-d", "-q", "--keep-unreachable"],
+    );
+    git(&repo.path, &["prune-packed"]);
+    let packs: Vec<_> = std::fs::read_dir(repo.path.join(".git/objects/pack"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "pack"))
+        .collect();
+    assert_eq!(packs.len(), 1);
+    let counted = git(&repo.path, &["count-objects", "-v"]);
+    assert!(counted.lines().any(|l| l == "count: 0"), "{counted}");
+    // The control: the pack holds all of them, the blob nothing names among them.
+    let listed = git(
+        &repo.path,
+        &["verify-pack", "-v", packs[0].path().to_str().unwrap()],
+    );
+    for id in [&later, &later_blob, &dangling, &tree] {
+        assert!(listed.contains(id.as_str()), "the pack lacks {id}");
+    }
+    let sb = sandbox(&repo);
+    assert!(holds(&sb.dir, &tree), "the base's tree is missing");
+    for id in [&later, &later_blob, &dangling] {
+        assert!(!holds(&sb.dir, id), "the sandbox holds {id}");
+    }
+}
+
+/// The same when the item's repository keeps none of the objects itself and borrows them all from another
+/// through `objects/info/alternates`: the sandbox borrows nothing, and holds only what the base reaches.
+#[test]
+fn a_sandbox_of_a_repository_that_borrows_its_objects_holds_nothing_its_base_does_not_reach() {
+    let (lender, later, later_blob, dangling, tree) = item_with_strangers();
+    let borrower = lender.scratch("borrower");
+    std::fs::create_dir(&borrower).unwrap();
+    git(&borrower, &["init", "-q", "-b", "main"]);
+    let objects = lender.path.join(".git/objects");
+    std::fs::write(
+        borrower.join(".git/objects/info/alternates"),
+        format!("{}\n", objects.display()),
+    )
+    .unwrap();
+    git(&borrower, &["update-ref", "refs/heads/main", &lender.base]);
+    // The control: the borrower holds every one of them, and none of its own.
+    let counted = git(&borrower, &["count-objects", "-v"]);
+    assert!(counted.lines().any(|l| l == "count: 0"), "{counted}");
+    assert!(counted.lines().any(|l| l == "in-pack: 0"), "{counted}");
+    for id in [&later, &later_blob, &dangling, &tree] {
+        assert!(holds(&borrower, id), "{id}");
+    }
+    let sb = Sandbox::create(
+        &borrower,
+        &lender.base,
+        &lender.scratch("sandbox"),
+        "room/i1/1",
+    )
+    .unwrap();
+    assert!(
+        !sb.dir.join(".git/objects/info/alternates").exists(),
+        "the sandbox borrows"
+    );
+    assert!(holds(&sb.dir, &tree), "the base's tree is missing");
+    assert!(holds(&sb.dir, &lender.base));
+    for id in [&later, &later_blob, &dangling] {
+        assert!(!holds(&sb.dir, id), "the sandbox holds {id}");
+    }
+}
+
+/// An annotated tag that points at the base is an object of its own, which the base does not reach: it is not
+/// in the sandbox, though the commit it names is.
+#[test]
+fn a_tag_object_that_points_at_the_base_is_not_in_the_sandbox() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    git(
+        &repo.path,
+        &["tag", "-a", "v1", "-m", "a release", &repo.base],
+    );
+    let tag = git(&repo.path, &["rev-parse", "refs/tags/v1"]);
+    let tree = git(
+        &repo.path,
+        &["rev-parse", &format!("{}^{{tree}}", repo.base)],
+    );
+    // The control: the tag is an object of the item's repository, and not the commit it names.
+    assert_ne!(tag, repo.base);
+    assert_eq!(git(&repo.path, &["cat-file", "-t", &tag]), "tag");
+    let sb = sandbox(&repo);
+    assert!(holds(&sb.dir, &tree), "the base's tree is missing");
+    assert!(holds(&sb.dir, &repo.base));
+    assert!(!holds(&sb.dir, &tag), "the sandbox holds the tag object");
+}
+
 #[test]
 fn a_checks_clone_holds_nothing_its_commit_does_not_reach() {
     use room::{CheckOrigin, CheckSpec};

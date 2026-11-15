@@ -5,18 +5,22 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use common::{Repo, git, strings};
 use room::{Step, Target, Tokens, Tool};
 use turn::worker::{ClaudeWorker, CodexWorker, RULES, Seen, Worker, from_name, prompt};
-use turn::{Sandbox, TurnError};
+use turn::{RunStatus, Sandbox, TurnError};
 
-/// A fresh `Seen` to pass into `Worker::run`.
+/// A fresh `Seen` to pass into `Worker::run`, for a turn that starts now.
 fn seen() -> Seen {
     Seen {
         steps: Vec::new(),
         tokens: Tokens::none(),
         steps_seen: 0,
+        started: Instant::now(),
+        seal_ms: 0,
+        status: None,
     }
 }
 
@@ -155,12 +159,16 @@ fn a_worker_past_its_limit_is_timed_out() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
     let path = script(&repo, "slow.sh", "#!/bin/sh\nsleep 600\n");
+    let mut seen = seen();
     let status = from_name(&format!("script:{}", path.display()))
         .unwrap()
-        .run(&sb, "t", "true", 1, &mut seen())
+        .run(&sb, "t", "true", 1, &mut seen)
         .unwrap();
     assert!(status.timed_out);
     assert_ne!(status.exit_code, 0);
+    // How the program ended is in what the room saw, too, and a script commits for itself.
+    assert_eq!(seen.status, Some(status));
+    assert_eq!(seen.seal_ms, 0);
 }
 
 #[test]
@@ -419,6 +427,14 @@ fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
     assert_eq!(kept.steps[0].target, tracked(&repo, "a.txt"));
     assert_eq!(kept.steps_seen, 2);
     assert_eq!(kept.tokens.total(), Some(37_220));
+    // How its program ended was kept before the room's commit was tried.
+    assert_eq!(
+        kept.status,
+        Some(RunStatus {
+            exit_code: 0,
+            timed_out: false
+        })
+    );
     // Codex: two commands and the closing total.
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -430,6 +446,102 @@ fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
     assert_eq!(oks(&kept.steps), [true, true]);
     assert_eq!(kept.steps_seen, 2);
     assert_eq!(kept.tokens.total(), Some(46_541));
+    assert_eq!(
+        kept.status,
+        Some(RunStatus {
+            exit_code: 0,
+            timed_out: false
+        })
+    );
+}
+
+/// A step's times count from the turn's start as the `Seen` says it, not from when the worker began: the room
+/// makes the sandbox in between, and that is the turn's time too.
+#[test]
+fn a_steps_times_count_from_the_turns_start() {
+    let earlier = |seen: &mut Seen| {
+        seen.started = Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .expect("this machine has been up five seconds");
+    };
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sample = read(Path::new(&data("claude-stream-ids.jsonl")));
+    let body = format!(
+        "#!/bin/sh\ncat > /dev/null\nsed \"s#/sandbox#$PWD#g\" <<'YAK_SAMPLE'\n{}\nYAK_SAMPLE\n",
+        sample.trim_end()
+    );
+    let path = script(&repo, "steps.sh", &body);
+    let script_worker = from_name(&format!("script:{}", path.display())).unwrap();
+    let claude = stand_in(&repo, "claude", "claude-stream-ids.jsonl");
+    let codex = stand_in(&repo, "codex", "codex-json-sample.jsonl");
+    let workers: [Box<dyn Worker>; 3] = [
+        script_worker,
+        Box::new(ClaudeWorker::with_program("opus", claude.to_str().unwrap())),
+        Box::new(CodexWorker::with_program("test", codex.to_str().unwrap())),
+    ];
+    for worker in workers {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let mut seen = seen();
+        earlier(&mut seen);
+        worker.run(&sb, "t", "true", 60, &mut seen).unwrap();
+        assert!(!seen.steps.is_empty(), "{}", worker.name());
+        for step in &seen.steps {
+            assert!(
+                step.seen_ms.unwrap() >= 5_000,
+                "{}: {step:?}",
+                worker.name()
+            );
+            if let Some(result) = step.result_ms {
+                assert!(result >= 5_000, "{}: {step:?}", worker.name());
+            }
+        }
+    }
+}
+
+/// The room's commit for a model worker is timed by the worker, apart from the program's own run. A script
+/// worker commits for itself, so the room's commit takes it no time.
+#[test]
+fn the_rooms_commit_for_a_worker_is_timed_apart_from_its_program() {
+    for family in ["claude", "codex"] {
+        let repo = Repo::new(&[("a.txt", "hello\n")]);
+        let sb = sandbox(&repo);
+        let fake = leaver(&repo, family, ":");
+        let fake = fake.to_str().unwrap();
+        let worker: Box<dyn Worker> = match family {
+            "codex" => Box::new(CodexWorker::with_program("test", fake)),
+            _ => Box::new(ClaudeWorker::with_program("test", fake)),
+        };
+        let mut seen = seen();
+        let began = Instant::now();
+        worker.run(&sb, "t", "true", 60, &mut seen).unwrap();
+        let whole = began.elapsed();
+        assert_ne!(
+            sb.head().unwrap(),
+            repo.base,
+            "{family}: nothing was committed"
+        );
+        // Three runs of git at least: some milliseconds, and never more than the whole run.
+        assert!(seen.seal_ms > 0, "{family}");
+        assert!(
+            u128::from(seen.seal_ms) <= whole.as_millis(),
+            "{family}: {} of {whole:?}",
+            seen.seal_ms
+        );
+    }
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let path = script(
+        &repo,
+        "commits.sh",
+        "#!/bin/sh\necho changed > a.txt\ngit commit -qam mine\n",
+    );
+    let mut seen = seen();
+    from_name(&format!("script:{}", path.display()))
+        .unwrap()
+        .run(&sb, "t", "true", 60, &mut seen)
+        .unwrap();
+    assert_eq!(seen.seal_ms, 0);
 }
 
 #[test]
@@ -746,44 +858,23 @@ fn a_worker_that_cannot_commit_leaves_its_message() {
 #[test]
 fn a_message_file_that_is_not_a_plain_file_is_not_read() {
     let fixed = "Turn by codex:test, committed by the room.\n\nMade by codex:test.\nCo-Authored-By: Codex <noreply@openai.com>";
-    // What is left at `.yak-message` afterwards: nothing, or what the room does not remove.
-    #[derive(Debug, PartialEq)]
-    enum Left {
-        Nothing,
-        Directory,
-        Pipe,
-    }
+    // A link is removed and not followed; a file the room cannot use is removed and not read. A directory or a
+    // pipe there stops the room's commit: `something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit`.
     let cases = [
         (
             "a link",
             "printf 'Read through a link\\n' > ../outside && ln -s ../outside .yak-message",
-            Left::Nothing,
         ),
-        (
-            "a directory",
-            "mkdir .yak-message && printf 'inside\\n' > .yak-message/note",
-            Left::Directory,
-        ),
-        ("a pipe", "mkfifo .yak-message", Left::Pipe),
         (
             "too long",
             "head -c 16385 /dev/zero | tr '\\000' a > .yak-message",
-            Left::Nothing,
         ),
-        ("empty", ": > .yak-message", Left::Nothing),
-        (
-            "blank",
-            "printf ' \\n\\n\\t\\n' > .yak-message",
-            Left::Nothing,
-        ),
-        (
-            "not UTF-8",
-            "printf 'caf\\351\\n' > .yak-message",
-            Left::Nothing,
-        ),
-        ("a NUL", "printf 'a\\000b\\n' > .yak-message", Left::Nothing),
+        ("empty", ": > .yak-message"),
+        ("blank", "printf ' \\n\\n\\t\\n' > .yak-message"),
+        ("not UTF-8", "printf 'caf\\351\\n' > .yak-message"),
+        ("a NUL", "printf 'a\\000b\\n' > .yak-message"),
     ];
-    for (what, leave, left) in cases {
+    for (what, leave) in cases {
         let repo = Repo::new(&[("a.txt", "hello\n")]);
         let sb = sandbox(&repo);
         let fake = leaver(&repo, "codex", leave);
@@ -792,19 +883,11 @@ fn a_message_file_that_is_not_a_plain_file_is_not_read() {
             .unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(last_message(&sb), fixed, "{what}");
         assert_eq!(git(&sb.dir, &["show", "HEAD:a.txt"]), "changed", "{what}");
-        let found = match message_file(&sb) {
-            None => Left::Nothing,
-            Some(meta) if meta.is_dir() => Left::Directory,
-            Some(meta) if std::os::unix::fs::FileTypeExt::is_fifo(&meta.file_type()) => Left::Pipe,
-            Some(meta) => panic!("{what}: left {meta:?}"),
-        };
-        assert_eq!(found, left, "{what}");
-        if left == Left::Nothing {
-            assert!(
-                !committed(&sb).iter().any(|p| p.starts_with(".yak-message")),
-                "{what}"
-            );
-        }
+        assert!(message_file(&sb).is_none(), "{what}: something is left");
+        assert!(
+            !committed(&sb).iter().any(|p| p.starts_with(".yak-message")),
+            "{what}"
+        );
     }
     // What the link pointed at is untouched.
     let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -818,6 +901,139 @@ fn a_message_file_that_is_not_a_plain_file_is_not_read() {
         .run(&sb, "t", "true", 60, &mut seen())
         .unwrap();
     assert_eq!(read(&sb.dir.with_file_name("outside")), "kept\n");
+}
+
+/// A model worker of each family whose program is `fake`.
+fn family_worker(family: &str, fake: &Path) -> Box<dyn Worker> {
+    let fake = fake.to_str().unwrap();
+    match family {
+        "codex" => Box::new(CodexWorker::with_program("test", fake)),
+        _ => Box::new(ClaudeWorker::with_program("test", fake)),
+    }
+}
+
+/// A repository whose base tracks `name`, made by `make` in its tree, beside a.txt.
+fn tracking(name: &str, make: impl FnOnce(&Path)) -> Repo {
+    let mut repo = Repo::new(&[("a.txt", "hello\n")]);
+    make(&repo.path.join(name));
+    repo.base = repo.commit("tracks the message file's name");
+    assert!(
+        git(&repo.path, &["ls-tree", "-z", "--name-only", &repo.base])
+            .split('\0')
+            .any(|tracked| tracked == name),
+        "{name} is not tracked"
+    );
+    repo
+}
+
+/// When the base already tracks something at the message file's name, in any letter case, it is the item's
+/// own file: the room neither reads it nor removes it, and for that turn there is no message file. A worker that
+/// leaves it as it was changes nothing, so nothing is committed, and it is still there as it was.
+#[test]
+fn a_message_file_the_base_tracks_is_neither_read_nor_removed() {
+    // Bytes no message could be: not UTF-8, a NUL, no newline at the end.
+    let bytes: &[u8] = b"tracked \xff\x00 by the item";
+    for family in ["claude", "codex"] {
+        // A plain file.
+        let repo = tracking(".yak-message", |path| std::fs::write(path, bytes).unwrap());
+        let sb = sandbox(&repo);
+        let quiet = script(&repo, family, "#!/bin/sh\ncat > /dev/null\n");
+        family_worker(family, &quiet)
+            .run(&sb, "t", "true", 60, &mut seen())
+            .unwrap();
+        assert_eq!(sb.head().unwrap(), repo.base, "{family}: a file");
+        assert_eq!(std::fs::read(sb.dir.join(".yak-message")).unwrap(), bytes);
+        // A link, to a file of the repository.
+        let repo = tracking(".yak-message", |path| {
+            std::os::unix::fs::symlink("a.txt", path).unwrap()
+        });
+        let sb = sandbox(&repo);
+        let quiet = script(&repo, family, "#!/bin/sh\ncat > /dev/null\n");
+        family_worker(family, &quiet)
+            .run(&sb, "t", "true", 60, &mut seen())
+            .unwrap();
+        assert_eq!(sb.head().unwrap(), repo.base, "{family}: a link");
+        assert_eq!(
+            std::fs::read_link(sb.dir.join(".yak-message")).unwrap(),
+            Path::new("a.txt")
+        );
+        // In other letters. Where the disk does not tell capital letters from small ones, this is the file the
+        // room would find at `.yak-message`.
+        let repo = tracking(".Yak-Message", |path| std::fs::write(path, bytes).unwrap());
+        let sb = sandbox(&repo);
+        let quiet = script(&repo, family, "#!/bin/sh\ncat > /dev/null\n");
+        family_worker(family, &quiet)
+            .run(&sb, "t", "true", 60, &mut seen())
+            .unwrap();
+        assert_eq!(sb.head().unwrap(), repo.base, "{family}: other letters");
+        assert_eq!(std::fs::read(sb.dir.join(".Yak-Message")).unwrap(), bytes);
+    }
+}
+
+/// The same holds on a disk that tells letters apart: with the base tracking the name in other letters, a
+/// `.yak-message` the worker writes is not taken as its message. It is committed with the room's fixed message
+/// as any other change is (on a disk that does not tell them apart it is the tracked file, changed), and it is
+/// still there afterwards.
+#[test]
+fn with_the_name_tracked_in_other_letters_no_message_file_is_read() {
+    // The second is spelled with the Kelvin sign, which folds to a small k.
+    for tracked in [".Yak-Message", ".YAK-MESSAGE", ".ya\u{212A}-message"] {
+        for family in ["claude", "codex"] {
+            let repo = tracking(tracked, |path| std::fs::write(path, "tracked\n").unwrap());
+            let sb = sandbox(&repo);
+            let fake = script(
+                &repo,
+                family,
+                "#!/bin/sh\ncat > /dev/null\necho changed > a.txt\nprintf 'Not read\\n' > .yak-message\n",
+            );
+            family_worker(family, &fake)
+                .run(&sb, "t", "true", 60, &mut seen())
+                .unwrap();
+            assert!(
+                last_message(&sb).starts_with("Turn by "),
+                "{tracked} {family}: {}",
+                last_message(&sb)
+            );
+            assert!(message_file(&sb).is_some(), "{tracked} {family}: removed");
+        }
+    }
+}
+
+/// When the base does not track the name and something at it after the worker's run is neither a plain file
+/// nor a link, the room does not commit for the worker: it says what it found, and where. Nothing of it is
+/// staged, and no commit holds what was in it.
+#[test]
+fn something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit() {
+    const MARKER: &str = "yak-marker-7f3c1a";
+    let cases = [
+        (
+            "a directory",
+            format!("mkdir .yak-message && printf '{MARKER}\\n' > .yak-message/note"),
+        ),
+        ("a named pipe", "mkfifo .yak-message".to_string()),
+    ];
+    for family in ["claude", "codex"] {
+        for (what, leave) in &cases {
+            let repo = Repo::new(&[("a.txt", "hello\n")]);
+            let sb = sandbox(&repo);
+            let fake = leaver(&repo, family, leave);
+            let result = family_worker(family, &fake).run(&sb, "t", "true", 60, &mut seen());
+            let path = sb.dir.join(".yak-message");
+            match &result {
+                Err(TurnError::Refused(why)) => {
+                    assert!(why.contains(&path.display().to_string()), "{why}");
+                    assert!(why.contains(&format!("is {what}")), "{why}");
+                }
+                other => panic!("{family} {what}: {other:?}"),
+            }
+            assert_eq!(sb.head().unwrap(), repo.base, "{family} {what}");
+            assert_eq!(git(&sb.dir, &["diff", "--cached", "--name-only"]), "");
+            let history = git(&sb.dir, &["log", "--all", "-p", "--format=%H %B"]);
+            assert!(!history.contains(MARKER), "{family} {what}: {history}");
+            // What was there is left there.
+            assert!(message_file(&sb).is_some(), "{family} {what}");
+        }
+    }
 }
 
 #[test]

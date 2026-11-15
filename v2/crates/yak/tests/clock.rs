@@ -59,6 +59,20 @@ fn every_way_a_turn_ends_leaves_a_measured_record() {
         let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, limit);
         result.unwrap();
         assert_measured(&world, &events, ended);
+        if body == "#!/bin/sh\nexit 0\n" {
+            // A turn that hands in nothing is still checked, on its base, and the room really spent that time:
+            // it is in the turn's active seconds.
+            let m = world
+                .room
+                .measured(&started(&events)[0].1)
+                .unwrap()
+                .unwrap();
+            let check = m.check_ms.expect("the base was checked");
+            assert_eq!(
+                m.active_ms,
+                m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + check
+            );
+        }
         if ended == room::Ended::TimedOut {
             let attempt = &started(&events)[0].1;
             let m = world.room.measured(attempt).unwrap().unwrap();
@@ -128,11 +142,15 @@ fn a_turn_that_cannot_make_a_sandbox_is_measured_as_not_run() {
 #[test]
 fn a_turns_changes_are_the_difference_between_its_base_and_its_commit() {
     let mut world = World::new(1);
-    let body = "#!/bin/sh\necho 42 > answer1.txt\necho new > added.txt\nrm answer2.txt\ngit add -A\ngit commit -qm change\n";
+    // `a b.txt` is not a plain path: it is counted, not kept.
+    let body = "#!/bin/sh\necho 42 > answer1.txt\necho new > added.txt\necho new > 'a b.txt'\nrm answer2.txt\ngit add -A\ngit commit -qm change\n";
     let script = world.script("changes.sh", body);
     let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, TURN_SECS);
     result.unwrap();
-    let changes = world.room.changes(&started(&events)[0].1).unwrap();
+    let attempt = &started(&events)[0].1;
+    let m = world.room.measured(attempt).unwrap().unwrap();
+    assert_eq!(m.unknown_changes, 1);
+    let changes = world.room.changes(attempt).unwrap();
     assert_eq!(
         changes,
         vec![
@@ -150,6 +168,114 @@ fn a_turns_changes_are_the_difference_between_its_base_and_its_commit() {
             },
         ]
     );
+}
+
+/// At most `MAX_CHANGES` changed files are kept for one turn; the rest are counted.
+#[test]
+fn a_turn_that_changes_more_files_than_are_kept_counts_the_rest() {
+    let mut world = World::new(1);
+    let body = format!(
+        "#!/bin/sh\ni=0\nwhile [ $i -lt {} ]; do : > \"f$i.txt\"; i=$((i + 1)); done\ngit add -A\n\
+         git commit -qm many\n",
+        room::limits::MAX_CHANGES + 1
+    );
+    let script = world.script("many.sh", &body);
+    let (result, events) = world.run(&[&script], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    let attempt = &started(&events)[0].1;
+    assert_eq!(
+        world.room.changes(attempt).unwrap().len(),
+        room::limits::MAX_CHANGES
+    );
+    assert_eq!(
+        world
+            .room
+            .measured(attempt)
+            .unwrap()
+            .unwrap()
+            .unknown_changes,
+        1
+    );
+}
+
+/// The check's work directory that has begun to wait, by the file it leaves there: `turns/<attempt>.check/*/
+/// waiting`.
+fn waiting_check(turns: &std::path::Path) -> Option<std::path::PathBuf> {
+    fs::read_dir(turns)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".check"))
+        .flat_map(|e| fs::read_dir(e.path()).into_iter().flatten().flatten())
+        .map(|e| e.path().join("waiting"))
+        .find(|flag| flag.exists())
+}
+
+/// How a worker ended is the worker's own: a lease lost after it ended (here, while its commit is checked)
+/// leaves it as the worker left it, though the turn ends as a lost lease. The lease is lost as the room sees a
+/// lease lost: the item's lease has moved on, so the verdict is refused.
+#[test]
+fn a_worker_that_ran_out_of_time_stays_so_when_the_lease_is_lost_during_the_check() {
+    let mut world = World::new(0);
+    // The check waits on the turn's commit only (freezing it runs it on the base and the wrong commit), says
+    // so, and goes on once this test has taken the lease away.
+    world.add_check(
+        "answer 1 is 42",
+        "if grep -qx 42 answer1.txt; then : > waiting; until [ -e go ]; do sleep 0.1; done; fi; sh check.sh 1",
+        &["check.sh"],
+    );
+    let late = world.script("late.sh", &format!("{FIX}sleep 600\n"));
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
+    let turns = world.room_dir.join("turns");
+    let store = world.room_dir.join("room.sqlite3");
+    let item = world.items[0].0.clone();
+    let stop = world.room_dir.join("STOP");
+    let taker = {
+        let stop = stop.clone();
+        thread::spawn(move || {
+            let mut waiting = None;
+            wait_until(Instant::now() + Duration::from_secs(90), || {
+                waiting = waiting_check(&turns);
+                waiting.is_some() || stop.exists()
+            });
+            let Some(waiting) = waiting else {
+                return false;
+            };
+            let moved = std::process::Command::new("python3")
+                .args([
+                    "-I",
+                    "-c",
+                    "import sqlite3, sys\n\
+                     c = sqlite3.connect(sys.argv[1], timeout=30)\n\
+                     c.execute('UPDATE items SET lease_no = lease_no + 1 WHERE id = ?', (sys.argv[2],))\n\
+                     c.commit()\n",
+                ])
+                .arg(&store)
+                .arg(&item)
+                .status()
+                .unwrap();
+            assert!(moved.success());
+            fs::write(waiting.with_file_name("go"), "").unwrap();
+            true
+        })
+    };
+    // The item's lease has moved on to one nobody holds, so the room is stopped when the turn ends.
+    let mut after_one = |e: &Event| {
+        if matches!(e, Event::Ended { .. }) {
+            fs::write(&stop, "").unwrap();
+        }
+    };
+    let (result, events) = world.run_hooked(&[&late], Mode::OnceThrough, NEVER, 2, &mut after_one);
+    assert!(taker.join().unwrap(), "the check never began to wait");
+    result.unwrap();
+    assert_eq!(outcomes(&events), [Outcome::LeaseLost]);
+    let m = world
+        .room
+        .measured(&started(&events)[0].1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(m.ended, room::Ended::TimedOut);
+    assert!(matches!(m.exit_code, Some(code) if code != 0), "{m:?}");
+    assert!(m.check_ms.is_some(), "{m:?}");
 }
 
 #[test]
@@ -203,7 +329,78 @@ fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
     assert!(world.room_refs().is_empty());
     let turn = world.room.turns(&world.items[0]).unwrap().remove(0);
     assert_eq!(turn.passed, None);
-    assert_eq!(turn.measured.unwrap().ended, room::Ended::Stopped);
+    // The stop came after the worker had ended, by itself: how it ended is its own.
+    assert_eq!(turn.measured.unwrap().ended, room::Ended::Exited);
+}
+
+/// A step's times count from the turn's start, the moment the room starts to make its sandbox, as the record's
+/// durations do. Seen with a sandbox that takes two seconds to make, from a git whose fetch of the turn's base
+/// waits that long: the step, seen once the worker runs, is seen after the sandbox was made.
+#[test]
+fn a_steps_times_count_from_before_its_sandbox_was_made() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let wrapper = dir.join("git");
+    // Only the fetch that makes the turn's own sandbox, `turns/<attempt>`: not a check's, not a freeze's.
+    fs::write(
+        &wrapper,
+        "#!/bin/sh\ncase \" $* \" in\n*/turns/a????????????\" -c protocol.version=2 \"*) sleep 2;;\nesac\n\
+         exec /usr/bin/git \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = dir.clone().into_os_string();
+    path.push(":/usr/bin:/bin:/usr/sbin:/sbin");
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inner_a_turn_whose_sandbox_is_slow_to_make",
+            "--nocapture",
+        ])
+        .env("YAK_INNER_SLOW_SANDBOX", "1")
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    let number = |label: &str| -> u64 {
+        let line = printed
+            .lines()
+            .find(|l| l.starts_with(label))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the inner run did not report {label}: {printed} {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )
+            });
+        line[label.len()..].trim().parse().unwrap()
+    };
+    let (sandbox_ms, seen_ms) = (number("SANDBOX_MS "), number("SEEN_MS "));
+    // The control: the sandbox did take its two seconds.
+    assert!(sandbox_ms >= 2_000, "{printed}");
+    assert!(seen_ms >= sandbox_ms, "{printed}");
+    assert!(printed.contains("PARTS ADD UP true"), "{printed}");
+}
+
+#[test]
+fn inner_a_turn_whose_sandbox_is_slow_to_make() {
+    if std::env::var_os("YAK_INNER_SLOW_SANDBOX").is_none() {
+        return;
+    }
+    let mut world = World::new(1);
+    let fix = world.script("fix.sh", FIX);
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
+    let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    let attempt = &started(&events)[0].1;
+    let m = world.room.measured(attempt).unwrap().unwrap();
+    let walk = world.room.walk(attempt).unwrap();
+    println!("SANDBOX_MS {}", m.sandbox_ms);
+    println!("SEEN_MS {}", walk[0].seen_ms.unwrap());
+    println!(
+        "PARTS ADD UP {}",
+        m.active_ms
+            == m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
+    );
 }
 
 #[test]
@@ -771,6 +968,61 @@ fn a_sandbox_that_was_replaced_is_left_where_it_is() {
     // Nothing else of any turn is left.
     let name = at.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(world.turns(), [name]);
+}
+
+/// A turn's record is written before its sandbox is removed, so that a clock that dies removing it leaves the
+/// record. Seen when the removal is refused: at the moment the clock says so, the record is in the store.
+#[test]
+fn a_turns_record_is_written_before_its_sandbox_is_removed() {
+    let mut world = World::new(1);
+    let slow = world.script("slow.sh", "#!/bin/sh\nsleep 3\n");
+    let _bound = StopsWithin::for_a_test(&world.room_dir);
+    let turns = world.room_dir.join("turns");
+    let moved = world.scratch("moved-away");
+    // As in the test above: the sandbox is moved away while its worker runs, and a directory put in its place.
+    let swapper = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut sandbox = None;
+        assert!(wait_until(deadline, || {
+            let names: Vec<String> = fs::read_dir(&turns)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            let running = names.iter().any(|n| n.ends_with(".pid"));
+            sandbox = names.into_iter().find(|n| !n.contains('.'));
+            running && sandbox.is_some()
+        }));
+        let at = turns.join(sandbox.unwrap());
+        fs::rename(&at, &moved).unwrap();
+        fs::create_dir(&at).unwrap();
+    });
+    let room_dir = world.room_dir.clone();
+    let stop = world.room_dir.join("STOP");
+    let mut attempt = None;
+    let mut measured_then = None;
+    // On the clock's own thread, as it says each thing: the store is read where the removal was refused.
+    let mut hook = |e: &Event| match e {
+        Event::Started { attempt: a, .. } => attempt = Some(a.clone()),
+        Event::Problem { what, .. } if what.contains("the sandbox was not removed") => {
+            let reader = room::Room::open_read_only(&room_dir).unwrap();
+            measured_then = Some(
+                reader
+                    .measured(attempt.as_ref().unwrap())
+                    .unwrap()
+                    .is_some(),
+            );
+        }
+        // One turn is enough.
+        Event::Ended { .. } => fs::write(&stop, "").unwrap(),
+        _ => {}
+    };
+    let (result, events) =
+        world.run_hooked(&[&slow], Mode::OnceThrough, NEVER, TURN_SECS, &mut hook);
+    swapper.join().unwrap();
+    result.unwrap();
+    assert_eq!(measured_then, Some(true), "{events:?}");
 }
 
 /// A scratch directory is the room's to remove only if a run of the room's made it. One that was at its path
@@ -2125,6 +2377,10 @@ fn inner_a_clock_that_can_no_longer_look_at_its_processes() {
             .map(|id| world.room.item(id).unwrap().state)
             .collect();
         println!("{label} ITEMS {states:?}");
+        if let Some(id) = attempt {
+            let measured = world.room.measured(&room::AttemptId(id.clone()));
+            println!("{label} MEASURED {}", matches!(measured, Ok(Some(_))));
+        }
     };
     // In the `-store` modes: once the run in question has its record, the store is held.
     let holder = mode.ends_with("-store").then(|| {
@@ -2268,8 +2524,13 @@ fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place
         "{plain}"
     );
 
-    stopped_at_the_workers_run(&with_ps("worker"));
-    stopped_at_the_checks_run(&with_ps("check"));
+    // The attempt's measured record is written, though the clock stopped for its run.
+    let worker = with_ps("worker");
+    stopped_at_the_workers_run(&worker);
+    assert!(worker.contains("FIRST MEASURED true"), "{worker}");
+    let check = with_ps("check");
+    stopped_at_the_checks_run(&check);
+    assert!(check.contains("FIRST MEASURED true"), "{check}");
 
     // A check being frozen: its work directory, the sandbox in it and its record all stay, and no turn starts.
     let freeze = with_ps("freeze");

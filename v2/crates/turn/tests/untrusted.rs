@@ -162,6 +162,9 @@ fn a_script_worker_cannot_write_outside_its_sandbox_and_its_commit_still_lands()
         steps: Vec::new(),
         tokens: Tokens::none(),
         steps_seen: 0,
+        started: std::time::Instant::now(),
+        seal_ms: 0,
+        status: None,
     };
     let status = worker::from_name(&format!("script:{}", script.display()))
         .unwrap()

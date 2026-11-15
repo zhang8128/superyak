@@ -158,12 +158,15 @@ impl Tokens {
     }
 
     /// `fresh_in + cache_write + cache_read + output`, when the program gave its closing total and every one
-    /// of those parts. `reasoning` is not added.
+    /// of those parts. `reasoning` is not added. A sum too large for a `u64` is not known either.
     pub fn total(&self) -> Option<u64> {
         if !self.complete {
             return None;
         }
-        Some(self.fresh_in? + self.cache_write? + self.cache_read? + self.output?)
+        self.fresh_in?
+            .checked_add(self.cache_write?)?
+            .checked_add(self.cache_read?)?
+            .checked_add(self.output?)
     }
 }
 
@@ -182,14 +185,21 @@ pub enum Ended {
 /// A turn's measured record. Durations are milliseconds on a clock that does not jump.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Measured {
+    /// How the turn's worker ended, not how the turn did: a stop or a lost lease that comes after the worker has
+    /// ended (while its commit is brought in, at the hand-in, at the verdict) leaves it as the worker's own end.
     pub ended: Ended,
     pub exit_code: Option<i32>,
     pub tokens: Tokens,
     pub steps_seen: u64,
     pub unknown_steps: u64,
+    /// Files the turn's commit changed that were counted and not kept: a path that is not plain, or one past
+    /// `limits::MAX_CHANGES`.
+    pub unknown_changes: u64,
     pub sandbox_ms: u64,
     pub worker_ms: u64,
     pub seal_ms: u64,
+    /// Bringing the commit into the item's repository, and the hand-in. A turn that hands in nothing has no
+    /// commit to bring, and still has a few milliseconds here, not 0: its hand-in is recorded in this phase.
     pub bring_ms: u64,
     pub check_ms: Option<u64>,
     pub recheck_ms: Option<u64>,
@@ -289,5 +299,24 @@ mod tests {
     #[test]
     fn total_is_none_when_not_complete() {
         assert_eq!(tokens(false).total(), None);
+    }
+
+    #[test]
+    fn total_is_none_when_the_sum_would_overflow() {
+        for part in 0..4 {
+            let mut t = tokens(true);
+            let parts = [
+                &mut t.fresh_in,
+                &mut t.cache_write,
+                &mut t.cache_read,
+                &mut t.output,
+            ];
+            *parts.into_iter().nth(part).unwrap() = Some(u64::MAX);
+            assert_eq!(t.total(), None, "part {part}");
+        }
+        // The control: the largest sum that fits is still given.
+        let mut t = tokens(true);
+        t.output = Some(u64::MAX - 6);
+        assert_eq!(t.total(), Some(u64::MAX));
     }
 }

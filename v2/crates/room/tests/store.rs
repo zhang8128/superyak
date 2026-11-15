@@ -148,8 +148,14 @@ CREATE TABLE disagreements (
 );
 "#;
 
+/// A store as the stage 1 program left it: the stage 1 schema and one of everything, in WAL mode, as its writer
+/// always set it.
 fn version_1(dir: &std::path::Path) -> rusqlite::Connection {
     let c = rusqlite::Connection::open(dir.join("room.sqlite3")).unwrap();
+    let mode: String = c
+        .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
     c.execute_batch(V1).unwrap();
     c.execute_batch("INSERT INTO meta VALUES (1,40,1);
         INSERT INTO items VALUES (1,'i000000000000','fixture','/fixture','0000000000000000000000000000000000000000','[]','failed',1,1);
@@ -237,8 +243,11 @@ fn a_version_1_store_opened_read_only_says_how() {
     assert!(matches!(e, RoomError::OlderSchema { found: 1, known: 2 }));
 }
 
+/// Another writer holding the store's write lock keeps the migration from starting, and the store stays as the
+/// stage 1 program left it. With the store in WAL mode, as a real stage 1 store is, nothing before the migration
+/// needs that lock: it is the migration's own transaction that is refused.
 #[test]
-fn bringing_a_store_forward_is_all_or_nothing() {
+fn a_held_write_lock_stops_the_migration_and_leaves_version_1_as_it_was() {
     let d = tempfile::tempdir().unwrap();
     let c = version_1(d.path());
     c.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -294,6 +303,7 @@ fn every_version_2_table_and_column_is_validated() {
                 "reasoning",
                 "steps_seen",
                 "unknown_steps",
+                "unknown_changes",
                 "sandbox_ms",
                 "worker_ms",
                 "seal_ms",

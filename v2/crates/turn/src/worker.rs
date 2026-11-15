@@ -9,7 +9,7 @@ use std::time::Instant;
 use room::{Step, Tokens};
 use serde_json::json;
 
-use crate::sandbox::{RunStatus, SAFE_GIT_ENV, SAFE_GIT_FLAGS};
+use crate::sandbox::{RunStatus, SAFE_GIT_ENV, SAFE_GIT_FLAGS, git};
 use crate::transcript::{ClaudeParser, CodexParser};
 use crate::{Sandbox, TurnError, io};
 
@@ -51,6 +51,15 @@ pub struct Seen {
     pub steps: Vec<Step>,
     pub tokens: Tokens,
     pub steps_seen: u64,
+    /// The turn's start, set by whoever makes the `Seen`, before the sandbox is made. A step's times count from
+    /// it.
+    pub started: Instant,
+    /// How long the room's own commit on the worker's behalf took, in milliseconds, set by the worker: 0 for a
+    /// worker that commits for itself.
+    pub seal_ms: u64,
+    /// How the worker's program itself ended, set as soon as its run returns, before the room's commit: a run
+    /// that then returns an error has still said it.
+    pub status: Option<RunStatus>,
 }
 
 /// What a worker needs of a stream's parser.
@@ -180,15 +189,17 @@ impl Worker for ScriptWorker {
         let program = self.path.to_str().ok_or_else(|| {
             TurnError::Refused(format!("{} is not a UTF-8 path", self.path.display()))
         })?;
-        let mut watching = Watching::new(ClaudeParser::new(sandbox, Instant::now()), seen);
+        let mut watching = Watching::new(ClaudeParser::new(sandbox, seen.started), seen);
         // A script stands in for a worker's own code, so it runs as untrusted.
-        sandbox.run_untrusted(
+        let status = sandbox.run_untrusted(
             program,
             &[],
             &prompt(item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
-        )
+        )?;
+        watching.seen.status = Some(status);
+        Ok(status)
     }
 }
 
@@ -314,7 +325,8 @@ impl Worker for ClaudeWorker {
             .map_err(|e| TurnError::Io(e.to_string()))?;
         std::fs::write(&path, text).map_err(io("write the claude settings"))?;
         let _settings = Removed(&path);
-        let mut watching = Watching::new(ClaudeParser::new(sandbox, Instant::now()), seen);
+        let tracked = base_tracks_message(sandbox)?;
+        let mut watching = Watching::new(ClaudeParser::new(sandbox, seen.started), seen);
         let status = sandbox.run(
             &self.program,
             &self.args(&path),
@@ -322,7 +334,11 @@ impl Worker for ClaudeWorker {
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
-        seal(sandbox, &self.name(), "Claude <noreply@anthropic.com>")?;
+        watching.seen.status = Some(status);
+        let name = self.name();
+        timed(watching.seen, || {
+            seal(sandbox, &name, "Claude <noreply@anthropic.com>", tracked)
+        })?;
         Ok(status)
     }
 }
@@ -388,7 +404,8 @@ impl Worker for CodexWorker {
         limit_secs: u32,
         seen: &mut Seen,
     ) -> Result<RunStatus, TurnError> {
-        let mut watching = Watching::new(CodexParser::new(sandbox, Instant::now()), seen);
+        let tracked = base_tracks_message(sandbox)?;
+        let mut watching = Watching::new(CodexParser::new(sandbox, seen.started), seen);
         let status = sandbox.run(
             &self.program,
             &self.args(sandbox),
@@ -396,9 +413,21 @@ impl Worker for CodexWorker {
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
-        seal(sandbox, &self.name(), "Codex <noreply@openai.com>")?;
+        watching.seen.status = Some(status);
+        let name = self.name();
+        timed(watching.seen, || {
+            seal(sandbox, &name, "Codex <noreply@openai.com>", tracked)
+        })?;
         Ok(status)
     }
+}
+
+/// Runs the room's commit for a worker, and keeps how long it took in `seen.seal_ms`, whatever it returned.
+fn timed(seen: &mut Seen, seal: impl FnOnce() -> Result<(), TurnError>) -> Result<(), TurnError> {
+    let start = Instant::now();
+    let sealed = seal();
+    seen.seal_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    sealed
 }
 
 /// Removes a file when dropped.
@@ -424,12 +453,13 @@ fn is_status_entry(line: &str) -> bool {
     bytes.len() > 3 && bytes[2] == b' ' && bytes[..2].iter().all(|b| b" MADRCUT?!".contains(b))
 }
 
-fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str) -> Result<(), TurnError> {
+/// `tracked` says whether the base tracks something at the message file's name (`base_tracks_message`).
+fn seal(sandbox: &Sandbox, worker: &str, coauthor: &str, tracked: bool) -> Result<(), TurnError> {
     sandbox.reclaim()?;
     sandbox.single_repository()?;
     // Taken before git looks at the tree, so that the file is in no commit, and a message with no other change
     // makes none.
-    let said = take_message(sandbox)?;
+    let said = take_message(sandbox, tracked)?;
     let git = |args: &[&str], on_line: &mut dyn FnMut(&str)| -> Result<(), TurnError> {
         // Through `env`, since a run's environment is the scrubbed one.
         let mut argv: Vec<String> = SAFE_GIT_ENV
@@ -478,12 +508,36 @@ const MESSAGE_FILE: &str = ".yak-message";
 /// The longest message the room reads.
 const MESSAGE_BYTES: usize = 16_384;
 
+/// Whether the base commit tracks something at `MESSAGE_FILE`'s name, in any letter case: a name at the top of
+/// its tree that folds to it. Read with the room's git before the worker runs, from the clone as the room made
+/// it. A disk that does not tell capital letters from small ones holds such a file at `MESSAGE_FILE` itself.
+fn base_tracks_message(sandbox: &Sandbox) -> Result<bool, TurnError> {
+    let names = git(
+        &sandbox.dir,
+        &[
+            "ls-tree",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            sandbox.base(),
+        ],
+    )?;
+    Ok(names
+        .split(|&b| b == 0)
+        .any(|name| String::from_utf8_lossy(name).to_uppercase().to_lowercase() == MESSAGE_FILE))
+}
+
 /// Takes the message a worker left in `MESSAGE_FILE`, when there is one the room can use, and removes the file
-/// so that it is in no commit. Only a plain file is read, of at most `MESSAGE_BYTES`, holding text git can take
-/// as a message: UTF-8, with no NUL, and not blank. Whatever else is at that name is not read. A link is removed
-/// as a file is, and is never followed; a directory, a pipe or anything else is left where it is. The worker has
-/// ended, everything it started with it, so what was looked at is what is read.
-fn take_message(sandbox: &Sandbox) -> Result<Option<String>, TurnError> {
+/// so that it is in no commit. When the base tracks something at that name (`tracked`), there is no message
+/// file for the turn: nothing there is read or removed, and it is committed as any tracked file is. Otherwise
+/// only a plain file is read, of at most `MESSAGE_BYTES`, holding text git can take as a message: UTF-8, with
+/// no NUL, and not blank. A link is removed as a file is, and is never followed. A directory, a pipe or anything
+/// else there is refused: the room does not commit for the worker with it there, and nothing of it is staged.
+/// The worker has ended, everything it started with it, so what was looked at is what is read.
+fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, TurnError> {
+    if tracked {
+        return Ok(None);
+    }
     let path = sandbox.dir.join(MESSAGE_FILE);
     let meta = match std::fs::symlink_metadata(&path) {
         Ok(meta) => meta,
@@ -491,7 +545,17 @@ fn take_message(sandbox: &Sandbox) -> Result<Option<String>, TurnError> {
         Err(e) => return Err(io("look at the message file")(e)),
     };
     if !meta.is_file() && !meta.is_symlink() {
-        return Ok(None);
+        let found = if meta.is_dir() {
+            "a directory"
+        } else if std::os::unix::fs::FileTypeExt::is_fifo(&meta.file_type()) {
+            "a named pipe"
+        } else {
+            "something other than a file or a link"
+        };
+        return Err(TurnError::Refused(format!(
+            "{} is {found}, not a file or a link, and the room does not commit for the worker with it there",
+            path.display()
+        )));
     }
     let said = if meta.is_file() {
         let mut bytes = Vec::new();
