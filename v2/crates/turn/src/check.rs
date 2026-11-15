@@ -23,6 +23,22 @@ struct CheckFile {
     executable: bool,
 }
 
+/// Says whether `spec` could be frozen at `base_commit`, writing and running nothing: its command is not
+/// empty, and each of its files is a plain relative path naming a regular tracked file at that commit. The
+/// same tests `freeze` makes, so an item whose check could never be frozen is refused when it is added.
+pub fn freezable(repo: &Path, base_commit: &str, spec: &CheckSpec) -> Result<(), TurnError> {
+    let paths = check_paths(spec)?;
+    if base_commit.is_empty() || base_commit.starts_with('-') {
+        return Err(TurnError::Refused(format!(
+            "{base_commit:?} is not a commit"
+        )));
+    }
+    for path in &paths {
+        read_at(repo, base_commit, path)?;
+    }
+    Ok(())
+}
+
 /// Freezes `spec` at `base_commit`: copies its files from that commit to `checks_dir/<check_hash>/`, then runs
 /// the check on `base_commit` and on each wrong artifact to say which of them it fails on.
 pub fn freeze(

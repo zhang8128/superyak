@@ -227,23 +227,26 @@ fn add_item(dir: &Path, add: Add) -> Result<()> {
         return Err(RoomError::Refused(format!("unknown base commit: {}", add.base)).into());
     }
     let base_commit = String::from_utf8(output.stdout)?.trim().to_owned();
+    let check = CheckSpec {
+        command: add.check,
+        files: add.file,
+        timeout_secs: limits::CHECK_TIMEOUT_SECS,
+        origin: match add.origin {
+            Origin::Outside => CheckOrigin::Outside,
+            Origin::Observed => CheckOrigin::ObservedFailure,
+            Origin::Model => CheckOrigin::Model,
+        },
+        wrong_artifacts: add.wrong,
+        written_by: add.by,
+    };
+    // A check that could never be frozen would only fail later, at the clock: refuse it now.
+    turn::check::freezable(&repo, &base_commit, &check)?;
     let id = room.add_item(NewItem {
         title: add.title,
         repo,
         base_commit,
         after: add.after.into_iter().map(ItemId).collect(),
-        check: CheckSpec {
-            command: add.check,
-            files: add.file,
-            timeout_secs: limits::CHECK_TIMEOUT_SECS,
-            origin: match add.origin {
-                Origin::Outside => CheckOrigin::Outside,
-                Origin::Observed => CheckOrigin::ObservedFailure,
-                Origin::Model => CheckOrigin::Model,
-            },
-            wrong_artifacts: add.wrong,
-            written_by: add.by,
-        },
+        check,
     })?;
     println!("{}", id.0);
     Ok(())
