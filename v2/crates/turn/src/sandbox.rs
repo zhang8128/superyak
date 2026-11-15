@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -88,8 +88,12 @@ pub struct Sandbox {
     id: (u64, u64),
     /// The same for the scratch directory, once a jailed run has made it.
     scratch_id: OnceLock<(u64, u64)>,
-    /// Whether a run was started in this sandbox.
-    started: AtomicBool,
+    /// Whether a run was ever started in this sandbox.
+    a_run_began: AtomicBool,
+    /// What a model worker's shell is not shown, as real paths: the item's repository, and what the room adds.
+    hidden_from_worker: Vec<PathBuf>,
+    /// The turn's own temporary directory and which directory it is, once made.
+    worker_tmp: Mutex<Option<(PathBuf, (u64, u64))>>,
 }
 
 /// Which directory `path` is: its device and its number on that device. A link is not a directory.
@@ -112,6 +116,40 @@ fn clear(path: &Path) -> Result<(), TurnError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(io(format!("look at {}", path.display()))(e)),
     }
+}
+
+/// What a run is, beside its program: one in the jail, with the jail and its scratch directory; a model worker's
+/// own program, with the turn's own temporary directory; or neither.
+#[derive(Clone, Copy)]
+enum Started<'a> {
+    Plain,
+    Model(&'a Path),
+    Jailed(&'a Jail, &'a Path),
+}
+
+/// How many names a private directory is tried under before the room gives up.
+const PRIVATE_DIR_TRIES: u32 = 5;
+
+/// Makes a new directory `yak-<name>` in `parent` with mode 0700, where nothing is at that name: not a file,
+/// not a link, not a directory. When something is, another name is asked of `name` and tried, up to
+/// `PRIVATE_DIR_TRIES` names in all. Anything else that stops it is said at once.
+fn private_dir(
+    parent: &Path,
+    name: &mut dyn FnMut() -> Result<String, TurnError>,
+) -> Result<PathBuf, TurnError> {
+    use std::os::unix::fs::DirBuilderExt;
+    for _ in 0..PRIVATE_DIR_TRIES {
+        let path = parent.join(format!("yak-{}", name()?));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io(format!("make {}", path.display()))(e)),
+        }
+    }
+    Err(TurnError::Refused(format!(
+        "no private directory could be made in {}: something was already at each of {PRIVATE_DIR_TRIES} new names",
+        parent.display()
+    )))
 }
 
 /// Writes a file that must not exist yet, so a link put in its place is never written through.
@@ -294,6 +332,10 @@ impl Sandbox {
             // `maintenance.auto` is what a commit asks; `gc.auto` is for a git old enough to ask that.
             ("maintenance.auto", "false"),
             ("gc.auto", "0"),
+            // No git in the clone looks for an ignore or attributes file in a home: a worker's shell may not
+            // read the home, and git there warns of every file it was refused.
+            ("core.excludesFile", "/dev/null"),
+            ("core.attributesFile", "/dev/null"),
         ] {
             git(dir, &["config", key, value])?;
         }
@@ -302,6 +344,8 @@ impl Sandbox {
         // The room's own copy of the clone's config, put back before the room runs git there after a worker.
         let config =
             fs::read(dir.join(".git").join("config")).map_err(io("read the clone's config"))?;
+        // The item's repository keeps every commit brought into it, earlier turns' answers among them.
+        let repo = fs::canonicalize(&repo).map_err(io("find the item's repository"))?;
         made.0 = None;
         let id = identity(&dir)?;
         Ok(Sandbox {
@@ -313,8 +357,70 @@ impl Sandbox {
             stop: Arc::new(AtomicBool::new(false)),
             id,
             scratch_id: OnceLock::new(),
-            started: AtomicBool::new(false),
+            a_run_began: AtomicBool::new(false),
+            hidden_from_worker: vec![repo],
+            worker_tmp: Mutex::new(None),
         })
+    }
+
+    /// Hides `path` from a model worker's shell, as its real path. A path that is not absolute, or is not there,
+    /// is refused: one quietly left out would look hidden and not be.
+    pub fn hide_from_worker(&mut self, path: &Path) -> Result<(), TurnError> {
+        if !path.is_absolute() {
+            return Err(TurnError::Refused(format!(
+                "{} cannot be hidden from a worker: it is not an absolute path",
+                path.display()
+            )));
+        }
+        let real = fs::canonicalize(path).map_err(|e| {
+            TurnError::Refused(format!(
+                "{} cannot be hidden from a worker: it is not there ({e})",
+                path.display()
+            ))
+        })?;
+        self.hidden_from_worker.push(real);
+        Ok(())
+    }
+
+    /// What a model worker's shell is not shown, as real paths: first the item's repository, then what was
+    /// added with `hide_from_worker`, in that order.
+    pub fn hidden_from_worker(&self) -> &[PathBuf] {
+        &self.hidden_from_worker
+    }
+
+    /// The turn's own temporary directory: made on the first call, and the same afterwards. It is a new
+    /// directory directly under the real path of `/tmp`, `yak-` and 16 hex characters from the system's random
+    /// source, with mode 0700, made so that making it fails if anything is already at its name. It is removed
+    /// with the sandbox, and only if it is still the directory that was made.
+    ///
+    /// Why under `/tmp` and not beside the sandbox: Claude gives a shell command a temporary directory shared
+    /// by every session on the machine unless the one it is told to use has a short path (measured: a path of
+    /// 77 characters was not used, one of 19 was).
+    pub fn worker_tmp(&self) -> Result<PathBuf, TurnError> {
+        let mut made = self
+            .worker_tmp
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((path, _)) = &*made {
+            return Ok(path.clone());
+        }
+        let root = fs::canonicalize("/tmp").map_err(io("find /tmp"))?;
+        let path = private_dir(&root, &mut || Ok(marker()?[..16].to_string()))?;
+        *made = Some((path.clone(), identity(&path)?));
+        Ok(path)
+    }
+
+    /// The temporary directories every turn on the machine shares: the real path of `/tmp`, and the real path of
+    /// the clock's own `TMPDIR` when that is set, is there and is another directory.
+    pub fn shared_tmp() -> Vec<PathBuf> {
+        let mut shared: Vec<PathBuf> = fs::canonicalize("/tmp").into_iter().collect();
+        if let Some(own) = std::env::var_os("TMPDIR").and_then(|dir| fs::canonicalize(dir).ok())
+            && own.is_dir()
+            && !shared.contains(&own)
+        {
+            shared.push(own);
+        }
+        shared
     }
 
     /// The commit the sandbox was made at, in full.
@@ -435,7 +541,7 @@ impl Sandbox {
     /// Whether a run was ever started in this sandbox: a worker's program, a check, the room's own git. Until
     /// one is, nothing has run here, whatever a worker's `run` returned.
     pub fn started_a_run(&self) -> bool {
-        self.started.load(Ordering::Relaxed)
+        self.a_run_began.load(Ordering::Relaxed)
     }
 
     /// Each run atomically writes its group and leader start time, one per line, to this path, and
@@ -478,7 +584,31 @@ impl Sandbox {
         limit_secs: u32,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<RunStatus, TurnError> {
-        self.run_with(None, program, args, stdin, limit_secs, on_line)
+        self.run_with(Started::Plain, program, args, stdin, limit_secs, on_line)
+    }
+
+    /// Runs a model worker's own program as `run` does, telling it where it may keep temporary files and that
+    /// its git reads no global settings: `TMPDIR` and `CLAUDE_CODE_TMPDIR` are the turn's own temporary
+    /// directory (`worker_tmp`), and `GIT_CONFIG_GLOBAL` is `/dev/null`. Its shell may not read the home, and git
+    /// stops where it may not read the settings it looks for there (measured: "fatal: unable to access
+    /// '.../.gitconfig': Operation not permitted").
+    pub(crate) fn run_model(
+        &self,
+        program: &str,
+        args: &[String],
+        stdin: &str,
+        limit_secs: u32,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<RunStatus, TurnError> {
+        let tmp = self.worker_tmp()?;
+        self.run_with(
+            Started::Model(&tmp),
+            program,
+            args,
+            stdin,
+            limit_secs,
+            on_line,
+        )
     }
 
     /// Runs `program` as `run` does, inside an OS-level jail: it can write only in the sandbox and a scratch
@@ -527,7 +657,7 @@ impl Sandbox {
             jail = jail.allow_read(Path::new(program))?;
         }
         self.run_with(
-            Some((&jail, &scratch)),
+            Started::Jailed(&jail, &scratch),
             program,
             args,
             stdin,
@@ -545,7 +675,7 @@ impl Sandbox {
 
     fn run_with(
         &self,
-        jailed: Option<(&Jail, &Path)>,
+        started: Started<'_>,
         program: &str,
         args: &[String],
         stdin: &str,
@@ -559,13 +689,13 @@ impl Sandbox {
         }
         self.own()?;
         let wrapped;
-        let (program, args) = match jailed {
-            Some((jail, _)) => {
+        let (program, args) = match started {
+            Started::Jailed(jail, _) => {
                 let (tool, tool_args) = jail.command(program, args);
                 wrapped = (tool.to_string_lossy().into_owned(), tool_args);
                 (wrapped.0.as_str(), wrapped.1.as_slice())
             }
-            None => (program, args),
+            Started::Plain | Started::Model(_) => (program, args),
         };
         let launch = Launch::new(program, args, limit_secs);
         let marker = marker()?;
@@ -583,18 +713,27 @@ impl Sandbox {
             .envs(launch.env)
             .env("YAK_TURN", &marker)
             .current_dir(&self.dir);
-        if let Some((_, scratch)) = jailed {
-            command.env("HOME", scratch).env("TMPDIR", scratch);
-            for name in AGENT_HOMES {
-                command.env_remove(name);
+        match started {
+            Started::Jailed(_, scratch) => {
+                command.env("HOME", scratch).env("TMPDIR", scratch);
+                for name in AGENT_HOMES {
+                    command.env_remove(name);
+                }
+                // A jailed run's git reads no settings of the machine's. Its home is the scratch directory, so
+                // it has none of a person's either. A check then means the same on every machine; and git works
+                // where its own settings file is kept somewhere the jail does not show, which it otherwise takes
+                // for an error and stops at (Homebrew's git, whose settings are under `/opt/homebrew/etc`).
+                for (name, value) in JAILED_GIT_ENV {
+                    command.env(name, value);
+                }
             }
-            // A jailed run's git reads no settings of the machine's. Its home is the scratch directory, so it
-            // has none of a person's either. A check then means the same on every machine; and git works where
-            // its own settings file is kept somewhere the jail does not show, which it otherwise takes for an
-            // error and stops at (Homebrew's git, whose settings are under `/opt/homebrew/etc`).
-            for (name, value) in JAILED_GIT_ENV {
-                command.env(name, value);
+            Started::Model(tmp) => {
+                command
+                    .env("TMPDIR", tmp)
+                    .env("CLAUDE_CODE_TMPDIR", tmp)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null");
             }
+            Started::Plain => {}
         }
         command
             .stdin(Stdio::piped())
@@ -602,7 +741,7 @@ impl Sandbox {
             .stderr(writer)
             .process_group(0);
         let mut child = command.spawn().map_err(io(format!("start {program}")))?;
-        self.started.store(true, Ordering::Relaxed);
+        self.a_run_began.store(true, Ordering::Relaxed);
         // The command holds the pipe's write ends; until it is gone the pipe never reaches its end.
         drop(command);
         let group = child.id();
@@ -705,9 +844,10 @@ impl Sandbox {
     }
 
     /// Removes the sandbox: the clone that was made, even where a worker took away its own write permission,
-    /// and the scratch directory a jailed run was given. Only those. If something else is at either path by
-    /// now, it is not the room's to remove: it is left as it is, the rest is still removed, and the error
-    /// (`TurnError::Left`) holds the paths that were left, for a caller that tidies around them.
+    /// the scratch directory a jailed run was given, and the turn's own temporary directory. Only those. If
+    /// something else is at any of those paths by now (a link put in the place of one, say), it is not the room's
+    /// to remove: it is left as it is, the rest is still removed, and the error (`TurnError::Left`) holds the
+    /// paths that were left, for a caller that tidies around them.
     pub fn destroy(self) -> Result<(), TurnError> {
         let mut left = Vec::new();
         // A removal that fails does not end the others, and does not take the place of what was left.
@@ -731,6 +871,19 @@ impl Sandbox {
         let filter = PathBuf::from(filter);
         if fs::symlink_metadata(&filter).is_ok_and(|meta| meta.is_file()) {
             tried(fs::remove_file(&filter).map_err(io("remove the jail's filter")));
+        }
+        // The turn's own temporary directory, when one was made and it is still that one: a link is no directory.
+        let made = self
+            .worker_tmp
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((tmp, id)) = made {
+            if identity(&tmp).ok() == Some(id) {
+                tried(remove_tree(&tmp));
+            } else if fs::symlink_metadata(&tmp).is_ok() {
+                left.push(tmp);
+            }
         }
         if identity(&self.dir).ok() == Some(self.id) {
             tried(remove_tree(&self.dir));
@@ -1415,6 +1568,48 @@ mod tests {
         });
         assert_eq!(looks, 1);
         assert!(matches!(result, Err(TurnError::Io(_))), "{result:?}");
+    }
+
+    /// A private directory is made where nothing is, under another name when something is at the one tried,
+    /// five names at most; anything else that stops it is said at once.
+    #[test]
+    fn a_private_directory_takes_another_name_when_one_is_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path();
+        // A file at the first name, and a link to nowhere at the second.
+        fs::write(parent.join("yak-a"), "").unwrap();
+        std::os::unix::fs::symlink(parent.join("nowhere"), parent.join("yak-b")).unwrap();
+        let mut names = ["a", "b", "c", "d"].into_iter().map(String::from);
+        let made = private_dir(parent, &mut || Ok(names.next().unwrap())).unwrap();
+        assert_eq!(made, parent.join("yak-c"));
+        let meta = fs::symlink_metadata(&made).unwrap();
+        assert!(meta.is_dir());
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o700);
+        assert!(
+            fs::symlink_metadata(parent.join("nowhere")).is_err(),
+            "made through the link"
+        );
+        // Five names taken: refused after five tries, and nothing made at a sixth.
+        for name in ["p", "q", "r", "s", "t"] {
+            fs::create_dir(parent.join(format!("yak-{name}"))).unwrap();
+        }
+        let mut tried = 0;
+        let mut names = ["p", "q", "r", "s", "t", "u"].into_iter().map(String::from);
+        let refused = private_dir(parent, &mut || {
+            tried += 1;
+            Ok(names.next().unwrap())
+        });
+        assert!(matches!(refused, Err(TurnError::Refused(_))), "{refused:?}");
+        assert_eq!(tried, 5);
+        assert!(fs::symlink_metadata(parent.join("yak-u")).is_err());
+        // A parent that is not there is no taken name: said at once.
+        let mut tried = 0;
+        let lost = private_dir(&parent.join("missing"), &mut || {
+            tried += 1;
+            Ok(format!("n{tried}"))
+        });
+        assert!(matches!(lost, Err(TurnError::Io(_))), "{lost:?}");
+        assert_eq!(tried, 1);
     }
 
     #[test]

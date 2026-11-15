@@ -884,6 +884,8 @@ impl Clock<'_, '_> {
         let turns = self.room.dir().join(TURNS);
         fs::create_dir_all(&turns)
             .map_err(|e| ClockError::Io(format!("make {}: {e}", turns.display())))?;
+        let room_dir = fs::canonicalize(self.room.dir())
+            .map_err(|e| ClockError::Io(format!("find {}: {e}", self.room.dir().display())))?;
         let branch = format!("room/{}/{}", lease.item.0, lease.lease_no);
         record.start(Instant::now());
         let mut sandbox = match Sandbox::create(
@@ -900,6 +902,15 @@ impl Clock<'_, '_> {
                 return Ok(Outcome::NotRun { reason });
             }
         };
+        // No worker's shell may read the room's own directory: the store, the other turns' directories, the
+        // checks. It was found a moment ago, so this fails only if it went away since; then no worker runs.
+        if let Err(e) = sandbox.hide_from_worker(&room_dir) {
+            if let Err(left) = sandbox.destroy() {
+                self.keep(&left);
+            }
+            let reason = format!("no sandbox: {e}");
+            return Ok(Outcome::NotRun { reason });
+        }
         record.advance(Phase::Worker);
         // The pid file is for a clock that starts after this one died. This clock ends its own turn with the
         // sandbox's switch.
@@ -2544,6 +2555,52 @@ ln -s .git-old .git
         assert_eq!(
             m.active_ms,
             m.sandbox_ms + m.worker_ms + m.seal_ms + m.bring_ms + m.check_ms.unwrap_or(0)
+        );
+    }
+
+    /// A worker that keeps what its sandbox hides from a model worker's shell, and does nothing else.
+    struct KeepsWhatIsHidden(std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>);
+    impl turn::Worker for KeepsWhatIsHidden {
+        fn name(&self) -> String {
+            "script:keeps".into()
+        }
+        fn run(
+            &self,
+            sandbox: &Sandbox,
+            _title: &str,
+            _command: &str,
+            _limit: u32,
+            _seen: &mut Seen,
+        ) -> Result<RunStatus, TurnError> {
+            *self.0.lock().unwrap() = sandbox.hidden_from_worker().to_vec();
+            Ok(RunStatus {
+                exit_code: 0,
+                timed_out: false,
+                stopped: false,
+            })
+        }
+    }
+
+    /// Every sandbox the clock makes for a turn hides the room's own directory from a worker's shell: its store,
+    /// the other turns' directories and the checks. Here as a real path, beside the item's repository, which
+    /// the sandbox hides by itself. A worker of a test's own sees the list, through `attempt` as a turn goes:
+    /// from outside the clock only a model worker would, and with the jail off the clock runs none.
+    #[test]
+    fn the_clock_hides_its_room_from_a_worker() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, base) = base_repo(d.path());
+        let (mut room, lease) = leased(d.path(), repo.clone(), &base, "script:keeps");
+        let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let given = std::sync::Arc::clone(&kept);
+        let mut clock = test_clock(&mut room, 5, None);
+        let outcome = clock.attempt(&lease, now(), &mut Fixed(1), move |_| {
+            Ok(Box::new(KeepsWhatIsHidden(given)))
+        });
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let room_dir = d.path().join("room").canonicalize().unwrap();
+        assert_eq!(
+            *kept.lock().unwrap(),
+            [repo.canonicalize().unwrap(), room_dir]
         );
     }
 }

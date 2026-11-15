@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::sandbox::{RunStatus, SAFE_GIT_ENV, SAFE_GIT_FLAGS, git};
 use crate::transcript::{ClaudeParser, CodexParser};
-use crate::{Sandbox, TurnError, io};
+use crate::{Sandbox, TurnError, io, jail};
 
 /// The rules every turn reads first: section 9 of the v2 spec.
 pub const RULES: &str = "\
@@ -203,8 +203,157 @@ impl Worker for ScriptWorker {
     }
 }
 
+/// What a model worker's shell may read beside its sandbox, as both programs' settings are written from it. The
+/// rule is the jail's own: it is shown its sandbox, a temporary directory of the turn's own, the system and the
+/// directories named for tools. The home, what the room hid (the item's repository, the room's directory), the
+/// home's keys and settings, and the temporary directories every turn shares are hidden from it.
+struct Reach {
+    /// The clone.
+    dir: PathBuf,
+    /// The turn's own temporary directory.
+    tmp: PathBuf,
+    /// The home, hidden as a whole: a tool directory inside it can still be shown.
+    home: PathBuf,
+    /// What the room hid by name (`Sandbox::hidden_from_worker`): nothing inside one of these is shown.
+    by_room: Vec<PathBuf>,
+    /// The temporary directories every turn shares, hidden as a whole.
+    shared: Vec<PathBuf>,
+    /// The jail's places (`jail::places`).
+    jail_hidden: Vec<PathBuf>,
+    shown: Vec<PathBuf>,
+    system: Vec<PathBuf>,
+}
+
+impl Reach {
+    fn of(sandbox: &Sandbox) -> Result<Reach, TurnError> {
+        let places = jail::places()?;
+        Ok(Reach {
+            dir: sandbox.dir.clone(),
+            tmp: sandbox.worker_tmp()?,
+            home: places.home,
+            by_room: sandbox.hidden_from_worker().to_vec(),
+            shared: Sandbox::shared_tmp(),
+            jail_hidden: places.hidden,
+            shown: places.shown,
+            system: places.system,
+        })
+    }
+
+    /// Whether a directory the shell would otherwise be shown is hidden: it is a shared temporary directory, or
+    /// it is or lies in something hidden by name. Claude's own rule is that the narrower path decides, so
+    /// showing such a directory would show that part of what is hidden.
+    fn hides(&self, path: &Path) -> bool {
+        self.shared.iter().any(|dir| path == dir)
+            || self
+                .by_room
+                .iter()
+                .chain(&self.jail_hidden)
+                .any(|dir| path.starts_with(dir))
+    }
+
+    /// `sandbox.filesystem` of Claude's settings: what its shell may write, may read, and may not read.
+    fn claude_filesystem(&self) -> Result<serde_json::Value, TurnError> {
+        let own = [&self.dir, &self.tmp];
+        let allow_read = once(
+            own.into_iter()
+                .chain(self.shown.iter().filter(|p| !self.hides(p))),
+        );
+        let deny_read = once(
+            [&self.home]
+                .into_iter()
+                .chain(&self.by_room)
+                .chain(&self.shared)
+                .chain(&self.jail_hidden),
+        );
+        let texts = |paths: &[&PathBuf]| -> Result<Vec<String>, TurnError> {
+            paths.iter().map(|p| plain(p).map(str::to_string)).collect()
+        };
+        let mut deny_read = texts(&deny_read)?;
+        deny_read.extend(["**/.env".to_string(), "**/.env.*".to_string()]);
+        Ok(json!({
+            "allowWrite": texts(&own)?,
+            "allowRead": texts(&allow_read)?,
+            "denyRead": deny_read,
+        }))
+    }
+
+    /// Codex's permission table: `{` then the entries joined by `, ` then `}`. The three named places first,
+    /// then the system and the named tools to read, the turn's own temporary directory to write, and what the
+    /// room and the jail hide. A shown directory that is hidden is left out, and no path is written twice.
+    fn codex_table(&self) -> Result<String, TurnError> {
+        let shown = self
+            .system
+            .iter()
+            .chain(&self.shown)
+            .filter(|p| !self.hides(p))
+            .map(|p| (p, "read"));
+        let hidden = self
+            .by_room
+            .iter()
+            .chain(&self.jail_hidden)
+            .map(|p| (p, "deny"));
+        let mut entries = vec![
+            "\":root\"=\"deny\"".to_string(),
+            "\":minimal\"=\"read\"".to_string(),
+            "\":slash_tmp\"=\"deny\"".to_string(),
+        ];
+        let mut written: Vec<&PathBuf> = Vec::new();
+        for (path, access) in shown.chain([(&self.tmp, "write")]).chain(hidden) {
+            if !written.contains(&path) {
+                written.push(path);
+                entries.push(format!("{}=\"{access}\"", toml_key(path)?));
+            }
+        }
+        Ok(format!("{{{}}}", entries.join(", ")))
+    }
+}
+
+/// Each path once, where it first came.
+fn once<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a PathBuf> {
+    let mut kept: Vec<&PathBuf> = Vec::new();
+    for path in paths {
+        if !kept.contains(&path) {
+            kept.push(path);
+        }
+    }
+    kept
+}
+
+/// A path as the room writes it into a worker program's own sandbox settings. One that is not UTF-8, or holds a
+/// control character (below U+0020, or U+007F), is refused: written as best it could be, it would name some
+/// other path, and the one meant would be left as it was.
+fn plain(path: &Path) -> Result<&str, TurnError> {
+    match path.to_str() {
+        Some(text) if !text.chars().any(|c| c < ' ' || c == '\u{7f}') => Ok(text),
+        _ => Err(TurnError::Refused(format!(
+            "{path:?} cannot be named in a worker's sandbox settings: a path there must be UTF-8 with no \
+             control character"
+        ))),
+    }
+}
+
+/// A path as a key of a TOML table: a basic string, with `\` and `"` escaped.
+fn toml_key(path: &Path) -> Result<String, TurnError> {
+    let mut key = String::from("\"");
+    for c in plain(path)?.chars() {
+        if matches!(c, '\\' | '"') {
+            key.push('\\');
+        }
+        key.push(c);
+    }
+    key.push('"');
+    Ok(key)
+}
+
 /// `claude -p` with stream-json output, no session kept, no MCP servers, no user settings, and a settings file
 /// that allows file tools in the sandbox and the shell, which Claude's own sandbox keeps to it.
+///
+/// What the shell can read: its sandbox, the turn's own temporary directory, the system, and the directories
+/// named in `YAK_JAIL_READ`. Its sandbox does not let it read the home, the item's repository, the room's
+/// directory (hidden by the clock), the home's keys and settings or the agents' settings directories, the
+/// shared temporary directories (`/tmp` and the clock's own `TMPDIR`), or a `.env` file anywhere. It writes in
+/// its sandbox and its own temporary directory alone, and has no network. Other places outside the home, the
+/// room and the temporary directories are read as the machine lets it: that is not measured.
 pub struct ClaudeWorker {
     model: String,
     program: String,
@@ -258,31 +407,19 @@ impl ClaudeWorker {
         PathBuf::from(path)
     }
 
-    /// Only file tools inside the sandbox and the shell, which Claude's sandbox confines to writing in the clone,
-    /// with no network. Everything else, the web included, is refused; `dontAsk` refuses what is not listed.
-    pub fn settings(sandbox: &Sandbox) -> serde_json::Value {
-        let dir = sandbox.dir.to_string_lossy();
+    /// Only file tools inside the sandbox and the shell, which Claude's sandbox confines to writing in the clone
+    /// and the turn's own temporary directory, with no network. Everything else, the web included, is refused;
+    /// `dontAsk` refuses what is not listed. In `sandbox.filesystem`, `denyRead` is the home, what the sandbox
+    /// hides from a worker, the shared temporary directories and the jail's hidden places, then any `.env` file;
+    /// `allowRead` is the sandbox, the turn's own temporary directory and each tool directory that is not
+    /// hidden; `allowWrite` is those first two. Where read rules overlap, Claude's narrower path decides.
+    pub fn settings(sandbox: &Sandbox) -> Result<serde_json::Value, TurnError> {
+        let filesystem = Reach::of(sandbox)?.claude_filesystem()?;
+        let dir = plain(&sandbox.dir)?;
         // `//` makes a rule's path absolute; a single `/` is relative to the settings file.
         let scoped = |tool: &str| format!("{tool}(/{dir}/**)");
-        // Where this machine keeps keys and agent accounts, as absolute paths, as v1's settings give them.
-        let mut deny_read: Vec<String> = Vec::new();
-        if let Some(home) = std::env::var_os("HOME") {
-            let home = Path::new(&home);
-            for private in [
-                ".ssh",
-                ".superyak",
-                ".claude",
-                ".codex",
-                ".config/gh",
-                ".aws",
-                ".gnupg",
-            ] {
-                deny_read.push(home.join(private).to_string_lossy().into_owned());
-            }
-        }
-        deny_read.extend(["**/.env".to_string(), "**/.env.*".to_string()]);
         // The worker commits on its branch with the shell, so the clone's .git stays writable to it.
-        json!({
+        Ok(json!({
             "permissions": {
                 "defaultMode": "dontAsk",
                 "allow": [scoped("Read"), scoped("Grep"), scoped("Edit"), "Bash"],
@@ -296,14 +433,11 @@ impl ClaudeWorker {
                 "failIfUnavailable": true,
                 "autoAllowBashIfSandboxed": true,
                 "allowUnsandboxedCommands": false,
-                "filesystem": {
-                    "allowWrite": [dir],
-                    "denyRead": deny_read,
-                },
+                "filesystem": filesystem,
                 "network": { "allowedDomains": [] },
             },
             "disableAllHooks": true,
-        })
+        }))
     }
 }
 
@@ -321,13 +455,13 @@ impl Worker for ClaudeWorker {
         seen: &mut Seen,
     ) -> Result<RunStatus, TurnError> {
         let path = ClaudeWorker::settings_path(sandbox);
-        let text = serde_json::to_vec_pretty(&ClaudeWorker::settings(sandbox))
+        let text = serde_json::to_vec_pretty(&ClaudeWorker::settings(sandbox)?)
             .map_err(|e| TurnError::Io(e.to_string()))?;
         std::fs::write(&path, text).map_err(io("write the claude settings"))?;
         let _settings = Removed(&path);
         let tracked = base_tracks_message(sandbox)?;
         let mut watching = Watching::new(ClaudeParser::new(sandbox, seen.started), seen);
-        let status = sandbox.run(
+        let status = sandbox.run_model(
             &self.program,
             &self.args(&path),
             &prompt(item_title, check_command),
@@ -343,8 +477,16 @@ impl Worker for ClaudeWorker {
     }
 }
 
-/// `codex exec` with JSON events, its workspace-write sandbox in the clone, no session kept, no user config (and
-/// so none of its MCP servers), no approvals asked and no web search.
+/// `codex exec` in the clone with JSON events, a permission profile of the room's own, no session kept, no user
+/// config (and so none of its MCP servers), no approvals asked and no web search.
+///
+/// What the shell can read: its sandbox (the directory given with `-C`), the turn's own temporary directory, the
+/// system the jail shows, and the directories named in `YAK_JAIL_READ`. Everything else is denied: the home, the
+/// item's repository, the room's directory (hidden by the clock), `/tmp` and the clock's own `TMPDIR`. It writes
+/// in its sandbox and its own temporary directory alone, has no network, and its clone's `.git` stays read-only
+/// to it, as under the `workspace-write` mode, so the room commits for it. A sandbox mode is never given:
+/// with one Codex ignores a profile. Hiding the home alone is not used either: measured, it breaks `cd` in a
+/// script run by `sh`.
 pub struct CodexWorker {
     model: String,
     program: String,
@@ -367,12 +509,25 @@ impl CodexWorker {
         &self.program
     }
 
-    /// The arguments: the plan's, then the model, and `-` to read the prompt from stdin.
-    pub fn args(&self, sandbox: &Sandbox) -> Vec<String> {
-        let mut args: Vec<String> = ["exec", "--json", "-s", "workspace-write", "-C"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+    /// The arguments: the plan's, then the model, and `-` to read the prompt from stdin. In place of a sandbox
+    /// mode, three `-c` values, each one argument as written (no shell comes between): the profile `yak`, made
+    /// from Codex's `:workspace`, with the filesystem table of `Reach::codex_table`.
+    pub fn args(&self, sandbox: &Sandbox) -> Result<Vec<String>, TurnError> {
+        let table = Reach::of(sandbox)?.codex_table()?;
+        let mut args: Vec<String> = [
+            "exec",
+            "--json",
+            "-c",
+            "default_permissions=\"yak\"",
+            "-c",
+            "permissions.yak.extends=\":workspace\"",
+            "-c",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        args.push(format!("permissions.yak.filesystem={table}"));
+        args.push("-C".to_string());
         args.push(sandbox.dir.to_string_lossy().into_owned());
         for word in [
             "-m",
@@ -387,7 +542,7 @@ impl CodexWorker {
         ] {
             args.push(word.to_string());
         }
-        args
+        Ok(args)
     }
 }
 
@@ -405,10 +560,11 @@ impl Worker for CodexWorker {
         seen: &mut Seen,
     ) -> Result<RunStatus, TurnError> {
         let tracked = base_tracks_message(sandbox)?;
+        let args = self.args(sandbox)?;
         let mut watching = Watching::new(CodexParser::new(sandbox, seen.started), seen);
-        let status = sandbox.run(
+        let status = sandbox.run_model(
             &self.program,
-            &self.args(sandbox),
+            &args,
             &prompt(item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
@@ -578,7 +734,112 @@ fn take_message(sandbox: &Sandbox, tracked: bool) -> Result<Option<String>, Turn
 
 #[cfg(test)]
 mod tests {
-    use super::is_status_entry;
+    use std::path::{Path, PathBuf};
+
+    use super::{Reach, is_status_entry, plain, toml_key};
+    use crate::TurnError;
+
+    /// What a turn in a room on a Mac would be given: the clone is in the room's directory, which is hidden, and
+    /// among the tools named are one in the home (twice), one the system already shows, one inside the item's
+    /// repository, one inside a place the jail hides, the clock's own temporary directory, and the repository
+    /// itself. The jail refuses a tool directory inside one of its own hidden places; it is here all the same.
+    fn sample() -> Reach {
+        let p = PathBuf::from;
+        Reach {
+            dir: p("/room/turns/a1"),
+            tmp: p("/private/tmp/yak-0123456789abcdef"),
+            home: p("/home/someone"),
+            by_room: vec![p("/items/repo"), p("/room")],
+            shared: vec![p("/private/tmp"), p("/private/var/folders/x/T")],
+            jail_hidden: vec![p("/home/someone/.ssh"), p("/items/repo")],
+            shown: vec![
+                p("/home/someone/.cargo/bin"),
+                p("/usr/bin"),
+                p("/items/repo/vendor"),
+                p("/home/someone/.ssh/tools"),
+                p("/private/var/folders/x/T"),
+                p("/items/repo"),
+                p("/home/someone/.cargo/bin"),
+            ],
+            system: vec![p("/usr/bin"), p("/Library/Developer"), p("/room/tools")],
+        }
+    }
+
+    #[test]
+    fn the_codex_table_is_written_in_the_plans_order_and_form() {
+        assert_eq!(
+            sample().codex_table().unwrap(),
+            "{\":root\"=\"deny\", \":minimal\"=\"read\", \":slash_tmp\"=\"deny\", \
+             \"/usr/bin\"=\"read\", \"/Library/Developer\"=\"read\", \"/home/someone/.cargo/bin\"=\"read\", \
+             \"/private/tmp/yak-0123456789abcdef\"=\"write\", \
+             \"/items/repo\"=\"deny\", \"/room\"=\"deny\", \"/home/someone/.ssh\"=\"deny\"}"
+        );
+    }
+
+    #[test]
+    fn claudes_lists_hide_the_home_and_show_only_what_is_not_hidden() {
+        let filesystem = sample().claude_filesystem().unwrap();
+        assert_eq!(
+            filesystem,
+            serde_json::json!({
+                "allowWrite": ["/room/turns/a1", "/private/tmp/yak-0123456789abcdef"],
+                "allowRead": [
+                    "/room/turns/a1",
+                    "/private/tmp/yak-0123456789abcdef",
+                    "/home/someone/.cargo/bin",
+                    "/usr/bin",
+                ],
+                "denyRead": [
+                    "/home/someone",
+                    "/items/repo",
+                    "/room",
+                    "/private/tmp",
+                    "/private/var/folders/x/T",
+                    "/home/someone/.ssh",
+                    "**/.env",
+                    "**/.env.*",
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn a_path_key_is_a_toml_basic_string() {
+        assert_eq!(
+            toml_key(Path::new("/a \"b\" \\ c")).unwrap(),
+            "\"/a \\\"b\\\" \\\\ c\""
+        );
+        assert_eq!(toml_key(Path::new("/plain")).unwrap(), "\"/plain\"");
+    }
+
+    /// A path neither program's settings can be trusted to take as written is refused, in both, and named as
+    /// best it can be shown.
+    #[test]
+    fn a_path_that_is_not_plain_text_cannot_be_named_in_a_workers_settings() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_utf8 = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
+        for (path, shown) in [
+            (not_utf8, "caf\\xE9"),
+            (Path::new("/tmp/a\tb"), "a\\tb"),
+            (Path::new("/tmp/a\x1fb"), "a\\u{1f}b"),
+            (Path::new("/tmp/a\x7fb"), "a\\u{7f}b"),
+        ] {
+            let refused = plain(path);
+            assert!(
+                matches!(&refused, Err(TurnError::Refused(why)) if why.contains(shown)),
+                "{refused:?}"
+            );
+            let mut reach = sample();
+            reach.jail_hidden.push(path.to_path_buf());
+            assert!(matches!(reach.codex_table(), Err(TurnError::Refused(_))));
+            assert!(matches!(
+                reach.claude_filesystem(),
+                Err(TurnError::Refused(_))
+            ));
+        }
+        // The space and the tilde, either side of what is refused, are plain.
+        assert_eq!(plain(Path::new("/a b~")).unwrap(), "/a b~");
+    }
 
     #[test]
     fn only_a_status_entry_counts_as_a_change() {

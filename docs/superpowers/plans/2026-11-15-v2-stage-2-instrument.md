@@ -371,6 +371,96 @@ same prompt share a program's memory of it, so the later one is cheaper and fast
 
 ---
 
+### Task 4b: A worker's shell is shown what the jail shows (a Claude builder, read by the other family)
+
+Added after the plan was written, from a question by the ship Tardis: what can a model worker reach outside
+its clone? The lead measured it (the spec, "What a worker can read beside its sandbox"). As stage 1 set the
+two programs, a worker's shell reads the home but for a few named places, and shares the machine's temporary
+directories with every other turn. Both programs can be set to hide all of that and still do a turn's work;
+that was measured through a live turn of Claude and through Codex's own sandbox command.
+
+**The rule.** A model worker's shell is shown its sandbox, a temporary directory of the turn's own, the
+system, and the directories named in `YAK_JAIL_READ`. Hidden from it: the home, the room's directory, the
+item's repository, and the temporary directories the machine shares.
+
+**Files:**
+- Modify: `v2/crates/turn/src/jail.rs`, `v2/crates/turn/src/sandbox.rs`, `v2/crates/turn/src/worker.rs`,
+  `v2/crates/yak/src/clock.rs`
+- Test: `v2/crates/turn/tests/sandbox.rs`, `v2/crates/turn/tests/worker.rs`, `v2/crates/yak/tests/clock.rs`
+
+**Interfaces:**
+- Produces:
+  - `turn::jail::places() -> Result<Places, TurnError>` with `pub struct Places { pub home: PathBuf, pub
+    hidden: Vec<PathBuf>, pub shown: Vec<PathBuf>, pub system: Vec<PathBuf> }`: the home as a real path; the
+    home's keys and settings that are there; each `YAK_JAIL_READ` directory; and the system directories the
+    jail shows on this machine that are there. All read exactly as the jail reads them, with the jail's
+    refusals: one reading of the settings, not a second copy of the rules.
+  - `Sandbox::hide_from_worker(&mut self, path: &Path) -> Result<(), TurnError>` and
+    `Sandbox::hidden_from_worker(&self) -> &[PathBuf]`. `create` puts the item's repository there as a real
+    path. A path that is not absolute or is not there is refused.
+  - `Sandbox::worker_tmp(&self) -> Result<PathBuf, TurnError>`: the turn's own temporary directory, made on
+    first use and the same afterwards. It is a new directory `yak-` and 16 hex characters from the system's
+    random source, directly under the real path of `/tmp`, with mode 0700, made so that making it fails if
+    anything is already there (then another name is tried, five times at most). It is removed where the
+    sandbox is removed, by the same care: only the directory the room made, never a link. A clock that dies
+    leaves it behind; nothing reads it, and the system clears `/tmp`.
+    Why `/tmp` and not beside the sandbox: Claude gives a shell command a temporary directory shared by
+    every session on the machine unless the one it is told to use has a short path (measured: a path of 77
+    characters was not used, one of 19 was).
+  - `Sandbox::shared_tmp() -> Vec<PathBuf>`: the real path of `/tmp`, and the real path of the clock's own
+    `TMPDIR` when it is set, is there and is another directory.
+  - `ClaudeWorker::settings(sandbox) -> Result<serde_json::Value, TurnError>`. In `sandbox.filesystem`:
+    `denyRead` is the home, each of `hidden_from_worker()`, each of `shared_tmp()`, each of `places.hidden`,
+    then `**/.env` and `**/.env.*`; `allowRead` is the sandbox's directory, `worker_tmp()`, and each of
+    `places.shown` that is not itself in `denyRead`; `allowWrite` is the sandbox's directory and
+    `worker_tmp()`. The rest is as it was.
+  - `CodexWorker::args(sandbox) -> Result<Vec<String>, TurnError>`: no `-s` and no sandbox mode (a sandbox
+    mode makes Codex ignore a profile). In their place three `-c` values: `default_permissions="yak"`,
+    `permissions.yak.extends=":workspace"`, and `permissions.yak.filesystem={…}`, an inline table that holds,
+    in this order: `":root"="deny"`, `":minimal"="read"`, `":slash_tmp"="deny"`; each of `places.system` as
+    `"read"`; each of `places.shown` as `"read"`; `worker_tmp()` as `"write"`; each of
+    `hidden_from_worker()` and of `places.hidden` as `"deny"`. A key that is a path is a TOML basic string:
+    `\` and `"` are escaped. A path that holds a control character or is not UTF-8 is refused. A shown
+    path that is also hidden is left out of the shown ones, and no path is written twice. Hiding the home alone is not used for Codex: measured, it breaks
+    `cd` in a script run by `sh`.
+  - The environment a model worker's program is given also carries `TMPDIR` and `CLAUDE_CODE_TMPDIR`, both
+    `worker_tmp()`, and `GIT_CONFIG_GLOBAL=/dev/null`: git stops when it may not read the home's settings
+    (measured: "fatal: unable to access '…/.gitconfig': Operation not permitted").
+  - A clone's settings also name `/dev/null` for `core.excludesFile` and `core.attributesFile`, so that no git
+    in the clone looks for either in a home.
+  - The clock hides the room's directory from every worker: `hide_from_worker(room directory)` on each
+    sandbox it makes for a turn.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `a_sandbox_hides_its_items_repository_from_a_worker`: after `create`, the list is the repository's real
+    path; a relative path and a missing one are refused; a good one is added as a real path.
+  - `a_turns_own_temporary_directory_is_short_private_and_removed_with_it`: its parent is the real `/tmp`;
+    its mode is 0700; a second call gives the same path; another sandbox gets another; it is gone when the
+    sandbox is removed; a link put in its place is not followed when removing.
+  - `claudes_shell_is_shown_the_sandbox_its_own_tmp_and_the_named_tools_and_not_the_home`: with a home and
+    one `YAK_JAIL_READ` directory, `denyRead` begins with the home and holds the repository, a path that was
+    added, and the shared temporary directories; `allowRead` is the sandbox's directory, the turn's own
+    temporary directory and the tool directory; `allowWrite` is the first two of those alone.
+  - `codex_is_given_a_profile_and_no_sandbox_mode`: the arguments hold no `-s` and no `workspace-write`, and
+    hold the three values, the table compared as a whole string.
+  - `a_path_with_a_quote_or_a_backslash_is_written_as_toml`, `a_path_with_a_control_character_is_refused`.
+  - `a_tool_directory_that_is_also_hidden_is_not_shown`: the item's repository named in `YAK_JAIL_READ`.
+  - `a_workers_program_is_given_its_own_tmp_and_no_global_git_settings`: a script standing in for each
+    program prints the three variables.
+  - `a_clone_looks_for_no_ignore_or_attributes_file_in_a_home`.
+  - `the_clock_hides_its_room_from_a_worker`: fails when the clock's call is taken out.
+- [ ] **Step 2:** Run them. Expected: FAIL.
+- [ ] **Step 3: Implement.** Bring the doc comments on both workers up to date: they say what a shell can read.
+- [ ] **Step 4:** `cargo test -p turn -p yak` where your sandbox allows. Say which tests it does not. Commit.
+- [ ] **Step 5 (the lead):** A live turn of each program in a throwaway room, on an item whose repository
+  holds a script of probes and whose work is to run it and commit its output. Read the output in the commit
+  handed in: the room's directory, the item's repository, another checkout, the home and a file left in
+  `/tmp` refused; the sandbox, the turn's own temporary directory and a named tool used; an earlier answer's
+  object absent and the base's tree present. Then the three live replays of the stage 1 items, as the spec's
+  smoke test, to see that a worker can still do real work.
+
+---
+
 ### Task 6: Each builder reads the other's work, then the lead runs the acceptance table
 
 - [ ] **Step 1:** The Codex builder reads Tasks 3 and 4; the Claude builder reads Tasks 1, 2 and 5. Each

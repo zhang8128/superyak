@@ -429,7 +429,7 @@ fn a_repository_named_by_a_relative_path_is_cloned_from_where_it_is() {
 }
 
 /// What a clone's own settings must say: who commits, and that it runs nothing and reaches nothing.
-const ROOM_SETTINGS: [(&str, &str); 9] = [
+const ROOM_SETTINGS: [(&str, &str); 11] = [
     ("user.name", "yak turn"),
     ("user.email", "turn@yak.invalid"),
     ("commit.gpgsign", "false"),
@@ -439,6 +439,8 @@ const ROOM_SETTINGS: [(&str, &str); 9] = [
     ("credential.helper", ""),
     ("maintenance.auto", "false"),
     ("gc.auto", "0"),
+    ("core.excludesFile", "/dev/null"),
+    ("core.attributesFile", "/dev/null"),
 ];
 
 #[test]
@@ -1452,4 +1454,136 @@ fn a_runs_command_reaches_its_program_as_written() {
         );
     }
     sb.destroy().unwrap();
+}
+
+// --- What a model worker's shell is shown (Task 4b) ----------------------------------------------------------
+
+#[test]
+fn a_sandbox_hides_its_items_repository_from_a_worker() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let mut sb = sandbox(&repo);
+    // The repository is named by a path through a link here (the temporary directory's), and kept as its real one.
+    let real_repo = repo.path.canonicalize().unwrap();
+    assert_eq!(sb.hidden_from_worker(), std::slice::from_ref(&real_repo));
+    // A relative path, and one that is not there, are refused, and nothing is added. The relative one is there,
+    // from where this test runs: refused for being relative, not for being missing.
+    let missing = repo.scratch("not-there");
+    let relative = std::path::Path::new("tests");
+    assert!(relative.is_dir(), "the test runs in its crate's directory");
+    for bad in [relative, missing.as_path()] {
+        let refused = sb.hide_from_worker(bad);
+        assert!(
+            matches!(refused, Err(TurnError::Refused(_))),
+            "{}: {refused:?}",
+            bad.display()
+        );
+    }
+    assert_eq!(sb.hidden_from_worker(), std::slice::from_ref(&real_repo));
+    // A good one is added as its real path: named here through a link of its own.
+    let elsewhere = repo.scratch("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let alias = repo.scratch("alias");
+    std::os::unix::fs::symlink(&elsewhere, &alias).unwrap();
+    sb.hide_from_worker(&alias).unwrap();
+    assert_eq!(
+        sb.hidden_from_worker(),
+        [real_repo, elsewhere.canonicalize().unwrap()]
+    );
+}
+
+#[test]
+fn a_turns_own_temporary_directory_is_short_private_and_removed_with_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let tmp = sb.worker_tmp().unwrap();
+    // Directly under the real `/tmp`, named `yak-` and sixteen hex characters: a short path.
+    let slash_tmp = std::path::Path::new("/tmp").canonicalize().unwrap();
+    assert_eq!(tmp.parent(), Some(slash_tmp.as_path()));
+    let name = tmp.file_name().unwrap().to_str().unwrap();
+    let hex = name
+        .strip_prefix("yak-")
+        .unwrap_or_else(|| panic!("{name}"));
+    assert!(
+        hex.len() == 16
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "{name}"
+    );
+    // A directory, the room's alone.
+    let meta = std::fs::symlink_metadata(&tmp).unwrap();
+    assert!(meta.is_dir());
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o700);
+    // The same on every later call; another sandbox gets another.
+    assert_eq!(sb.worker_tmp().unwrap(), tmp);
+    let other =
+        Sandbox::create(&repo.path, &repo.base, &repo.scratch("other"), "room/i1/2").unwrap();
+    let other_tmp = other.worker_tmp().unwrap();
+    assert_ne!(other_tmp, tmp);
+    // Gone with its sandbox, whatever the worker left in it.
+    std::fs::create_dir(tmp.join("left")).unwrap();
+    std::fs::write(tmp.join("left/file"), "x").unwrap();
+    sb.destroy().unwrap();
+    assert!(
+        std::fs::symlink_metadata(&tmp).is_err(),
+        "{} is still there",
+        tmp.display()
+    );
+    // A link put in its place is not followed: what it leads to stays as it was, the link stays, and the room
+    // says what it left.
+    std::fs::remove_dir(&other_tmp).unwrap();
+    let canary = repo.scratch("canary");
+    std::fs::create_dir(&canary).unwrap();
+    std::fs::write(canary.join("keep"), "KEEP").unwrap();
+    std::os::unix::fs::symlink(&canary, &other_tmp).unwrap();
+    let removed = other.destroy();
+    let left = matches!(&removed, Err(TurnError::Left { paths, .. }) if paths == std::slice::from_ref(&other_tmp));
+    std::fs::remove_file(&other_tmp).unwrap();
+    assert!(left, "{removed:?}");
+    assert_eq!(
+        std::fs::read_to_string(canary.join("keep")).unwrap(),
+        "KEEP"
+    );
+}
+
+#[test]
+fn a_clone_looks_for_no_ignore_or_attributes_file_in_a_home() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    // A home whose git files would ignore a new file, and give it an attribute.
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".config/git");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("ignore"), "new.txt\n").unwrap();
+    std::fs::write(config.join("attributes"), "new.txt yak-from-home\n").unwrap();
+    for dir in [&repo.path, &sb.dir] {
+        std::fs::write(dir.join("new.txt"), "new\n").unwrap();
+    }
+    // Git as a worker's shell runs it: told to use no global settings, with this home.
+    let looks = |dir: &std::path::Path, args: &[&str]| -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("HOME", home.path())
+            .env_remove("XDG_CONFIG_HOME")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim_end()
+            .to_string()
+    };
+    let status = ["status", "--porcelain", "--untracked-files=all"];
+    let attributes = ["check-attr", "-a", "new.txt"];
+    // The control: a repository without the room's settings reads both from the home.
+    assert_eq!(looks(&repo.path, &status), "");
+    assert!(looks(&repo.path, &attributes).contains("yak-from-home"));
+    // The clone reads neither.
+    assert_eq!(looks(&sb.dir, &status), "?? new.txt");
+    assert_eq!(looks(&sb.dir, &attributes), "");
 }
