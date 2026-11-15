@@ -121,13 +121,22 @@ pub fn run_check(
     match (sandbox.destroy(), result) {
         (Err(TurnError::Left { paths, also }), result) => Err(TurnError::Left {
             paths,
-            also: result.err().map(|e| e.to_string()).or(also),
+            also: both(result.err().map(|e| e.to_string()), also),
         }),
         (removed, result) => {
             let verdict = result?;
             removed?;
             Ok(verdict)
         }
+    }
+}
+
+/// What went wrong besides what was left: the check's own failure, the removal's, or both. Neither is dropped
+/// for the other.
+fn both(check: Option<String>, removal: Option<String>) -> Option<String> {
+    match (check, removal) {
+        (Some(check), Some(removal)) => Some(format!("{check}; and {removal}")),
+        (check, removal) => check.or(removal),
     }
 }
 
@@ -366,6 +375,22 @@ fn write_new(at: &PathBuf, file: &CheckFile) -> Result<(), TurnError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_went_wrong_besides_keeps_the_checks_failure_and_the_removals() {
+        let (check, removal) = (
+            Some("the check".to_string()),
+            Some("the removal".to_string()),
+        );
+        let said = both(check.clone(), removal.clone()).unwrap();
+        assert!(
+            said.contains("the check") && said.contains("the removal"),
+            "{said}"
+        );
+        assert_eq!(both(check.clone(), None), check);
+        assert_eq!(both(None, removal.clone()), removal);
+        assert_eq!(both(None, None), None);
+    }
 
     fn file(path: &str, content: &[u8], executable: bool) -> CheckFile {
         CheckFile {

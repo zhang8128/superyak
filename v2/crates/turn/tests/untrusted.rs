@@ -729,3 +729,48 @@ fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
     );
     assert!(printed.contains("SAID ran"), "{printed}");
 }
+
+/// A link whose words go up out of a part that is not there. `~/.cargo` says `<t>/missing/../redirect`, and
+/// `<t>/redirect` is a link to a directory. Once `<t>/missing` is made, the credentials file lands in that
+/// directory: so naming it is refused. Below what is not there nothing is looked at, but a `..` leads back out,
+/// and from there the jail looks again. The same when the link is written from where it is, and when the part
+/// it goes up out of is a file.
+#[test]
+fn a_secrets_place_is_known_through_a_link_that_goes_up_out_of_what_is_not_there() {
+    for form in ["full", "beside", "file"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let (home, t, grant) = (root.join("home"), root.join("t"), root.join("grant"));
+        for dir in [&home, &t] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::create_dir_all(grant.join("bin")).unwrap();
+        std::os::unix::fs::symlink(&grant, t.join("redirect")).unwrap();
+        let says = match form {
+            "full" => t.join("missing/../redirect"),
+            "beside" => std::path::PathBuf::from("../t/missing/../redirect"),
+            _ => {
+                fs::write(t.join("a-file"), "").unwrap();
+                t.join("a-file/inside/../../redirect")
+            }
+        };
+        std::os::unix::fs::symlink(&says, home.join(".cargo")).unwrap();
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &grant)],
+            true,
+        );
+        assert!(
+            printed.contains("REFUSED ") && printed.contains("would also show"),
+            "{form}: {printed}"
+        );
+        // The control: a directory beside where it all leads can be named.
+        let named = grant.join("bin");
+        let printed = under(
+            "echo ran",
+            &[("HOME", &home), ("YAK_JAIL_READ", &named)],
+            true,
+        );
+        assert!(printed.contains("SAID ran"), "{form}: {printed}");
+    }
+}

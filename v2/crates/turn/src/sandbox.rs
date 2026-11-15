@@ -923,6 +923,18 @@ pub fn safe_git_output_until(
     output_within(command, what, limit, Some(stop))
 }
 
+/// `safe_git_output_until` for a question git answers with its exit code: gives that code and the output,
+/// where the other treats every code but 0 as a failure. No code means a signal ended it.
+pub fn safe_git_code_until(
+    command: Command,
+    what: &str,
+    limit: Duration,
+    stop: &AtomicBool,
+) -> Result<(Option<i32>, Vec<u8>), TurnError> {
+    let (status, stdout, _) = ended_within(command, what, limit, Some(stop))?;
+    Ok((status.code(), stdout))
+}
+
 /// Runs `command` for at most `limit` and returns its stdout. The room's own git reads repositories a worker
 /// has had its hands on, and must not wait on one for ever.
 ///
@@ -930,11 +942,28 @@ pub fn safe_git_output_until(
 /// open after the program itself is done. The program runs in a group of its own, and when the limit passes
 /// the whole group is ended, so nothing it started is left. The same is done as soon as `stop` is set.
 fn output_within(
-    mut command: Command,
+    command: Command,
     what: &str,
     limit: Duration,
     stop: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, TurnError> {
+    let (status, stdout, stderr) = ended_within(command, what, limit, stop)?;
+    if status.success() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&stderr);
+    let stderr: String = stderr.trim().chars().take(300).collect();
+    Err(TurnError::Git(format!("{what} failed: {stderr}")))
+}
+
+/// `output_within`, giving the program's own end and both of its outputs whatever that end was. An error here
+/// is the runner's: it could not start the program, or ended it.
+fn ended_within(
+    mut command: Command,
+    what: &str,
+    limit: Duration,
+    stop: Option<&AtomicBool>,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), TurnError> {
     let stopped = || stop.is_some_and(|stop| stop.load(Ordering::Relaxed));
     let halted = || TurnError::Git(format!("{what} was ended before it finished"));
     if stopped() {
@@ -1017,12 +1046,7 @@ fn output_within(
     };
     // The program is done and so is its output. Anything it left in its group goes with it.
     signal_group(group, "KILL");
-    if status.success() {
-        return Ok(stdout);
-    }
-    let stderr = String::from_utf8_lossy(&stderr);
-    let stderr: String = stderr.trim().chars().take(300).collect();
-    Err(TurnError::Git(format!("{what} failed: {stderr}")))
+    Ok((status, stdout, stderr))
 }
 
 /// The full id of `rev` in `dir`.

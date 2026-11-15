@@ -918,18 +918,12 @@ impl Clock<'_, '_> {
             let job = move || {
                 // A name that is taken is not this turn's to make, and never its to take back, whatever commit
                 // it names: a worker can hand in a commit that was in the repository all along.
-                let taken = git(
-                    repo,
-                    ["for-each-ref", "--format=%(refname)", name],
-                    limit,
-                    halt,
-                );
-                match taken {
-                    Ok(names) if names.is_empty() => (
+                match taken(repo, name, limit, halt) {
+                    Ok(false) => (
                         true,
                         publish(repo, name, commit, limit, halt).map_err(|e| e.to_string()),
                     ),
-                    Ok(_) => (false, Err(format!("{name} is already there"))),
+                    Ok(true) => (false, Err(format!("{name} is already there"))),
                     Err(e) => (false, Err(e.to_string())),
                 }
             };
@@ -1031,12 +1025,12 @@ impl Clock<'_, '_> {
         Ok(())
     }
 
-    /// Remembers what a removal left in place (`TurnError::Left`), so that tidying leaves it too. A sandbox
-    /// knows its own path with every link followed, from when it was made; tidying brings each name it finds
-    /// to the same form (`placed`) before it compares.
+    /// Remembers what a removal left in place (`TurnError::Left`), so that tidying leaves it too. Each is kept
+    /// as the disk spells it (`spelled`), which is how tidying meets it again: a sandbox knows the name it
+    /// would have made, and what was found in its place may be kept in other letters.
     fn keep(&mut self, e: &TurnError) {
         if let TurnError::Left { paths, .. } = e {
-            self.kept.extend(paths.iter().cloned());
+            self.kept.extend(paths.iter().map(|path| spelled(path)));
         }
     }
 
@@ -1279,6 +1273,32 @@ fn publish(
     Ok(())
 }
 
+/// Whether the ref name `name` is taken in `repo`. A ref that names a commit is, and so is a symbolic ref,
+/// also one that names nothing: a listing of refs leaves that kind out, and making a ref of its name would
+/// write over it. A question git cannot answer is an error, and the name is then not made.
+fn taken(repo: &Path, name: &str, limit: Duration, stop: &AtomicBool) -> Result<bool, ClockError> {
+    let mut asked = turn::sandbox::safe_git();
+    asked.arg("-C").arg(repo).args(["symbolic-ref", "-q", name]);
+    // git says "it is one" with 0 and "it is not" with 1.
+    match turn::sandbox::safe_git_code_until(asked, "the clock's git", limit, stop) {
+        Ok((Some(0), _)) => return Ok(true),
+        Ok((Some(1), _)) => {}
+        Ok((code, _)) => {
+            return Err(ClockError::Git(format!(
+                "symbolic-ref could not say what {name} is (it ended with {code:?})"
+            )));
+        }
+        Err(e) => return Err(ClockError::Git(e.to_string())),
+    }
+    let listed = git(
+        repo,
+        ["for-each-ref", "--format=%(refname)", name],
+        limit,
+        stop,
+    )?;
+    Ok(!listed.is_empty())
+}
+
 /// Runs the room's git in `dir`, with what the fetch needs added, for at most `limit` and until `stop` is set;
 /// returns its trimmed stdout.
 fn git<I, S>(dir: &Path, args: I, limit: Duration, stop: &AtomicBool) -> Result<String, ClockError>
@@ -1302,6 +1322,30 @@ fn placed(path: &Path) -> PathBuf {
         (Some(Ok(dir)), Some(name)) => dir.join(name),
         _ => path.to_path_buf(),
     }
+}
+
+/// `path` as the disk spells it: the directory it is in resolved, and its own name as that directory lists it.
+/// The entry is found by which file it is, not by its letters: on a disk where capital and small letters name
+/// the same file, `a.scratch` may be kept as `a.SCRATCH`. A link at that place is named and not followed.
+fn spelled(path: &Path) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let (Some(Ok(dir)), Ok(this)) = (
+        path.parent().map(fs::canonicalize),
+        fs::symlink_metadata(path),
+    ) else {
+        return placed(path);
+    };
+    fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|entry| {
+            entry
+                .metadata()
+                .is_ok_and(|other| other.dev() == this.dev() && other.ino() == this.ino())
+        })
+        .map(|entry| entry.path())
+        .unwrap_or_else(|| placed(path))
 }
 
 /// Whether `path` is a pid file a turn left: a plain file named `<attempt>.pid`. A link is never one.

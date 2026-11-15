@@ -548,43 +548,55 @@ fn a_sandbox_that_was_replaced_is_left_where_it_is() {
 /// before any run is not: the sandbox's own removal leaves it, and so does the clock's tidying after the turn.
 #[test]
 fn a_scratch_directory_the_room_did_not_make_is_left_where_it_is() {
-    let mut world = World::new(1);
-    let fix = world.script("fix.sh", FIX);
-    let turns = world.room_dir.join("turns");
-    let mut canaries = Vec::new();
-    let mut plant = |e: &Event| {
-        if let Event::Started { attempt, .. } = e {
-            let scratch = turns.join(format!("{}.scratch", attempt.0));
-            fs::create_dir_all(&scratch).unwrap();
-            fs::write(scratch.join("canary"), "KEEP").unwrap();
-            canaries.push(scratch);
-        }
+    // On a disk where capital and small letters name the same file, a directory kept as `<attempt>.SCRATCH` is
+    // at the scratch directory's place too, and is left like one kept in small letters.
+    let probe = tempfile::tempdir().unwrap();
+    fs::create_dir(probe.path().join("Letters")).unwrap();
+    let folds = probe.path().join("letters").is_dir();
+    let endings: &[&str] = if folds {
+        &["scratch", "SCRATCH"]
+    } else {
+        &["scratch"]
     };
-    let (result, events) =
-        world.run_hooked(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS, &mut plant);
-    result.unwrap();
-    assert!(!canaries.is_empty());
-    for scratch in &canaries {
-        assert_eq!(
-            fs::read_to_string(scratch.join("canary")).unwrap(),
-            "KEEP",
-            "{events:?}"
-        );
+    for ending in endings {
+        let mut world = World::new(1);
+        let fix = world.script("fix.sh", FIX);
+        let turns = world.room_dir.join("turns");
+        let mut canaries = Vec::new();
+        let mut plant = |e: &Event| {
+            if let Event::Started { attempt, .. } = e {
+                let scratch = turns.join(format!("{}.{ending}", attempt.0));
+                fs::create_dir_all(&scratch).unwrap();
+                fs::write(scratch.join("canary"), "KEEP").unwrap();
+                canaries.push(scratch);
+            }
+        };
+        let (result, events) =
+            world.run_hooked(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS, &mut plant);
+        result.unwrap();
+        assert!(!canaries.is_empty());
+        for scratch in &canaries {
+            assert_eq!(
+                fs::read_to_string(scratch.join("canary")).unwrap(),
+                "KEEP",
+                "{ending}: {events:?}"
+            );
+        }
+        // Each is said, and nothing else of any turn is left.
+        let said = events
+            .iter()
+            .filter(
+                |e| matches!(e, Event::Problem { what, .. } if what.contains("the sandbox was not removed")),
+            )
+            .count();
+        assert_eq!(said, canaries.len(), "{ending}: {events:?}");
+        let mut names: Vec<String> = canaries
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(world.turns(), names, "{ending}");
     }
-    // Each is said, and nothing else of any turn is left.
-    let said = events
-        .iter()
-        .filter(
-            |e| matches!(e, Event::Problem { what, .. } if what.contains("the sandbox was not removed")),
-        )
-        .count();
-    assert_eq!(said, canaries.len(), "{events:?}");
-    let mut names: Vec<String> = canaries
-        .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    assert_eq!(world.turns(), names);
 }
 
 /// A check has a sandbox of its own, inside the check's work directory. If something else is at that sandbox's
@@ -1068,6 +1080,53 @@ fn a_ref_already_there_is_not_overwritten() {
     ));
     assert_eq!(git(&world.repo, &["rev-parse", &taken]), world.base);
     assert_eq!(world.room_refs(), [taken, world.room_ref(&id, 2)]);
+}
+
+/// A symbolic ref that names nothing is a name that is taken, though a listing of refs leaves it out. The turn
+/// that would have made its ref there hands in nothing and fails, the symbolic ref is as it was, and the next
+/// lease makes its own.
+#[test]
+fn a_symbolic_ref_that_names_nothing_is_a_name_that_is_taken() {
+    let mut world = World::new(1);
+    let id = world.items[0].clone();
+    let taken = world.room_ref(&id, 1);
+    git(
+        &world.repo,
+        &["symbolic-ref", &taken, "refs/heads/no-such-branch"],
+    );
+    // The control for what this is about: the listing does not show it.
+    assert!(world.room_refs().is_empty());
+    let fix = world.script("fix.sh", FIX);
+    let (result, events) = world.run(&[&fix], Mode::OnceThrough, NEVER, TURN_SECS);
+    result.unwrap();
+    let ends = outcomes(&events);
+    let Outcome::Judged {
+        state,
+        commit,
+        nothing,
+        ..
+    } = &ends[0]
+    else {
+        panic!("{:?}", ends[0]);
+    };
+    assert_eq!((state, commit), (&ItemState::Failed, &world.base));
+    assert!(
+        nothing.as_deref().unwrap().contains("is already there"),
+        "{nothing:?}"
+    );
+    assert!(matches!(
+        ends[1],
+        Outcome::Judged {
+            state: ItemState::PassedVerified,
+            ..
+        }
+    ));
+    // Still a symbolic ref, and still to the same name.
+    assert_eq!(
+        git(&world.repo, &["symbolic-ref", &taken]),
+        "refs/heads/no-such-branch"
+    );
+    assert_eq!(world.room_refs(), [world.room_ref(&id, 2)]);
 }
 
 /// In `Forever`, the ceiling does not end the clock: it waits for the next day, and says so once.

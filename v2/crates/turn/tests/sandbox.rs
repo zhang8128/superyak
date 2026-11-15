@@ -896,3 +896,45 @@ fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
         "the clone, which was the room's, is still there"
     );
 }
+
+/// A removal that fails does not end the others, and does not take the place of what was left. Here the
+/// clone holds a file that cannot be removed, and a scratch directory the room never made is beside it: the
+/// room says what it left, with the removal's failure beside it. macOS only: a file's owner can make it
+/// unremovable there, and elsewhere that takes root.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_removal_that_fails_is_said_beside_what_was_left() {
+    let repo = Repo::new(&[("a.txt", "hello\n")]);
+    let sb = sandbox(&repo);
+    let clone = sb.dir.clone();
+    let held = clone.join("held-here");
+    std::fs::write(&held, "x").unwrap();
+    let flag = |how: &str| {
+        let done = Command::new("/usr/bin/chflags")
+            .args([how])
+            .arg(&held)
+            .status()
+            .unwrap();
+        assert!(done.success(), "chflags {how}");
+    };
+    flag("uchg");
+    let mut name = clone.file_name().unwrap().to_os_string();
+    name.push(".scratch");
+    let scratch = clone.with_file_name(name);
+    std::fs::create_dir(&scratch).unwrap();
+    std::fs::write(scratch.join("canary"), "KEEP").unwrap();
+
+    let removed = sb.destroy();
+    flag("nouchg");
+    let Err(TurnError::Left { paths, also }) = &removed else {
+        panic!("{removed:?}");
+    };
+    assert_eq!(paths.as_slice(), std::slice::from_ref(&scratch));
+    assert!(also.is_some(), "the removal's failure was dropped");
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("canary")).unwrap(),
+        "KEEP"
+    );
+    // The clone is still there, since it could not be removed; nothing else was touched.
+    assert!(held.exists());
+}
