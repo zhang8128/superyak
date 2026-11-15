@@ -129,6 +129,12 @@ commits offered, the version and hash of the ranker and of the renderer that mad
 length, and its hash. A hash alone is not a recipe, so the ranker and renderer are deterministic and pinned,
 and an offer can be made again from what is kept. The text itself is not kept.
 
+**A prompt of its own.** Two turns given the same prompt share its opening words, and a worker's program
+keeps what it has lately been sent. Within that memory's life the second turn reads the first one's: it is
+cheaper and faster, and the order turns ran in leaks into what they cost. So a turn's prompt can be made to
+begin with a line that is that turn's alone. The pilot and the experiment run with it on. Reads from that
+memory are kept apart from fresh input in a turn's tokens, never added to it as equals.
+
 **A worker that cannot commit can still say what it did.** The room commits for Codex with a fixed message
 today. A worker may leave its message in one untracked file. The room uses it as the commit's message and
 removes the file before the commit is made, so the file is never part of what is checked.
@@ -154,6 +160,7 @@ after, as a smoke test: they are not expected to produce the rare cases by thems
 | The record's ties | Everything under "What a record is tied to" is written and read back |
 | No text of a turn | None in the store, or in any log or cache of the room's. The message file is not in the committed tree: it is gone before the commit is made |
 | Two turns at one item | Shown not to share an answer, with the control present |
+| Two turns given the same item | Their prompts differ from the first line, and neither turn's line is kept in the store |
 
 **Tokens or seconds: decided by the table, before the pilot.** Tokens are the deciding outcome only if every
 row above that speaks of a token cost shows a complete total: the normal turn, the turn with no tool call, the
@@ -179,6 +186,10 @@ same turn differs from itself. It is a pilot. Its numbers do not by themselves f
   it passed or not, plus the three replays of part 0.
 - **What is read:** for each item and worker, the spread of the deciding outcome across its five turns, as a
   standard deviation of the logarithm. All three are kept and reported, with the worker beside each.
+- **Each turn's prompt begins with its own line,** as part 0 provides. Without it the later of five identical
+  turns would be cheaper and faster than the first, and the spread would measure a program's memory.
+- **An item's five turns are spread out,** not run back to back: one of each item, then round again. What an
+  hour does to a model's speed then falls on every item alike.
 - **What it cannot say:** how turns differ on the work part 2 will choose, how an offer changes the spread,
   or how much the gain differs from item to item.
 
@@ -218,7 +229,10 @@ that this can be checked afterwards.
   what the worker's program reports, which includes the block every time it is sent again.
 - **One ranker for both arms, frozen before the run.** A title's words are its runs of letters and digits,
   in lower case. A history turn's score is the number of different words its item's title shares with the
-  scored item's title. Highest first; ties go to the later turn. A score of nought is not offered.
+  scored item's title. A word that is in more than half of the history items' titles scores nothing: in one
+  repository's titles a few words are everywhere, and without this rule every history turn would score and
+  the offer would be whichever came last. Highest first; ties go to the later turn. A score of nought is not
+  offered. The score of every offer made is kept and reported.
 - **Fewer than three, or none.** A run whose arm has nothing to offer is still its arm's run, and is counted
   as that. How often it happened is reported.
 - **A walk is offered with its age.** A file it names that has changed since is marked as changed. A file
@@ -231,6 +245,10 @@ that this can be checked afterwards.
 **Assignment.** Every scored item is run under every arm. Each turn has its own source copy, so no turn can
 find another's answer. The order of an item's three arms is one of the six possible orders, drawn
 by a seeded draw. The seed and the order are recorded.
+
+**Paired in time as well.** An item's three runs follow one another, with no other item's run between them.
+If seconds decide, a model's speed drifts with the hour, and three runs an hour apart would carry that drift
+into the comparison.
 
 **One run, defined.** An item under an arm is run as stage 1 runs an item: up to three turns, each fresh,
 on the same base, with the same offer, told nothing of the turns before it. Its cost is the cost of all its
@@ -249,8 +267,14 @@ not read for one if it leaves incomplete an item that the arm it is compared wit
 that is every item nothing completes. For walks against notes, it is every item notes complete. Every item
 stays in the figures either way. Draft 1 would have let an arm win by failing cheaply.
 
-**How uncertainty is worked out.** By resampling the scored items with replacement, ten thousand times, each
-item carried whole with all its arms, and taking the middle 95% of the resampled figures.
+**How uncertainty is worked out.** Two ways, and the wider one is used.
+
+- By resampling the scored items with replacement, ten thousand times, each item carried whole with all its
+  arms, and taking the middle 95% of the resampled figures.
+- By the ordinary interval for a mean, on the logarithms of the items' ratios.
+
+Resampling a score of items gives an interval that runs narrow. A benefit is shown only if the upper end of
+both is below 1, so that it is not the method that shows it.
 
 **How a comparison is read.** Four readings, which between them cover every interval, fixed now:
 
@@ -355,6 +379,19 @@ changes.
 | C. The readings left an interval wholly above 1 unread, and the outcome table could keep notes that had shown nothing | Four readings; "Worth building on"; the outcome table, read from the top |
 | D. An arm could still win cheaply against notes | "An arm must finish the work to win on cost", for each comparison's own reference |
 | Also: a smallest number of items; the pilot measures turns, not runs | "Never fewer than 20"; "What the pilot cannot give this rule" |
+
+## What a third reader added
+
+The ship Tardis read draft 3 as an advisory reader. It checked the sizing and the two readings against
+nothing, and added four points that neither earlier reader had raised. None stops parts 0 and 1 as it saw
+them; the lead takes the first to bear on the pilot as well.
+
+| Point | Answer in this draft |
+| --- | --- |
+| 1. A program's memory of its last prompt is a channel between turns: the second reads the first one's | "A prompt of its own", in part 0; used by the pilot and the experiment; memory reads kept apart in the tokens |
+| 2. If seconds decide, a model's speed drifts with the hour | "Paired in time as well"; the pilot's turns spread across items |
+| 3. Titles in one repository share a few words, so the ranker would offer whichever turn came last | A word in more than half the history titles scores nothing; every offer's score is reported |
+| 4. Resampling about twenty items gives an interval that runs narrow | Two intervals, and the wider one decides |
 
 ## Decisions the lead made here, for the next reader to attack
 

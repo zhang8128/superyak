@@ -349,6 +349,28 @@ pub struct TurnView {
 
 ---
 
+### Task 5b: A prompt of its own (the lead, after the builders' work is merged)
+
+Added after the plan was written, from an advisory read of the spec by the ship Tardis: two turns given the
+same prompt share a program's memory of it, so the later one is cheaper and faster.
+
+**Files:**
+- Modify: `v2/crates/turn/src/worker.rs`, `v2/crates/yak/src/main.rs`, `v2/crates/yak/src/clock.rs`
+- Test: `v2/crates/turn/tests/worker.rs`, `v2/crates/yak/tests/cli.rs`
+
+**Interfaces:**
+- Produces: `yak clock run --own-prompts`. With it, `prompt` is given the turn's attempt id and begins with one
+  line holding it. Without it the prompt is as it was. The line is in no store.
+
+- [ ] **Step 1: Write the failing tests.** `two_turns_at_one_item_have_prompts_that_differ_from_the_first_line`
+  with the switch on; `the_prompt_is_as_it_was_without_the_switch`; `no_turns_own_line_reaches_the_store`
+  (scan the store's file for the attempt id inside any text that is not an id column).
+- [ ] **Step 2:** Run them. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** The whole suite on both machines. Commit.
+
+---
+
 ### Task 6: Each builder reads the other's work, then the lead runs the acceptance table
 
 - [ ] **Step 1:** The Codex builder reads Tasks 3 and 4; the Claude builder reads Tasks 1, 2 and 5. Each
