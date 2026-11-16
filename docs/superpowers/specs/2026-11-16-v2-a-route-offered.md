@@ -1,14 +1,14 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 6. A change to the design of stage 2
+Serenity, 2026-11-16, revision 7. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
 
 A fresh reader of the other family approved revision 1 with seven named changes, confirmed revision 2
-with four more, and confirmed revision 4's change of where the items come from with two more. All thirteen
-are made here; the last section says where. Revision 6 changes the reach of one rule of section 6, and
-that change waits for the same reader. Two things came from the ship
+with four more, confirmed revision 4's change of where the items come from with two more, and confirmed
+revision 6's change to the reach of one rule with one more. All fourteen are made here; the last section
+says where. Two things came from the ship
 Tardis, which owns the store this rests on, and one from a measurement; that section names them too.
 
 ## Why the design changes
@@ -232,8 +232,8 @@ scored:
 3. At most three test files and five source files; Python only; no test file that needs a browser.
 4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Both inside
    the room's jail, within the check's limit.
-5. Among the scored items no two name one test file, and among the pilot's three. Where two would, the
-   earlier is the item and the later is left out. History items are not held to this.
+5. Among the scored items no two name one test file, and among the pilot's three. Which of two is kept is
+   said below, under "The scored, the pilot's and history". History items are not held to this.
 
 **Earlier, exactly.** The commits are put in one order, the same on any machine and however they are read
 out: a commit comes after every commit it descends from; among commits free to come next, the one with
@@ -263,7 +263,8 @@ had changed a file that the scored commit also changed. With the rule among the 
 commits before the pilot's as history: 13 of 20, and 10 of 20. With 40 commits as history: 4 of 20, and 2.
 So the figures are small and unsteady. This is a rule chosen knowing roughly how it bears on what a route
 could find. It rests on the reasoning above and not on the figures, which are here so that a reader can
-weigh the choice. No commit is taken or left out by them.
+weigh the choice. That does not make it a blind choice: it was made with these stand-ins, drawn from the
+commits' own answers, in view. No commit is taken or left out by them.
 
 **Disjoint in their test files among the scored, and no more than that.** Rule 5 keeps two scored items
 from naming one test file. It does not keep two items from coming from one fault or one feature, mended in
@@ -293,13 +294,24 @@ of the scored design to judge from the list and the history, before any scored t
 - **Its reference** is the commit's own source changes over the base, shown to pass before the item is
   listed. No turn sees it: a sandbox holds only what its base reaches.
 
-**The scored, the pilot's and history, by that order.** A stated commit divides. Going forward from it,
-each commit that can be an item is scored, unless rule 5 leaves it out. The dividing commit is the latest
-one after which forty scored items are found, forty being the most the sizing rule allows; the scored are
-the first `n` of them. The pilot's three are the nearest three before the dividing commit of which no two
-name one test file. History is every commit that can be an item before the earliest of those three. So no
-turn is ever offered a way learned from a change made after its own. How many history items are run, the
-nearest first, is fixed with the scored design, by its reader, with the pilot's results in hand.
+**The scored, the pilot's and history, by that order.** One commit that can be an item divides them: the
+last that is not scored.
+
+- **Scored.** Going forward from the first such commit after the dividing one, each is scored unless it
+  names a test file that a scored commit before it names: of two, the earlier is kept. The dividing commit
+  is the latest for which at least forty are found so, forty being the most the sizing rule allows. The
+  scored are the first `n` of them.
+- **The pilot's three.** Going back from the dividing commit, itself included, each is the pilot's unless
+  it names a test file that one already taken names: so here, of two, the later is kept, where among the
+  scored it is the earlier. The first three so found are the pilot's.
+- **History.** Every commit that can be an item before the earliest of the pilot's three.
+- A commit passed over in either scan is listed as left out by rule 5. If forty scored, or three for the
+  pilot, cannot be found, no list is made, and that is said.
+
+So no turn is ever offered a way learned from a change made after its own. How many history items are run,
+the nearest first, is fixed with the scored design, by its reader, with the pilot's results in hand, with
+the limits on attempts and on cost, and with the reason written down. It is fixed before any scored turn is
+offered anything, and no scored result changes it.
 
 **What this narrows, said before any turn.**
 
@@ -324,10 +336,11 @@ might serve it.
 **The item-maker is in the repository, with tests of its own.** They show, on a small repository made for
 the purpose: the same list whatever order the commits are read out in, and with two commits at one time;
 the dividing commit found; a later scored commit left out for naming an earlier one's test file, while a
-history commit that names it stays; a base with one parent and the fixed message; a reference that passes;
-and the check failing each of these, by name: the base, the wrong commit, a turn that changed a test file,
-one that changed a helper the tests use, one that changed the tests' configuration, and one that made the
-tests be skipped.
+history commit that names it stays; the pilot's three found going back, the dividing commit among them and
+the later of two kept; too few for the scored or for the pilot, refused; a base with one parent and the
+fixed message; a reference that passes; and the check failing each of these, by name: the base, the wrong
+commit, a turn that changed a test file, one that changed a helper the tests use, one that changed the
+tests' configuration, and one that made the tests be skipped.
 
 **For the reader of the scored design, beside the pilot's results:** how often the ranker finds a history
 turn at all. Every title is one sentence with test files' names in it, and the ranker drops a word that
@@ -432,10 +445,18 @@ The same reader confirmed it with two named changes, both made in revision 5:
 It also asked that the reader of the scored design be shown how often the ranker offers anything at all
 under these titles. That is in section 6's last paragraph.
 
-**Changed in revision 6, and to be read by the same reader before any pilot turn: the reach of rule 5.**
-Revision 5 let no two items name one test file. Revision 6 holds only the scored items to that, and the
-pilot's three, and makes history every commit that can be an item. The reason and what was measured are
-in section 6, under "Why rule 5 holds among the scored".
+**Changed in revision 6: the reach of rule 5.** Revision 5 let no two items name one test file. Revision 6
+holds only the scored items to that, and the pilot's three, and makes history every commit that can be an
+item. The reason and what was measured are in section 6, under "Why rule 5 holds among the scored". The
+same reader confirmed it with one named change, made in revision 7:
+
+| Named change | Where |
+| --- | --- |
+| T1. Say which commit the split falls on, which way each scan goes and which of two commits it keeps, and what happens when the pilot's three cannot be found | Section 6: "The scored, the pilot's and history", and the item-maker's own tests |
+
+It also held that the choice of this rule, made with stand-ins drawn from the commits' own answers in
+view, is an exploratory choice and not a blind one, and that the number of history items, once fixed, is
+not to be moved by a scored result. Both are now said in section 6.
 
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
