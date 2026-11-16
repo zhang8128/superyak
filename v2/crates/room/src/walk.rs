@@ -129,7 +129,7 @@ impl Room {
     }
 }
 
-pub(crate) fn plain_path(path: &str) -> bool {
+pub fn plain_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 512
         && !path.starts_with('/')

@@ -4,7 +4,7 @@
 #
 # The same list holds on macOS and on Linux: which programs there are comes from the crates' files, not from
 # the machine. It was made from a whole run at 417ccdea on each, and the two were the same. Three crates each
-# have a test file named offer.rs, so that line is here three times.
+# have a test file named offer.rs, so that line is here three times, and two have one named history.rs.
 #
 # After adding a test program, make it again from the log of a whole run, and read what changed:
 #   python3 -I scripts/suite_guard.py --programs <log>
@@ -17,6 +17,9 @@ Running tests/check.rs [check]
 Running tests/cli.rs [cli]
 Running tests/clock.rs [clock]
 Running tests/integration_api.rs [integration_api]
+Running tests/history.rs [history]
+Running tests/history.rs [history]
+Running tests/history_worker.rs [history_worker]
 Running tests/item.rs [item]
 Running tests/jail.rs [jail]
 Running tests/lease.rs [lease]
