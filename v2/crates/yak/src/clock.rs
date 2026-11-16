@@ -2189,6 +2189,7 @@ mod measurement_tests {
     /// A program that ran out of time is recorded as having run out of time, with its exit code, though its run
     /// then returned an error: how it ended was kept before the room's commit was tried.
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn a_program_that_timed_out_is_recorded_so_though_its_run_then_fails() {
         let d = tempfile::tempdir().unwrap();
         let (repo, base) = base_repo(d.path());
@@ -2211,6 +2212,7 @@ mod measurement_tests {
     /// The room's commit on a worker's behalf is timed by the worker, and that time is the seal's, not the
     /// worker's; the parts still add up.
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn the_rooms_commit_for_a_worker_is_in_the_seal_and_not_in_the_worker() {
         const SEAL: Duration = Duration::from_millis(2_000);
         let d = tempfile::tempdir().unwrap();
@@ -2340,6 +2342,7 @@ mod measurement_tests {
     /// limit, stops the turn and leaves how the program ended. A stop that comes while the program runs is how
     /// it ended.
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn a_stop_while_the_room_commits_for_a_worker_leaves_how_its_program_ended() {
         // (the script, the turn's limit, whether the stop waits for the program's end, how it ended)
         let cases: [(&str, u32, bool, Ended); 3] = [
@@ -2390,6 +2393,7 @@ mod measurement_tests {
     /// The same for a lease that is lost while the room commits for a worker: the turn is lost, and how the
     /// program ended is kept. (A lease lost while the program runs is in the clock's own tests.)
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn a_lease_lost_while_the_room_commits_for_a_worker_leaves_how_its_program_ended() {
         let d = tempfile::tempdir().unwrap();
         let (repo, base) = base_repo(d.path());
@@ -2492,6 +2496,7 @@ mod measurement_tests {
     }
 
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn a_turns_steps_are_kept_when_its_worker_ends_in_an_error() {
         let d = tempfile::tempdir().unwrap();
         let repo = d.path().join("repo");

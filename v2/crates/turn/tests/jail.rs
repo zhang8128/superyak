@@ -1,8 +1,9 @@
 //! What a run inside the jail cannot do.
 //!
 //! These tests enter a real jail. A jail cannot be entered from inside another sandbox (a team builder's, for
-//! instance), so there they fail with a message that says so. They are never skipped: a jail nobody tested is
-//! not a jail.
+//! instance): there they fail with a message that says so, and so a plain `cargo test` leaves out each one that
+//! enters a jail and prints why. Where the room can run, the whole suite is asked for with `-- --include-ignored`:
+//! a jail nobody tested is not a jail.
 
 use std::fs;
 use std::io::Read;
@@ -86,6 +87,7 @@ fn sh_quote(path: &Path) -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_can_write_in_its_checkout_and_its_scratch() {
     let g = ground();
     let out = jailed(
@@ -106,6 +108,7 @@ fn a_jailed_run_can_write_in_its_checkout_and_its_scratch() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_write_outside() {
     let g = ground();
     let target = g.outside.join("made");
@@ -138,6 +141,7 @@ fn unjailed(script: &str) -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_reads_only_what_it_is_shown() {
     let g = ground();
     let read = format!("cat {}/readable", sh_quote(&g.outside));
@@ -163,6 +167,7 @@ fn a_jailed_run_reads_only_what_it_is_shown() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_read_the_home_of_whoever_runs_the_room() {
     let home = PathBuf::from(std::env::var_os("HOME").expect("this test needs HOME"));
     let list = format!("ls -a {}", sh_quote(&home));
@@ -179,6 +184,7 @@ fn a_jailed_run_cannot_read_the_home_of_whoever_runs_the_room() {
 /// name that starts with `/System`. The run with no jail is the control: it shows the second name works here.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_reach_a_home_or_another_disk_by_its_other_name() {
     let g = ground();
     let home = PathBuf::from(std::env::var_os("HOME").expect("this test needs HOME"));
@@ -209,6 +215,7 @@ fn a_jailed_run_cannot_reach_a_home_or_another_disk_by_its_other_name() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn what_is_hidden_stays_hidden_inside_what_is_shown() {
     let g = ground();
     let root = g.checkout.parent().unwrap();
@@ -245,6 +252,7 @@ fn what_is_hidden_stays_hidden_inside_what_is_shown() {
 /// Showing something inside a hidden directory does not bring it back: hiding wins, in whichever order the
 /// two were asked for.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn what_is_shown_inside_something_hidden_stays_hidden() {
     let g = ground();
     let secret = g.hidden.join("secret");
@@ -268,6 +276,7 @@ fn what_is_shown_inside_something_hidden_stays_hidden() {
 
 /// A room kept below a hidden directory (`~/.superyak`, say) must still give a run its own checkout.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_checkout_inside_a_hidden_directory_is_still_the_runs_own() {
     let g = ground();
     let root = g.checkout.parent().unwrap();
@@ -296,6 +305,7 @@ fn a_checkout_inside_a_hidden_directory_is_still_the_runs_own() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn one_file_can_be_shown_and_run_without_its_neighbours() {
     use std::os::unix::fs::PermissionsExt;
     let g = ground();
@@ -331,6 +341,7 @@ fn the_whole_machine_cannot_be_shown() {
 /// Fetches a local page with and without the jail. The run without it is the control: it shows the listener
 /// and the fetch work, so the jailed failure means the jail and not a broken test.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_has_no_network() {
     let g = ground();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -410,6 +421,7 @@ print("own-pair:" + ("works" if b.recv(1) == b"x" else "broken"))
 /// socket file it can see: the checkout here, or a tool directory named for it where some service of the
 /// machine listens. The run with no jail is the control: all three sends arrive.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_reach_a_unix_socket_it_can_see() {
     use std::os::unix::net::{UnixDatagram, UnixListener};
     let g = ground();
@@ -513,6 +525,7 @@ except OSError as e:
 /// The run with no jail is the control: there all of it is reached.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let() {
     let g = ground();
     let args = ["-c".to_string(), BEYOND_THE_NETWORK.to_string()];
@@ -538,6 +551,7 @@ fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_signal_a_process_outside() {
     let g = ground();
     let mut victim = Command::new("/bin/sleep").arg("30").spawn().unwrap();
@@ -556,6 +570,7 @@ fn a_jailed_run_cannot_signal_a_process_outside() {
 /// that route exists on this machine, so the jailed failure means the jail.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_ask_the_system_to_run_something() {
     let g = ground();
     let label = |n: &str| format!("yak.jail.test.{}.{n}", std::process::id());
@@ -607,6 +622,7 @@ fn a_jailed_run_cannot_ask_the_system_to_run_something() {
 /// act on a person's desktop if they worked, so they are tried only inside the jail.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_script_other_programs_or_open_things() {
     let g = ground();
     let script = "/usr/bin/osascript -e 'return 6 * 7'";
@@ -692,6 +708,7 @@ fn seen_on_its_terminal(g: &Ground, command: (&Path, &[String])) -> String {
 /// to `/dev/tty` reaches that terminal, which is the control: a test with no terminal at all would see the
 /// write fail whatever the jail did.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_write_to_the_terminal() {
     let g = ground();
     let write = ["-c".to_string(), "echo MARK-typed > /dev/tty".to_string()];
@@ -707,6 +724,7 @@ fn a_jailed_run_cannot_write_to_the_terminal() {
 /// and as the place for temporary files. Each thing the jail allows beyond reading and writing is used here, so
 /// taking one away fails this test.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn honest_tools_still_run_in_the_jail() {
     let g = ground();
     let jail = jail(&g);
@@ -751,6 +769,7 @@ fn honest_tools_still_run_in_the_jail() {
 /// outside it. The run without the jail is the control.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_make_a_named_semaphore() {
     let g = ground();
     let make = "python3 -c 'import multiprocessing; print(\"ready\", flush=True); multiprocessing.Semaphore(1)'";
@@ -773,6 +792,7 @@ fn a_jailed_run_cannot_make_a_named_semaphore() {
 /// Every terminal device, not only the `/dev/tty` alias: another window's terminal carries what a person types.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_open_a_terminal_device() {
     let g = ground();
     // Given to the interpreter as an argument. A here-document would need a temporary file, and the jail
@@ -808,6 +828,7 @@ sys.exit(1 if opened or len(paths) < 3 else 0)
 /// could move its checkout away and leave a link in its place, the next run in that sandbox would be jailed
 /// around whatever the link names.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_replace_its_checkout_or_its_scratch() {
     let g = ground();
     fs::write(g.checkout.join("mine"), "MINE").unwrap();
@@ -957,6 +978,7 @@ impl Drop for Canary {
 /// only with both. `the_macos_profile_denies_by_default_and_names_what_it_allows` holds the profile to both.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_ask_about_another_process_or_read_its_environment() {
     let g = ground();
     let canary = Canary::start();
@@ -972,12 +994,14 @@ fn a_jailed_run_cannot_ask_about_another_process_or_read_its_environment() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_jail_passes_the_exit_code_through() {
     let g = ground();
     assert_eq!(jailed(&jail(&g), "exit 7").status.code(), Some(7));
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_directory_name_cannot_rewrite_the_jail() {
     // The name closes a string and a list and adds a rule, in the profile language of the macOS jail.
     let tmp = tempfile::tempdir().unwrap();

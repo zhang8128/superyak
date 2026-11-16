@@ -1760,6 +1760,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn the_rooms_git_is_not_read_past_its_limit_of_output() {
         let prints = |bytes: usize| {
             let mut command = Command::new("/bin/sh");
@@ -1856,6 +1857,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn the_rooms_git_is_ended_when_it_does_not_finish() {
         let mut slow = Command::new("/bin/sleep");
         slow.arg("30");
@@ -1904,6 +1906,7 @@ mod tests {
     /// The switch ends the room's git as its limit does, the whole group, and at once: while the program runs,
     /// and while only its output is waited for. Set beforehand, nothing is started at all.
     #[test]
+    #[ignore = "needs the room: a list of processes and a jail"]
     fn the_rooms_git_is_ended_when_its_switch_is_set() {
         let own = std::process::id();
         for (script, sleeper) in [

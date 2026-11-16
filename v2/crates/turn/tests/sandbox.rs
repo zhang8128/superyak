@@ -96,6 +96,7 @@ fn a_commit_in_a_sandbox_starts_none_of_gits_own_tidying() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_push_from_the_sandbox_fails_even_to_a_path() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -257,6 +258,7 @@ fn a_tag_object_that_points_at_the_base_is_not_in_the_sandbox() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_checks_clone_holds_nothing_its_commit_does_not_reach() {
     use room::{CheckOrigin, CheckSpec};
     let (repo, later, later_blob, dangling, tree) = item_with_strangers();
@@ -499,6 +501,7 @@ fn create_refuses_an_unknown_commit_and_a_bad_branch() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_environment_is_scrubbed() {
     // A test cannot set variables in its own process without `unsafe`, so it runs this binary again with them
     // set, and the child reports what a run in its sandbox sees.
@@ -612,6 +615,7 @@ fn has_ended_unseen(pid: u32) -> bool {
 /// ends; the test, reading that line, holds the room's look back until the process is seen to have ended, so
 /// the order is certain.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out() {
     use std::sync::atomic::Ordering;
     // A repository for each run: a test's sandbox has one place in its repository's scratch.
@@ -679,6 +683,7 @@ fn a_program_that_ended_by_itself_is_not_called_stopped_or_timed_out() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_past_its_limit_is_ended_with_its_children() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -718,6 +723,7 @@ fn a_run_past_its_limit_is_ended_with_its_children() {
 
 /// The clock ends a turn from another thread, when the room is stopped or the turn's lease is lost.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_stopped_run_is_ended_with_its_children_and_no_later_run_starts() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -753,6 +759,7 @@ fn a_stopped_run_is_ended_with_its_children_and_no_later_run_starts() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_group_that_ignores_term_is_killed_after_the_grace() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -775,6 +782,7 @@ fn a_group_that_ignores_term_is_killed_after_the_grace() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_job_left_behind_by_a_finished_run_is_ended() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -796,6 +804,7 @@ fn a_job_left_behind_by_a_finished_run_is_ended() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn lines_are_handed_over_as_they_come() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -821,6 +830,7 @@ fn lines_are_handed_over_as_they_come() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn stdout_stderr_stdin_and_the_exit_code() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -840,6 +850,7 @@ fn stdout_stderr_stdin_and_the_exit_code() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_that_never_reads_a_large_stdin_still_ends() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -869,6 +880,7 @@ fn create_refuses_a_directory_that_holds_something() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_line_longer_than_the_cap_is_cut() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -888,6 +900,7 @@ fn a_line_longer_than_the_cap_is_cut() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_pid_file_holds_the_running_group_and_is_gone_after() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let mut sb = sandbox(&repo);
@@ -919,6 +932,7 @@ fn the_pid_file_holds_the_running_group_and_is_gone_after() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn stale_process_identity_is_never_signalled() {
     use std::os::unix::process::CommandExt;
     let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -939,6 +953,7 @@ fn stale_process_identity_is_never_signalled() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_stored_identity_can_end_the_run_and_its_detached_children() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let mut sb = sandbox(&repo);
@@ -978,6 +993,7 @@ fn a_stored_identity_can_end_the_run_and_its_detached_children() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn every_run_gets_its_own_marker() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -989,6 +1005,7 @@ fn every_run_gets_its_own_marker() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn an_unrelated_process_is_untouched_by_supervision() {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -1018,6 +1035,7 @@ fn an_unrelated_process_is_untouched_by_supervision() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_finished_run_ends_its_detached_children() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -1035,6 +1053,7 @@ fn a_finished_run_ends_its_detached_children() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn destroy_removes_the_directory() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -1056,6 +1075,7 @@ fn destroy_removes_the_directory() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_clone_whose_git_directory_was_swapped_is_refused() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -1075,6 +1095,7 @@ fn a_clone_whose_git_directory_was_swapped_is_refused() {
 /// A worker can leave anything in its clone's `.git`. A named pipe where a ref should be would hold the room's
 /// own git, which opens the ref to read it, for as long as nobody writes to the pipe: for ever.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_named_pipe_in_the_clones_git_directory_is_refused_and_holds_nothing_up() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -1136,6 +1157,7 @@ fn a_sandbox_whose_directory_was_replaced_is_refused() {
 /// worker that is not jailed can reach it between runs. Something already at its path, or a link put where it
 /// was, is refused: the next run would be let write wherever the link names.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_scratch_directory_that_is_not_the_rooms_own_is_refused() {
     let run = |sb: &Sandbox, script: &str| {
         sb.run_untrusted("sh", &strings(&["-c", script]), "", 30, &mut |_| {})
@@ -1247,6 +1269,7 @@ impl Drop for Abandoned {
 /// run's record. From it a later clock ends the leader and every process the run was seen to start: also one
 /// that has since left the group, and also when the leader itself is already gone.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_whose_clock_died_is_ended_from_its_record() {
     for leader_already_gone in [false, true] {
         let tmp = tempfile::tempdir().unwrap();
@@ -1315,6 +1338,7 @@ fn a_run_whose_clock_died_is_ended_from_its_record() {
 /// A check is a run too. While it runs its record is beside its work directory, where a later clock would find
 /// it, and it is gone when the check has ended.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_running_check_has_a_record_beside_its_work_directory() {
     use room::{CheckOrigin, CheckSpec};
     let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -1360,6 +1384,7 @@ fn a_running_check_has_a_record_beside_its_work_directory() {
 /// Removing a sandbox removes the directory that was made, and its scratch directory. If something else is at
 /// either path by then, it is not the room's to remove: it is left as it is, and the room says so.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
     // The clone replaced by another directory.
     let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -1422,6 +1447,7 @@ fn a_replaced_sandbox_or_scratch_is_left_alone_when_the_sandbox_is_removed() {
 /// unremovable there, and elsewhere that takes root.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_removal_that_fails_is_said_beside_what_was_left() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -1509,6 +1535,7 @@ fn a_removal_that_fails_is_said_beside_what_was_left() {
 /// unless it is told not to: `$$` to `$`, `${NAME-otherwise}` to nothing. A check's command would then mean
 /// something else on one machine than on another.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_runs_command_reaches_its_program_as_written() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);

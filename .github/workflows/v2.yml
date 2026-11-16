@@ -47,14 +47,23 @@ jobs:
         # cargo test leaves bins in the build dir; only cargo build puts yak in target/debug, where the suite finds it.
         if: success() || failure()
         run: cargo build --workspace --bins --locked
-      - name: Tests, the acceptance suite with them
+      - name: Every test, the ones that need the room and the acceptance suite with them
+        # A plain cargo test leaves out the tests that need the room, each with a line that says so, and the
+        # acceptance suite. Here the room can run, so every test is asked for, and the guard fails the step if
+        # one was left out all the same, or if a test program that the list names was not started.
         if: success() || failure()
-        run: cargo test --workspace --locked --no-fail-fast
-      - name: The pilot's scripts
-        # The scripts that run the pilot's turns and read what they leave, tried on records made by hand: no
-        # model, no clock, no room.
+        run: bash scripts/whole-suite.sh "$RUNNER_TEMP/suite.log"
+      - name: The scripts' own tests
+        # The guard over the whole suite, and the probe of a plain cargo test with its checks, each tried with a
+        # script standing in for cargo; and the scripts that run the pilot's turns and read what they leave,
+        # tried on records made by hand: no model, no clock, no room.
         if: success() || failure()
-        run: python3 -I probes/pilot/test_records.py
+        run: |
+          status=0
+          python3 -I scripts/test_suite_guard.py || status=1
+          python3 -I probes/tests/test_probe.py || status=1
+          python3 -I probes/pilot/test_records.py || status=1
+          exit "$status"
       - name: The first run's three checks
         # The frozen checks of the first run with model workers. Its items are done, so the checks are regression
         # checks now: each builds yak offline from this checkout and drives `yak item add` from outside. They want

@@ -57,6 +57,7 @@ impl Item {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn freeze_reports_red_on_base_and_on_each_wrong_artifact() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -83,6 +84,7 @@ fn freeze_reports_red_on_base_and_on_each_wrong_artifact() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn freeze_reports_a_check_that_passes_on_base() {
     let item = Item::new();
     let mut spec = item.spec();
@@ -99,6 +101,7 @@ fn freeze_reports_a_check_that_passes_on_base() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_same_spec_freezes_to_the_same_hash() {
     let item = Item::new();
     item.repo.write("other.txt", "x\n");
@@ -133,6 +136,7 @@ fn the_same_spec_freezes_to_the_same_hash() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_commit_that_rewrote_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -174,6 +178,7 @@ fn a_commit_that_rewrote_the_check_file_fails() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_commit_that_deleted_the_check_file_fails() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -202,6 +207,7 @@ fn a_commit_that_deleted_the_check_file_fails() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_path_must_keep_its_frozen_type() {
     for directory in [false, true] {
         let item = Item::new();
@@ -234,6 +240,7 @@ fn a_check_path_must_keep_its_frozen_type() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_frozen_copies_are_never_written_through_a_link() {
     let repo = Repo::new(&[
         ("checks/check.sh", "grep fixed a.txt\n"),
@@ -268,6 +275,7 @@ fn the_frozen_copies_are_never_written_through_a_link() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_frozen_copy_keeps_its_mode() {
     let repo = Repo::new(&[
         ("check.sh", "#!/bin/sh\ngrep fixed a.txt\n"),
@@ -317,6 +325,7 @@ fn the_frozen_copy_keeps_its_mode() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_that_never_ends_times_out() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -346,6 +355,7 @@ fn a_check_that_never_ends_times_out() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_verdict_names_the_commit_and_the_check() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -387,6 +397,7 @@ fn the_verdict_names_the_commit_and_the_check() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_changed_frozen_copy_is_refused() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");
@@ -484,6 +495,7 @@ fn freeze_refuses_a_path_that_is_not_plain_or_not_tracked() {
 /// is done. If something else is at the sandbox's path by then, it is not the room's to remove: it is left,
 /// with the work directory that holds it, and the freeze says so and gives no result.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_freeze_leaves_its_work_directory_when_something_took_its_sandboxs_place() {
     let item = Item::new();
     let checks = item.repo.scratch("checks");

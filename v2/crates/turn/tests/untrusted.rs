@@ -46,6 +46,7 @@ fn reached(listener: &TcpListener) -> bool {
 /// The check's command tries to write beside the repository, then passes only if the file is not there. So the
 /// verdict is a pass exactly when the write was stopped.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_cannot_write_outside_its_checkout() {
     let repo = Repo::new(&[("a.txt", "one\n")]);
     repo.write("a.txt", "two\n");
@@ -73,6 +74,7 @@ fn a_check_cannot_write_outside_its_checkout() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_has_no_network() {
     let repo = Repo::new(&[("a.txt", "one\n")]);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -115,6 +117,7 @@ fn a_check_has_no_network() {
 
 /// A check may still use temporary files and a home directory: both are its scratch directory.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_has_a_home_and_a_place_for_temporary_files() {
     let repo = Repo::new(&[("a.txt", "one\n")]);
     let spec = spec(
@@ -138,6 +141,7 @@ fn a_check_has_a_home_and_a_place_for_temporary_files() {
 /// A script worker is a stand-in for a worker's own code, so it is jailed too. It makes its own commit, as a
 /// script worker does, which also shows git works inside the jail.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_script_worker_cannot_write_outside_its_sandbox_and_its_commit_still_lands() {
     let repo = Repo::new(&[("a.txt", "one\n")]);
     let outside = repo.scratch("outside");
@@ -319,6 +323,7 @@ fn home() -> Home {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_is_shown_the_tools_named_for_it_and_none_of_the_homes_secrets() {
     let home = home();
     let at = |name: &str| quote(&home.dir.join(name));
@@ -374,6 +379,7 @@ fn a_run_is_shown_the_tools_named_for_it_and_none_of_the_homes_secrets() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
     let home = home();
     let above = home.dir.parent().unwrap().to_path_buf();
@@ -419,6 +425,7 @@ fn a_named_path_that_is_wrong_or_would_show_the_home_is_refused() {
 /// A worker's program kept where keys are kept would be named for its run and still be hidden from it. The
 /// room says so, and does not start a run that can only fail to find its own program.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_program_kept_in_a_hidden_place_is_refused_by_name() {
     let home = home();
     let tool = home.dir.join(".ssh/tool.sh");
@@ -442,6 +449,7 @@ fn a_program_kept_in_a_hidden_place_is_refused_by_name() {
 /// nothing, so it does not start. The same goes for an agent's settings directory that is named but cannot
 /// be placed.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jail_with_no_usable_home_does_not_start() {
     let home = home();
     let file = home.dir.join(".netrc");
@@ -485,6 +493,7 @@ fn a_jail_with_no_usable_home_does_not_start() {
 /// entry would find a program the worker committed to the checkout, and run it in place of the room's shell or
 /// of the worker's own program, outside any jail.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_program_in_the_checkout_is_never_run_in_place_of_the_one_named() {
     let home = home();
     let mark = home.dir.join("the-shim-ran");
@@ -517,6 +526,7 @@ fn a_program_in_the_checkout_is_never_run_in_place_of_the_one_named() {
 /// somewhere else, and a credentials file made there later is the same file `~/.cargo/credentials.toml` names.
 /// So the jail refuses the link as it would the directory, and refuses its target named directly as well.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_named_link_to_a_directory_that_could_hold_a_secret_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -573,6 +583,7 @@ fn a_named_link_to_a_directory_that_could_hold_a_secret_is_refused() {
 /// name as written nor the place both links lead to is inside the first place; the name with only the first
 /// link followed is. Naming the first place is refused, by either road.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_is_known_through_each_link_on_the_way_to_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -613,6 +624,7 @@ fn a_secrets_place_is_known_through_each_link_on_the_way_to_it() {
 /// that does. A credentials file made later, once that directory is, would lie inside the one that does: so
 /// naming that one is refused. A link is followed by what it says, whether or not anything is there.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_is_known_through_a_link_to_somewhere_not_there_yet() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -656,6 +668,7 @@ fn a_secrets_place_is_known_through_a_link_to_somewhere_not_there_yet() {
 /// be shown the day it is made: no jail starts beside it. One that is there is hidden where it is, with
 /// whatever is put in it later, and the jail starts.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_in_a_directory_every_run_is_shown_stops_the_jail_unless_it_is_hidden() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
@@ -699,6 +712,7 @@ fn a_secrets_place_in_a_directory_every_run_is_shown_stops_the_jail_unless_it_is
 /// macOS it is refused on any disk, since the jail's rules there ignore letters. On Linux, on a disk that
 /// tells the two apart, they are two names, and `.Cargo` is an ordinary directory.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
@@ -749,6 +763,7 @@ fn a_secrets_place_is_known_whatever_letters_its_name_is_kept_in() {
 /// and from there the jail looks again. The same when the link is written from where it is, and when the part
 /// it goes up out of is a file.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_is_known_through_a_link_that_goes_up_out_of_what_is_not_there() {
     for form in ["full", "beside", "file"] {
         let tmp = tempfile::tempdir().unwrap();
@@ -795,6 +810,7 @@ fn a_secrets_place_is_known_through_a_link_that_goes_up_out_of_what_is_not_there
 /// and a name in other letters is another name.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_in_a_shown_directory_is_known_in_any_letters() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
@@ -842,6 +858,7 @@ fn a_secrets_place_in_a_shown_directory_is_known_in_any_letters() {
 /// writing is still inside the directory the disk has, and naming that directory to the jail is refused. On a
 /// disk that tells the two apart they are two names, and the directory is an ordinary one.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_secrets_place_is_known_however_an_accented_letter_is_written() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -890,6 +907,7 @@ fn a_secrets_place_is_known_however_an_accented_letter_is_written() {
 /// `/opt/homebrew/etc`). It does not look: the run's git works, and does not have the setting. With the jail
 /// off, the same run reads it.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_runs_git_reads_no_settings_of_the_machine() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap().join("home");

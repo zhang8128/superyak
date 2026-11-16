@@ -406,6 +406,7 @@ const ONE_TURN: [&str; 2] = ["--daily-turns", "1"];
 const AT_ITS_LIMIT: [&str; 4] = ["--daily-turns", "1", "--turn-secs", "5"];
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_ends_normally_has_its_programs_closing_total_and_what_it_changed() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -450,6 +451,7 @@ fn a_turn_that_ends_normally_has_its_programs_closing_total_and_what_it_changed(
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_with_no_tool_call_has_a_record_with_its_cost() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -464,6 +466,7 @@ fn a_turn_with_no_tool_call_has_a_record_with_its_cost() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_fails_its_check_and_one_that_hands_in_nothing_each_have_a_record() {
     for program in &PROGRAMS {
         // A wrong answer: handed in, and judged.
@@ -490,6 +493,7 @@ fn a_turn_that_fails_its_check_and_one_that_hands_in_nothing_each_have_a_record(
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_ended_at_its_limit_has_a_record_and_a_cost_as_whole_as_its_program_left_it() {
     for program in &PROGRAMS {
         // Ended before its closing total, as a program is that was still at work.
@@ -519,6 +523,7 @@ fn a_turn_ended_at_its_limit_has_a_record_and_a_cost_as_whole_as_its_program_lef
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_whose_program_crashes_has_a_record() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -540,6 +545,7 @@ fn a_turn_whose_program_crashes_has_a_record() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_is_killed_has_a_record() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -578,6 +584,7 @@ fn a_turn_that_is_killed_has_a_record() {
 /// A run is an item's turns until it passes or is given up. Its cost is nowhere but in its turns: every one of
 /// them has a record, the failed ones too, and the sum is over those.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_runs_cost_is_the_sum_over_its_turns() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -612,6 +619,7 @@ fn a_runs_cost_is_the_sum_over_its_turns() {
 /// A command that names several tracked files keeps all of them, in the order named. One that names none is a
 /// step all the same, and is counted among those the record cannot name.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_command_naming_several_files_keeps_them_in_order_and_one_naming_none_is_counted() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -695,6 +703,7 @@ fn holds(bytes: &[u8], words: &str) -> bool {
 /// No text of a turn is kept by the room: not in its store, not in any other file under its directory, and
 /// not in what the clock prints. Each program's stream here holds one word in every text it carries.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn no_text_of_a_turn_is_kept_by_the_room() {
     for program in &PROGRAMS {
         let case = Case::new();
@@ -742,6 +751,7 @@ fn no_text_of_a_turn_is_kept_by_the_room() {
 /// made to take a time that is known, and that time must be in the check's part and in the turn's active
 /// time: for a commit that is handed in, and for a turn that hands in nothing, whose base is checked.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_checks_time_is_in_its_part_and_in_the_turns_active_time() {
     for program in &PROGRAMS {
         for (then, passes) in [("echo green > answer", Some(true)), (":", None)] {
@@ -799,6 +809,7 @@ impl Drop for Held {
 /// The case's own guard. Ending a clock ends the clock alone, and a worker it had started is then nobody's:
 /// seen here alive after its clock is gone. Dropping the case ends it, from the room's record of it.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_case_ends_the_worker_that_a_clock_it_ended_left_running() {
     for program in &PROGRAMS {
         let case = Case::new();

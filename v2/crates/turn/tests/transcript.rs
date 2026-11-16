@@ -972,6 +972,12 @@ fn peak_of_a_parse(bytes: u64) -> u64 {
         "the probe failed: {stdout}{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    // Only the probe's body prints this. A good exit does not show it ran, an ignored test gives one too, and on
+    // macOS `time` gives a peak for that process as well.
+    assert!(
+        stdout.contains("PROBE_READ="),
+        "the probe's body did not run: {stdout}"
+    );
     #[cfg(target_os = "macos")]
     return String::from_utf8_lossy(&out.stderr)
         .lines()
@@ -993,6 +999,7 @@ fn peak_of_a_parse(bytes: u64) -> u64 {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_stream_of_two_hundred_megabytes_is_read_in_bounded_memory() {
     let small = peak_of_a_parse(MB);
     let big = peak_of_a_parse(200 * MB);
@@ -1059,6 +1066,7 @@ fn rss_probe() {
     if bytes >= 64 * MB {
         assert_eq!(longest, MAX_LINE_BYTES);
     }
+    println!("PROBE_READ={}", pairs.unwrap());
     #[cfg(not(target_os = "macos"))]
     println!("PEAK_BYTES={}", own_peak());
 }

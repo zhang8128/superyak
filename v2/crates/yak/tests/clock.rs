@@ -38,6 +38,7 @@ fn a_clock_gives_no_turn_a_line_of_its_own_unless_asked() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn every_way_a_turn_ends_leaves_a_measured_record() {
     for (body, limit, ended) in [
         (FIX.to_string(), TURN_SECS, room::Ended::Exited),
@@ -93,6 +94,7 @@ fn every_way_a_turn_ends_leaves_a_measured_record() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_with_no_steps_still_has_a_record() {
     let mut world = World::new(1);
     let script = world.script("silent.sh", "#!/bin/sh\nexit 0\n");
@@ -108,6 +110,7 @@ fn a_turn_with_no_steps_still_has_a_record() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_cannot_make_a_sandbox_is_measured_as_not_run() {
     let mut world = World::new(1);
     let worker = world.script("idle.sh", "#!/bin/sh\nexit 0\n");
@@ -146,6 +149,7 @@ fn a_turn_that_cannot_make_a_sandbox_is_measured_as_not_run() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turns_changes_are_the_difference_between_its_base_and_its_commit() {
     let mut world = World::new(1);
     // `a b.txt` is not a plain path: it is counted, not kept.
@@ -178,6 +182,7 @@ fn a_turns_changes_are_the_difference_between_its_base_and_its_commit() {
 
 /// At most `MAX_CHANGES` changed files are kept for one turn; the rest are counted.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_changes_more_files_than_are_kept_counts_the_rest() {
     let mut world = World::new(1);
     let body = format!(
@@ -220,6 +225,7 @@ fn waiting_check(turns: &std::path::Path) -> Option<std::path::PathBuf> {
 /// leaves it as the worker left it, though the turn ends as a lost lease. The lease is lost as the room sees a
 /// lease lost: the item's lease has moved on, so the verdict is refused.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_that_ran_out_of_time_stays_so_when_the_lease_is_lost_during_the_check() {
     let mut world = World::new(0);
     // The check waits on the turn's commit only (freezing it runs it on the base and the wrong commit), says
@@ -285,6 +291,7 @@ fn a_worker_that_ran_out_of_time_stays_so_when_the_lease_is_lost_during_the_chec
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
     let Some(dir) = std::env::var_os("YAK_DIFF_TEST_DIR") else {
         let d = tempfile::tempdir().unwrap();
@@ -301,6 +308,7 @@ fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
             .args([
                 "--exact",
                 "a_stop_during_the_changed_file_list_leaves_no_ref_or_check",
+                "--include-ignored",
                 "--nocapture",
             ])
             .env("YAK_DIFF_TEST_DIR", d.path())
@@ -313,6 +321,7 @@ fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        assert!(marker.is_file(), "the inner run never started the diff");
         return;
     };
     let mut world = World::new(1);
@@ -343,6 +352,7 @@ fn a_stop_during_the_changed_file_list_leaves_no_ref_or_check() {
 /// durations do. Seen with a sandbox that takes two seconds to make, from a git whose fetch of the turn's base
 /// waits that long: the step, seen once the worker runs, is seen after the sandbox was made.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_steps_times_count_from_before_its_sandbox_was_made() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().canonicalize().unwrap();
@@ -410,6 +420,7 @@ fn inner_a_turn_whose_sandbox_is_slow_to_make() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_second_look_is_timed_beside_the_turn() {
     let mut world = World::new(1);
     let script = world.script("fix.sh", FIX);
@@ -438,6 +449,7 @@ fn state(world: &World, n: usize) -> ItemState {
 // The six tests of the plan.
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn once_through_passes_a_fixable_item() {
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
@@ -478,6 +490,7 @@ fn once_through_passes_a_fixable_item() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_only_new_ref_is_the_turns_branch() {
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
@@ -514,6 +527,7 @@ fn the_only_new_ref_is_the_turns_branch() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn stop_ends_a_running_worker() {
     let mut world = World::new(2);
     // It ignores SIGTERM, and so does its child, so only the SIGKILL after the grace ends them.
@@ -544,6 +558,11 @@ fn stop_ends_a_running_worker() {
     });
     let (result, events) = world.run(&[&slow], Mode::Forever, NEVER, TURN_SECS);
     let returned = Instant::now();
+    for event in &events {
+        if let Event::NotFrozen { reason, .. } = event {
+            eprintln!("NOT FROZEN {reason}");
+        }
+    }
     let (group, stopped_at) = stopper.join().unwrap();
     result.unwrap();
     assert!(
@@ -570,6 +589,7 @@ fn stop_ends_a_running_worker() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn workers_take_turns() {
     let mut world = World::new(4);
     let a = world.script("a.sh", FIX);
@@ -585,6 +605,7 @@ fn workers_take_turns() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_recheck_that_differs_is_listed() {
     let mut world = World::new(0);
     // Red on the base and on the wrong commit; on the fix it passes the first time and fails when rechecked. A
@@ -614,6 +635,7 @@ fn a_recheck_that_differs_is_listed() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_sandbox_is_gone_after_the_verdict() {
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
@@ -658,6 +680,7 @@ fn the_sandbox_is_gone_after_the_verdict() {
 /// A worker that commits nothing hands in its base, which fails; the item is taken again until it is abandoned,
 /// and the loop goes on to the next item.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_that_commits_nothing_fails_and_the_room_moves_on() {
     let mut world = World::new(2);
     let idle = world.script("idle.sh", "#!/bin/sh\nexit 0\n");
@@ -702,6 +725,7 @@ fn a_turn_that_commits_nothing_fails_and_the_room_moves_on() {
 
 /// A worker that runs out of time is ended with its group, and what it had committed by then is judged.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turn_out_of_time_is_judged_by_what_it_committed() {
     let mut world = World::new(1);
     let late = world.script("late.sh", &format!("{FIX}sleep 600\n"));
@@ -739,6 +763,7 @@ fn a_turn_out_of_time_is_judged_by_what_it_committed() {
 /// run to see. So this test does not ask that one was seen. The test after the next shows a lease running
 /// out while the worker runs, by holding the clock still, where nothing is left to how busy the machine is.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
     let mut world = World::new(1);
     world.room.set_lease_secs(1).unwrap();
@@ -801,6 +826,7 @@ fn a_lease_that_goes_stale_mid_turn_is_left_to_expire() {
 /// not read at all, however truly it describes a process that is running: ending a process on the word of a
 /// file anyone could have put there is not the clock's to do.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
     let mut world = World::new(1);
     assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 1);
@@ -915,6 +941,7 @@ fn a_restart_ends_a_dead_clocks_run_and_clears_its_files() {
 /// going. The clock stops where it is: it removes nothing, starts no turn, and says which record. With the
 /// record gone, by a person's hand, it starts.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_record_that_cannot_be_read_stops_the_clock_with_everything_in_place() {
     let mut world = World::new(1);
     assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 1);
@@ -953,6 +980,7 @@ fn a_record_that_cannot_be_read_stops_the_clock_with_everything_in_place() {
 /// A sandbox is removed only if it is still the directory the room made. If something else is at its path when
 /// the turn ends, the clock leaves it where it is, says so, and goes on.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_sandbox_that_was_replaced_is_left_where_it_is() {
     let mut world = World::new(1);
     // It commits nothing: three turns, each a failure.
@@ -1001,6 +1029,7 @@ fn a_sandbox_that_was_replaced_is_left_where_it_is() {
 /// A turn's record is written before its sandbox is removed, so that a clock that dies removing it leaves the
 /// record. Seen when the removal is refused: at the moment the clock says so, the record is in the store.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_turns_record_is_written_before_its_sandbox_is_removed() {
     let mut world = World::new(1);
     let slow = world.script("slow.sh", "#!/bin/sh\nsleep 3\n");
@@ -1056,6 +1085,7 @@ fn a_turns_record_is_written_before_its_sandbox_is_removed() {
 /// A scratch directory is the room's to remove only if a run of the room's made it. One that was at its path
 /// before any run is not: the sandbox's own removal leaves it, and so does the clock's tidying after the turn.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_scratch_directory_the_room_did_not_make_is_left_where_it_is() {
     // On a disk where capital and small letters name the same file, a directory kept as `<attempt>.SCRATCH` is
     // at the scratch directory's place too, and is left like one kept in small letters.
@@ -1111,6 +1141,7 @@ fn a_scratch_directory_the_room_did_not_make_is_left_where_it_is() {
 /// What is found at the scratch directory's place need not be a directory. A file there is left too, and a
 /// file can go by a second name in the same directory: both names are left, whichever the clock meets first.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_file_at_the_scratch_directorys_place_is_left_under_every_name_it_has() {
     let mut world = World::new(1);
     let fix = world.script("fix.sh", FIX);
@@ -1146,6 +1177,7 @@ fn a_file_at_the_scratch_directorys_place_is_left_under_every_name_it_has() {
 /// that run cannot start, so the check fails for a reason of its own as well, and what the removal left is
 /// still what the clock is told.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() {
     for (which, rng, how) in [
         ("check", NEVER, "swap"),
@@ -1255,6 +1287,7 @@ fn what_took_a_checks_sandboxs_place_is_left_with_the_directory_that_holds_it() 
 /// ends the clock; it does not take the place of what the check said, and the clock's tidying on the way out
 /// still leaves the directory that holds what was found.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn what_a_check_left_is_remembered_though_the_store_fails_meanwhile() {
     let mut world = World::new(0);
     world.room.set_lease_secs(6).unwrap();
@@ -1310,6 +1343,7 @@ fn what_a_check_left_is_remembered_though_the_store_fails_meanwhile() {
 /// every other directory, since nothing is removed. A run the clock had already ended by then is over, and its
 /// record went as it ended.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_clock_stopped_at_one_run_has_ended_the_ones_before_it_and_removed_nothing_else() {
     let mut world = World::new(2);
     assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 2);
@@ -1367,6 +1401,7 @@ fn a_clock_stopped_at_one_run_has_ended_the_ones_before_it_and_removed_nothing_e
 
 /// In `OnceThrough`, the ceiling ends the run with its reason, for the command line to say.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_ceiling_ends_a_once_through_run() {
     let mut world = World::new(2);
     world.room.set_ceiling(1, 1).unwrap();
@@ -1387,6 +1422,7 @@ fn the_ceiling_ends_a_once_through_run() {
 /// A hand-in whose check cannot run (here the worker removed the room's frozen copies) gets no verdict: the item
 /// stays `Checking` until its lease expires, and is taken again until it is abandoned.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_check_that_cannot_run_leaves_the_item_to_expire() {
     let mut world = World::new(1);
     // Long enough that a turn on a busy machine hands in before it runs out, short enough to wait out thrice.
@@ -1422,6 +1458,7 @@ fn a_check_that_cannot_run_leaves_the_item_to_expire() {
 /// A worker that replaces its clone's `.git` with a link cannot have its work taken back: the turn hands in its
 /// base and fails, and no git runs in what the worker left.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_that_breaks_its_clone_hands_in_nothing() {
     let mut world = World::new(1);
     let body = format!("{FIX}mv .git .git-moved\nln -s .git-moved .git\n");
@@ -1449,6 +1486,7 @@ fn a_worker_that_breaks_its_clone_hands_in_nothing() {
 /// A draft whose check cannot be frozen (its base commit is not in the repository) stays a draft; the others are
 /// frozen and run. `freeze_drafts` says which failed after trying the rest.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_draft_that_cannot_be_frozen_stays_a_draft() {
     let mut world = World::new(0);
     let missing = "0".repeat(40);
@@ -1485,6 +1523,7 @@ fn a_draft_that_cannot_be_frozen_stays_a_draft() {
 /// A commit that cannot be brought into the item's repository (here its object store is read-only) is a turn that
 /// handed in nothing: the base is handed in and fails, so the attempt counts, and no ref is made.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_commit_that_cannot_be_fetched_fails_the_turn() {
     let mut world = World::new(1);
     assert_eq!(clock::freeze_drafts(&mut world.room).unwrap(), 1);
@@ -1529,6 +1568,7 @@ fn a_commit_that_cannot_be_fetched_fails_the_turn() {
 /// A turn longer than its lease keeps it: the clock renews it while the worker runs and while the check runs, so
 /// the pass is recorded under the first lease. A reader sees the expiry move on in both states.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_long_turn_keeps_its_lease() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1584,6 +1624,7 @@ fn a_long_turn_keeps_its_lease() {
 /// A ref the clock would make that is already in the repository is not replaced: that turn hands in nothing and
 /// fails, and the next lease makes its own.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_ref_already_there_is_not_overwritten() {
     let mut world = World::new(1);
     let id = world.items[0].clone();
@@ -1624,6 +1665,7 @@ fn a_ref_already_there_is_not_overwritten() {
 /// that would have made its ref there hands in nothing and fails, the symbolic ref is as it was, and the next
 /// lease makes its own.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_symbolic_ref_that_names_nothing_is_a_name_that_is_taken() {
     let mut world = World::new(1);
     let id = world.items[0].clone();
@@ -1669,6 +1711,7 @@ fn a_symbolic_ref_that_names_nothing_is_a_name_that_is_taken() {
 
 /// In `Forever`, the ceiling does not end the clock: it waits for the next day, and says so once.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn in_forever_the_ceiling_waits_and_says_so_once() {
     let mut world = World::new(2);
     world.room.set_ceiling(1, 1).unwrap();
@@ -1692,6 +1735,7 @@ fn in_forever_the_ceiling_waits_and_says_so_once() {
             }
         }
         Event::Started { .. } => turns += 1,
+        Event::NotFrozen { reason, .. } => eprintln!("NOT FROZEN {reason}"),
         _ => {}
     };
     clock::run_with(
@@ -1737,12 +1781,18 @@ fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
         "in_forever_the_ceiling_waits_and_says_so_once",
     ] {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([name, "--exact", "--test-threads=1"])
+            .args([
+                name,
+                "--exact",
+                "--include-ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env("PATH", &path)
             .env("YAK_TEST_STOPS_WITHIN_SECS", "3")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
@@ -1750,9 +1800,19 @@ fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
         if !ended {
             let _ = child.kill();
         }
-        let status = child.wait().unwrap();
+        let out = child.wait_with_output().unwrap();
+        let printed = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(ended, "{name} did not end where no turn can start");
-        assert!(!status.success(), "{name} passed with a ps that fails");
+        assert!(!out.status.success(), "{name} passed with a ps that fails");
+        assert!(
+            printed.contains("inspect processes:")
+                || printed.contains("process inspection is unavailable"),
+            "{name} did not report its failed look at processes: {printed}"
+        );
     }
 }
 
@@ -2099,6 +2159,7 @@ fn with_git(mode: &str) -> String {
 /// made, and nothing of the turn is left. Seen with the clock held still for longer than its lease, once a
 /// worker that waits for thirty seconds is running.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_lease_that_runs_out_while_the_worker_runs_ends_the_worker() {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
@@ -2143,6 +2204,7 @@ fn took(printed: &str) -> u64 {
 /// is done, so a fetch that stops the room and then fails starts no check either. Seen with a `git` that is
 /// slow to fetch.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() {
     // A fetch of eight seconds under a lease of six: the lease is renewed meanwhile, and the turn is judged
     // under the lease it began with.
@@ -2182,6 +2244,7 @@ fn a_slow_fetch_keeps_its_lease_and_ends_with_no_ref_once_the_room_is_stopped() 
 /// either changed while it was being made, the ref is taken back before the turn ends. Seen with a `git` that
 /// is slow to make a ref, or that makes it while the clock is held still.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_ref_is_made_only_under_a_lease_the_turn_holds_in_a_room_that_is_not_stopped() {
     // Eight seconds to make the ref under a lease of six: the lease is renewed meanwhile.
     let slow = with_git("slow-ref");
@@ -2226,6 +2289,7 @@ fn a_ref_is_made_only_under_a_lease_the_turn_holds_in_a_room_that_is_not_stopped
 /// names. Here it names the very commit the worker hands in, one the repository had all along. The turn ends,
 /// for a stop or for a lease that ran out as the clock looked at the name, and the ref is as it was.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_ref_that_was_already_there_is_left_when_the_turn_ends_without_a_hand_in() {
     // The control: the worker's commit is the very one made beforehand. Its turn fails the check (every answer
     // is 41), and the ref the clock made for it names that commit.
@@ -2252,6 +2316,7 @@ fn a_ref_that_was_already_there_is_left_when_the_turn_ends_without_a_hand_in() {
 /// When the room's store fails just after the ref was made, the clock ends, as it does for any failure of its
 /// store. The turn hands nothing in, so its ref is taken back first: that needs git, not the store.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_ref_is_taken_back_when_the_store_fails_before_the_hand_in() {
     let failed = with_git("ref-then-store");
     assert!(failed.contains("REFUSED "), "{failed}");
@@ -2264,6 +2329,7 @@ fn a_ref_is_taken_back_when_the_store_fails_before_the_hand_in() {
 /// that is done at once and leaves something holding its output does not hold the turn. Seen with a limit of
 /// two seconds and a `git` whose fetch leaves a `sleep` of 47 seconds behind.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_clocks_fetch_runs_under_the_rooms_git_limit() {
     let held = with_git("fetch-held");
     assert!(
@@ -2556,6 +2622,7 @@ fn stopped_at_the_checks_run(printed: &str) {
 /// worker's run, for a check's and for a check being frozen. A clock started again finds the record and stops
 /// in the same way until the run can be ended.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place() {
     // The control: with the same `ps` in the way and nothing breaking it, both items pass and nothing is left.
     let plain = with_ps("plain");
@@ -2598,6 +2665,7 @@ fn a_run_that_cannot_be_confirmed_ended_stops_the_clock_with_everything_in_place
 /// run was being ended; but it is no leave to remove what is left of a run that may still be going. The clock
 /// stops for the run, with its record and its directories in place, and says that the store failed as well.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_run_that_cannot_be_confirmed_ended_is_kept_though_the_store_fails_too() {
     let worker = with_ps("worker-store");
     stopped_at_the_workers_run(&worker);
@@ -2615,6 +2683,7 @@ fn a_run_that_cannot_be_confirmed_ended_is_kept_though_the_store_fails_too() {
 /// at the next thing it checks, that the program is there, and no model is started by this test whatever the
 /// clock does.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn with_a_protection_switched_off_the_clock_runs_no_model_worker() {
     let under = |workers: &str, switches: &[(&str, &str)]| {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());

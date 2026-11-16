@@ -1,0 +1,38 @@
+# The test programs a whole run of v2's tests starts, as scripts/suite_guard.py names them: one line each,
+# without what differs from one build to the next. whole-suite.sh fails when a run starts another set. A crate
+# or a test file that is left out of a run shows here and nowhere else: its tests print no line at all.
+#
+# The same list holds on macOS and on Linux: which programs there are comes from the crates' files, not from
+# the machine. It was made from a whole run at 417ccdea on each, and the two were the same.
+#
+# After adding a test program, make it again from the log of a whole run, and read what changed:
+#   python3 -I scripts/suite_guard.py --programs <log>
+Doc-tests acceptance
+Doc-tests room
+Doc-tests turn
+Doc-tests yak
+Running tests/budget.rs [budget]
+Running tests/check.rs [check]
+Running tests/cli.rs [cli]
+Running tests/clock.rs [clock]
+Running tests/integration_api.rs [integration_api]
+Running tests/item.rs [item]
+Running tests/jail.rs [jail]
+Running tests/lease.rs [lease]
+Running tests/mcp.rs [mcp]
+Running tests/measured.rs [measured]
+Running tests/part0.rs [part0]
+Running tests/release.rs [release]
+Running tests/review.rs [review]
+Running tests/sandbox.rs [sandbox]
+Running tests/stage1.rs [stage1]
+Running tests/store.rs [store]
+Running tests/transcript.rs [transcript]
+Running tests/untrusted.rs [untrusted]
+Running tests/walk.rs [walk]
+Running tests/worker.rs [worker]
+Running unittests fixture.rs [acceptance]
+Running unittests src/lib.rs [room]
+Running unittests src/lib.rs [turn]
+Running unittests src/lib.rs [yak]
+Running unittests src/main.rs [yak]

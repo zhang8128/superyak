@@ -84,6 +84,7 @@ fn read(path: &Path) -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_script_worker_can_commit_in_its_sandbox() {
     let repo = Repo::new(&[("a.txt", "broken\n")]);
     let sb = sandbox(&repo);
@@ -129,6 +130,7 @@ fn an_unknown_worker_name_is_refused() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
     let repo = Repo::new(&[("src/a.txt", "source\n")]);
     let sb = sandbox(&repo);
@@ -164,6 +166,7 @@ fn a_script_worker_gets_the_prompt_and_its_stream_becomes_steps() {
 /// With a turn's name, its prompt begins with one line that holds the name, and the rest is the prompt as it
 /// is without one. Each kind of worker gives its program that prompt when its sandbox has the turn's name.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_named_turns_prompt_begins_with_a_line_of_its_own() {
     let plain = prompt(None, "Read the source", "test -f src/a.txt");
     let named = prompt(Some("a1b2c3"), "Read the source", "test -f src/a.txt");
@@ -282,6 +285,7 @@ fn the_prompt_is_the_item_its_check_and_the_rules() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_past_its_limit_is_timed_out() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
@@ -472,6 +476,7 @@ fn stand_in(repo: &Repo, name: &str, fixture: &str) -> PathBuf {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -536,6 +541,7 @@ fn a_claude_worker_reads_its_stream_and_its_work_is_committed() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_codex_worker_reads_its_stream_and_its_work_is_committed() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -589,6 +595,7 @@ fn breaker(repo: &Repo, name: &str, fixture: &str, lines: &str) -> PathBuf {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
     // Claude: Read a.txt and its result, the call to `ls`, and the closing total.
     let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -636,6 +643,7 @@ fn what_was_seen_is_kept_when_the_run_ends_in_an_error() {
 /// A step's times count from the turn's start as the `Seen` says it, not from when the worker began: the room
 /// makes the sandbox in between, and that is the turn's time too.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_steps_times_count_from_the_turns_start() {
     let earlier = |seen: &mut Seen| {
         seen.started = Instant::now()
@@ -680,6 +688,7 @@ fn a_steps_times_count_from_the_turns_start() {
 /// The room's commit for a model worker is timed by the worker, apart from the program's own run. A script
 /// worker commits for itself, so the room's commit takes it no time.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_rooms_commit_for_a_worker_is_timed_apart_from_its_program() {
     for family in ["claude", "codex"] {
         let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -723,6 +732,7 @@ fn the_rooms_commit_for_a_worker_is_timed_apart_from_its_program() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_script_workers_stream_gives_its_tokens() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -745,6 +755,7 @@ fn a_script_workers_stream_gives_its_tokens() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn an_agent_that_changed_nothing_leaves_no_commit() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -759,6 +770,7 @@ fn an_agent_that_changed_nothing_leaves_no_commit() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn nothing_a_worker_plants_in_its_git_directory_runs_when_the_room_commits() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -806,6 +818,7 @@ fn nothing_a_worker_plants_in_its_git_directory_runs_when_the_room_commits() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_room_requires_plain_git_metadata_at_every_depth() {
     for name in [
         "logs/HEAD",
@@ -844,6 +857,7 @@ fn the_room_requires_plain_git_metadata_at_every_depth() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_room_accepts_only_a_single_repository_tree() {
     for git_file in [false, true] {
         let repo = Repo::new(&[("a.txt", "hello\n")]);
@@ -902,6 +916,7 @@ fn the_room_accepts_only_a_single_repository_tree() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_room_requires_an_index_without_gitlinks() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -926,6 +941,7 @@ fn the_room_requires_an_index_without_gitlinks() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn room_commits_leave_no_reflogs() {
     let repo = Repo::new(&[("a.txt", "hello\n")]);
     let sb = sandbox(&repo);
@@ -973,6 +989,7 @@ fn message_file(sb: &Sandbox) -> Option<std::fs::Metadata> {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_worker_that_cannot_commit_leaves_its_message() {
     let leave = "printf 'Make the greeting say bye\\n\\nIt said hello.\\n' > .yak-message";
     for family in ["codex", "claude"] {
@@ -1034,6 +1051,7 @@ fn a_worker_that_cannot_commit_leaves_its_message() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_message_file_that_is_not_a_plain_file_is_not_read() {
     // A link is removed and not followed; a file the room cannot use is removed and not read. A directory or a
     // pipe there stops the room's commit: `something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit`.
@@ -1131,6 +1149,7 @@ fn tracking(name: &str, make: impl FnOnce(&Path)) -> Repo {
 /// own file: the room neither reads it nor removes it, and for that turn there is no message file. A worker that
 /// leaves it as it was changes nothing, so nothing is committed, and it is still there as it was.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_message_file_the_base_tracks_is_neither_read_nor_removed() {
     // Bytes no message could be: not UTF-8, a NUL, no newline at the end.
     let bytes: &[u8] = b"tracked \xff\x00 by the item";
@@ -1176,6 +1195,7 @@ fn a_message_file_the_base_tracks_is_neither_read_nor_removed() {
 /// as any other change is (on a disk that does not tell them apart it is the tracked file, changed), and it is
 /// still there afterwards.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn with_the_name_tracked_in_other_letters_no_message_file_is_read() {
     // The second is spelled with the Kelvin sign, which folds to a small k.
     for tracked in [".Yak-Message", ".YAK-MESSAGE", ".ya\u{212A}-message"] {
@@ -1204,6 +1224,7 @@ fn with_the_name_tracked_in_other_letters_no_message_file_is_read() {
 /// nor a link, the room does not commit for the worker: it says what it found, and where. Nothing of it is
 /// staged, and no commit holds what was in it.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn something_at_the_message_path_that_is_not_a_file_stops_the_rooms_commit() {
     const MARKER: &str = "yak-marker-7f3c1a";
     let cases = [
@@ -1640,6 +1661,7 @@ fn a_tool_directory_that_is_also_hidden_is_not_shown() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_workers_program_is_given_its_own_tmp_and_no_global_git_settings() {
     for family in ["claude", "codex"] {
         let repo = Repo::new(&[("a.txt", "hello\n")]);

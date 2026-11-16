@@ -215,6 +215,7 @@ fn item_add_then_show_round_trips() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn item_turns_prints_what_was_measured() {
     let f = Fixture::new();
     let id = f.add();
@@ -277,6 +278,7 @@ fn the_prompt_as_it_was() -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn two_turns_at_one_item_have_prompts_that_differ_from_the_first_line() {
     let f = Fixture::new();
     let id = f.add();
@@ -318,6 +320,7 @@ fn two_turns_at_one_item_have_prompts_that_differ_from_the_first_line() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn the_prompt_is_as_it_was_without_the_switch() {
     let f = Fixture::new();
     let id = f.add();
@@ -369,6 +372,7 @@ fn holds(bytes: &[u8], words: &str) -> bool {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn no_turns_own_line_reaches_the_store() {
     let f = Fixture::new();
     let id = f.add();
@@ -592,6 +596,7 @@ fn bad_jail_read_is_refused_at_start_before_a_draft_is_frozen() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_successful_clock_prints_events_without_transcript_text() {
     let f = Fixture::new();
     let id = f.add();
@@ -624,6 +629,7 @@ fn a_successful_clock_prints_events_without_transcript_text() {
 /// A room named by a relative path still has its turns run: the clock hides the room's directory from every
 /// worker's shell, and finds its real path to do so before it makes a turn's sandbox.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_clock_in_a_room_named_by_a_relative_path_runs_its_turns() {
     let f = Fixture::new();
     let id = f.add();
@@ -645,6 +651,7 @@ fn a_clock_in_a_room_named_by_a_relative_path_runs_its_turns() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
     let f = Fixture::new();
     let id = f.add();
@@ -743,6 +750,7 @@ fn clock_restarts_with_only_the_allowed_environment_and_does_not_loop() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn clock_errors_including_once_through_ceiling_exit_nonzero() {
     let f = Fixture::new();
     let first = f.add();
@@ -788,6 +796,7 @@ fn stop_and_resume_work_without_the_writer_lock() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn turn_limit_reaches_the_clock() {
     let f = Fixture::new();
     let id = f.add();
@@ -803,6 +812,7 @@ fn turn_limit_reaches_the_clock() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn concurrent_sets_the_room_ceiling_without_dispatching_parallel_turns() {
     let f = Fixture::new();
     let id = f.add();
@@ -819,6 +829,7 @@ fn concurrent_sets_the_room_ceiling_without_dispatching_parallel_turns() {
 }
 
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn events_arrive_during_a_turn_and_stop_works_while_the_clock_holds_the_lock() {
     let f = Fixture::new();
     let id = f.add();
@@ -975,6 +986,7 @@ fn starting_a_clock_leaves_nothing_beside_the_room() {
 /// A number given twice is not a mistake to refuse: a script that wraps `yak` adds its own after the defaults
 /// it was handed. The last one wins, as it does in most command lines.
 #[test]
+#[ignore = "needs the room: a list of processes and a jail"]
 fn a_number_given_twice_takes_the_last() {
     let f = Fixture::new();
     f.add();
