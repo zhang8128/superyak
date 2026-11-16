@@ -1,14 +1,14 @@
 # v2: walks into roads, and a route back
 
-Tardis, 2026-11-16, revision 2. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
+Tardis, 2026-11-16, revision 3. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
 ("the room's spec" below, at 487f44bb), which fixes what the room writes, the list's form, and what the room
 needs back (its sections 1, 2, 3 and 8). This spec says how a walk becomes cells, which walks may teach, what a
 road costs, what a route and a detour are, how the store is built and checked, and what the answer holds. It
 builds on the n-category store (`2026-11-07-ncat-store.md`) and its kernel (`2026-11-07-ncat-kernel.md`), and
 states the detour rule that spec left to "stage 4".
 
-A fresh reader of the other family (w45) approved revision 1 with seven named changes. All seven are made
-here; the last section says where.
+A fresh reader of the other family (w45) approved revision 1 with seven named changes, and confirmed revision 2
+with one more. All eight are made here; the last section says where.
 
 ## What is asked
 
@@ -165,8 +165,8 @@ runs an experiment also requires `for_experiment: true`, and the list and measur
 5. Otherwise a route: `{"goal", "route"}`, where `route` has `paths` (the files after the start, in order,
    ending at the goal); `roads`, in route order, each with `from` (`null` for the start), `to`, `turns` (its
    `k`) and `witness` (the `attempt` of a taught turn that walked it: the first in byte order); `cost`;
-   `roads_n`; `blobs` (for each path on the route, every blob taught walks saw it at, sorted); and `detours`
-   (section 7).
+   `roads_n`; `blobs`, an object from each path on the route to a sorted array of the blob hashes taught walks saw
+   it at, none twice; and `detours` (section 7).
 
 A taught walk that visited the goal always gives a way to it, so a goal past the first three has a route or a
 recorded refusal.
@@ -189,9 +189,9 @@ order; the roads in byte order of (`from`, `to`), the start before any path; the
 route, then each turn's way and detour. Two generators with the same boundaries are two cells, which is why
 the order is fixed.
 
-**A detour in the answer** names the turn (`attempt`, `item`, `family`), `visit` (how far along its visits the
-goal first came, from 1) and `seq` (that step's), and its way: `paths`, `cost`, `roads_n`. Detours are sorted
-by `attempt`. A way that costs the same or less is not a detour, and is not named.
+**A detour in the answer** is one flat object, `{attempt, item, family, visit, seq, paths, cost, roads_n}`: the
+turn, how far along its visits the goal first came (from 1), that step's `seq`, and its way's paths, cost and
+number of roads. Detours are sorted by `attempt`. A way that costs the same or less is not a detour, and is not named.
 
 **Refused, never dropped.** The inherited store drops a refused session and keeps the rest; this one does not.
 If the kernel refuses a goal's route, a way to it, or a detour, that goal answers `refused` with the kernel's
@@ -215,13 +215,19 @@ better way to do the work, or that it beats a table that made the same offer.
 - **Canonical JSON:** keys sorted, `,` and `:` with no spaces, ASCII with `\u` escapes, integers as JSON
   integers, one newline at the end, nothing else. Every list's order is fixed above; none follows the order
   files were read in.
-- **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each a string of decimal
-  digits (they can outgrow any fixed-width integer); and `nats`, for reading.
+- **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each `str()` of the whole
+  number, with no sign and no leading zeros (they can outgrow any fixed-width integer); and `nats`, for reading.
 - **`nats`** is worked in a fresh `decimal.Context(prec=34, rounding=ROUND_HALF_EVEN)`: `x = Decimal(num) /
   Decimal(den)`, then `−x.ln()`, then quantized to 9 places with `ROUND_HALF_EVEN`, and written in fixed point
   with exactly 9 decimals (`format(q, 'f')`, so nothing is `0E-9`), with no sign when it is zero. It is a
   reproducible approximation for reading, not a certified rounding of the real logarithm.
   The fraction decides.
+- **The fixture is normative.** `2026-11-16-v2-walks-into-routes-fixture/` holds three walk files, `list.json`,
+  `question.json` and `answer.json`, worked by hand from this spec's rules and not by the store. Given the three
+  walks and the list, the store answers the question with exactly `answer.json`'s bytes, and the room's renderer
+  reads `answer.json`. Its route to `target.txt` is `b.txt`, `target.txt` at 2/9, stitched: the first road is
+  witnessed by `attempt-2`, the second, walked by two turns, by `attempt-1`. Both other ways are detours at 2/27.
+  `b.txt` was seen at two blobs from two bases, and `added.txt` is `never_named`.
 
 ## 9. What it doesn't do, and what it accepts
 
@@ -284,3 +290,9 @@ here.
 | C5. Finish the canonical answer and the decimal | Sections 6 and 8; section 10, "Exact, and the same bytes" |
 | C6. Say when detours are made, in what order, how they are checked, and that a refusal is said | Section 7; section 10, "A detour is real" and "The store is the store" |
 | C7. Fix admission: the list's form, every listed turn and no other, one repository, the question matched | Sections 2, 3 and 6, with the room's list form at 487f44bb; section 10, "Only listed turns teach" and "A question is the store's" |
+
+**The same reader confirmed revision 2 with one more:**
+
+| Named change | Where |
+| --- | --- |
+| R1. Fix the last two containers, the fractions' strings, and give a fixture | Sections 6, 7 and 8: `blobs` and a detour as w45 suggested, `str()` fractions, and the fixture |
