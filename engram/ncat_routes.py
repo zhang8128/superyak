@@ -1,6 +1,6 @@
 """Walks into roads, and a route back: the store's side of the route offered to a turn.
 
-Spec: docs/superpowers/specs/2026-11-16-v2-walks-into-routes.md (revision 3), against the room's
+Spec: docs/superpowers/specs/2026-11-16-v2-walks-into-routes.md (revision 6), against the room's
 docs/superpowers/specs/2026-11-16-v2-a-route-offered.md. The room writes walk files and a list of the turns that may
 teach; this reads them, keeps their roads, routes and detours as cells on the n-category kernel, in a file rebuilt whole
 and renamed into place, and answers a route for each file the room asks for, with the same bytes on any machine.
@@ -18,6 +18,7 @@ import hashlib
 import heapq
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -25,15 +26,25 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from fractions import Fraction
 from pathlib import Path
 
+import ncat
 from ncat import ERRORS, NCat, NCatError
-from ncat_store import BUDGET_BYTES, _compose, _fsync, _kernel_digest
+from ncat_store import BUDGET_BYTES, _compose, _fsync
 
 FORMAT = 1
 PATH_RULE = 1
 # The store's version in every answer: raised whenever an answer's bytes could change for the same walks, list and
-# question. The kernel's is the digest of the kernel source that built the store's cells.
-STORE_VERSION = "1"
-MAX_LINE = 1 << 20
+# question. The kernel's is the digest of the kernel source that built the store's cells. Version 2: blobs are every
+# taught step's, not only each visit's first (w50's C4). A file built by another version is refused, to be built again.
+STORE_VERSION = "2"
+MAX_LINE = 1 << 20       # a walk line's bytes before its newline
+MAX_LIST = 4 << 20       # the list's bytes
+MAX_QUESTION = 1 << 20   # a question's bytes
+MAX_FILE = 64 << 20      # a walk file's bytes, refused before it is read
+MAX_WALKS = 10_000       # walks in one store
+MAX_NAMED = 1_000_000    # named files over all of a store's steps, counted before any network or cell is made
+MAX_DEPTH = 8            # JSON nesting: a walk needs 5, a list 3, a question 2
+FAMILIES = ("claude", "codex", "script")                            # the room's (room/src/history.rs)
+TOOLS = ("read", "edit", "write", "search", "shell", "other")       # the room's Tool (room/src/types.rs)
 SHARE = ("share", 1)
 SHIP_SHARE = ("ship-share", 1)
 TEACHES = {SHARE: ("passed_verified",), SHIP_SHARE: ("unjudged",)}
@@ -47,6 +58,27 @@ STEP_KEYS = ("named", "ok", "result_ms", "seen_ms", "seq", "tokens_in", "tokens_
 LIST_KEYS = ("measure", "repo", "turns", "v")
 ENTRY_KEYS = ("attempt", "base", "item", "sha256", "standing")
 QUESTION_KEYS = ("goals", "list", "measure", "repo", "v")
+META_KEYS = ("budget", "for_experiment", "kernel", "list", "measure", "repo", "store", "v")
+DIGITS = frozenset("0123456789")
+STRING = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"')
+BRACKET = re.compile(r"[\[\]{}]")
+
+
+def _kernel_digest():
+    """The digest of the kernel source the loader builds from: `ncat.SOURCE`, an installed wheel's shared copy included."""
+    return hashlib.sha256(ncat.SOURCE.read_bytes()).hexdigest()[:16]
+
+
+def _dec(n):
+    """A whole number's decimal digits, exactly, with no ceiling: `str(int)` stops at 4,300 digits."""
+    return str(Decimal(n))
+
+
+def _undec(text):
+    """The whole number a string of decimal digits names, exactly, with no ceiling; anything else is refused."""
+    if not isinstance(text, str) or not text or not set(text) <= DIGITS or (len(text) > 1 and text[0] == "0"):
+        raise ValueError("not a whole number's digits")
+    return int(Decimal(text))
 
 
 class Refused(ValueError):
@@ -59,6 +91,10 @@ class IntegrityError(RuntimeError):
 
 class Busy(RuntimeError):
     """Another build of the same file holds the lock."""
+
+
+class TooDeep(ValueError):
+    """JSON nested past MAX_DEPTH, refused before it is parsed."""
 
 
 # ------------------------------------------------------------------ reading and admitting
@@ -92,8 +128,22 @@ def _pairs(pairs):
     return dict(pairs)
 
 
+def _depth(text):
+    """How deep the JSON's brackets nest, outside its strings."""
+    depth = deepest = 0
+    for bracket in BRACKET.findall(STRING.sub('""', text)):
+        depth += 1 if bracket in "[{" else -1
+        deepest = max(deepest, depth)
+    return deepest
+
+
 def _json(text):
-    return json.loads(text, object_pairs_hook=_pairs, parse_constant=_refuse_constant)
+    if _depth(text) > MAX_DEPTH:
+        raise TooDeep
+    try:
+        return json.loads(text, object_pairs_hook=_pairs, parse_constant=_refuse_constant)
+    except RecursionError:   # a backstop: the bound above refuses first
+        raise TooDeep from None
 
 
 def _keys(obj, keys, place):
@@ -115,7 +165,8 @@ def _walk(obj, place):
     for field in ("repo", "base"):
         if not _hex(obj[field]):
             raise Refused(f"{place}.{field} is not 40 or 64 lowercase hex")
-    for field in ("item", "attempt", "family"):
+    _word(obj["family"], FAMILIES, f"{place}.family")
+    for field in ("item", "attempt"):
         if not isinstance(obj[field], str) or not obj[field] or not obj[field].isascii() or not obj[field].isprintable():
             raise Refused(f"{place}.{field} is not a printable ASCII id")
     _word(obj["verdict"], VERDICTS, f"{place}.verdict")
@@ -131,8 +182,7 @@ def _walk(obj, place):
         if not _int(step["seq"]) or step["seq"] <= last:
             raise Refused(f"{sp}.seq is not a non-negative integer above the last")
         last = step["seq"]
-        if not isinstance(step["tool"], str) or not step["tool"].isascii() or not step["tool"].isidentifier():
-            raise Refused(f"{sp}.tool is not a tool word")
+        _word(step["tool"], TOOLS, f"{sp}.tool")
         if not isinstance(step["ok"], bool):
             raise Refused(f"{sp}.ok is not true or false")
         for field in ("seen_ms", "result_ms", "tokens_in", "tokens_out"):
@@ -164,11 +214,16 @@ def read_walks(data, name):
     if not text.endswith("\n"):
         raise Refused(f"{name} does not end its last line")
     walks = []
-    for n, line in enumerate(text[:-1].split("\n"), 1):
+    lines = text[:-1].split("\n")
+    if len(lines) > MAX_WALKS:
+        raise Refused(f"{name} holds more than {MAX_WALKS} walks")
+    for n, line in enumerate(lines, 1):
         if len(line.encode()) > MAX_LINE:
             raise Refused(f"{name} line {n} is longer than 1 MiB")
         try:
             obj = _json(line)
+        except TooDeep:
+            raise Refused(f"{name} line {n} is nested deeper than {MAX_DEPTH}") from None
         except ValueError:
             raise Refused(f"{name} line {n} is not one JSON object") from None
         walks.append(_walk(obj, f"{name} line {n}"))
@@ -177,12 +232,20 @@ def read_walks(data, name):
 
 def read_list(data):
     """The room's list (its spec, section 3): its bytes, checked to be exactly the form, and its parts."""
+    if len(data) > MAX_LIST:
+        raise Refused("the list is longer than 4 MiB")
     try:
         obj = _json(data.decode("utf-8"))
+    except TooDeep:
+        raise Refused(f"the list is nested deeper than {MAX_DEPTH}") from None
     except (UnicodeDecodeError, ValueError):
         raise Refused("the list is not one JSON object in UTF-8") from None
     _keys(obj, LIST_KEYS, "the list")
-    if json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() != data:
+    try:
+        again = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    except UnicodeEncodeError:   # a lone surrogate, which no UTF-8 list can hold
+        raise Refused("the list is not in its form: keys sorted, no spaces, nothing after") from None
+    if again != data:
         raise Refused("the list is not in its form: keys sorted, no spaces, nothing after")
     if obj["v"] != 1 or not _int(obj["v"]) or not _hex(obj["repo"]):
         raise Refused("the list's v or repo is not the form's")
@@ -200,6 +263,10 @@ def read_list(data):
         attempts.append(entry["attempt"])
     if attempts != sorted(attempts) or len(set(attempts)) != len(attempts):
         raise Refused("the list's turns are not sorted by attempt, each once")
+    if len({e["sha256"] for e in obj["turns"]}) != len(obj["turns"]):   # two turns with one file would be admitted as one
+        raise Refused("the list names one walk file's digest for two turns")
+    if len(obj["turns"]) > MAX_WALKS:
+        raise Refused(f"the list names more than {MAX_WALKS} turns")
     return obj
 
 
@@ -284,10 +351,11 @@ class Network:
         self.out = defaultdict(list)
         for a, b in self.k:
             self.out[a].append(b)
-        self.blobs = defaultdict(set)
+        self.blobs = defaultdict(set)   # every blob a taught step named, apart from the collapsing of visits
         for w in self.taught:
-            for p, blob, _ in self.visits[w["attempt"]]:
-                self.blobs[p].add(blob)
+            for step in w["steps"]:
+                for p, blob in step["named"]:
+                    self.blobs[p].add(blob)
 
     def roads(self):
         """Every road in the fixed order: by (from, to) bytes, the start before any path."""
@@ -385,13 +453,14 @@ def nats(fraction):
 
 
 def cost(fraction):
-    return {"num": str(fraction.numerator), "den": str(fraction.denominator), "nats": nats(fraction)}
+    return {"num": _dec(fraction.numerator), "den": _dec(fraction.denominator), "nats": nats(fraction)}
 
 
 # ------------------------------------------------------------------ the file
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE listing (body BLOB NOT NULL);
 CREATE TABLE walk (attempt TEXT PRIMARY KEY, item TEXT NOT NULL, family TEXT NOT NULL, base TEXT NOT NULL,
                    standing TEXT NOT NULL, taught INTEGER NOT NULL, sha256 TEXT NOT NULL, body BLOB NOT NULL);
 CREATE TABLE generator (id INTEGER PRIMARY KEY, dim INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
@@ -446,7 +515,7 @@ def _cells(net, budget_bytes):
     return generators, composites, goals, detour_rows
 
 
-def _write(path, net, meta, bodies, budget_bytes):
+def _write(path, net, meta, bodies, budget_bytes, list_bytes=None):
     generators, composites, goals, detours = _cells(net, budget_bytes)
     db = sqlite3.connect(path)
     try:
@@ -454,6 +523,8 @@ def _write(path, net, meta, bodies, budget_bytes):
         db.executescript(SCHEMA)
         with db:
             db.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))
+            if list_bytes is not None:
+                db.execute("INSERT INTO listing VALUES (?)", (list_bytes,))
             for w in net.walks:
                 body = bodies[w["attempt"]]
                 db.execute("INSERT INTO walk VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -464,11 +535,11 @@ def _write(path, net, meta, bodies, budget_bytes):
             for goal, (route, cell, code, reason) in goals.items():
                 share = net.share(route)
                 db.execute("INSERT INTO goal VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                           (goal, json.dumps(route), str(share.numerator), str(share.denominator), len(route), cell,
+                           (goal, json.dumps(route), _dec(share.numerator), _dec(share.denominator), len(route), cell,
                             code, reason))
             for goal, attempt, visit, seq, way, share, way_cell, gen_id, _ in detours:
                 db.execute("INSERT INTO detour VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (goal, attempt, visit, seq, way, str(share.numerator), str(share.denominator), way_cell, gen_id))
+                           (goal, attempt, visit, seq, way, _dec(share.numerator), _dec(share.denominator), way_cell, gen_id))
     finally:
         db.close()
     return {"turns": len(net.walks), "taught": net.N, "paths": len(net.paths), "roads": len(net.k),
@@ -479,10 +550,18 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
     """Build the store whole and rename it into place. With `list_file`, an experiment's store under `share` 1; without,
     a ship's store under `ship-share` 1. Anything refused, or a kernel refusal of a 0-cell or a road, leaves the old file."""
     out = Path(out).resolve()
+    if len(walk_files) > MAX_WALKS:
+        raise Refused(f"more than {MAX_WALKS} walk files")
+    for f in walk_files:
+        if Path(f).stat().st_size > MAX_FILE:
+            raise Refused(f"{Path(f).name} is longer than 64 MiB")
     files = {Path(f).name: Path(f).read_bytes() for f in walk_files}
     if len(files) != len(walk_files):
         raise Refused("two walk files have one name")
+    list_bytes = None
     if list_file is not None:
+        if Path(list_file).stat().st_size > MAX_LIST:
+            raise Refused("the list is longer than 4 MiB")
         list_bytes = Path(list_file).read_bytes()
         listed, walks = admit(list_bytes, files)
         measure, repo, list_id = SHARE, listed["repo"], hashlib.sha256(list_bytes).hexdigest()
@@ -494,9 +573,14 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
         measure, list_id = SHIP_SHARE, None
         repo = walks[0]["repo"] if walks else None
         bodies = {w["attempt"]: canonical(w) for w in walks}
+    if len(walks) > MAX_WALKS:
+        raise Refused(f"more than {MAX_WALKS} walks")
+    if sum(len(step["named"]) for w in walks for step in w["steps"]) > MAX_NAMED:
+        raise Refused(f"the walks name more than {MAX_NAMED} files in all")
     net = Network(walks, measure)
-    meta = {"v": str(FORMAT), "repo": json.dumps(repo), "list": json.dumps(list_id), "measure": json.dumps(list(measure)),
-            "budget": str(budget_bytes), "for_experiment": json.dumps(list_id is not None), "kernel": _kernel_digest()}
+    meta = {"v": str(FORMAT), "store": STORE_VERSION, "repo": json.dumps(repo), "list": json.dumps(list_id),
+            "measure": json.dumps(list(measure)), "budget": str(budget_bytes),
+            "for_experiment": json.dumps(list_id is not None), "kernel": _kernel_digest()}
     lock = os.open(f"{out}.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         try:
@@ -506,7 +590,7 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
         temporary = out.with_name(f"{out.name}.tmp-{os.getpid()}")
         os.close(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         try:
-            report = _write(temporary, net, meta, bodies, budget_bytes)
+            report = _write(temporary, net, meta, bodies, budget_bytes, list_bytes)
             _fsync(temporary)
         except BaseException:
             temporary.unlink(missing_ok=True)
@@ -527,16 +611,30 @@ class RouteStore:
         self._db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
         try:
             meta = dict(self._db.execute("SELECT key, value FROM meta"))
+            listings = [body for (body,) in self._db.execute("SELECT body FROM listing")]
+            if sorted(meta) != sorted(META_KEYS) or meta["v"] != str(FORMAT):
+                raise ValueError("header")
+            if meta["store"] != STORE_VERSION:
+                raise IntegrityError(f"the route store at {path} was built by another store version; build it again")
             self.repo, self.list = json.loads(meta["repo"]), json.loads(meta["list"])
             self.measure = tuple(json.loads(meta["measure"]))
             self.for_experiment = json.loads(meta["for_experiment"])
-            self.budget = int(meta["budget"])
-            self.kernel = meta["kernel"]
-            if meta["v"] != str(FORMAT) or self.measure not in TEACHES:
-                raise ValueError("format or measure")
+            self.budget, self.kernel = _undec(meta["budget"]), meta["kernel"]
+            self.listing = listings[0] if listings else None
+            if not _hex(self.kernel, (16,)) or self.budget <= 0 or self.measure not in TEACHES \
+                    or not (self.repo is None or _hex(self.repo)) or len(listings) > 1:
+                raise ValueError("header")
+            experiment = (self.measure == SHARE and _hex(self.list, (64,)) and self.for_experiment is True
+                          and self.listing is not None and self.repo is not None)
+            ship = self.measure == SHIP_SHARE and self.list is None and self.for_experiment is False and not listings
+            if not (experiment or ship):
+                raise ValueError("header")
         except (sqlite3.Error, KeyError, ValueError, TypeError):
             self._db.close()
             raise IntegrityError(f"the route store at {path} can't be read; build it") from None
+        except IntegrityError:
+            self._db.close()
+            raise
 
     def close(self):
         self._db.close()
@@ -547,8 +645,12 @@ class RouteStore:
 
     def ask(self, question_bytes):
         """The answer's bytes for a question (spec section 6), or Refused for a question that isn't this store's."""
+        if len(question_bytes) > MAX_QUESTION:
+            raise Refused("the question is longer than 1 MiB")
         try:
             q = _json(question_bytes.decode("utf-8"))
+        except TooDeep:
+            raise Refused(f"the question is nested deeper than {MAX_DEPTH}") from None
         except (UnicodeDecodeError, ValueError):
             raise Refused("the question is not one JSON object in UTF-8") from None
         _keys(q, QUESTION_KEYS, "the question")
@@ -558,9 +660,8 @@ class RouteStore:
             raise Refused("the question's v or goals are not the form's")
         if q["repo"] != self.repo or q["list"] != self.list or (q["measure"]["name"], q["measure"]["version"]) != self.measure:
             raise Refused("the question's repo, list or measure is not this store's")
-        N = self._db.execute("SELECT count(*) FROM walk WHERE taught = 1").fetchone()[0]
-        named = {p for (body,) in self._db.execute("SELECT body FROM walk")
-                 for p, _, _ in visits(_json(body.decode().rstrip("\n")))}
+        net = self._network()   # N and what was named, from the stored walks themselves, which the check binds
+        N, named = net.N, {p for vs in net.visits.values() for p, _, _ in vs}
         answers = [self._goal(goal, N, named) for goal in q["goals"]]
         return canonical({"v": 1, "store": STORE_VERSION, "kernel": self.kernel, "repo": self.repo, "list": self.list,
                           "for_experiment": self.for_experiment,
@@ -591,9 +692,9 @@ class RouteStore:
             way = json.loads(way)
             detours.append({"attempt": attempt, "item": families[attempt]["item"], "family": families[attempt]["family"],
                             "visit": visit, "seq": seq, "paths": way,
-                            "cost": cost(Fraction(int(d_num), int(d_den))), "roads_n": len(way)})
+                            "cost": cost(Fraction(_undec(d_num), _undec(d_den))), "roads_n": len(way)})
         detours.sort(key=lambda d: d["attempt"].encode())
-        return {"goal": goal, "route": {"paths": route, "roads": roads, "cost": cost(Fraction(int(num), int(den))),
+        return {"goal": goal, "route": {"paths": route, "roads": roads, "cost": cost(Fraction(_undec(num), _undec(den))),
                                         "roads_n": roads_n, "blobs": {p: sorted(net.blobs[p]) for p in route},
                                         "detours": detours}}
 
@@ -608,9 +709,23 @@ class RouteStore:
         the number of cells checked."""
         try:
             walks = self._walks()
-            for (attempt, body, sha) in self._db.execute("SELECT attempt, body, sha256 FROM walk"):
-                if hashlib.sha256(body).hexdigest() != sha:
-                    raise IntegrityError(f"walk {attempt} doesn't hash to its record; build the store")
+            rows = list(self._db.execute(
+                "SELECT attempt, item, family, base, standing, taught, sha256, body FROM walk ORDER BY attempt"))
+            teaches = TEACHES[self.measure]
+            for (attempt, item, family, base, standing, taught, sha, body), w in zip(rows, walks):
+                if hashlib.sha256(body).hexdigest() != sha or (attempt, item, family, base, standing, taught) != \
+                        (w["attempt"], w["item"], w["family"], w["base"], w["standing"], int(w["standing"] in teaches)):
+                    raise IntegrityError("a walk's row isn't its walk; build the store")
+            if any(w["repo"] != self.repo for w in walks):
+                raise IntegrityError("a walk is of another repository than the store's; build the store")
+            if self.measure == SHARE:
+                if hashlib.sha256(self.listing).hexdigest() != self.list:
+                    raise IntegrityError("the store's list isn't the list it names; build the store")
+                listed, admitted = admit(self.listing, {f"stored-{a}": body for a, *_, body in rows})
+                if listed["repo"] != self.repo or sorted(w["attempt"] for w in admitted) != [r[0] for r in rows]:
+                    raise IntegrityError("the store's walks aren't its list's turns; build the store")
+            else:
+                ship_walks({f"stored-{a}": body for a, *_, body in rows})
             net = Network(walks, self.measure)
             expected = _cells(net, self.budget)
             stored_gens = list(self._db.execute("SELECT id, dim, kind, ref, key FROM generator ORDER BY id"))
@@ -620,7 +735,7 @@ class RouteStore:
             stored_detours = sorted(self._db.execute(
                 "SELECT path, attempt, visit, seq, way, num, den, way_cell, gen FROM detour"))
             stored_goal_costs = {p: (n, d, rn) for p, n, d, rn in self._db.execute("SELECT path, num, den, roads_n FROM goal")}
-        except (sqlite3.Error, ValueError, KeyError, TypeError, Refused) as error:
+        except (sqlite3.Error, ValueError, KeyError, TypeError, Refused, NCatError) as error:
             raise IntegrityError(f"the route store can't be read ({type(error).__name__}); build it") from None
         generators, composites, goals, detours = expected
         if stored_gens != generators:
@@ -631,14 +746,14 @@ class RouteStore:
             raise IntegrityError("a goal's route, cell or refusal isn't what its walks make; build the store")
         for goal, (route, _, _, _) in goals.items():
             share = net.share(route)
-            if stored_goal_costs[goal] != (str(share.numerator), str(share.denominator), len(route)):
+            if stored_goal_costs[goal] != (_dec(share.numerator), _dec(share.denominator), len(route)):
                 raise IntegrityError(f"a goal's cost isn't what its walks make; build the store")
-        want = sorted((g, a, v, s, w, str(sh.numerator), str(sh.denominator), wc, gid)
+        want = sorted((g, a, v, s, w, _dec(sh.numerator), _dec(sh.denominator), wc, gid)
                       for g, a, v, s, w, sh, wc, gid, _ in detours)
         if stored_detours != want:
             raise IntegrityError("a detour's turn, goal, visit, way or saving isn't what its walks make; build the store")
         for g, a, v, s, w, num, den, _, _ in stored_detours:
-            if not Fraction(int(num), int(den)) < net.share(net.route(g)):
+            if not Fraction(_undec(num), _undec(den)) < net.share(net.route(g)):
                 raise IntegrityError("a detour saves nothing; build the store")
         return len(generators) + len(composites)
 
@@ -684,6 +799,9 @@ def main(argv=None):
     except Busy as error:
         print(f"ncat_routes: {error}", file=sys.stderr)
         return 4
+    except FileNotFoundError as error:
+        print(f"ncat_routes: no such file: {error.filename}", file=sys.stderr)
+        return 1
     except (NCatError, RuntimeError) as error:
         print(f"ncat_routes: the kernel stopped the build ({error}); the store is unchanged", file=sys.stderr)
         return 5

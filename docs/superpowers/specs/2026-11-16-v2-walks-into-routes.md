@@ -1,6 +1,6 @@
 # v2: walks into roads, and a route back
 
-Tardis, 2026-11-16, revision 5. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
+Tardis, 2026-11-16, revision 6. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
 ("the room's spec" below, at 487f44bb), which fixes what the room writes, the list's form, and what the room
 needs back (its sections 1, 2, 3 and 8). This spec says how a walk becomes cells, which walks may teach, what a
 road costs, what a route and a detour are, how the store is built and checked, and what the answer holds. It
@@ -48,14 +48,14 @@ left out and never 0.
 | `repo` | 40 or 64 lowercase hex | the repository's id: of its root commits that the turn's base reaches, the first in byte order (the room's spec, section 3) |
 | `base` | 40 or 64 lowercase hex | the commit the turn's sandbox was made from |
 | `item`, `attempt` | the room's ids | an attempt names a turn, once, everywhere |
-| `family` | the room's family word | never a worker's own name |
+| `family` | `"claude"`, `"codex"` or `"script"` | the room's families; never a worker's own name |
 | `verdict` | `"passed"`, `"failed"` or `null` | whether the turn's commit passed its frozen check; `null` when the check could not run |
 | `standing` | `"passed_verified"`, `"passed_unverified"`, `"failed"` or `"unjudged"` | how the room classed the turn when it wrote the file; a ship's walk is `"unjudged"`, and only a ship's |
 | `steps` | list | in order of `seq` |
 | `changed` | list of `[path, "added" \| "changed" \| "removed"]` | the paths the turn's commit changed, in the order recorded |
 
 A step is an object: `seq` (a non-negative integer, each greater than the last; the room numbers a turn's steps
-from 0), `tool` (the room's tool word), `ok` (true or
+from 0), `tool` (one of `read`, `edit`, `write`, `search`, `shell`, `other`: the room's), `ok` (true or
 false), `named` (a list of `[path, blob]` in the order named, possibly empty), `seen_ms`, `result_ms`,
 `tokens_in`, `tokens_out` (each a non-negative integer or `null`). A step of an older store, which had one
 target and no list, is written with that one file as its list.
@@ -67,6 +67,11 @@ exactly 1 MiB is read); bytes that are not UTF-8. The refusal names the file, th
 its place in this schema (a step by its index), and never repeats a value or an unknown key. Nothing is dropped
 silently: a failed step and a failed turn are read and kept as what they are.
 
+**Bounds, each refused by name before the work it bounds:** a walk file over 64 MiB, before it is read; a list over
+4 MiB; a question over 1 MiB; JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
+on a list; more than 1,000,000 named files over all of a store's steps, before any network or cell is made; and a
+string holding a lone surrogate, which no UTF-8 file can hold.
+
 ## 3. Which walks teach
 
 **An experiment's store is built from a list,** whose form is the room's (its section 3): one JSON object, keys
@@ -74,12 +79,12 @@ sorted, no spaces, UTF-8, with `v` 1, `repo`, `measure` (`name`, `version`), and
 each with `attempt`, `item`, `base`, `standing` and `sha256`. The store reads the list's bytes as given, keeps
 them, and takes the list's id as their SHA-256.
 
-**The build refuses, before any cell is made,** each by name: a list that is not in that form, or not sorted,
-or names an attempt twice; a measure this store does not have (section 5); a file given whose bytes hash to no
-entry, or to an entry already given; a listed entry with no file given; a file holding more than one walk;
-a walk whose `attempt`, `item`, `base` or `standing` differ from its entry's, whose `repo` differs from the
-list's, or whose `source` is not `"room"`. So every listed turn is in the store once, and nothing else is: a
-missing turn would change `N`, and with it every price.
+**The build refuses, before any cell is made,** each by name: a list that is not in that form, or not sorted, or names
+an attempt twice, or one walk file's digest for two turns; a measure this store does not have (section 5); a file given
+whose bytes hash to no entry, or to an entry already given; a listed entry with no file given; a file holding more than
+one walk; a walk whose `attempt`, `item`, `base` or `standing` differ from its entry's, whose `repo` differs from the
+list's, or whose `source` is not `"room"`. So every listed turn is in the store once, and nothing else is: a missing
+turn would change `N`, and with it every price.
 
 **What the store can and cannot check.** It checks a frozen snapshot: the files it is given against the list
 it is given. If a listed turn's standing changes in the room after the list is made, an export written again
@@ -153,9 +158,10 @@ So:
 that form; a goal the path rule refuses; a `repo`, `list` or `measure` that is not the store's. A consumer that
 runs an experiment also requires `for_experiment: true`, and the list and measure it pinned.
 
-**The answer** (section 8 gives its bytes): `v` 1; `store`, this store's version, `"1"` for this revision and raised
+**The answer** (section 8 gives its bytes): `v` 1; `store`, this store's version, `"2"` for this revision and raised
 whenever an answer's bytes could change for the same walks, list and question; `kernel`, the digest of the kernel
-source that built the store's cells (the first 16 hex digits of its SHA-256, as the n-category store keeps it); `repo`;
+source that built the store's cells (the first 16 hex digits of the SHA-256 of the source the kernel's loader builds
+from, an installed wheel's shared copy included), recorded at build time; `repo`;
 `list`; `for_experiment`; `measure` (`name`,
 `version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
 `answers`, one for each goal, in the order asked, a goal asked twice answered twice.
@@ -170,8 +176,8 @@ source that built the store's cells (the first 16 hex digits of its SHA-256, as 
 5. Otherwise a route: `{"goal", "route"}`, where `route` has `paths` (the files after the start, in order,
    ending at the goal); `roads`, in route order, each with `from` (`null` for the start), `to`, `turns` (its
    `k`) and `witness` (the `attempt` of a taught turn that walked it: the first in byte order); `cost`;
-   `roads_n`; `blobs`, an object from each path on the route to a sorted array of the blob hashes taught walks saw
-   it at, none twice; and `detours` (section 7).
+   `roads_n`; `blobs`, an object from each path on the route to a sorted array of the blob hashes taught steps named
+   it at, none twice (every step's, not only each visit's first); and `detours` (section 7).
 
 A taught walk that visited the goal always gives a way to it, so a goal past the first three has a route or a
 recorded refusal.
@@ -210,6 +216,13 @@ goal's first visit, recomputed from the walk; its target is the goal's route, re
 exactly. The counts, witnesses and refusals are recomputed and compared too. A right key with a wrong witness
 is damage.
 
+**What the check binds besides the cells.** The store keeps the list's own bytes. Its check hashes them to the list
+it names and admits the stored walks against them again, compares every walk row (its attempt, item, family, base,
+standing and whether it teaches) with the walk it holds, and holds every walk to the store's repository. Opening a
+store refuses a header out of its form: an unknown or missing key, a kernel digest that is not 16 lowercase hex, a
+measure, list and flag that disagree (an experiment's is `share`, a list and `true`; a ship's is `ship-share`,
+`null` and `false`), and a file built by another store version, which is to be built again.
+
 **What a detour shows, and no more.** The kernel checks that its two sides start and end at the same 0-cells,
 and keeps it in the category's structure. That the way was walked, that the route is cheaper and that it is
 the cheapest are the store's checks. None of it shows that the stitched way was walked whole, that it is a
@@ -220,20 +233,21 @@ better way to do the work, or that it beats a table that made the same offer.
 - **Canonical JSON:** keys sorted, `,` and `:` with no spaces, ASCII with `\u` escapes, integers as JSON
   integers, one newline at the end, nothing else. Every list's order is fixed above; none follows the order
   files were read in.
-- **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each `str()` of the whole
-  number, with no sign and no leading zeros (they can outgrow any fixed-width integer); and `nats`, for reading.
+- **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each the whole number's decimal
+  digits, with no sign and no leading zeros (they can outgrow any fixed-width integer, and are written and read
+  exactly, with no ceiling: Python's `str(int)` stops at 4,300 digits); and `nats`, for reading.
 - **`nats`** is worked in a fresh `decimal.Context(prec=34, rounding=ROUND_HALF_EVEN)`: `x = Decimal(num) /
   Decimal(den)`, then `−x.ln()`, then quantized to 9 places with `ROUND_HALF_EVEN`, and written in fixed point
   with exactly 9 decimals (`format(q, 'f')`, so nothing is `0E-9`), with no sign when it is zero. It is a
   reproducible approximation for reading, not a certified rounding of the real logarithm.
   The fraction decides.
 - **The fixture is normative.** `2026-11-16-v2-walks-into-routes-fixture/` holds three walk files, `list.json`,
-  `question.json` and `answer.json`, worked by hand from this spec's rules and not by the store. Given the three
-  walks and the list, the store answers the question with exactly `answer.json`'s bytes, and the room's renderer
-  reads `answer.json`. Its route to `target.txt` is `b.txt`, `target.txt` at 2/9, stitched: the first road is
-  witnessed by `attempt-2`, the second, walked by two turns, by `attempt-1`. Both other ways are detours at 2/27.
-  `b.txt` was seen at two blobs from two bases, and `added.txt` is `never_named`. Its `kernel` is the digest of the
-  kernel source at v2 487f44bb; a store built from another kernel answers with that kernel's digest, and is byte for
+  `question.json` and `answer.json`, worked by hand from this spec's rules and not by the store. Given the three walks
+  and the list, the store answers the question with exactly `answer.json`'s bytes, and the room's renderer reads
+  `answer.json`. Its route to `target.txt` is `b.txt`, `target.txt` at 2/9, stitched: the first road is witnessed by
+  `attempt-2`, the second, walked by two turns, by `attempt-1`. Both other ways are detours at 2/27. `b.txt` was seen at
+  two blobs from two bases, and `added.txt` is `never_named`. Its `store` is `"2"`, and its `kernel` is the digest of
+  the kernel source at v2 487f44bb; a store built from another kernel answers with that kernel's digest, and is byte for
   byte the same otherwise.
 
 ## 9. What it doesn't do, and what it accepts
@@ -309,3 +323,16 @@ kernel's, so that the room can keep them with each offer (the room's spec, secti
 
 **Found on the room's 21 real walks, by the lead:** the room numbers steps from 0, and revision 4 said a positive
 `seq`. A first `seq` of 0 is now read, and a detour's `seq` can be 0. Section 2.
+
+**The code's reader (w50, Sol) on 2d1a2dac, approve with named changes, all made:**
+
+| Named change | Where |
+| --- | --- |
+| C1. Accept a first `seq` of 0 | Section 2 (revision 5) |
+| C2. Refuse one digest for two listed turns | Section 3 |
+| C3. The room's own family and tool words | Section 2 |
+| C4. Blobs from every taught step, apart from the collapsing of visits | Section 6; the store's version is raised to `"2"` |
+| C5. The kernel's digest from the source its loader builds from | Section 6 |
+| C6. Whole numbers written and read with no ceiling on their digits | Section 8 |
+| C7. Bounds on reading and nesting, and refusals by name for what escaped them | Section 2's bounds |
+| C8. Bind the header, the list's bytes and the walk rows | Section 7, "What the check binds" |

@@ -99,7 +99,7 @@ def test_every_answer_names_the_store_and_the_kernel_in_the_rooms_version_words(
     import re
     out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"])])
     answer = ask(out, ["a", "nowhere"], list_id)
-    assert answer["store"] == R.STORE_VERSION == "1" and answer["kernel"] == R._kernel_digest()
+    assert answer["store"] == R.STORE_VERSION == "2" and answer["kernel"] == R._kernel_digest()
     for value in (answer["store"], answer["kernel"]):
         assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value)
 
@@ -510,3 +510,186 @@ def test_nothing_in_recall_reads_the_route_store():
     engram = Path(R.__file__).resolve().parent
     readers = [p.name for p in engram.glob("*.py") if p.name != "ncat_routes.py" and "ncat_routes" in p.read_text()]
     assert readers == []
+
+
+# ------------------------------------------------------------------ w50's named changes on 2d1a2dac, each its probe
+
+
+def test_two_listed_turns_with_one_digest_are_refused():   # C2
+    a = walk("t1", ["a"])
+    data = line(a)
+    entry = {"attempt": "t1", "item": a["item"], "base": BASE, "standing": "passed_verified",
+             "sha256": hashlib.sha256(data).hexdigest()}
+    lst = json.dumps({"v": 1, "repo": REPO, "measure": {"name": "share", "version": 1},
+                      "turns": [dict(entry, attempt="t0"), entry]}, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(R.Refused):
+        R.read_list(lst)
+    with pytest.raises(R.Refused):
+        R.admit(lst, {"a.jsonl": data})
+
+
+@pytest.mark.parametrize("field", ["family", "tool"])
+def test_a_family_or_tool_outside_the_rooms_words_is_refused(field):   # C3
+    planted = MARKER.replace("-", "_")
+    w = walk("t1", ["a"])
+    if field == "family":
+        w["family"] = planted
+    else:
+        w["steps"][0]["tool"] = planted
+    with pytest.raises(R.Refused) as refused:
+        R.read_walks(line(w), "f")
+    assert planted not in str(refused.value)
+    for word in R.FAMILIES:
+        R.read_walks(line(walk("t1", ["a"], family=word)), "f")
+    for word in R.TOOLS:
+        ok = walk("t1", ["a"])
+        ok["steps"][0]["tool"] = word
+        R.read_walks(line(ok), "f")
+
+
+def test_a_file_seen_at_two_blobs_in_a_row_is_one_visit_with_both_blobs(tmp_path):   # C4
+    w = walk("s1", ["a", "b"], source="ship")
+    w["steps"][0]["named"] = [["a", "1" * 40], ["a", "2" * 40]]
+    assert [v[0] for v in R.visits(w)] == ["a", "b"]
+    f = tmp_path / "ship.jsonl"
+    f.write_bytes(line(w))
+    out = tmp_path / "ship.db"
+    R.build(out, [f])
+    r = route_of(ask(out, ["a"], None, measure=("ship-share", 1)))
+    assert r["paths"] == ["a"] and r["blobs"] == {"a": ["1" * 40, "2" * 40]}
+
+
+def test_the_kernel_digest_is_of_the_source_the_loader_builds_from(tmp_path, monkeypatch):   # C5
+    import ncat
+    import ncat_store
+    shared = tmp_path / "share" / "engram" / "ncat_kernel.c"   # an installed wheel's place for it
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(ncat.SOURCE.read_bytes() + b"\n/* the installed copy */\n")
+    monkeypatch.setattr(ncat, "SOURCE", shared)
+    monkeypatch.setattr(ncat_store, "__file__", str(tmp_path / "site-packages" / "ncat_store.py"))   # nothing beside it
+    assert R._kernel_digest() == hashlib.sha256(shared.read_bytes()).hexdigest()[:16]
+
+
+def test_a_walk_whose_fraction_outgrows_4300_digits_builds_answers_and_checks(tmp_path):   # C6
+    import sys
+    if not 0 < sys.get_int_max_str_digits() < 4516:
+        pytest.skip("the digit ceiling isn't in force here")
+    long = walk("t1", [["a", "b"] * 7500 + ["goal"]])   # 735 KB, one step: a and b 7,500 times, then the goal
+    out, list_id, _ = experiment(tmp_path, [long, walk("t2", [])])
+    r = route_of(ask(out, ["goal"], list_id))
+    assert r["paths"] == ["a", "b", "goal"] and r["cost"]["num"] == "1" and r["cost"]["den"] == "8"
+    (detour,) = r["detours"]
+    assert detour["roads_n"] == 15001 and detour["cost"]["num"] == "1" and len(detour["cost"]["den"]) == 4516
+    assert int(R._undec(detour["cost"]["den"])) == 2 ** 15001
+    with R.open_store(out) as s:
+        assert s.check() > 0
+
+
+DEEP = b"[" * 10000 + b"0" + b"]" * 10000
+
+
+def test_deep_json_is_refused_where_it_is_read(tmp_path):   # C7
+    with pytest.raises(R.Refused, match="nested deeper than 8"):
+        R.read_walks(DEEP + b"\n", "f")
+    with pytest.raises(R.Refused, match="nested deeper than 8"):
+        R.read_list(DEEP)
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    with pytest.raises(R.Refused, match="nested deeper than 8"), R.open_store(out) as s:
+        s.ask(DEEP)
+    past = b"[" * 9 + b"0" + b"]" * 9   # past the bound by one, and refused by it, not by the schema
+    with pytest.raises(R.Refused, match="nested deeper than 8"):
+        R.read_walks(past + b"\n", "f")
+    at = b'["' + b"[" * 3 + b'", ' + b"[" * 7 + b"0" + b"]" * 7 + b"]"   # depth 8; brackets in a string don't count
+    with pytest.raises(R.Refused, match="not one JSON object|must be an object"):
+        R.read_walks(at + b"\n", "f")
+
+
+def test_a_lone_surrogate_in_the_list_is_refused():   # C7
+    with pytest.raises(R.Refused):
+        R.read_list(b'{"measure":{},"repo":"\\ud800","turns":[],"v":1}')
+
+
+def test_byte_bounds_are_checked_before_reading(tmp_path):   # C7
+    big = tmp_path / "big.jsonl"
+    with open(big, "wb") as f:
+        f.truncate(R.MAX_FILE + 1)   # sparse: nothing to read, and nothing is read
+    with pytest.raises(R.Refused, match="longer than 64 MiB"):
+        R.build(tmp_path / "x.db", [big])
+    with pytest.raises(R.Refused, match="longer than 4 MiB"):
+        R.read_list(b" " * (R.MAX_LIST + 1))
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    with pytest.raises(R.Refused, match="longer than 1 MiB"), R.open_store(out) as s:
+        s.ask(b" " * (R.MAX_QUESTION + 1))
+
+
+def test_aggregate_bounds_are_checked_before_any_network(tmp_path, monkeypatch):   # C7
+    walks = [walk(f"s{i}", ["a", "b"], source="ship") for i in range(3)]
+    f = tmp_path / "ships.jsonl"
+    f.write_bytes(b"".join(line(w) for w in walks))
+    monkeypatch.setattr(R, "MAX_WALKS", 2)
+    with pytest.raises(R.Refused, match="more than 2"):
+        R.build(tmp_path / "x.db", [f])
+    monkeypatch.setattr(R, "MAX_WALKS", 10)
+    monkeypatch.setattr(R, "MAX_NAMED", 5)
+    monkeypatch.setattr(R, "Network", lambda *a: pytest.fail("a network was made past the bound"))
+    with pytest.raises(R.Refused, match="more than 5 files"):
+        R.build(tmp_path / "x.db", [f])
+
+
+def test_the_cli_calls_deep_input_a_refusal_not_a_kernel_stop(tmp_path, monkeypatch, capsys):   # C7
+    import io
+    import sys
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(DEEP)))
+    assert R.main(["ask", "--store", str(out)]) == 2
+    assert "refused" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("damage", [
+    "UPDATE walk SET taught = 0",
+    "UPDATE walk SET family = 'codex' WHERE attempt = 't1'",
+    "UPDATE walk SET item = 'other' WHERE attempt = 't2'",
+    "UPDATE walk SET standing = 'failed' WHERE attempt = 't2'",
+    "UPDATE listing SET body = CAST('{}' AS BLOB)",
+], ids=["taught", "family", "item", "standing", "listing"])
+def test_a_damaged_walk_row_or_list_fails_the_check(tmp_path, damage):   # C8
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"]), walk("t2", ["g"])])
+    db = sqlite3.connect(out)
+    db.execute(damage)
+    db.commit()
+    db.close()
+    with pytest.raises(R.IntegrityError), R.open_store(out) as s:
+        s.check()
+
+
+@pytest.mark.parametrize("damage", [
+    "UPDATE meta SET value = 'not-a-digest' WHERE key = 'kernel'",
+    "UPDATE meta SET value = '\"unbound-list\"' WHERE key = 'list'",
+    "UPDATE meta SET value = 'false' WHERE key = 'for_experiment'",
+    "UPDATE meta SET value = '1' WHERE key = 'store'",
+    "UPDATE meta SET value = '[\"ship-share\", 1]' WHERE key = 'measure'",
+    "UPDATE meta SET value = '0' WHERE key = 'budget'",
+    "DELETE FROM listing",
+    "INSERT INTO meta VALUES ('extra', '1')",
+], ids=["kernel", "list", "flag", "store version", "measure", "budget", "no listing", "extra key"])
+def test_a_damaged_header_is_refused_when_the_store_is_opened(tmp_path, damage):   # C8
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    db = sqlite3.connect(out)
+    db.execute(damage)
+    db.commit()
+    db.close()
+    with pytest.raises(R.IntegrityError):
+        R.RouteStore(out)
+
+
+def test_a_ships_store_that_claims_to_be_an_experiments_is_refused(tmp_path):   # C8
+    f = tmp_path / "ship.jsonl"
+    f.write_bytes(line(walk("s1", ["a"], source="ship")))
+    out = tmp_path / "ship.db"
+    R.build(out, [f])
+    db = sqlite3.connect(out)
+    db.execute("UPDATE meta SET value = 'true' WHERE key = 'for_experiment'")
+    db.commit()
+    db.close()
+    with pytest.raises(R.IntegrityError):
+        R.RouteStore(out)
