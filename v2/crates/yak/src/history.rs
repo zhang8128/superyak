@@ -280,12 +280,14 @@ fn load(plan: &Plan, need_arrival: bool) -> Result<Vec<HistoryItem>> {
 }
 
 fn walk_value(repo: &str, base: &str, item: &ItemId, turn: &ArrivedTurn) -> Result<Value> {
-    let mut previous = 0;
+    // The room numbers a turn's steps from nought, in every store there is. A walk is written as it was
+    // recorded, so the first step may be numbered nought; each one after it has a greater number.
+    let mut previous = None;
     for step in &turn.steps {
-        if step.seq <= previous {
+        if previous.is_some_and(|before| step.seq <= before) {
             return Err(refuse("walk.steps.seq"));
         }
-        previous = step.seq;
+        previous = Some(step.seq);
         for name in &step.named {
             if !plain_path(&name.path) {
                 return Err(refuse("walk.steps.named.path"));
@@ -758,12 +760,22 @@ mod tests {
                 turn,
             )
         };
+        // A real turn's first step is numbered nought, and is written so.
         let mut t = turn();
         t.steps[0].seq = 0;
-        assert_eq!(value(&t).unwrap_err().0, "walk.steps.seq");
-        let mut t = turn();
         t.steps.push(t.steps[0].clone());
-        assert_eq!(value(&t).unwrap_err().0, "walk.steps.seq");
+        t.steps[1].seq = 1;
+        let written = value(&t).unwrap();
+        assert_eq!(written["steps"][0]["seq"], 0);
+        assert_eq!(written["steps"][1]["seq"], 1);
+        // A number that does not rise is refused: the same again, at nought and above it, and a lesser one.
+        for (first, second) in [(0, 0), (1, 1), (2, 1)] {
+            let mut t = turn();
+            t.steps[0].seq = first;
+            t.steps.push(t.steps[0].clone());
+            t.steps[1].seq = second;
+            assert_eq!(value(&t).unwrap_err().0, "walk.steps.seq");
+        }
         let mut t = turn();
         t.steps[0].named[0].path = "../MARKER".into();
         assert_eq!(value(&t).unwrap_err().0, "walk.steps.named.path");

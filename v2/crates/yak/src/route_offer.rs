@@ -249,9 +249,8 @@ fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute
         {
             return Err(refuse(&format!("{at}.visit")));
         }
-        if whole(&detour["seq"], &format!("{at}.seq"))? == 0 {
-            return Err(refuse(&format!("{at}.seq")));
-        }
+        // A step's number in its walk, which the room counts from nought: any whole number.
+        whole(&detour["seq"], &format!("{at}.seq"))?;
         if whole(&detour["roads_n"], &format!("{at}.roads_n"))? != detour_paths.len() as u64 {
             return Err(refuse(&format!("{at}.roads_n")));
         }
@@ -908,7 +907,8 @@ mod tests {
                 format!("{prefix}/detours/0/paths"),
                 json!(["gone.txt", "same.txt", "gone.txt"]),
             ),
-            (format!("{prefix}/detours/0/seq"), json!(0)),
+            (format!("{prefix}/detours/0/seq"), json!(-1)),
+            (format!("{prefix}/detours/0/seq"), json!("0")),
             (format!("{prefix}/detours/0/roads_n"), json!(1)),
             (format!("{prefix}/cost/num"), json!("0")),
             (format!("{prefix}/cost/num"), json!("")),
@@ -926,6 +926,10 @@ mod tests {
             let error = parse_fixture(&bad, &["gone.txt"]).unwrap_err().to_string();
             assert!(!error.contains("MARKER"), "{pointer}");
         }
+        // A detour that left its turn's way at the first step: the room numbers steps from nought.
+        let mut first_step = answer();
+        first_step["answers"][0]["route"]["detours"][0]["seq"] = json!(0);
+        parse_fixture(&first_step, &["gone.txt"]).unwrap();
         for extra in [json!([]), json!([{"goal":"gone.txt","none":"unreached"}])] {
             let mut bad = answer();
             bad["answers"] = extra;
