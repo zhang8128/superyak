@@ -1780,6 +1780,10 @@ fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
         "stop_ends_a_running_worker",
         "in_forever_the_ceiling_waits_and_says_so_once",
     ] {
+        // What a child prints goes to files and not through pipes: something that outlived a killed child and
+        // still held a pipe would be waited for, with no end, in the one test that is here to show an end.
+        let printed_at = dir.path().join(format!("{name}.out"));
+        let said_at = dir.path().join(format!("{name}.err"));
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 name,
@@ -1791,8 +1795,8 @@ fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
             .env("PATH", &path)
             .env("YAK_TEST_STOPS_WITHIN_SECS", "3")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(fs::File::create(&printed_at).unwrap())
+            .stderr(fs::File::create(&said_at).unwrap())
             .spawn()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
@@ -1800,14 +1804,14 @@ fn a_test_whose_clock_waits_for_work_ends_where_no_turn_can_start() {
         if !ended {
             let _ = child.kill();
         }
-        let out = child.wait_with_output().unwrap();
+        let status = child.wait().unwrap();
         let printed = format!(
             "{}\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&fs::read(&printed_at).unwrap()),
+            String::from_utf8_lossy(&fs::read(&said_at).unwrap())
         );
         assert!(ended, "{name} did not end where no turn can start");
-        assert!(!out.status.success(), "{name} passed with a ps that fails");
+        assert!(!status.success(), "{name} passed with a ps that fails");
         assert!(
             printed.contains("inspect processes:")
                 || printed.contains("process inspection is unavailable"),

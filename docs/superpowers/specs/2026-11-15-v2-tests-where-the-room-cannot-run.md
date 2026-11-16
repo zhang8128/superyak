@@ -141,9 +141,10 @@ pilot that was run stands as it is.
 
 ## What building it showed
 
-Added the same day, after the builders handed in and the first live turn ran. Four things the text above
-did not foresee, and what was done about each. Where this section and the text above differ, this section
-holds. It is read by a fresh reader before the change is pushed.
+Added after the builders handed in and the first live turn ran. Five things the text above did not foresee,
+and what was done about each. Where this section and the text above differ, this section holds. A fresh
+reader of the other family read the first four before the change was pushed, and approved each; what it
+asked to be changed is said under the second.
 
 **1. In the measured run, a test's own words often do not name the cause.** Of the 159 tests that failed
 there, 96 printed a line that names the look at processes. The other 63 failed further on: a clock that
@@ -157,9 +158,16 @@ that the thing they are about to refuse works on this machine: a listener, a soc
 home, a terminal, the system's launcher, a question about another process, a keyring. Then each enters a
 jail. In a builder's sandbox the control fails, or the jail is refused without a word, so what such a test
 prints there is not about a jail; by "Which tests" it would stay unmarked, and fail in every worker's
-sandbox. Each of the seven enters a jail on a line that every path through its body reaches. No place
-without a jail can pass it. They carry the mark on that evidence: the line of the body, and the pass where
-the room can run. One of the seven is built on Linux only, where no builder stood.
+sandbox. Each of the seven enters a jail on a line that every path through its body reaches, and passes
+only on something the jailed program itself printed. No place without a jail can pass it. They carry the
+mark on that evidence: the line of the body, and the pass where the room can run. One of the seven is built
+on Linux only, where no builder stood.
+
+The reader found that one of the seven did not hold to this as first written. The test of the terminal
+passed when nothing reached the terminal, and a jail whose shell never started leaves nothing there either.
+Its shell now says first, on the output it was given, that it started, and the test requires that line
+before it looks for the one that must not come. With the jailed program replaced by one that starts no
+shell, the test fails with "the jailed shell did not start", and its control still holds.
 
 **3. The room needs a third thing of a machine: a directory of its own in /tmp.** Nine tests of what the
 room gives a worker's program (its command, its settings, its own place for temporary files) make that
@@ -179,5 +187,13 @@ In the whole run that number is 0 on every line, as the ignored count is, and th
 It still does not see a test program that a test started for itself, whose output that test kept; that is
 what "A test that another test starts" is for.
 
-**What is not changed:** the way taken, the first sentence's words, the command that runs everything, and
-what is left to the acceptance suite's owner.
+**5. The acceptance suite's owner marked its tests, and the exception is closed.** The ship that owns the
+suite marked the thirteen with the first sentence, by its own reading of the path each takes, and changed a
+fourteenth: a test that no text of a turn reaches the store passed where no turn ran, which is a pass for
+what did not run. It now requires that its turn passed, and so needs the room, and says so. Run at the
+owner's commit on the lead's machine with every test asked for: all 16 pass with the machine's own `ps`; 14
+fail and 2 pass with a `ps` that fails. The two that pass anywhere start no clock. So the workspace has no
+`default-members` line: a plain `cargo test` runs the acceptance suite's two, and prints the other fourteen
+as left out, with their reason, as it does for every other crate.
+
+**What is not changed:** the way taken, the first sentence's words, and the command that runs everything.

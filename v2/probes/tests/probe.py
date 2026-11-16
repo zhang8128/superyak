@@ -14,8 +14,10 @@ It prints, in this order:
   BUILD    `cargo build`, offline, from the vendored crates, and its seconds.
   COMPILE  `cargo test --no-run`: the tests built and not run, so that the tests' own seconds are apart.
   TESTS    `cargo test --no-fail-fast` under a limit of its own (240 seconds unless another is given), with
-           everything it started ended at the limit, so that a test that waits cannot take the turn. Then the
-           counts, why tests were ignored, and all that cargo printed.
+           all of its own process group ended at the limit, so that a test that waits cannot take the turn.
+           Then the counts, why tests were ignored, and all that cargo printed. It says `ok` only when cargo
+           ended well and the harness's own lines show tests that ran and passed; a good exit with no such
+           lines is said as that.
   PROBE DONE, as the last line, whatever happened before it.
 
 The whole probe keeps to nine minutes: a worker's program may end a command at ten. When the build has used
@@ -154,6 +156,28 @@ def counted(text):
     return seen, reasons, failed
 
 
+def unshown(seen, failed):
+    """Why cargo's good exit is not taken for tests that ran and passed: one line each, none when it is.
+
+    The exit says only that the command ended well. That tests ran and passed is read from the harness's own
+    lines: a program started for each result, every result read, none failed, at least one test passed.
+    """
+    doubts = []
+    if seen["programs"] == 0:
+        doubts.append("no test program was started")
+    if seen["results"] != seen["programs"]:
+        doubts.append("%d test programs were started and %d results were read" % (seen["programs"], seen["results"]))
+    if seen["unread"]:
+        doubts.append("%d results could not be read" % seen["unread"])
+    if seen["inner"]:
+        doubts.append("%d results leave tests out by a filter" % seen["inner"])
+    if seen["failed"] or failed:
+        doubts.append("%d tests are counted as failed" % max(seen["failed"], len(failed)))
+    if seen["passed"] == 0:
+        doubts.append("no test is counted as passed")
+    return doubts
+
+
 def kept(text):
     """All of a text, or its two ends and a line that says what was left out."""
     raw = text.encode("utf-8", errors="replace")
@@ -236,8 +260,13 @@ def main(argv):
     code, took, out, after = limited(command + words, limit, cwd=v2, env=env)
     said = "`%s %s`, under a limit of %d s" % (" ".join(command), shown, limit)
     seen, reasons, failed = counted(out)
+    doubts = unshown(seen, failed)
     if code is None:
         say("TESTS ended by the limit after %.0f s: %s. A test waited, or they are slow here" % (took, said))
+        status = 1
+    elif code == 0 and doubts:
+        say("TESTS not shown to have passed after %.0f s: %s. Cargo ended with 0, and yet: %s"
+            % (took, said, "; ".join(doubts)))
         status = 1
     elif code == 0:
         say("TESTS ok in %.0f s: %s. Every test that ran passed" % (took, said))

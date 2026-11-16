@@ -4,9 +4,8 @@
 #   bash scripts/whole-suite.sh <log> [more words for cargo, such as --offline]
 #
 # A plain `cargo test` leaves out the tests that need the room (a list of processes and a jail, or a directory
-# of its own in /tmp), each with a line that says so, and the acceptance suite, with no line. That is for a
-# worker's sandbox, where the room cannot run. This is the command that leaves nothing out, for the lead's
-# machines and for CI:
+# of its own in /tmp), each with a line that says so. That is for a worker's sandbox, where the room cannot
+# run. This is the command that leaves nothing out, for the lead's machines and for CI:
 #   - yak is built, because the acceptance suite looks for it in the build's own directory;
 #   - every test of the workspace is run, the ignored ones asked for;
 #   - suite_guard.py reads what was printed, and fails if a test was left out all the same or a test program

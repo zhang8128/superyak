@@ -711,11 +711,24 @@ fn seen_on_its_terminal(g: &Ground, command: (&Path, &[String])) -> String {
 #[ignore = "needs the room: a list of processes and a jail"]
 fn a_jailed_run_cannot_write_to_the_terminal() {
     let g = ground();
-    let write = ["-c".to_string(), "echo MARK-typed > /dev/tty".to_string()];
+    // The shell first says it started, on the output it was given, which is that terminal. Then it tries the
+    // terminal by its name. Without the first, a jail whose shell never started would pass: nothing of it reaches
+    // the terminal then either.
+    let write = [
+        "-c".to_string(),
+        "echo MARK-started; echo MARK-typed > /dev/tty".to_string(),
+    ];
     let free = seen_on_its_terminal(&g, (Path::new("/bin/sh"), &write));
-    assert!(free.contains("MARK-typed"), "control failed: {free:?}");
+    assert!(
+        free.contains("MARK-started") && free.contains("MARK-typed"),
+        "control failed: {free:?}"
+    );
     let (tool, args) = jail(&g).command("/bin/sh", &write);
     let jailed = seen_on_its_terminal(&g, (&tool, &args));
+    assert!(
+        jailed.contains("MARK-started"),
+        "the jailed shell did not start: {jailed:?}"
+    );
     assert!(!jailed.contains("MARK-typed"), "{jailed:?}");
 }
 

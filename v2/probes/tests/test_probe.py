@@ -129,6 +129,36 @@ class Counted(unittest.TestCase):
         self.assertEqual((reasons, failed), ({}, []))
 
 
+class Unshown(unittest.TestCase):
+    """What keeps cargo's good exit from being taken for tests that ran and passed."""
+
+    def doubts(self, text):
+        seen, _, failed = probe.counted(text)
+        return probe.unshown(seen, failed)
+
+    def test_a_run_whose_lines_show_tests_that_passed_leaves_no_doubt(self):
+        self.assertEqual(self.doubts(GOOD), [])
+
+    def test_each_thing_missing_is_said(self):
+        started = "     Running tests/a.rs (target/debug/deps/a-0123456789abcdef)"
+        for text, said in (
+            ("", ["no test program was started", "no test is counted as passed"]),
+            (started, ["1 test programs were started and 0 results were read", "no test is counted as passed"]),
+            (result(), ["no test program was started", "0 test programs were started and 1 results were read"]),
+            (started + "\ntest result: ok. some passed",
+             ["1 test programs were started and 0 results were read", "1 results could not be read",
+              "no test is counted as passed"]),
+            (started + "\n" + result(filtered=7),
+             ["1 test programs were started and 0 results were read", "1 results leave tests out by a filter",
+              "no test is counted as passed"]),
+            (started + "\n" + result(passed=2, failed=1, word="FAILED"), ["1 tests are counted as failed"]),
+            (started + "\ntest x ... FAILED\n" + result(passed=2), ["1 tests are counted as failed"]),
+            (started + "\n" + result(passed=0), ["no test is counted as passed"]),
+            (started + "\n" + result(passed=0, ignored=5), ["no test is counted as passed"]),
+        ):
+            self.assertEqual(self.doubts(text), said, text)
+
+
 class Kept(unittest.TestCase):
     def test_a_short_text_is_kept_whole_and_a_long_one_by_its_two_ends(self):
         self.assertEqual(probe.kept("all of it\n"), "all of it\n")
@@ -364,6 +394,30 @@ class Whole(unittest.TestCase):
         self.assertIn("  failed: another", lines)
         self.assertIn("1 more that could not be read, and 1 of test programs", self.line(lines, "  test programs started"))
         self.assertEqual(lines[-1], "PROBE DONE")
+
+    def test_a_good_exit_is_not_called_ok_without_the_harnesss_own_lines(self):
+        # Cargo ends with 0 in each: a runner that started nothing, a program with no result, a result that
+        # says a test failed, a result that cannot be read, a run with a filter, a run in which nothing passed.
+        started = "     Running tests/a.rs (target/debug/deps/a-0123456789abcdef)"
+        for name, text, said in (
+            ("nothing printed", "", "no test program was started; no test is counted as passed"),
+            ("no result", started, "1 test programs were started and 0 results were read"),
+            ("a failed result", started + "\n" + result(passed=2, failed=1, word="FAILED"),
+             "1 tests are counted as failed"),
+            ("a result that cannot be read", started + "\ntest result: ok. some passed", "1 results could not be read"),
+            ("a filter", started + "\n" + result(filtered=7), "1 results leave tests out by a filter"),
+            ("nothing passed", started + "\n" + result(passed=0, ignored=5), "no test is counted as passed"),
+        ):
+            with self.subTest(name):
+                self.give("tests.out", text + "\n")
+                code, lines = self.run_probe(self.vendor)
+                self.assertEqual(code, 1, "\n".join(lines))
+                line = self.line(lines, "TESTS ")
+                self.assertRegex(line, r"^TESTS not shown to have passed after \d+ s: `cargo test --no-fail-fast ")
+                self.assertIn("Cargo ended with 0, and yet: ", line)
+                self.assertIn(said, line)
+                self.assertFalse(any(found.startswith("TESTS ok") for found in lines))
+                self.assertEqual(lines[-1], "PROBE DONE")
 
     def test_tests_that_wait_are_ended_at_the_limit_with_all_they_started(self):
         self.give("tests.sleep", "")

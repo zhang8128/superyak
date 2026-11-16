@@ -1,10 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/room", "crates/turn", "crates/yak", "acceptance"]
-# A plain `cargo test` here runs the three crates and leaves the acceptance suite out, with no line for any of
-# its tests: they need the room to run, they are another ship's and frozen, and so they cannot say so
-# themselves yet. `--workspace` takes it in; scripts/whole-suite.sh is the command that leaves nothing out.
-default-members = ["crates/room", "crates/turn", "crates/yak"]
 
 [workspace.package]
 edition = "2024"
