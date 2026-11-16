@@ -923,6 +923,29 @@ mod tests {
             let error = parse_fixture(&bad, &["gone.txt"]).unwrap_err().to_string();
             assert!(!error.contains("MARKER"), "{pointer}");
         }
+        // One road more than the way has places, and one fewer: each refused by the count's name. That
+        // comparison is all that stands between a store's answer and an index past the end of the way.
+        for more in [true, false] {
+            let mut bad = answer();
+            let roads = bad["answers"][0]["route"]["roads"].as_array_mut().unwrap();
+            if more {
+                let extra = roads.last().unwrap().clone();
+                roads.push(extra);
+            } else {
+                roads.pop();
+            }
+            assert_eq!(
+                parse_fixture(&bad, &["gone.txt"]).unwrap_err().0,
+                "answer.answers[0].route.roads_n"
+            );
+        }
+        // A route where no turn taught is refused as that, before any road's count is looked at.
+        let mut bad = answer();
+        bad["taught"] = json!(0);
+        assert_eq!(
+            parse_fixture(&bad, &["gone.txt"]).unwrap_err().0,
+            "answer.answers[0].none.precedence"
+        );
         // A detour that left its turn's way at the first step: the room numbers steps from nought.
         let mut first_step = answer();
         first_step["answers"][0]["route"]["detours"][0]["seq"] = json!(0);

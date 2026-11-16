@@ -332,18 +332,18 @@ fn manifest_is_plan_order_independent_hashes_exact_bytes_and_keeps_empty_taught_
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, format!("{digest}\n").as_bytes());
-    assert!(
-        Command::new(assert_cmd::cargo::cargo_bin!("yak"))
-            .args(["history", "check", "--plan"])
-            .arg(path)
-            .arg("--list")
-            .arg(out.join("history.json"))
-            .arg("--walks")
-            .arg(out)
-            .status()
-            .unwrap()
-            .success()
-    );
+    // The admission says which list it admitted: the same hash.
+    let admitted = Command::new(assert_cmd::cargo::cargo_bin!("yak"))
+        .args(["history", "check", "--plan"])
+        .arg(path)
+        .arg("--list")
+        .arg(out.join("history.json"))
+        .arg("--walks")
+        .arg(out)
+        .output()
+        .unwrap();
+    assert!(admitted.status.success());
+    assert_eq!(admitted.stdout, format!("{digest}\n").as_bytes());
 }
 
 #[test]
@@ -542,6 +542,17 @@ fn check_refuses_every_admission_and_integrity_error_by_name() {
         history::goals(&plan, &out.join("history.json"), "alpha"),
         "another_repository",
     );
+    // The list given from elsewhere: a copy of it among the walks is let be, and anything else under its name
+    // is a file the list does not name.
+    let out = w.make(&plan, "list_elsewhere");
+    let elsewhere = out.parent().unwrap().join("the-list-kept-elsewhere.json");
+    fs::copy(out.join("history.json"), &elsewhere).unwrap();
+    assert_eq!(
+        history::check(&plan, &elsewhere, &out).unwrap(),
+        history::sha256(&fs::read(&elsewhere).unwrap())
+    );
+    fs::write(out.join("history.json"), b"{}").unwrap();
+    refused(history::check(&plan, &elsewhere, &out), "unlisted_file");
     let out = w.make(&plan, "changed_standing");
     w.room
         .record_recheck(&item, lease.lease_no, &w.verdict(false))

@@ -431,8 +431,10 @@ fn listed<'a>(
     Err(refuse("not_arrived"))
 }
 
-pub fn check(plan: &Plan, list_path: &Path, walks: &Path) -> Result<()> {
-    let (list, _) = HistoryList::read(list_path)?;
+/// Admits every turn of the list, or refuses by name. Gives the admitted list's SHA-256, so that a run's
+/// record can show which list was admitted.
+pub fn check(plan: &Plan, list_path: &Path, walks: &Path) -> Result<String> {
+    let (list, admitted) = HistoryList::read(list_path)?;
     let items = load(plan, false)?;
     if items.iter().any(|item| item.repo != list.repo) {
         return Err(refuse("another_repository"));
@@ -470,9 +472,7 @@ pub fn check(plan: &Plan, list_path: &Path, walks: &Path) -> Result<()> {
     for file in io(fs::read_dir(walks), "walks.directory")? {
         let file = io(file, "walks.directory")?;
         let name = file.file_name();
-        if name == "history.json" && file.path() == list_path {
-            continue;
-        }
+        // The list itself may lie among the walks, there or as a copy of the one given.
         if name == "history.json"
             && io(fs::read(file.path()), "list.read")? == io(fs::read(list_path), "list.read")?
         {
@@ -488,11 +488,13 @@ pub fn check(plan: &Plan, list_path: &Path, walks: &Path) -> Result<()> {
             return Err(refuse("unlisted_file"));
         }
     }
-    Ok(())
+    Ok(admitted)
 }
 
 /// Version 1 ranks distinct lowercase title words, excluding words in over half the listed items.
 /// Equal scores prefer later verdict arrival time, then the bytewise greater attempt id.
+/// Only turns the list lets teach under its measure are ranked: a narrowing of the first design's ranker,
+/// which ranked every arrived turn. A route can be made only from walks that teach.
 pub const RANKER_VERSION: &str = "title-words-1";
 pub const MAX_CHOSEN: usize = 3;
 

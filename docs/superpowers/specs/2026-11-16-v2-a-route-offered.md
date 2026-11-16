@@ -160,10 +160,14 @@ the id is the root that is first in byte order among those the turn's base reach
 | Route | The route to each file that the nearest history turns changed, over the whole of the history let teach: the files along each way in order, how many turns walked each road, how many turns went a dearer way, and for each file whether it has changed since or is gone |
 | The same places, shuffled | Every different file of the route arm's block, once, with the same mark of changed or gone, in an order drawn by the seeded draw, under the same opening sentence. Nothing of a road: no order, no counts, no dearer ways |
 
-- **The goals.** The first design's ranker, unchanged, picks up to three arrived history turns by shared
-  title words. The files asked for are the files those turns changed, in the ranker's order of turns and
-  each turn's recorded order, a file named twice kept where it first comes. A score of nought offers
-  nothing. The scored item's own answer is never consulted, to find goals or to mend a poor match.
+- **The goals.** The first design's ranker picks up to three arrived history turns by shared title words,
+  with one narrowing: it ranks only the turns the list lets teach under its measure, where the first
+  design ranked every arrived turn. A route can be made only from walks that teach, and a failed turn's
+  changed files are not where the work was done. Equal scores go to the turn whose verdict came later, and
+  then to the attempt id that is greater in byte order, which is a fixed order and not one of time. The
+  files asked for are the files those turns changed, in the ranker's order of turns and each turn's
+  recorded order, a file named twice kept where it first comes. A score of nought offers nothing. The
+  scored item's own answer is never consulted, to find goals or to mend a poor match.
 - **Route against nothing compares a package:** this ranker, these goals, this history, this rendering. A
   benefit would not say which part earned it.
 - **Route against shuffled is ordered routes with their roads, against the same places with no roads.**

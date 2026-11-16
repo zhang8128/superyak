@@ -300,7 +300,10 @@ async fn execute(cli: Cli) -> Result<()> {
                 );
             }
             HistoryCommand::Check { plan, list, walks } => {
-                yak::history::check(&yak::history::read_plan(&plan)?, &list, &walks)?;
+                println!(
+                    "{}",
+                    yak::history::check(&yak::history::read_plan(&plan)?, &list, &walks)?
+                );
             }
         },
         Command::Offer {
