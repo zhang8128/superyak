@@ -1,6 +1,6 @@
 # v2: walks into roads, and a route back
 
-Tardis, 2026-11-16, revision 3. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
+Tardis, 2026-11-16, revision 4. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
 ("the room's spec" below, at 487f44bb), which fixes what the room writes, the list's form, and what the room
 needs back (its sections 1, 2, 3 and 8). This spec says how a walk becomes cells, which walks may teach, what a
 road costs, what a route and a detour are, how the store is built and checked, and what the answer holds. It
@@ -151,7 +151,10 @@ So:
 that form; a goal the path rule refuses; a `repo`, `list` or `measure` that is not the store's. A consumer that
 runs an experiment also requires `for_experiment: true`, and the list and measure it pinned.
 
-**The answer** (section 8 gives its bytes): `v` 1; `repo`; `list`; `for_experiment`; `measure` (`name`,
+**The answer** (section 8 gives its bytes): `v` 1; `store`, this store's version, `"1"` for this revision and raised
+whenever an answer's bytes could change for the same walks, list and question; `kernel`, the digest of the kernel
+source that built the store's cells (the first 16 hex digits of its SHA-256, as the n-category store keeps it); `repo`;
+`list`; `for_experiment`; `measure` (`name`,
 `version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
 `answers`, one for each goal, in the order asked, a goal asked twice answered twice.
 
@@ -227,7 +230,9 @@ better way to do the work, or that it beats a table that made the same offer.
   walks and the list, the store answers the question with exactly `answer.json`'s bytes, and the room's renderer
   reads `answer.json`. Its route to `target.txt` is `b.txt`, `target.txt` at 2/9, stitched: the first road is
   witnessed by `attempt-2`, the second, walked by two turns, by `attempt-1`. Both other ways are detours at 2/27.
-  `b.txt` was seen at two blobs from two bases, and `added.txt` is `never_named`.
+  `b.txt` was seen at two blobs from two bases, and `added.txt` is `never_named`. Its `kernel` is the digest of the
+  kernel source at v2 487f44bb; a store built from another kernel answers with that kernel's digest, and is byte for
+  byte the same otherwise.
 
 ## 9. What it doesn't do, and what it accepts
 
@@ -296,3 +301,6 @@ here.
 | Named change | Where |
 | --- | --- |
 | R1. Fix the last two containers, the fractions' strings, and give a fixture | Sections 6, 7 and 8: `blobs` and a detour as w45 suggested, `str()` fractions, and the fixture |
+
+**Asked since, by the room's builder (w46), through the lead:** every answer names the store's version and the
+kernel's, so that the room can keep them with each offer (the room's spec, section 4). Section 6, and the fixture.

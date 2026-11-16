@@ -1,0 +1,473 @@
+"""The route store (docs/superpowers/specs/2026-11-16-v2-walks-into-routes.md, revision 3), row by row of its section 10:
+what a right store does, and what a wrong one would do that each test catches."""
+import decimal
+import hashlib
+import itertools
+import json
+import random
+import sqlite3
+from fractions import Fraction
+from pathlib import Path
+
+import pytest
+
+import ncat_routes as R
+from ncat import NCat, NCatError
+
+FIXTURE = Path(__file__).resolve().parents[2] / "docs/superpowers/specs/2026-11-16-v2-walks-into-routes-fixture"
+REPO, BASE = "1" * 40, "2" * 40
+MARKER = "zq-planted-marker"
+
+
+def blob(path):
+    return hashlib.sha1(path.encode()).hexdigest()
+
+
+def walk(attempt, steps, standing="passed_verified", source="room", item=None, family="claude", base=BASE):
+    """`steps`: each a list of paths named in one step (a bare path is a one-file step)."""
+    steps = [[s] if isinstance(s, str) else s for s in steps]
+    return {"v": 1, "source": source, "repo": REPO, "base": base, "item": item or f"item-{attempt}", "attempt": attempt,
+            "family": family, "verdict": None if standing == "unjudged" else ("passed" if "passed" in standing else "failed"),
+            "standing": "unjudged" if source == "ship" else standing,
+            "steps": [{"seq": i + 1, "tool": "read", "ok": True, "named": [[p, blob(p)] for p in names], "seen_ms": None,
+                       "result_ms": None, "tokens_in": None, "tokens_out": None} for i, names in enumerate(steps)],
+            "changed": []}
+
+
+def line(w):
+    return R.canonical(w)
+
+
+def experiment(tmp_path, walks, budget=R.BUDGET_BYTES, name="routes.db"):
+    """Write each walk to its own file and a list of them all, build, and return (store path, list id, files)."""
+    d = tmp_path / f"in-{len(list(tmp_path.iterdir()))}"
+    d.mkdir()
+    files = []
+    for w in walks:
+        f = d / f"walk-{w['attempt']}.jsonl"
+        f.write_bytes(line(w))
+        files.append(f)
+    lst = listing(walks, files)
+    (d / "list.json").write_bytes(lst)
+    out = tmp_path / name
+    R.build(out, files, d / "list.json", budget_bytes=budget)
+    return out, hashlib.sha256(lst).hexdigest(), files
+
+
+def listing(walks, files, measure=("share", 1)):
+    turns = sorted(({"attempt": w["attempt"], "item": w["item"], "base": w["base"], "standing": w["standing"],
+                     "sha256": hashlib.sha256(f.read_bytes()).hexdigest()} for w, f in zip(walks, files)),
+                   key=lambda e: e["attempt"])
+    return json.dumps({"v": 1, "repo": REPO, "measure": {"name": measure[0], "version": measure[1]}, "turns": turns},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def ask(store, goals, list_id, measure=("share", 1)):
+    q = {"v": 1, "repo": REPO, "list": list_id, "measure": {"name": measure[0], "version": measure[1]}, "goals": goals}
+    with R.open_store(store) as s:
+        return json.loads(s.ask(R.canonical(q)))
+
+
+def route_of(answer, i=0):
+    return answer["answers"][i]["route"]
+
+
+# ------------------------------------------------------------------ the fixture, normative
+
+
+def fixture_answer():
+    """The fixture's answer, with `kernel` the digest of the kernel source in use: byte for byte otherwise (spec, section 8)."""
+    expected = json.loads((FIXTURE / "answer.json").read_bytes())
+    expected["kernel"] = R._kernel_digest()
+    return R.canonical(expected)
+
+
+def test_the_fixture_is_answered_byte_for_byte(tmp_path):
+    out = tmp_path / "routes.db"
+    walks = sorted(FIXTURE.glob("walk-*.jsonl"))
+    R.build(out, walks, FIXTURE / "list.json")
+    with R.open_store(out) as s:
+        assert s.ask((FIXTURE / "question.json").read_bytes()) == fixture_answer()
+        assert s.check() > 0
+    R.build(out, list(reversed(walks)), FIXTURE / "list.json")   # files given in another order: the same bytes
+    with R.open_store(out) as s:
+        assert s.ask((FIXTURE / "question.json").read_bytes()) == fixture_answer()
+    assert json.loads((FIXTURE / "answer.json").read_bytes())["kernel"] == "511bacd017146586"   # the kernel at v2 487f44bb
+
+
+def test_every_answer_names_the_store_and_the_kernel_in_the_rooms_version_words(tmp_path):
+    import re
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    answer = ask(out, ["a", "nowhere"], list_id)
+    assert answer["store"] == R.STORE_VERSION == "1" and answer["kernel"] == R._kernel_digest()
+    for value in (answer["store"], answer["kernel"]):
+        assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value)
+
+
+# ------------------------------------------------------------------ the path rule
+
+
+@pytest.mark.parametrize("path", ["a" * 512, "a/b-c_d.e", "x", "a.b/c"])
+def test_the_path_rule_accepts(path):
+    assert R.plain_path(path)
+
+
+@pytest.mark.parametrize("path", ["a" * 513, "two words", 'quote".txt', "é.txt", "/a", "a//b", "./a", "a/..", "", "a/.",
+                                  "tab\tx", "back\\slash", "a/", None, 7])
+def test_the_path_rule_refuses(path):
+    assert not R.plain_path(path)
+
+
+# ------------------------------------------------------------------ a walk file, read as written
+
+
+def test_a_walk_file_is_read_as_written():
+    w = walk("t1", [["a", "b", "c"], [], "d"], standing="failed")
+    w["steps"][1]["named"] = []
+    w["steps"][0]["tokens_in"], w["steps"][0]["seen_ms"] = 12, 340
+    w["changed"] = [["d", "changed"], ["new", "added"], ["old", "removed"]]
+    (back,) = R.read_walks(line(w), "f")
+    assert back == w
+    assert [v[0] for v in R.visits(back)] == ["a", "b", "c", "d"]
+
+
+REFUSALS = [
+    ("a field missing", lambda w: w.pop("family")),
+    ("an unknown key", lambda w: w.update({MARKER: 1})),
+    ("a wrong type", lambda w: w.update({"steps": MARKER})),
+    ("a seq that goes back", lambda w: w["steps"][1].update({"seq": 1})),
+    ("a path with ..", lambda w: w["steps"][0]["named"][0].__setitem__(0, f"a/../{MARKER}")),
+    ("a blob of 39 hex", lambda w: w["steps"][0]["named"][0].__setitem__(1, "a" * 39)),
+    ("a bool for an integer", lambda w: w["steps"][0].update({"seen_ms": True})),
+    ("an unknown standing", lambda w: w.update({"standing": MARKER})),
+    ("a ship walk that isn't unjudged", lambda w: w.update({"source": "ship"})),
+]
+
+
+@pytest.mark.parametrize("why, change", REFUSALS, ids=[r[0] for r in REFUSALS])
+def test_a_bad_walk_is_refused_by_place_and_never_repeats_a_value(why, change):
+    w = walk("t1", ["a", "b"])
+    change(w)
+    with pytest.raises(R.Refused) as refused:
+        R.read_walks(line(w), "f.jsonl")
+    assert MARKER not in str(refused.value) and "f.jsonl line 1" in str(refused.value), why
+
+
+@pytest.mark.parametrize("data", [b"\xff\xfe\n", ('{"v": NaN}\n').encode(), b'{"v":1,"v":1}\n',
+                                  (json.dumps({MARKER: "x" * (1 << 20)}) + "\n").encode(), line(walk("t", ["a"]))[:-1]])
+def test_bytes_that_are_no_walk_are_refused_without_their_content(data):
+    with pytest.raises(R.Refused) as refused:
+        R.read_walks(data, "f.jsonl")
+    assert MARKER not in str(refused.value)
+
+
+# ------------------------------------------------------------------ only listed turns teach
+
+
+def write_inputs(tmp_path, walks):
+    d = tmp_path / "w"
+    d.mkdir(exist_ok=True)
+    files = {}
+    for w in walks:
+        files[f"walk-{w['attempt']}.jsonl"] = line(w)
+    return files
+
+
+def test_only_listed_turns_teach_and_an_unverified_pass_is_kept_but_counts_nowhere(tmp_path):
+    walks = [walk("t1", ["a", "goal"]), walk("t2", ["b", "goal"], standing="passed_unverified")]
+    out, list_id, _ = experiment(tmp_path, walks)
+    answer = ask(out, ["goal", "b"], list_id)
+    assert answer["taught"] == 1 and route_of(answer)["paths"] == ["a", "goal"]
+    assert all(road["turns"] == 1 for road in route_of(answer)["roads"])
+    assert answer["answers"][1] == {"goal": "b", "none": "not_taught"}
+    assert answer["list"] == list_id and answer["for_experiment"] is True
+
+
+def admission_cases():
+    a, b = walk("t1", ["a"]), walk("t2", ["b"])
+    files = {"a.jsonl": line(a), "b.jsonl": line(b)}
+
+    def lst(walks_files, **change):
+        turns = sorted(({"attempt": w["attempt"], "item": w["item"], "base": w["base"], "standing": w["standing"],
+                         "sha256": hashlib.sha256(data).hexdigest()} for w, data in walks_files), key=lambda e: e["attempt"])
+        obj = {"v": 1, "repo": REPO, "measure": {"name": "share", "version": 1}, "turns": turns, **change}
+        return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+    good = lst([(a, files["a.jsonl"]), (b, files["b.jsonl"])])
+    other_repo = dict(walk("t3", ["c"]), repo="9" * 40)
+    ship = walk("t4", ["d"], source="ship")
+    yield "an unlisted file", good, {**files, "c.jsonl": line(walk("t3", ["c"]))}
+    yield "a second copy of an entry", good, {**files, "copy.jsonl": files["a.jsonl"]}
+    yield "a listed entry left out", good, {"a.jsonl": files["a.jsonl"]}
+    two = files["a.jsonl"] + files["b.jsonl"]
+    yield "a file with two walks", lst([(a, two)]), {"two.jsonl": two}
+    yield "another repository's walk", lst([(other_repo, line(other_repo))]), {"o.jsonl": line(other_repo)}
+    after = files["a.jsonl"] + line(ship)
+    yield "a ship's walk after a room line", lst([(a, after)]), {"s.jsonl": after}
+    wrong = dict(a, standing="failed", verdict="failed")
+    yield "a standing other than the list's", lst([(a, line(wrong))]), {"a.jsonl": line(wrong)}
+    yield "a measure this store has not", lst([(a, files["a.jsonl"])], measure={"name": "share", "version": 2}), \
+        {"a.jsonl": files["a.jsonl"]}
+    yield "a list not in its form", good.replace(b",", b", ", 1), files
+    unsorted = json.loads(good)
+    unsorted["turns"].reverse()
+    yield "a list not sorted", json.dumps(unsorted, sort_keys=True, separators=(",", ":")).encode(), files
+
+
+@pytest.mark.parametrize("why, list_bytes, files", list(admission_cases()), ids=[c[0] for c in admission_cases()])
+def test_admission_refuses(why, list_bytes, files):
+    with pytest.raises(R.Refused):
+        R.admit(list_bytes, files)
+
+
+def test_a_re_exported_file_after_a_standing_changes_is_refused_by_its_hash(tmp_path):
+    w = walk("t1", ["a"])
+    files = {"a.jsonl": line(w)}
+    lst = json.dumps({"v": 1, "repo": REPO, "measure": {"name": "share", "version": 1}, "turns": [
+        {"attempt": "t1", "item": w["item"], "base": BASE, "standing": "passed_verified",
+         "sha256": hashlib.sha256(files["a.jsonl"]).hexdigest()}]}, sort_keys=True, separators=(",", ":")).encode()
+    R.admit(lst, files)
+    demoted = dict(w, standing="passed_unverified")
+    with pytest.raises(R.Refused):
+        R.admit(lst, {"a.jsonl": line(demoted)})
+
+
+# ------------------------------------------------------------------ a ship's store is apart
+
+
+def test_a_ships_store_routes_under_its_own_measure_and_never_carries_experiment_flags(tmp_path):
+    walks = [walk("s1", ["a", "b"], source="ship"), walk("s2", ["a", "c"], source="ship")]
+    f = tmp_path / "ship.jsonl"
+    f.write_bytes(b"".join(line(w) for w in walks))
+    out = tmp_path / "ship.db"
+    R.build(out, [f])
+    answer = ask(out, ["b"], None, measure=("ship-share", 1))
+    assert answer["list"] is None and answer["for_experiment"] is False and answer["taught"] == 2
+    assert route_of(answer)["paths"] == ["a", "b"]
+    with pytest.raises(R.Refused):   # an experiment's question to a ship's store
+        ask(out, ["b"], "0" * 64)
+    with pytest.raises(R.Refused):   # a ship's walk to an experiment's build
+        R.admit(listing([walks[0]], [f]), {"ship.jsonl": line(walks[0])})
+
+
+# ------------------------------------------------------------------ visits and roads
+
+
+def test_visits_and_roads_and_what_counts():
+    one = walk("t1", ["a", "a", "b", "a", ["c", "d", "e"]])          # read then edit is one visit; leave and come back is two
+    net = R.Network([one, walk("t2", ["a", "b"]), walk("t3", ["a", "b"]), walk("t4", [])], R.SHARE)
+    assert [v[0] for v in R.visits(one)] == ["a", "b", "a", "c", "d", "e"]
+    assert net.N == 4                                                   # a taught turn that named nothing counts
+    assert net.k[None, "a"] == 3 and net.k["a", "b"] == 3              # t1 walked a to b once: k counts turns
+    assert net.k["c", "d"] == 1 and net.k["d", "e"] == 1                # three files in one step, two roads
+    assert ("a", "a") not in net.k
+
+
+def test_two_turns_that_walked_alike_are_one_cell_and_two_turns(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "x", "g"]), walk("t2", ["a", "x", "g"]),
+                                            walk("t3", ["b", "g"]), walk("t4", ["b", "g"]), walk("t5", ["b", "g"])])
+    with sqlite3.connect(out) as db:
+        cells = {c for (c,) in db.execute("SELECT way_cell FROM detour WHERE path = 'g'")}
+    answer = ask(out, ["g"], list_id)
+    assert [d["attempt"] for d in route_of(answer)["detours"]] == ["t1", "t2"] and len(cells) == 1
+
+
+# ------------------------------------------------------------------ the route
+
+
+def test_a_route_is_stitched_and_the_first_walks_way_is_a_detour(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a.txt", "b.txt", "target.txt"]), walk("t2", ["b.txt", "x.txt"])])
+    r = route_of(ask(out, ["target.txt"], list_id))
+    assert r["paths"] == ["b.txt", "target.txt"] and r["roads_n"] == 2
+    assert [(x["from"], x["to"], x["witness"]) for x in r["roads"]] == [(None, "b.txt", "t2"), ("b.txt", "target.txt", "t1")]
+    assert [d["attempt"] for d in r["detours"]] == ["t1"]
+    with R.open_store(out) as s:
+        s.check()
+
+
+def every_simple_way(net, goal):
+    paths = net.paths
+    for n in range(1, len(paths) + 1):
+        for way in itertools.permutations(paths, n):
+            if way[-1] == goal and all(road in net.k for road in zip((None,) + way, way)):
+                yield list(way)
+
+
+def oracle(net, goal):
+    ways = list(every_simple_way(net, goal))
+    if not ways:
+        return None
+    best = max(net.share(w) for w in ways)
+    return min((w for w in ways if net.share(w) == best), key=lambda w: [p.encode() for p in w])
+
+
+def test_the_search_agrees_with_every_simple_way_on_a_thousand_sets_drawn_at_random():
+    rng = random.Random(16)
+    names = ["a", "b", "c", "d", "e", "ab", "b/c"]
+    for case in range(1000):
+        walks = []
+        for t in range(rng.randint(1, 5)):
+            steps = [rng.sample(names, rng.randint(0, 2)) for _ in range(rng.randint(0, 6))]
+            walks.append(walk(f"t{t}", steps))
+        net = R.Network(walks, R.SHARE)
+        for goal in net.paths:
+            assert net.route(goal) == oracle(net, goal), (case, goal)
+
+
+def test_cheaper_by_the_measure_not_by_roads_and_empty_turns_move_the_prices():
+    base = [walk("t1", ["a", "b", "target"]), walk("t2", ["a", "b", "target"]), walk("t3", ["b", "x"])]
+    net = R.Network(base, R.SHARE)
+    assert net.route("target") == ["a", "b", "target"] and net.share(["a", "b", "target"]) == Fraction(8, 27)
+    assert net.share(["b", "target"]) == Fraction(2, 9) and not net.detours("target", ["a", "b", "target"])
+    tie = R.Network(base + [walk("e1", [])], R.SHARE)
+    assert tie.share(["a", "b", "target"]) == tie.share(["b", "target"]) == Fraction(1, 8)
+    assert tie.route("target") == ["a", "b", "target"]                   # a tie goes to the first in byte order
+    two = R.Network(base + [walk("e1", []), walk("e2", [])], R.SHARE)
+    assert two.route("target") == ["b", "target"] and two.share(["b", "target"]) == Fraction(2, 25)
+
+
+def test_zero_cost_cycles_give_a_simple_route_first_in_byte_order():
+    walks = [walk(f"t{i}", ["a", "b", "a", "c"]) for i in range(3)]     # every road walked by every turn: all cost nothing
+    net = R.Network(walks, R.SHARE)
+    assert all(k == 3 for k in net.k.values()) and net.share(["a", "b", "a", "c"]) == 1
+    assert net.route("c") == ["a", "c"] and net.route("b") == ["a", "b"]
+    assert net.route("a") == ["a"]
+
+
+# ------------------------------------------------------------------ exact, and the same bytes
+
+
+def test_the_same_bytes_whatever_order_or_context(tmp_path):
+    walks = [walk("t1", ["a", "b", "g"]), walk("t2", ["c", "b", "g"]), walk("t3", ["b", "g"]), walk("t4", ["b", "x"])]
+    out1, list_id, _ = experiment(tmp_path, walks, name="one.db")
+    out2, list_id2, _ = experiment(tmp_path, list(reversed(walks)), name="two.db")
+    assert list_id == list_id2
+    q = R.canonical({"v": 1, "repo": REPO, "list": list_id, "measure": {"name": "share", "version": 1},
+                     "goals": ["g", "x", "g", "b"]})
+    with R.open_store(out1) as s:
+        first = s.ask(q)
+    with decimal.localcontext() as ctx:   # the ambient context changed: the answer is not
+        ctx.prec, ctx.rounding = 5, decimal.ROUND_DOWN
+        with R.open_store(out2) as s:
+            assert s.ask(q) == first
+    answer = json.loads(first)
+    assert [a["goal"] for a in answer["answers"]] == ["g", "x", "g", "b"] and answer["answers"][0] == answer["answers"][2]
+    assert [d["attempt"] for d in answer["answers"][0]["route"]["detours"]] == ["t1", "t2"]
+    assert R.nats(Fraction(1, 2)) == "0.693147181" and R.nats(Fraction(1)) == "0.000000000"
+    near = (Fraction(10**20 + 1, 10**21), Fraction(10**20, 10**21))
+    assert float(near[0]) == float(near[1]) and near[0] != near[1] and R.cost(near[0])["num"] != R.cost(near[1])["num"]
+
+
+# ------------------------------------------------------------------ a detour is real
+
+
+def test_detours_with_a_shared_road_and_a_repeated_file_are_kept_and_checked(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "b", "target"]), walk("t2", ["a", "b", "a", "b", "target"]),
+                                            walk("t3", ["b", "target"]), walk("t4", ["b", "target"]),
+                                            walk("t5", ["b", "target"])])
+    r = route_of(ask(out, ["target"], list_id))
+    assert r["paths"] == ["b", "target"]
+    assert {d["attempt"]: d["paths"] for d in r["detours"]} == {"t1": ["a", "b", "target"],
+                                                                "t2": ["a", "b", "a", "b", "target"]}
+    with R.open_store(out) as s:
+        assert s.check() > 0
+
+
+@pytest.mark.parametrize("tamper", [
+    "UPDATE detour SET visit = visit + 1",
+    "UPDATE detour SET attempt = 't3'",
+    "UPDATE detour SET way = '[\"b\",\"target\"]'",
+    "UPDATE detour SET num = '1', den = '1'",
+    "UPDATE generator SET ref = '[\"target\",\"t9\"]' WHERE kind = 'detour'",
+    "UPDATE goal SET route = '[\"a\",\"b\",\"target\"]' WHERE path = 'target'",
+    "UPDATE composite SET recipe = '[\"then\",0,[]]' WHERE dim = 1 AND rowid = 1",
+    "DELETE FROM detour WHERE attempt = 't1'",
+    "UPDATE walk SET body = CAST(replace(CAST(body AS TEXT), '\"a\"', '\"c\"') AS BLOB) WHERE attempt = 't1'",
+], ids=["visit", "turn", "way", "saving", "generator", "route", "recipe", "a lost detour", "a walk"])
+def test_a_tampered_store_fails_its_check(tmp_path, tamper):
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a", "b", "target"]), walk("t2", ["b", "target"]),
+                                      walk("t3", ["b", "target"])])
+    db = sqlite3.connect(out)
+    db.execute(tamper)
+    db.commit()
+    db.close()
+    with pytest.raises(R.IntegrityError), R.open_store(out) as s:
+        s.check()
+
+
+def test_the_kernel_refuses_a_detour_whose_ends_do_not_meet():
+    cat = NCat(budget_bytes=1 << 24)
+    start, a, b, c = (cat.object() for _ in range(4))
+    to_b, to_c = cat.generator(start, b), cat.generator(start, c)
+    with pytest.raises(NCatError):
+        cat.generator(to_b, to_c)
+
+
+# ------------------------------------------------------------------ what is not there is said
+
+
+def test_each_kind_of_absence_in_its_precedence(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["only-failed"], standing="failed")])
+    answer = ask(out, ["only-failed", "nowhere"], list_id)
+    assert answer["taught"] == 0
+    assert [a["none"] for a in answer["answers"]] == ["no_history", "no_history"]
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"]), walk("t2", ["u"], standing="passed_unverified")],
+                                 name="two.db")
+    answer = ask(out, ["nowhere", "u", "a"], list_id)
+    assert [a.get("none") for a in answer["answers"]] == ["never_named", "not_taught", None]
+
+
+def test_a_kernel_refusal_is_said_with_its_code(tmp_path):
+    walks = [walk(f"t{i}", [f"p{j}" for j in range(i, i + 12)] + ["goal"]) for i in range(6)]
+    found = None
+    for budget in range(20_000, 400_000, 4_000):   # just enough for the cells every goal needs, not for every route
+        try:
+            out, list_id, _ = experiment(tmp_path, walks, budget=budget, name=f"b{budget}.db")
+        except NCatError:
+            continue
+        with R.open_store(out) as s:
+            refused = [g for (g,) in s._db.execute("SELECT path FROM goal WHERE code IS NOT NULL")]
+            assert s.check() > 0   # a refusal replays as a refusal
+        if refused:
+            found = (out, list_id, refused[0])
+            break
+    assert found, "no budget refused a goal while the build stood"
+    out, list_id, goal = found
+    (a,) = ask(out, [goal], list_id)["answers"]
+    assert a["none"] == "refused" and a["code"] == -10 and a["reason"]
+
+
+# ------------------------------------------------------------------ a question is the store's
+
+
+def test_a_question_of_another_list_repository_or_measure_is_refused_not_answered(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    ask(out, ["a"], list_id)
+    for change in ({"list": "0" * 64}, {"repo": "9" * 40}, {"measure": {"name": "ship-share", "version": 1}},
+                   {"measure": {"name": "share", "version": True}}, {"goals": ["a b"]}, {"v": 2}):
+        q = {"v": 1, "repo": REPO, "list": list_id, "measure": {"name": "share", "version": 1}, "goals": ["a"], **change}
+        with pytest.raises(R.Refused), R.open_store(out) as s:
+            s.ask(R.canonical(q))
+
+
+# ------------------------------------------------------------------ the store is the store
+
+
+def test_a_failed_build_leaves_the_old_file_and_a_good_one_replaces_it(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "b"])])
+    before = out.read_bytes()
+    with pytest.raises(NCatError):
+        experiment(tmp_path, [walk("t2", ["c", "d"])], budget=64)   # too small for the start: the build stops
+    assert out.read_bytes() == before
+    assert not [p for p in tmp_path.iterdir() if ".tmp-" in p.name]
+    experiment(tmp_path, [walk("t3", ["e"])])
+    with R.open_store(out) as s:
+        assert [a["route"]["paths"] for a in json.loads(s.ask(R.canonical(
+            {"v": 1, "repo": REPO, "list": s.list, "measure": {"name": "share", "version": 1}, "goals": ["e"]})))["answers"]] \
+            == [["e"]]
+
+
+def test_nothing_in_recall_reads_the_route_store():
+    engram = Path(R.__file__).resolve().parent
+    readers = [p.name for p in engram.glob("*.py") if p.name != "ncat_routes.py" and "ncat_routes" in p.read_text()]
+    assert readers == []

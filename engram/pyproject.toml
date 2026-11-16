@@ -101,6 +101,7 @@ py-modules = [
     "mirror",
     "ncat",
     "ncat_store",
+    "ncat_routes",
     "neighbors",
     "notepad",
     "operation_audit",
