@@ -1,210 +1,286 @@
 # v2: walks into roads, and a route back
 
-Tardis, 2026-11-16, revision 1, not yet read. The store's side of
-`docs/superpowers/specs/2026-11-16-v2-a-route-offered.md` ("the room's spec" below, revision 3 at 94d7027b),
-which fixes what the room writes and what it needs back (its sections 1, 2, 3 and 8). This spec says how a
-walk becomes cells, which walks may teach, what a road costs, what a route and a detour are, and what the
-answer holds. It builds on the n-category store (`2026-11-07-ncat-store.md`) and its kernel
-(`2026-11-07-ncat-kernel.md`), and states the detour rule that spec left to "stage 4". It needs a fresh reader
-of the other family, like any spec.
+Tardis, 2026-11-16, revision 2. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
+("the room's spec" below, at 487f44bb), which fixes what the room writes, the list's form, and what the room
+needs back (its sections 1, 2, 3 and 8). This spec says how a walk becomes cells, which walks may teach, what a
+road costs, what a route and a detour are, how the store is built and checked, and what the answer holds. It
+builds on the n-category store (`2026-11-07-ncat-store.md`) and its kernel (`2026-11-07-ncat-kernel.md`), and
+states the detour rule that spec left to "stage 4".
+
+A fresh reader of the other family (w45) approved revision 1 with seven named changes. All seven are made
+here; the last section says where.
 
 ## What is asked
 
 1. **Read the room's walk files,** each checked against the list that says which turns may teach.
-2. **Keep their roads as cells,** on the kernel, in a file that is derived and disposable.
+2. **Keep their roads, routes and detours as cells,** on the kernel, in a file that is derived, rebuilt whole,
+   and read only once built.
 3. **Answer a route,** for each file the room asks for, in the order asked, with the same bytes on any machine.
-4. **Name the detours,** each kept as a cell the kernel checked, so that a route is shown to be a rewriting of
-   ways turns really went.
+4. **Name a turn for every road and every detour,** so that a route is shown to be stitched from ways turns
+   really went.
 
 ## Not asked
 
-- **An estimate.** The search is the cheapest way with no estimate of the distance left (the room's spec,
-  "Not asked").
+- **An estimate.** The search is the cheapest way with no estimate of the distance left.
 - **A tour.** A route to each goal on its own, in the order asked. Nothing joins two goals.
-- **Names across machines.** A path means a path in one repository. Two repositories' walks never share a
-  cell.
+- **Names across machines.** A path means a path in one repository. A store holds one repository.
 - **Recall.** Nothing in Engram's recall reads this. It answers the room, and nothing else.
-- **Text.** The store reads paths, blob hashes, counts and times. It reads no message, prompt, command or
-  output, and the walk file has no field that could carry one.
+- **Text.** The store reads paths, blob hashes, ids, counts and times. The walk file has no field that could
+  carry a message, prompt, command or output.
 
-## 1. The walk file
+## 1. One rule for a plain path
 
-JSON Lines: one walk on each line, as `yak item walks <item> --json` writes it (the room's spec, section 1).
-Every field is required; a part the room did not record is `null`, never left out and never 0.
+The room's, exactly (`v2/crates/room/src/walk.rs`, `plain_path`): 1 to 512 bytes; each byte an ASCII letter or
+digit, or one of `_ . / -`; not starting with `/`; and no part between slashes that is empty, `.` or `..`.
+It is applied to every named path, every changed path and every goal. One rule, so that the store never answers
+with a path the room would refuse to render. Its version is 1, and the answer names it.
+
+## 2. The walk file
+
+JSON Lines: one walk on each line, as the room writes it (the room's spec, section 1). Under a list, a walk
+file holds one walk and no more. Every field is required; a part the room did not record is `null`, never
+left out and never 0.
 
 | Field | Type | What |
 | --- | --- | --- |
 | `v` | 1 | this format's number |
 | `source` | `"room"` or `"ship"` | a turn of the room, or a ship's own record of files it named |
-| `repo` | 40 or 64 hex | the repository's root commit, so that the same repository has the same id on any clone |
-| `base` | 40 or 64 hex | the commit the turn's sandbox was made from |
-| `item`, `attempt` | the room's ids | |
-| `family` | the room's family name | `claude`, `codex`, `script`; never a worker's own name |
+| `repo` | 40 or 64 lowercase hex | the repository's id: of its root commits that the turn's base reaches, the first in byte order (the room's spec, section 3) |
+| `base` | 40 or 64 lowercase hex | the commit the turn's sandbox was made from |
+| `item`, `attempt` | the room's ids | an attempt names a turn, once, everywhere |
+| `family` | the room's family word | never a worker's own name |
 | `verdict` | `"passed"`, `"failed"` or `null` | whether the turn's commit passed its frozen check; `null` when the check could not run |
-| `standing` | `"passed_verified"`, `"passed_unverified"`, `"failed"` or `"unjudged"` | how the room classes the turn when it writes the file; a ship's walk is `"unjudged"` |
+| `standing` | `"passed_verified"`, `"passed_unverified"`, `"failed"` or `"unjudged"` | how the room classed the turn when it wrote the file; a ship's walk is `"unjudged"`, and only a ship's |
 | `steps` | list | in order of `seq` |
 | `changed` | list of `[path, "added" \| "changed" \| "removed"]` | the paths the turn's commit changed, in the order recorded |
 
 A step is an object: `seq` (a positive integer, increasing), `tool` (the room's tool word), `ok` (true or
 false), `named` (a list of `[path, blob]` in the order named, possibly empty), `seen_ms`, `result_ms`,
-`tokens_in`, `tokens_out` (each an integer or `null`). A step of an older store, which had one target and no
-list, is written with that one file as its list.
+`tokens_in`, `tokens_out` (each a non-negative integer or `null`). A step of an older store, which had one
+target and no list, is written with that one file as its list.
 
-**Refused, the whole file with it:** a field missing, unknown, or of another type; a `seq` that does not
-increase; a path that is not plain (not empty, not absolute, no `.` or `..` part, no empty part, no control
-character, no backslash); a blob that is not 40 or 64 lowercase hex; a line longer than 1 MiB. The refusal
-names the line and the field, and never repeats a value. Nothing is dropped silently: a failed step and a
-failed turn are read, and kept as what they are.
+**Refused, the whole file with it:** a field missing or unknown, or of another type; a word outside its
+vocabulary; a `seq` that does not increase; a path the rule refuses; a blob that is not 40 or 64 lowercase hex;
+a line longer than 1 MiB; bytes that are not UTF-8. The refusal names the file, the line and the field by
+its place in this schema (a step by its index), and never repeats a value or an unknown key. Nothing is dropped
+silently: a failed step and a failed turn are read and kept as what they are.
 
-## 2. Which walks teach
+## 3. Which walks teach
 
-**An experiment's store is built from a list** (the room's spec, section 3), and from nothing else. The store
-reads the list, which names each walk file's SHA-256, and checks each file it is given against it: the
-file's bytes hash to an entry; no entry is given twice; the file's `repo`, `base`, `item`, `attempt` and
-`standing` are the entry's; its `source` is `"room"`. Anything else stops the build and is named. The list's
-own SHA-256 is written into the store and into every answer.
+**An experiment's store is built from a list,** whose form is the room's (its section 3): one JSON object, keys
+sorted, no spaces, UTF-8, with `v` 1, `repo`, `measure` (`name`, `version`), and `turns` sorted by `attempt`,
+each with `attempt`, `item`, `base`, `standing` and `sha256`. The store reads the list's bytes as given, keeps
+them, and takes the list's id as their SHA-256.
 
-**The measure says which standings teach.** This spec defines one, `share`, version 1, which lets only
-`"passed_verified"` teach. A turn of another standing is read, its walk kept, and counted apart as *not
-taught*; it makes no road and enters no count. Only its paths are kept, so that a file it alone named is told
-apart from one nobody named (section 5).
+**The build refuses, before any cell is made,** each by name: a list that is not in that form, or not sorted,
+or names an attempt twice; a measure this store does not have (section 5); a file given whose bytes hash to no
+entry, or to an entry already given; a listed entry with no file given; a file holding more than one walk;
+a walk whose `attempt`, `item`, `base` or `standing` differ from its entry's, whose `repo` differs from the
+list's, or whose `source` is not `"room"`. So every listed turn is in the store once, and nothing else is: a
+missing turn would change `N`, and with it every price.
 
-**A ship's walks are kept apart as unjudged** (the lead's question: 239 session records, 626 roads on the
-Mac). They are built only into a store of their own, with no list, whose answers say `"list": null` and
-`"for_experiment": false`. No experiment's store reads a ship's walk: the list check refuses one.
+**What the store can and cannot check.** It checks a frozen snapshot: the files it is given against the list
+it is given. If a listed turn's standing changes in the room after the list is made, an export written again
+fails its hash, and is refused here; the old export, given again, still matches, and is caught by the room's
+own check against its store before any offer (the room's spec, section 3). That check is the room's, and this
+store does not claim it.
 
-## 3. The cells
+**A ship's walks are kept apart.** They build only a store with no list, under the ship measure of section 5,
+whose answers say `"list": null` and `"for_experiment": false`. An experiment's build refuses a ship's walk
+wherever it is in a file. No answer of a ship's store can carry an experiment's list or measure.
 
-All of it lives on the kernel, in one category per store.
+## 4. The cells
 
-- **0-cells.** One 0-generator for the start, where every turn begins, and one for each path any read walk
-  named. The start is not a path: no path can name it, and the answer writes it as `null`.
+All of it lives on the kernel, in one category per store, with the store's budget (128 MiB) and the kernel's
+default work limit.
+
+- **0-cells.** One 0-generator for the start, where every turn begins, and one for each path a taught walk
+  visited. The start is not a path: no path can name it, and the answer writes it as `null`.
 - **A visit.** A taught walk's visits are its steps' `named` lists, joined in step order and the order named,
   with a repeat of the visit just before dropped. A file read and then edited is one visit; a file left and
-  come back to is two. A walk that named nothing has no visits.
+  come back to is two. A walk that named nothing has no visits, and still teaches: it counts in `N`.
 - **A road, a 1-generator.** The start to a walk's first visit, and each visit to the next. One generator for
-  each ordered pair any taught walk walked, however often. There is no road from a file to itself.
-- **A walk's way to a file, a 1-cell.** The composite of its roads from the start up to the file's first
-  visit, in order, each road as often as it was walked. Two turns that walked alike have the same cell; they
-  are still two turns in every count.
-- **A route, a 1-cell.** The composite of the roads section 5 chooses.
-- **A detour, a 2-generator,** from a walk's way to the route to the same file (section 6). The kernel
-  refuses one whose two sides do not start and end at the same 0-cells, so a detour whose ends do not meet
-  cannot be kept.
+  each ordered pair any taught walk walked. There is no road from a file to itself.
+- **A turn's way to a file, a 1-cell.** The composite of its roads from the start up to the file's first visit,
+  in order, each road as often as it was walked there. It may pass a file twice; the kernel keeps each
+  occurrence as its own element, so it is still a cell.
+- **A route, a 1-cell,** the composite of the roads section 6 chooses.
+- **A detour, a 2-generator,** from a turn's way to the route to the same file (section 7).
 
-**Counts.** For each road, the number of taught turns that walked it, each turn once. `N` is the number of
-taught turns in the list, whether or not they named anything.
+**Counts.** For each road, `k`: the taught turns that walked it, each turn once however often. `N`: the taught
+turns on the list, whether or not they named anything. Two turns that walked alike are one cell and two turns.
 
-**The file** is the store's (`2026-11-07-ncat-store.md`): generators, composites by recipe, and a check that
-rebuilds each key through the kernel and refuses a mismatch. Two tables are added: `walk` (attempt, item,
-family, standing, taught, the file's SHA-256) and `detour` (the 2-generator's key, the turn, the goal, the
-visit). It is rebuilt whole from the list and its files, and renamed into place.
+**Paths only untaught walks named** are kept in a table, not as cells, so that section 6 can tell a file no
+walk named from one only an untaught walk named.
 
-## 4. The measure: `share`, version 1
+## 5. The measures
 
-- **A road's share** is `k / N`: `k` taught turns walked it, of `N`.
-- **Its cost** is `−ln(k / N)`. A road every taught turn walked costs nothing; one walked by a single turn of
-  many costs the most.
-- **A way's cost** is the sum of its roads' costs, a road walked twice counted twice. So a way's cost is
-  `−ln` of the product of its roads' shares.
-- **Compared exactly.** One way is cheaper than another when the product of its shares is strictly larger.
-  The store compares the products as exact fractions, never as floating-point sums, so no machine's
-  logarithm decides an answer.
-- **Written exactly.** A cost is given as the product, `num` and `den` in lowest terms, and beside it `nats`:
-  `−ln` of that fraction, worked in Python's `decimal` at 34 digits (correctly rounded on every machine)
-  and quantized to 9 places, as a string. `nats` is for reading; the fraction decides.
-- **Longer can be cheaper.** Under a price by share, a way of three well-walked roads can cost less than a
-  way of two seldom-walked ones (the room's spec, section 8's third row). The answer gives the cost and,
-  apart from it, the number of roads. The number decides nothing.
+**`share`, version 1,** for an experiment's store. It lets `"passed_verified"` teach, and nothing else.
 
-## 5. A route
+- **A road's share** is `k / N`. **Its cost** is `−ln(k / N)`: a road every taught turn walked costs nothing,
+  and one walked by a single turn of many costs the most.
+- **A way's cost** is the sum of its roads' costs, a road walked twice counted twice, so it is `−ln` of the
+  product of its roads' shares.
+- **Compared exactly.** One way is cheaper than another when the product of its shares is strictly larger,
+  compared as exact fractions, never as floating-point sums.
 
-**The question,** one JSON object: `v` 1, `repo`, the list's SHA-256 (or `null` for a ship's store), and
-`goals`, a list of plain paths, in the room's order.
+**`ship-share`, version 1,** for a ship's store only. It lets `"unjudged"` walks of `source` `"ship"` teach,
+by the same formula over that population. It is observational: a way to try the store on real walks, never an
+experiment's measure.
 
-**The answer,** one JSON object, written with its keys sorted, no spaces, and UTF-8, so that the same store
-and the same question give the same bytes on any machine:
+**What a measure is not** (w45's C1). `k / N` is an unconditional share of turns, not a probability of going
+from one file to the next, and a product of shares is not the probability that a turn walked a whole route.
+So:
 
-- `v`, `repo`, `list`, `for_experiment`, the measure (`name`, `version`, the standings that teach), `taught`
-  (`N`), and `answers`: one for each goal, in the order asked, a goal asked twice answered twice.
-- **A route:** `paths` (the files after the start, in order, ending at the goal); `roads` (for each, `from`,
-  `to`, and `turns`, its `k`; `from` is `null` for the start); `cost`; `roads_n`; `blobs` (for each path on
-  the route, every blob taught walks saw it at, sorted, so the room can mark a file changed since or gone);
-  and `detours` (section 6).
-- **The cheapest way.** Of all ways from the start to the goal along roads, with no file twice, the one whose
-  cost is least. Of ways that cost the same, the one whose list of paths is first in byte order, a shorter
-  list first where one begins the other. Found by a search over exact fractions; a test checks it against
-  every simple way, on walks drawn at random.
-- **No route, said as one of four:**
-  - `"no_history"`: the list teaches no turn (`N` is 0).
-  - `"never_named"`: no walk in the store named the file, as with a file a turn added.
-  - `"not_taught"`: only walks that do not teach named it.
-  - `"refused"`: the kernel refused a cell the answer needed, with the kernel's reason. No route is made of
-    what was left.
-  A taught walk that named the file always gives a way to it, so there is no fifth kind.
+- **Turns that named nothing move the prices.** With two walks of start, a, b, target and one of start, b, x,
+  the three-road way wins (8/27 against 2/9); add one taught turn that named nothing and the two tie at 1/8;
+  add two and the two-road way wins (2/25 against 8/125). A worker that names little changes every route.
+- **A worker's order of naming lays roads.** A step that named three files makes two roads between them, in
+  the order named, though they may have been read at once. A worker can lay adjacencies by naming, and several
+  verified turns can raise a road's support. Passing a frozen check admits a turn; it does not make its order
+  necessary, causal, useful or candid.
+- **Costs move every way as the history grows.** A cost can stay at nothing, stay the same, rise or fall as `k`
+  and `N` change. An answer is of one list, named by its hash, and is never compared with another list's.
 
-## 6. A detour
+## 6. A route
 
-For each taught turn that visited the goal, its way to the goal's first visit is set beside the route.
+**The question,** one JSON object: `v` 1; `repo`; `list` (the list's id, or `null` for a ship's store);
+`measure` (`name`, `version`); and `goals`, a list of paths, in the room's order.
 
-- **A detour** is a way that costs strictly more than the route. The answer names the turn (`item`,
-  `attempt`, `family`), `visit` (how far along its visits the goal first came, from 1) and `seq` (that
-  step's), and the way: its `paths`, `cost` and `roads_n`. A way that costs the same or less is not a detour,
-  and is not named.
-- **Kept as a cell.** Each detour is a 2-generator from the way to the route, kept in the store's file and
-  read back by its key. The store refuses to keep one, by name, when the way is not a taught turn's way, when
-  either side uses a road no taught turn walked, when the way is no dearer, or when the two sides do not
-  meet (the kernel's own refusal of a generator between cells that are not parallel).
-- **Stitched, and said so.** A route can be walked whole by no turn. The answer does not say otherwise: each
-  road carries its own count, and only those.
+**Refused as a whole, with no answer and a named reason,** distinct from any no-route answer: a question not in
+that form; a goal the path rule refuses; a `repo`, `list` or `measure` that is not the store's. A consumer that
+runs an experiment also requires `for_experiment: true`, and the list and measure it pinned.
 
-## 7. What it doesn't do, and what it accepts
+**The answer** (section 8 gives its bytes): `v` 1; `repo`; `list`; `for_experiment`; `measure` (`name`,
+`version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
+`answers`, one for each goal, in the order asked, a goal asked twice answered twice.
 
-- **No filling in.** A step with no named file adds no visit, and a turn whose files are all outside the
-  repository has no roads. The room's spec measures how little the first pilot named (103 of 244 steps).
-- **Order within a step is the order named.** A step that named three files makes two roads between them,
-  though the worker may have read them at once. That is what was recorded, so it is what counts.
-- **The blob is evidence, not identity.** Routing is by path. A file whose contents changed between two
-  turns' bases is one 0-cell; `blobs` says it was seen at two versions.
-- **Costs grow with the history.** `N` grows as turns are taught, so every cost moves. An answer is of one
-  list, named by its hash, and is never compared with an answer of another.
-- **Size.** The first pilot's walks made 16 files and 50 roads. Nothing here needs more than thousands of
-  cells, well inside the store's budget of 128 MiB.
+**Each goal, in this order of precedence:**
 
-## 8. How we know it is done
+1. `{"goal", "none": "no_history"}` when `N` is 0, whatever the goal.
+2. `{"goal", "none": "never_named"}` when no walk in the store named it, as with a file a turn added.
+3. `{"goal", "none": "not_taught"}` when only untaught walks named it.
+4. `{"goal", "none": "refused", "code", "reason"}` when the build recorded a kernel refusal for this goal's
+   route or a way to it (section 7), with the kernel's code and its words.
+5. Otherwise a route: `{"goal", "route"}`, where `route` has `paths` (the files after the start, in order,
+   ending at the goal); `roads`, in route order, each with `from` (`null` for the start), `to`, `turns` (its
+   `k`) and `witness` (the `attempt` of a taught turn that walked it: the first in byte order); `cost`;
+   `roads_n`; `blobs` (for each path on the route, every blob taught walks saw it at, sorted); and `detours`
+   (section 7).
 
-Each row has a case that must pass and a case that must be refused. The rows of the room's spec that rest on
-the store (its second to seventh) are here too, by the store's side of them.
+A taught walk that visited the goal always gives a way to it, so a goal past the first three has a route or a
+recorded refusal.
 
-| What | Shown by |
-| --- | --- |
-| A walk file is read as written | Every field read back, on a step that named three files, a step that named none, an older store's one-target step, and a failed turn. Refused, each by name and with no value repeated: a field missing, an unknown field, a `seq` that goes back, a path with `..`, a blob of 39 hex, a line over 1 MiB. A marker planted in a field's place is in no store, answer or log |
-| Only listed turns teach | Refused, each by name: an unlisted file, an entry given twice, a wrong hash, another repository's walk, a ship's walk, a standing other than the list's. A passed but unverified turn is kept and in no count |
-| A ship's store is apart | Built from ship walks with no list: `for_experiment` false and `list` null in every answer. Given to an experiment's build, a ship's walk is refused |
-| Visits and roads | Read then edit of one file is one visit; a file left and come back to is two; a step's three files make two roads; a road walked twice by one turn counts once; two turns that walked alike count two and share one cell |
-| A route is stitched, and the cheapest | Walks start, a, b, target and start, b, x: the route to target is start, b, target, two roads walked whole by neither, and the first walk's way is a detour. A search written apart, over every simple way, agrees on this and on 1,000 sets of walks drawn at random |
-| Cheaper by the measure, not by roads | Walks start, a, b, target twice and start, b, x once: the three-road way is the answer, with its cost and three roads, and no detour is named |
-| Exact, and the same bytes | Two ways of equal cost: the one first in byte order, on two machines, byte for byte. Two products that agree to 15 digits as floats and differ as fractions are told apart |
-| A detour is real | One kept and read back by its key. Refused, by name: a way no taught turn went, a road no taught turn walked, a way no dearer, sides that do not meet |
-| What is not there is said | Each told from the others: no history; a file no walk named; a file only an untaught turn named; a kernel refusal with its reason, forced through the kernel's budget |
-| The store is the store | It rebuilds whole and renames into place; its check rebuilds each key through the kernel; nothing in Engram's recall reads it |
+**The cheapest way.** Of all ways from the start to the goal along roads, with no file twice, the one whose
+cost is least. Of ways that cost the same, the one whose list of paths is first in byte order, a shorter list
+first where one begins the other. A road can cost nothing, so cycles of no cost exist; the rule is over simple
+ways, and a search that stops at the first way found, or settles a file by cost alone, is not this rule. The
+builder's search is checked against every simple way.
+
+## 7. Detours, built with the store
+
+**When.** Every route and detour is made while the store is built, never while it answers. For each path a
+taught walk visited, in byte order: its route; then, for each taught turn that visited it, in byte order of
+`attempt`, that turn's way to its first visit. Where the way costs strictly more than the route, a detour is
+made: a 2-generator from the way to the route. A query reads a finished file and makes no cell.
+
+**The fixed order of cells,** so that every key is the same on every machine: the start; the paths in byte
+order; the roads in byte order of (`from`, `to`), the start before any path; then, path by path as above, its
+route, then each turn's way and detour. Two generators with the same boundaries are two cells, which is why
+the order is fixed.
+
+**A detour in the answer** names the turn (`attempt`, `item`, `family`), `visit` (how far along its visits the
+goal first came, from 1) and `seq` (that step's), and its way: `paths`, `cost`, `roads_n`. Detours are sorted
+by `attempt`. A way that costs the same or less is not a detour, and is not named.
+
+**Refused, never dropped.** The inherited store drops a refused session and keeps the rest; this one does not.
+If the kernel refuses a goal's route, a way to it, or a detour, that goal answers `refused` with the kernel's
+code, and the refusal is recorded in the file. If it refuses a 0-generator or a road, the build stops, the old
+file stays, and the build says so: it is never served as the new list's.
+
+**The check.** The store's check rebuilds every cell through the kernel in the fixed order and compares keys,
+as the inherited store does, and then checks what a key cannot: each detour's source is its turn's way to its
+goal's first visit, recomputed from the walk; its target is the goal's route, recomputed; its `visit` and
+`seq` are the walk's; every road of both sides was walked by a taught turn; and the way costs strictly more,
+exactly. The counts, witnesses and refusals are recomputed and compared too. A right key with a wrong witness
+is damage.
+
+**What a detour shows, and no more.** The kernel checks that its two sides start and end at the same 0-cells,
+and keeps it in the category's structure. That the way was walked, that the route is cheaper and that it is
+the cheapest are the store's checks. None of it shows that the stitched way was walked whole, that it is a
+better way to do the work, or that it beats a table that made the same offer.
+
+## 8. The answer's bytes
+
+- **Canonical JSON:** keys sorted, `,` and `:` with no spaces, ASCII with `\u` escapes, integers as JSON
+  integers, one newline at the end, nothing else. Every list's order is fixed above; none follows the order
+  files were read in.
+- **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each a string of decimal
+  digits (they can outgrow any fixed-width integer); and `nats`, for reading.
+- **`nats`** is worked in a fresh `decimal.Context(prec=34, rounding=ROUND_HALF_EVEN)`: `x = Decimal(num) /
+  Decimal(den)`, then `−x.ln()`, then quantized to 9 places with `ROUND_HALF_EVEN`, and written in fixed point
+  with exactly 9 decimals (`format(q, 'f')`, so nothing is `0E-9`), with no sign when it is zero. It is a
+  reproducible approximation for reading, not a certified rounding of the real logarithm.
+  The fraction decides.
+
+## 9. What it doesn't do, and what it accepts
+
+- **No filling in.** A step with no named file adds no visit. The room's spec measures how little the first
+  pilot named (103 of 244 steps).
+- **The blob is evidence, not identity.** Routing is by path. A file whose contents changed between two turns'
+  bases is one 0-cell; `blobs` says it was seen at two versions.
+- **Size.** The first pilot's walks made 16 files and 50 roads. Building every route and detour at build time is
+  one search per visited path; nothing here needs more than thousands of cells, inside the 128 MiB budget.
+
+## 10. How we know it is done
+
+Each row names what a right store does, and what a wrong one would do that its test catches.
+
+| What | Shown by | A wrong store caught |
+| --- | --- | --- |
+| The path rule | Accepted: a 512-byte path, `a/b-c_d.e`. Refused: 513 bytes, a space, a quote, `é`, a leading `/`, `a//b`, `./a`, `a/..`, an empty path | One that accepts any of these, as revision 1's rule did |
+| A walk file is read as written | Every field read back, on a step that named three files, a step that named none, an older store's one-target step, and a failed turn | One that drops a list or a `null`, accepts an unknown key or a wrong type, or repeats a refused value or key; markers are planted as values, as unknown keys and in unparsable lines, and are in no store, answer or log |
+| Only listed turns teach | A list built, its id in every answer | One that admits an unlisted file, a second copy of an entry, a two-walk file, a listed entry left out, another repository's walk, a ship's walk after a room line, a wrong standing, a wrong measure, or an unverified turn into `N` or `k`; and a re-exported file after a standing changes |
+| A ship's store is apart | A ship's store under `ship-share` gives one route that is not empty, `list` null and `for_experiment` false | One that lets a ship walk into an experiment's build, or an answer of a ship's store carry experiment flags |
+| Visits and roads | Read then edit is one visit; leave and come back is two; three files in one step make two roads; a road walked twice by one turn has `k` 1; two alike turns share one cell and count two; a taught turn that named nothing is in `N` | One that counts repeats as turns, collapses a real return, or leaves an empty taught turn out of `N` |
+| A route is stitched, and the cheapest | Walks start, a, b, target and start, b, x: the route to target is start, b, target, walked whole by neither, and the first walk's way is a detour kept and read back. A search written apart, over every simple way, agrees on fixed cases and on 1,000 sets drawn at random | One that returns the first walk's way, or a way that is not least, or the first way found |
+| Cheaper by the measure, not by roads | Two walks start, a, b, target and one start, b, x: the three-road way, at exactly 8/27 against 2/9, with no detour named. One empty taught turn ties them at 1/8, broken by byte order; two reverse it | One that picks by the number of roads, or compares floats |
+| Zero-cost cycles | Roads every taught turn walked, in a cycle: the route is simple, and first in byte order of the ways of least cost | One that loops, or settles a file by cost alone |
+| Exact, and the same bytes | The same store's answer, byte for byte, on two machines; with the files given in another order; with goals permuted and repeated; with several detours; under a changed ambient `decimal` context. `nats` of 1/2 is `0.693147181`. Two products equal as floats and different as fractions are told apart | One that follows read order, the ambient context, or float equality |
+| A detour is real | One with a shared final road, and one whose way passes a file twice, each kept and checked | One that keeps a way no taught turn went, a road no taught turn walked, a way no dearer, sides that do not meet, or a right key with a tampered turn, goal or visit |
+| What is not there is said | Each told apart and in precedence: no history, with a goal never named and one only untaught; a file no walk named; a file only an untaught walk named; a kernel refusal for a route and for a way, forced through the budget, with its code | One that conflates two kinds, or answers a route made of what was left |
+| A question is the store's | Answered when its `repo`, `list` and `measure` are the store's | One that answers a question of another list, repository or measure, or answers it as no route |
+| The store is the store | It rebuilds whole and renames into place; a failed build leaves the old file and says so; its check rebuilds every key and every witness; a recall run with this file present reads nothing of it | One that serves a partial or old file as the new list's, or accepts a damaged 2-cell recipe or witness |
 
 ## Decisions
 
-1. **The start is a 0-cell, written `null`,** because a repository may hold a file of any plain name (the
-   room's spec, section 2).
-2. **Routing is by path; blobs are evidence** (the lead's answer to Tardis's first question).
-3. **A step's whole `named` list makes visits,** not only its target (the lead's measurement: most looking is
-   by shell).
-4. **Only `"passed_verified"` teaches under `share` 1.** Another standing would be another measure, named and
-   versioned in the list.
-5. **Costs compare as exact fractions,** with `nats` for reading.
-6. **Ties break by byte order of the paths,** shorter first.
-7. **A ship's walks build only a store of their own.**
-8. **A detour is a 2-generator,** the rule the store spec left to stage 4: from a taught turn's way to a
-   strictly cheaper route between the same 0-cells.
+1. **One path rule, the room's** (C2).
+2. **The start is a 0-cell, written `null`,** because a repository may hold a file of any plain name.
+3. **Routing is by path; blobs are evidence** (the lead's answer to Tardis's first question).
+4. **A step's whole `named` list makes visits** (the lead's measurement: most looking is by shell).
+5. **`share` 1 lets only `"passed_verified"` teach; `ship-share` 1 lets only ship walks teach,** in stores of
+   their own (C3).
+6. **Costs compare as exact fractions;** `nats` is for reading, worked one fixed way (C5).
+7. **Ties break by byte order of the paths,** shorter first, over simple ways.
+8. **Every route and detour is made at build time,** in a fixed order, and a query makes no cell (C6).
+9. **Every road names a witness turn,** the first in byte order, beside its count (C4).
+10. **A detour is a 2-generator,** the rule the store spec left to stage 4: from a taught turn's way to a
+    strictly cheaper route between the same 0-cells. It shows that and no more.
 
 ## Left to the builder
 
-The command's name and flags; the store file's name; how the search is written, so long as it agrees with
-the search written apart; the order of work. Sections 1 to 6 and the rows of section 8 are fixed here.
+The command's name and flags; the store file's name and its new tables; how the search is written, so long as it
+agrees with the search written apart; the order of work. Sections 1 to 8 and the rows of section 10 are fixed
+here.
+
+## What the reader named, and where it is answered
+
+| Named change | Where |
+| --- | --- |
+| C1. State what the measure and a worker's order of naming mean | Section 5, "What a measure is not"; section 10, "Cheaper by the measure" |
+| C2. Use the room's exact path rule | Section 1; section 10, "The path rule" |
+| C3. Give ship trials a measure of their own | Sections 3 and 5; section 10, "A ship's store is apart" |
+| C4. Name a witness turn for every road | Section 6; section 7, "The check" |
+| C5. Finish the canonical answer and the decimal | Sections 6 and 8; section 10, "Exact, and the same bytes" |
+| C6. Say when detours are made, in what order, how they are checked, and that a refusal is said | Section 7; section 10, "A detour is real" and "The store is the store" |
+| C7. Fix admission: the list's form, every listed turn and no other, one repository, the question matched | Sections 2, 3 and 6, with the room's list form at 487f44bb; section 10, "Only listed turns teach" and "A question is the store's" |
