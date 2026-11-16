@@ -642,26 +642,23 @@ mod tests {
     }
 
     #[test]
-    fn normative_revision_three_answer_with_required_versions_converts() {
-        let bytes = include_bytes!("../tests/fixtures/store-route-r3/answer.json");
+    fn the_owners_normative_answer_converts_as_it_is() {
+        // The store's owner's own file, revision 4 of its spec, byte for byte: nothing is added to it here.
+        let bytes = include_bytes!("../tests/fixtures/store-route-r4/answer.json");
         assert_eq!(
             history::sha256(bytes),
-            "9ce7688766171ddb974889f59cd62e3003682ee4b4f65050b05cf8525681df16"
+            "0acb4f88e9b4f814ed86af6b03e6f55436a7f691c26063269b18e95eda7b0b33"
         );
         let question: history::Question = serde_json::from_slice(include_bytes!(
-            "../tests/fixtures/store-route-r3/question.json"
+            "../tests/fixtures/store-route-r4/question.json"
         ))
         .unwrap();
         let mut goals = goals(&["target.txt", "added.txt"]);
         goals.history = question.list.clone();
         goals.question = question;
-        let mut value: Value = serde_json::from_slice(bytes).unwrap();
-        // These are the owner's declared versions; the original fixture predates these two fields.
-        value["store"] = json!("1");
-        value["kernel"] = json!("511bacd017146586");
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("answer.json");
-        std::fs::write(&path, fixture_bytes(&value)).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let answer = read_answer(&path, &goals, &goals.question.repo).unwrap();
         let tree = BTreeMap::from([
             ("b.txt".into(), "5".repeat(40)),
