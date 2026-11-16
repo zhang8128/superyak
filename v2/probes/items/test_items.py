@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -705,7 +706,7 @@ class TheCheck(unittest.TestCase):
         cls.item = cls.f.entry("judged")
         cls.parent = git(cls.f.repo, "rev-parse", cls.f.toy.named["judged"] + "^").decode().strip()
 
-    def judged(self, commit, also=(), gone=False, path_first=None):
+    def judged(self, commit, also=(), gone=False, path_first=None, then=None):
         f = self.f
         where = tempfile.mkdtemp(dir=WORK, prefix="judged-")
         clone = os.path.join(where, "clone")
@@ -723,6 +724,8 @@ class TheCheck(unittest.TestCase):
             place(clone, path, git(f.repo, "cat-file", "blob", "%s:%s" % (self.item["base"], path)))
         if gone:
             shutil.rmtree(os.path.join(clone, ".git"))
+        if then:
+            then(clone)
         home = os.path.join(where, "home")
         os.mkdir(home)
         path = os.pathsep.join(([path_first] if path_first else []) + [os.path.dirname(PYTHON), GIT_ENV["PATH"]])
@@ -821,6 +824,26 @@ class TheCheck(unittest.TestCase):
     def test_a_checkout_that_is_not_a_repository(self):
         self.fails(self.item["reference"], "1: the checkout is not a git repository with a commit", gone=True)
 
+    def test_a_clone_in_which_what_changed_cannot_be_listed(self):
+        def lose_the_parents_tree(clone):
+            # The parent's commit stays, so that it is found and is an ancestor; its root tree, which only listing
+            # what changed reads, is taken away. Each object is made loose first, so that one can be taken.
+            objects = os.path.join(clone, ".git", "objects")
+            packs = os.path.join(objects, "pack")
+            moved = tempfile.mkdtemp(dir=WORK, prefix="packs-")
+            for name in os.listdir(packs):
+                os.rename(os.path.join(packs, name), os.path.join(moved, name))
+            for name in sorted(os.listdir(moved)):
+                if name.endswith(".pack"):
+                    with open(os.path.join(moved, name), "rb") as pack:
+                        git(clone, "unpack-objects", "-q", data=pack.read())
+            tree = git(clone, "rev-parse", self.parent + "^{tree}").decode().strip()
+            os.unlink(os.path.join(objects, tree[:2], tree[2:]))
+            self.assertEqual(git(clone, "cat-file", "-t", self.parent).decode().strip(), "commit")
+
+        self.fails(self.item["reference"], "1: cannot list what changed since the item's parent",
+                   then=lose_the_parents_tree)
+
     def test_a_git_committed_in_the_checkout_is_never_run(self):
         marker = os.path.join(WORK, "a committed git ran")
         turn = self.turn({"toy/src/judged.py": FIXED, "git": Exe(b"#!/bin/sh\necho ran > '%s'\nexit 0\n" %
@@ -842,7 +865,8 @@ class TheCheck(unittest.TestCase):
 
 
 class ItemJsonHeldToItsForm(unittest.TestCase):
-    """check.py given item.json files that the item-maker never writes: each is refused on one line."""
+    """check.py given item.json files that the item-maker never writes: each is refused on one line. The limits are
+    written out as numbers, not read from check.py, so that a limit changed there fails here."""
 
     GOOD = {"component": "toy", "parent": "a" * 40, "passed": 2, "skipped": 0, "source": "toy/src",
             "tests": [{"blob": "b" * 40, "path": "toy/tests/test_a.py"}]}
@@ -878,11 +902,10 @@ class ItemJsonHeldToItsForm(unittest.TestCase):
 
     def test_a_good_form_is_accepted_and_the_check_goes_on(self):
         for name, content in [("good", self.with_()),
-                              ("the most tests a count may say", self.with_(passed=check.MAX_COUNT,
-                                                                           skipped=check.MAX_COUNT)),
+                              ("the most tests a count may say", self.with_(passed=1_000_000, skipped=1_000_000)),
                               ("three test files", self.with_(tests=[{"blob": "b" * 40, "path": "toy/tests/t%d.py" % n}
                                                                      for n in range(3)])),
-                              ("an item of the largest size", self.with_().ljust(check.MAX_ITEM_BYTES)),
+                              ("an item of the largest size", self.with_().ljust(65536)),
                               ("a sha256 repository's ids", self.with_(parent="a" * 64, tests=[
                                   {"blob": "b" * 64, "path": "toy/tests/test_a.py"}]))]:
             with self.subTest(name):
@@ -924,8 +947,8 @@ class ItemJsonHeldToItsForm(unittest.TestCase):
             ("skipped below nothing", self.with_(skipped=-1), count % "skipped"),
             ("skipped 10**30", self.with_(skipped=10 ** 30), count % "skipped"),
             ("passed 10**30", self.with_(passed=10 ** 30), count % "passed"),
-            ("passed past the most", self.with_(passed=check.MAX_COUNT + 1), count % "passed"),
-            ("skipped past the most", self.with_(skipped=check.MAX_COUNT + 1), count % "skipped"),
+            ("passed past the most", self.with_(passed=1_000_001), count % "passed"),
+            ("skipped past the most", self.with_(skipped=1_000_001), count % "skipped"),
             ("passed NaN", self.with_()[:-1] + b', "passed": NaN}', strict),
             ("tests empty", self.with_(tests=[]), tests),
             ("four test files", self.with_(tests=[a_test(path="toy/tests/t%d.py" % n) for n in range(4)]), tests),
@@ -946,7 +969,7 @@ class ItemJsonHeldToItsForm(unittest.TestCase):
             ("a blob that is a number", self.with_(tests=[a_test(blob=7)]), blob),
             ("one test file twice", self.with_(tests=[a_test(), a_test()]),
              "0: .yak-check/item.json names one test file twice"),
-            ("past the largest size", self.with_().ljust(check.MAX_ITEM_BYTES + 1), unreadable),
+            ("past the largest size", self.with_().ljust(65537), unreadable),
         ]
         for name, content, says in cases:
             with self.subTest(name):
@@ -963,8 +986,35 @@ class ItemJsonHeldToItsForm(unittest.TestCase):
                 self.assertEqual((code, out), (1, ""))
                 self.assertTrue(err.startswith("FAIL 0: .yak-check/item.json is not a regular file"), err)
 
+    def test_a_nesting_the_parser_gives_up_on_is_not_strict_json(self):
+        # Python 3.9 gives up on "[" * 60000 at its recursion limit (about a thousand), as the case "nested past the
+        # stack" above shows. From 3.14 the parser's depth is bounded by the stack instead, and in a main thread
+        # 60000 is parsed to its end (a ValueError). Read in a thread of 4 MiB, the parser gives up on every version
+        # (3.15 at about 32,000), and the RecursionError it raises is also not strict JSON.
+        root = tempfile.mkdtemp(dir=WORK, prefix="form-")
+        place(root, ".yak-check/item.json", b"[" * 60000)
+        raised = []
+
+        def read():
+            try:
+                check.read_item(root)
+            except BaseException as error:  # noqa: B902 - whatever it is, the test says it
+                raised.append(error)
+
+        size = threading.stack_size(4 << 20)
+        try:
+            reader = threading.Thread(target=read)
+            reader.start()
+            reader.join()
+        finally:
+            threading.stack_size(size)
+        self.assertEqual([(type(error), str(error)) for error in raised],
+                         [(check.Fail, "0: .yak-check/item.json is not strict JSON")])
+
 
 class TheReport(unittest.TestCase):
+    """check.read_report. Its limit is written out as a number, so that a limit changed in check.py fails here."""
+
     def read(self, data):
         path = os.path.join(tempfile.mkdtemp(dir=WORK, prefix="report-"), "report.xml")
         with open(path, "wb") as out:
@@ -992,12 +1042,12 @@ class TheReport(unittest.TestCase):
             ("a count in words", self.suite("three")),
             ("a document type", b"<!DOCTYPE testsuite>" + self.suite()),
             ("a document type that declares an entity", b'<!DOCTYPE t [<!ENTITY a "1">]>' + self.suite()),
-            ("past the largest size", self.suite().ljust(check.MAX_REPORT_BYTES + 1)),
+            ("past the largest size", self.suite().ljust(16_777_217)),
         ]
         for name, data in cases:
             with self.subTest(name):
                 self.assertIsNone(self.read(data))
-        self.assertIsNotNone(self.read(self.suite().ljust(check.MAX_REPORT_BYTES)))
+        self.assertIsNotNone(self.read(self.suite().ljust(16_777_216)))
 
     def test_a_blob_id_is_gits_in_either_object_format(self):
         for form, parent in (("sha1", "a" * 40), ("sha256", "a" * 64)):
@@ -1072,6 +1122,80 @@ class TheTestsRun(unittest.TestCase):
         code, late = check.run_limited([sys.executable, "-c", "import time; time.sleep(30)"], WORK, {}, 0.5)
         self.assertTrue(late)
         self.assertLess(time.monotonic() - started, 10)
+
+
+class TheGitRun(unittest.TestCase):
+    """The words and the environment that check.py and items.py give git, as TheTestsRun shows the test runner's.
+    No filesystem monitor and no settings file of the machine's: neither shows in what a run of git here prints,
+    so each is shown by what git is given. A recorder stands in for subprocess.run; no git is run."""
+
+    def recorded(self, module, path, call):
+        calls = []
+
+        class Recorder:
+            DEVNULL, PIPE = subprocess.DEVNULL, subprocess.PIPE
+
+            @staticmethod
+            def run(argv, **how):
+                calls.append((argv, how))
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        real, before = module.subprocess, os.environ.get("PATH")
+        module.subprocess, os.environ["PATH"] = Recorder, path
+        try:
+            call()
+        finally:
+            module.subprocess = real
+            if before is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = before
+        return calls
+
+    def test_the_checks_git(self):
+        root = os.path.join(WORK, "a checkout")
+        calls = self.recorded(check, os.pathsep.join(["/opt/a/bin", "relative/bin", "", "/usr/bin"]),
+                              lambda: check.git(root, "rev-parse", "HEAD"))
+        self.assertEqual(calls, [(["git", "-c", "core.fsmonitor=false", "rev-parse", "HEAD"], {
+            "cwd": root, "env": {"PATH": os.pathsep.join(["/opt/a/bin", "/usr/bin"]),
+                                 "GIT_DIR": os.path.join(root, ".git"), "GIT_CONFIG_NOSYSTEM": "1"},
+            "stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL})])
+
+    def test_the_item_makers_git(self):
+        repo = os.path.join(WORK, "a repository")
+        calls = self.recorded(items, "/opt/a/bin:/usr/bin", lambda: items.Git(repo)(
+            "read-tree", "HEAD", data=b"given", env={"GIT_INDEX_FILE": "/an/index"}))
+        self.assertEqual(calls, [(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+                                   "-c", "i18n.commitEncoding=UTF-8", "-c", "core.autocrlf=false", "-C", repo,
+                                   "read-tree", "HEAD"], {
+            "input": b"given", "env": {"PATH": "/opt/a/bin:/usr/bin", "GIT_CONFIG_NOSYSTEM": "1",
+                                       "GIT_NO_REPLACE_OBJECTS": "1", "GIT_INDEX_FILE": "/an/index"},
+            "stdout": subprocess.PIPE, "stderr": subprocess.PIPE})])
+
+
+class ThePeerComponent(unittest.TestCase):
+    """items.py's table as the brief has its one entry: tests are peer/tests/test_*.py, source is
+    peer/superyak_peer/**, documents are docs/**, and the lock file is peer/uv.lock. Rules 2 and 3 tried on
+    changes alone, with no repository."""
+
+    @staticmethod
+    def sorted_out(*paths):
+        found = items.sort_out("peer", [items.Change("M", "100644", "b" * 40, path) for path in paths])
+        return found and tuple([change.path for change in part] for part in found)
+
+    def test_its_tests_source_and_documents(self):
+        meets = ["docs/a.md", "docs/deep/b.md", "peer/superyak_peer/a.py", "peer/superyak_peer/deep/er/b.py",
+                 "peer/tests/test_a.py"]
+        self.assertEqual(self.sorted_out(*meets), (["peer/tests/test_a.py"],
+                                                   ["peer/superyak_peer/a.py", "peer/superyak_peer/deep/er/b.py"]))
+        for other in ["peer/tests/helper.py", "peer/tests/conftest.py", "peer/tests/deep/test_b.py",
+                      "peer/test/test_c.py", "peer/test_d.py", "peer/superyak_peer_extra/c.py", "peer/pyproject.toml",
+                      "peer/uv.lock", "superyak_peer/a.py", "docs_extra/a.md", "toy/src/a.py"]:
+            with self.subTest(other):
+                self.assertIsNone(self.sorted_out(*meets, other))
+
+    def test_its_lock_file(self):
+        self.assertEqual(items.COMPONENTS["peer"]["lock"], "peer/uv.lock")
 
 
 class TheProgram(unittest.TestCase):
