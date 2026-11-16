@@ -501,6 +501,47 @@ fn check_refuses_every_admission_and_integrity_error_by_name() {
         v["turns"][0]["sha256"] = json!(history::sha256(&bytes))
     });
     refused(check(&out), "walk.store_mismatch");
+    // A plan that holds a room of another repository beside the right one is refused by the admission and by
+    // the ranker, as it is when a list is made.
+    let out = w.make(&plan, "other_room");
+    let mut other = World::new();
+    other.base = git(
+        &other.repo,
+        &[
+            "commit-tree",
+            &git(
+                &other.repo,
+                &["rev-parse", &format!("{}^{{tree}}", other.base)],
+                "",
+            ),
+        ],
+        "another root\n",
+    );
+    let elsewhere = other.item("beta");
+    other.finish(&elsewhere, 100, true, &[]);
+    let mut mixed = w.plan(std::slice::from_ref(&item));
+    mixed.items.push(PlanItem {
+        room: other.dir.clone(),
+        item: elsewhere,
+    });
+    refused(
+        history::check(&mixed, &out.join("history.json"), &out),
+        "another_repository",
+    );
+    refused(
+        history::goals(&mixed, &out.join("history.json"), "alpha"),
+        "another_repository",
+    );
+    history::check(&plan, &out.join("history.json"), &out).unwrap();
+    history::goals(&plan, &out.join("history.json"), "alpha").unwrap();
+    // The ranker holds the rooms to the list's repository, as the admission does: here the rooms are all of
+    // one repository and the list is of another. Its goals and its question would else be for the wrong one.
+    let out = w.make(&plan, "ranker_list_repo");
+    edit_list(&out, |v| v["repo"] = json!("f".repeat(40)));
+    refused(
+        history::goals(&plan, &out.join("history.json"), "alpha"),
+        "another_repository",
+    );
     let out = w.make(&plan, "changed_standing");
     w.room
         .record_recheck(&item, lease.lease_no, &w.verdict(false))

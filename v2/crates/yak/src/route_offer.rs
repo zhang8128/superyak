@@ -1084,6 +1084,13 @@ mod tests {
             std::fs::write(&path, bad.to_string()).unwrap();
             assert!(read_goals(&path).is_err(), "{pointer}");
         }
+        // A goal that is not a plain path is refused as that, and not only because the question's goals
+        // differ: here the question names the same goal.
+        let mut bad = valid.clone();
+        bad["goals"] = json!(["../MARKER"]);
+        bad["question"]["goals"] = json!(["../MARKER"]);
+        std::fs::write(&path, bad.to_string()).unwrap();
+        assert_eq!(read_goals(&path).unwrap_err().0, "goals.path");
         let mut at_limit = valid.clone();
         at_limit["ranker"] = json!("x".repeat(64));
         at_limit["chosen"] = json!(
