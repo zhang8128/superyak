@@ -1,6 +1,6 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 3. A change to the design of stage 2
+Serenity, 2026-11-16, revision 4. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
@@ -214,16 +214,61 @@ change.
   to one command of three crates, do not look like that. This is a change of the work the experiment is
   about, made for that reason, and not a result of the first pilot.
 
-**So the scored items, and the pilot's, come from the whole repository's waiting work,** taken in the order
-it was posted on the project's board, each with a check frozen beforehand by the other family, as the first
-design has it. The conclusion is then about that work, and not about work in general. What it costs is
-said below.
+**The project's board could not supply such work.** Read once, on 2026-11-16: 69 items waited on its two
+boards. By the lead's own pass about 20 are changes a frozen check could judge inside the room's jail. The
+rest are specs, work on a machine, decisions for a person, work that needs a browser, and faults whose
+text may not be published before they are fixed. The experiment's floor is 20 scored items with history
+items beside them, and each of those 20 would need its check written by hand.
 
-**The list of items is fixed before any route is looked at and before any measured turn:** the board as it
-stood at a stated time; every waiting item in the order posted; each one taken or left out, with the
-reason (no check can be frozen for it, it needs a person, it is not work on the repository); and which of
-those taken are history and which are scored, kept apart as the first design has them. Written down and
-hashed. No item is chosen, left out or reworded for how well a route might serve it.
+**So the items are made from the repository's own merged work.** A commit of the main branch is taken
+when all of these hold, by a program and not by eye:
+
+1. It is not a merge, and it lies between a stated first commit and a stated last one.
+2. It changes test files and source files of one component, and nothing outside that component but
+   documents. The first component is the peer, whose tests are the ones shown to run in the room.
+3. At most three test files and five source files; Python only; no test file that needs a browser.
+4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Both inside
+   the room's jail, within the check's limit.
+5. No commit taken earlier names one of its test files. Where two do, the earlier is the item.
+
+Measured on 2026-11-16 by the first three rules: 256 such commits for the peer since October. Of the ten
+most recent, all ten met the fourth, in 1 to 31 seconds each.
+
+**What such an item is.**
+
+- **Its base** is the commit's parent with the commit's test files laid over it, made as one commit.
+- **Its title** names those test files and asks that they be made to pass by changing the component's
+  code, and not the tests. It is the same sentence for every item. It never holds the commit's own first
+  line, which says what the fix was.
+- **Its check** runs those test files. The test files are among the check's own files, so the room, which
+  fails a commit that changes a check's file, fails a turn that changed a test.
+- **Its wrong commit** is the base with one unrelated file added. That shows the check is red on a change
+  that fixes nothing. It does not show the tests would catch a clever wrong fix; they are the tests the
+  project itself took.
+- **Its reference** is the commit's own source changes over the base, shown to pass before the item is
+  listed. No turn sees it: a sandbox holds only what its base reaches.
+
+**History and scored, by time.** The taken commits are put in the order they were made. A stated commit
+divides them: the earlier are history, the later are scored, and the pilot's three are the three just
+before the scored. So no turn is ever offered a way learned from a change made after its own. How many
+history items are run is fixed with the scored design, by its reader, with the pilot's results in hand.
+
+**What this narrows, said before any turn.**
+
+- **The tests are in the sandbox, and they point at the code.** This is the work of making failing tests
+  pass. There is less to find than when work begins from a report of a fault.
+- **Every turn is a turn of one worker program.** The tests were written by ships of one model family, and
+  the room gives an item only to a worker of another. So the network is made of one program's walks, many
+  times over, and not of two programs' together.
+- **One component of one repository.** The conclusion is about that work.
+- **It is work already done once.** The fix is in the project's public history after the base. A worker has
+  no network and its sandbox no later commit, and the models were made before these commits were.
+
+**The list of items is fixed before any route is looked at and before any measured turn:** the first and
+last commits; every commit that met rules 1 to 3, in order; for each, whether rules 4 and 5 took it or
+left it out, and why; the dividing commit; and the three for the pilot. Written down and hashed. The
+program that makes the list is in the repository, with tests of its own. No item is chosen, left out or
+reworded for how well a route might serve it.
 
 ## 7. Ready to test, and the one pilot
 
@@ -235,18 +280,21 @@ hashed. No item is chosen, left out or reworded for how well a route might serve
   older store is the kind section 1 writes out as it was recorded. If the ranker offers one of them
   nothing, that is reported, and the fixture is still the proof that a route reaches a prompt.
 
-**The pilot, once.** Before its first turn a list is fixed and hashed: the three items, in the order they
-were posted; each one's base, which holds the repair; each check, with the commit it fails on and the one
-it passes on; the worker programs, their models and versions; the limits; the seeds; the order of the
-fifteen turns; whether a turn has a first line of its own; and the list of section 3.
+**The pilot, once.** Before its first turn a list is fixed and hashed: the three items, by the rule of
+section 6; each one's base; each check, with the commit it fails on and the one it passes on; the room
+program, built from a commit that holds the repair; the worker program, its model and version; the
+environment the tests run in, by the hash of its lock file; the limits; the seeds; the order of the
+fifteen turns; and whether a turn has a first line of its own.
 
 - Five rounds with nothing offered. All fifteen turns are reported, and the first pilot's rules for a turn
   that is lost or an instrument that fails still stop it.
 - A turn of each worker is thrown away before its first measured turn, as in the first pilot.
 - The same rule gives `n` from the largest of the three spreads, worked before rounding. Over 40 is
   reported as over 40 and not cut to it, and no third pilot follows.
-- One turn at each item under each offering arm is run as well. The costs of those six, of the turns thrown
-  away and of the six turns of "ready to test" enter no sizing and no reading. Only the fifteen do.
+- Nothing is offered in the pilot. Its items have no history yet: the turns that would teach are the ones
+  it is about to run. The path from walks to a prompt is shown by "ready to test" above. The costs of the
+  turn thrown away and of the six turns of "ready to test" enter no sizing and no reading. Only the
+  fifteen do.
 
 ## 8. How we know it is ready
 
@@ -269,16 +317,15 @@ Each row has a case that must pass and a case that must be refused.
 
 - **To be ready:** the room's export and offer, the store's reading of walks and its route, the fixture,
   and six turns.
-- **The pilot:** three items of the whole repository, each needing its check written and tried by the
-  other family, and the repository's own tests running inside a worker's sandbox and the room's jail. From
-  a fresh copy, with its environment kept outside the copy, two of its test files pass on the lead's
-  machine. Through the room it was tried once and did not start: the interpreter under that environment
-  is kept in a directory the room hides from every run, because keys are kept there, and the room refused
-  to show it. That refusal is right. An environment has to be made where the room may show it. Then
-  fifteen turns, the two thrown away, and six.
-- **The scored experiment:** as the first design says, three arms for each of `n` items, with a check to
-  write for every history and scored item. At the whole repository's size that is days of builders' work
-  before the first scored turn.
+- **The pilot:** the program that makes items from merged commits, with its tests; three items; fifteen
+  turns and one thrown away. No check is written by hand.
+- **The repository's tests in the room,** tried on the lead's machine. The first try did not start: the
+  interpreter under the project's test environment is kept in a directory the room hides from every run,
+  because keys are kept there, and the room refused to show it. That refusal is right. With an
+  environment made where the room may show it, a worker inside its sandbox ran two of the peer's test
+  files (64 tests, 6 seconds), and a check that runs them passed inside the room's jail (7 seconds).
+- **The scored experiment:** as the first design says, three arms for each of `n` items, and a run with
+  nothing offered for each history item. The items cost machine time to make and no builder's.
 
 ## What is left to the builders
 
@@ -303,8 +350,13 @@ file against its store. Sections 1 to 5 and the rows of section 8 are fixed here
 | --- | --- |
 | R1. Keep the first design's logic of outcomes: the guard item by item, the four readings, building apart from attribution | Section 5 |
 | R2. Say exactly what the shuffled arm changes | Section 5: its row, and "Route against shuffled" |
-| R3. Finish what is fixed beforehand: the board's list, the turns thrown away, what enters sizing; and say what the measurement does not show | Sections 6 and 7 |
+| R3. Finish what is fixed beforehand: the list of items, the turns thrown away, what enters sizing; and say what the measurement does not show | Sections 6 and 7 |
 | R4. Carry across the seam which turns may teach and the measure of cost | Sections 1, 2 and 3, and three rows of section 8 |
+
+**Changed in revision 4, and to be read by the same reader before any pilot turn: where the items come
+from.** Revision 3 took them from the project's board. Section 6 now takes them from merged commits, each
+made into failing tests to be made to pass, with history and scored divided by time, and the pilot offers
+nothing. The reasons, each measured, are in section 6.
 
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
@@ -315,6 +367,7 @@ section 3; and that a path is rendered after the block's opening sentence, which
   places fixed. What it changes beside, and that the two blocks are not of one length, is said in section 5.
 - **A road's cost and a route's definition move to the store's spec.** From Tardis, whose first proposal
   prices a road by how small a share of verified turns walked it. This spec keeps what the room needs.
-- **The items come from the whole repository,** by the measurement in section 6.
+- **The items come from the whole repository,** by the measurement in section 6. (Revision 3 took them
+  from the board; revision 4, from merged commits.)
 - **Ready to test is parted from the pilot,** so that the path can be shown working on what exists before
   the costlier items are made.
