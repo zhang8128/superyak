@@ -328,6 +328,7 @@ fn the_claude_command_is_the_plans() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
@@ -416,6 +417,7 @@ fn the_claude_settings_allow_only_file_and_shell_tools_in_the_sandbox() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn the_codex_command_is_the_plans() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let sb = sandbox(&repo);
@@ -1413,6 +1415,7 @@ fn table_of(args: &[String]) -> String {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn claudes_shell_is_shown_the_sandbox_its_own_tmp_and_the_named_tools_and_not_the_home() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let at = places();
@@ -1457,6 +1460,7 @@ fn claudes_shell_is_shown_the_sandbox_its_own_tmp_and_the_named_tools_and_not_th
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn codex_is_given_a_profile_and_no_sandbox_mode() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let at = places();
@@ -1528,6 +1532,7 @@ fn codex_is_given_a_profile_and_no_sandbox_mode() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn a_path_with_a_quote_or_a_backslash_is_written_as_toml() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let at = places();
@@ -1554,6 +1559,7 @@ fn a_path_with_a_quote_or_a_backslash_is_written_as_toml() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn a_path_with_a_control_character_is_refused() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let at = places();
@@ -1581,6 +1587,7 @@ fn a_path_with_a_control_character_is_refused() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn a_tool_directory_that_is_also_hidden_is_not_shown() {
     let repo = Repo::new(&[("a.txt", "x\n"), ("tools/run.sh", "#!/bin/sh\n")]);
     let at = places();
@@ -1712,6 +1719,7 @@ fn a_workers_program_is_given_its_own_tmp_and_no_global_git_settings() {
 /// directory `CLAUDE_CONFIG_DIR` names. Each is named to be left out, as it is named and as it really is, since
 /// either may be the path the program matches a pattern against.
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn claude_is_given_no_instruction_file_from_its_own_home_wherever_that_is() {
     let repo = Repo::new(&[("a.txt", "x\n")]);
     let at = places();

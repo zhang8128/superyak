@@ -1604,6 +1604,7 @@ fn a_sandbox_hides_its_items_repository_from_a_worker() {
 }
 
 #[test]
+#[ignore = "needs the room: a directory of its own in /tmp"]
 fn a_turns_own_temporary_directory_is_short_private_and_removed_with_it() {
     use std::os::unix::fs::PermissionsExt;
     let repo = Repo::new(&[("a.txt", "hello\n")]);
