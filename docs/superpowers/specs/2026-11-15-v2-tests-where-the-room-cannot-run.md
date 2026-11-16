@@ -138,3 +138,46 @@ minute and not eight; what it does wait is measured when this is built. This giv
 much turns differ, and it does not reopen the rule the pilot was stopped on. If long test runs are what made one item's turns differ so much, that difference shrinks; and one
 way a note from an earlier turn could have helped a later one is gone with it. A later result says so. The
 pilot that was run stands as it is.
+
+## What building it showed
+
+Added the same day, after the builders handed in and the first live turn ran. Four things the text above
+did not foresee, and what was done about each. Where this section and the text above differ, this section
+holds. It is read by a fresh reader before the change is pushed.
+
+**1. In the measured run, a test's own words often do not name the cause.** Of the 159 tests that failed
+there, 96 printed a line that names the look at processes. The other 63 failed further on: a clock that
+could not freeze its item, and then a test that found no turn where it expected one. "Which tests" asks for
+the line. For the measured run the evidence is the run itself: the same commit, machine and command as the
+run in which all 418 pass, and one difference, the `ps`. The line is asked of the second place, a sandbox,
+where many things differ at once. What each of the 159 printed is kept with the report.
+
+**2. A test of the jail that makes its control first.** Seven tests of the jail first show, with no jail,
+that the thing they are about to refuse works on this machine: a listener, a socket, a listing of the
+home, a terminal, the system's launcher, a question about another process, a keyring. Then each enters a
+jail. In a builder's sandbox the control fails, or the jail is refused without a word, so what such a test
+prints there is not about a jail; by "Which tests" it would stay unmarked, and fail in every worker's
+sandbox. Each of the seven enters a jail on a line that every path through its body reaches. No place
+without a jail can pass it. They carry the mark on that evidence: the line of the body, and the pass where
+the room can run. One of the seven is built on Linux only, where no builder stood.
+
+**3. The room needs a third thing of a machine: a directory of its own in /tmp.** Nine tests of what the
+room gives a worker's program (its command, its settings, its own place for temporary files) make that
+directory as the room does, and look at no process and enter no jail. A builder reported them from its own
+sandbox, and the first live turn of a Claude worker through the room showed the same nine, each with
+`make /private/tmp/yak-...: Operation not permitted`, and no other test failing. They are marked, with
+words of their own, because the first words would say something untrue of them:
+`#[ignore = "needs the room: a directory of its own in /tmp"]`.
+
+So there are two sentences, and **every such reason begins `needs the room: `** and then names what the
+room needs of the machine. The set is found by that beginning. A test that was shown to need a list of
+processes or a jail carries the first sentence, whatever else it needs. A new sentence is added only for a
+need that is shown in a worker's sandbox, on a test that the first two do not describe.
+
+**4. The guard looks at one more number.** A `test result:` line also counts tests left out by a filter.
+In the whole run that number is 0 on every line, as the ignored count is, and the guard fails on either.
+It still does not see a test program that a test started for itself, whose output that test kept; that is
+what "A test that another test starts" is for.
+
+**What is not changed:** the way taken, the first sentence's words, the command that runs everything, and
+what is left to the acceptance suite's owner.

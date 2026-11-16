@@ -137,7 +137,10 @@ class Kept(unittest.TestCase):
         self.assertTrue(kept.startswith("HEAD"))
         self.assertTrue(kept.endswith("TAIL"))
         self.assertIn("[... %d bytes of the middle are left out ...]" % (len(long) - probe.KEPT), kept)
+        # As many bytes as it keeps of any text: a quarter from the start and the rest from the end.
+        self.assertGreater(len(kept), probe.KEPT)
         self.assertLess(len(kept), probe.KEPT + 200)
+        self.assertEqual(kept.index("\n[... "), probe.KEPT // 4)
         # At the limit, whole.
         self.assertEqual(probe.kept("y" * probe.KEPT), "y" * probe.KEPT)
 
