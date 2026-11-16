@@ -1,7 +1,9 @@
 //! The clock and the shared read-only views used by the CLI and MCP. Stage 1, tasks 9 and 10.
 
 pub mod clock;
+pub mod history;
 pub mod mcp;
+pub mod route_offer;
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
