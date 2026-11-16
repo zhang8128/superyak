@@ -209,6 +209,15 @@ fn the_offer_is_checked_at_the_base_of_every_item_a_turn_may_still_be_given() {
     for other in &ids[1..] {
         assert!(!said.contains(other.as_str()), "{said}");
     }
+    // And the other way about: extra.txt said to be gone. The first base does not track it and takes that; the
+    // fourth item's base tracks it and refuses, named by the fourth item. So both live bases are looked at,
+    // whichever comes first.
+    let gone = offer_file(&[], &["extra.txt"]);
+    let said = offer_refusal(&mut world, offering(Arm::Route, Some(&gone)));
+    assert!(said.contains(&ids[3]), "{said}");
+    for other in &ids[..3] {
+        assert!(!said.contains(other.as_str()), "{said}");
+    }
     // Each item at the first base finished, one of each way: passed and verified, abandoned, passed and not
     // verified. Then only the fourth's base is checked, and it tracks extra.txt.
     frozen(&mut world);
@@ -532,6 +541,15 @@ fn offer_render_refuses_what_the_clock_refuses() {
             .output()
             .unwrap(),
     );
+    // And --base without --repo: a base looked for in no repository is refused, not passed over unchecked.
+    let out = f
+        .render("route", &file, 0)
+        .arg("--base")
+        .arg("main")
+        .output()
+        .unwrap();
+    assert!(out.stdout.is_empty());
+    assert!(refusal(out).contains("--repo"));
 }
 
 /// What a turn's record keeps of its block is the block `yak offer render` makes again from the same file and

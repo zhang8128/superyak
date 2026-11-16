@@ -810,7 +810,7 @@ impl Draw {
         z ^ (z >> 31)
     }
 
-    /// A number below `n`, each as likely: a draw in the uneven top part of the range is drawn again.
+    /// A number below `n`, each as likely: a draw in the uneven low part of the range is drawn again.
     fn below(&mut self, n: u64) -> u64 {
         let uneven = n.wrapping_neg() % n;
         loop {
@@ -1074,7 +1074,7 @@ mod tests {
         );
     }
 
-    /// Below 2^63 + 1 nearly half of all draws are in the uneven top part and are drawn again: these are the
+    /// Below 2^63 + 1 nearly half of all draws are in the uneven low part and are drawn again: these are the
     /// values a separate reading of the same rule (in Python) gives, with draws 2, 3 and 4 of the first seed
     /// thrown away.
     #[test]
