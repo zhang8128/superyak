@@ -117,6 +117,17 @@ An experiment's network is made from a list, fixed and hashed before any turn th
 No scored item, and no turn at one, is ever on the list. The store's general command may still be given
 any walks, to build and try it.
 
+**The list's form,** fixed here because the room writes it and the store reads it. One JSON object, its
+keys sorted, no spaces, in UTF-8: `v`, which is 1; `repo`; `measure`, with its `name` and `version`; and
+`turns`, sorted by `attempt`, each with `attempt`, `item`, `base`, `standing` and `sha256`, the hash of that
+turn's walk file. A walk file on the list holds one walk and no more, so an entry is one file and one
+turn. An attempt is on the list once, and is the turn's name wherever a turn is named. The list is of one
+repository. Every listed turn's file is given to the store, and no other: one missing changes the count of
+turns that taught, and so the price of every road. The list's own SHA-256 is of exactly those bytes.
+
+**A repository's id** is a root commit of it. This repository has three, so "the root" names nothing:
+the id is the root that is first in byte order among those the turn's base reaches.
+
 ## 4. The offer
 
 - **`yak clock run --offer <file>`** gives every turn of that clock one block of text, after the prompt's
@@ -250,7 +261,7 @@ Each row has a case that must pass and a case that must be refused.
 | A detour is a real one | One kept by the store and read back. Refused: a way no turn went, a road no turn walked, a way that is no shorter, ends that do not meet |
 | What is not there is said | Each told from the others: a file no turn let teach reached; a file no turn named, as one a turn added; an empty history; a kernel refusal, with its reason |
 | Only listed turns teach | Refused, each by name: an unlisted file, a second copy, another repository's, a ship's, a wrong hash, a path not in the base's tree, a standing other than the list's. A turn that passed and was not verified is in its file and in no count, where only verified turns teach |
-| The offer is data, and the prompt without it is unchanged | The pinned prompt test. A tracked file whose name reads as an instruction is rendered inside the block's opening sentence and nowhere else. Route JSON holding a path that is not plain is refused by the renderer itself |
+| The offer is data, and the prompt without it is unchanged | The pinned prompt test. A tracked file whose name reads as an instruction is rendered inside the block, after its opening sentence, and nowhere else. Route JSON holding a path that is not plain is refused by the renderer itself |
 | What a turn was given can be made again | A stand-in worker's received block has the recorded hash and length; the block made again from what the store kept is the same bytes; an empty offer is told from no offer |
 | Two machines can run it | The same fixture gives the same route bytes on both, and one turn with a block that is not empty runs on the second |
 
@@ -294,6 +305,9 @@ file against its store. Sections 1 to 5 and the rows of section 8 are fixed here
 | R2. Say exactly what the shuffled arm changes | Section 5: its row, and "Route against shuffled" |
 | R3. Finish what is fixed beforehand: the board's list, the turns thrown away, what enters sizing; and say what the measurement does not show | Sections 6 and 7 |
 | R4. Carry across the seam which turns may teach and the measure of cost | Sections 1, 2 and 3, and three rows of section 8 |
+
+**Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
+section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
 
 **Changed between the two reads, and confirmed in the second:**
 
