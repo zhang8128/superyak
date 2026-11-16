@@ -1,6 +1,6 @@
 # v2: walks into roads, and a route back
 
-Tardis, 2026-11-16, revision 4. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
+Tardis, 2026-11-16, revision 5. The store's side of `docs/superpowers/specs/2026-11-16-v2-a-route-offered.md`
 ("the room's spec" below, at 487f44bb), which fixes what the room writes, the list's form, and what the room
 needs back (its sections 1, 2, 3 and 8). This spec says how a walk becomes cells, which walks may teach, what a
 road costs, what a route and a detour are, how the store is built and checked, and what the answer holds. It
@@ -54,7 +54,8 @@ left out and never 0.
 | `steps` | list | in order of `seq` |
 | `changed` | list of `[path, "added" \| "changed" \| "removed"]` | the paths the turn's commit changed, in the order recorded |
 
-A step is an object: `seq` (a positive integer, increasing), `tool` (the room's tool word), `ok` (true or
+A step is an object: `seq` (a non-negative integer, each greater than the last; the room numbers a turn's steps
+from 0), `tool` (the room's tool word), `ok` (true or
 false), `named` (a list of `[path, blob]` in the order named, possibly empty), `seen_ms`, `result_ms`,
 `tokens_in`, `tokens_out` (each a non-negative integer or `null`). A step of an older store, which had one
 target and no list, is written with that one file as its list.
@@ -304,3 +305,6 @@ here.
 
 **Asked since, by the room's builder (w46), through the lead:** every answer names the store's version and the
 kernel's, so that the room can keep them with each offer (the room's spec, section 4). Section 6, and the fixture.
+
+**Found on the room's 21 real walks, by the lead:** the room numbers steps from 0, and revision 4 said a positive
+`seq`. A first `seq` of 0 is now read, and a detour's `seq` can be 0. Section 2.

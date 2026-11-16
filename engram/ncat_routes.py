@@ -124,12 +124,12 @@ def _walk(obj, place):
         raise Refused(f"{place}.standing is unjudged exactly when the walk is a ship's")
     if not isinstance(obj["steps"], list):
         raise Refused(f"{place}.steps is not a list")
-    last = 0
+    last = -1   # the room numbers a turn's steps from 0
     for i, step in enumerate(obj["steps"]):
         sp = f"{place}.steps[{i}]"
         _keys(step, STEP_KEYS, sp)
         if not _int(step["seq"]) or step["seq"] <= last:
-            raise Refused(f"{sp}.seq is not a positive integer above the last")
+            raise Refused(f"{sp}.seq is not a non-negative integer above the last")
         last = step["seq"]
         if not isinstance(step["tool"], str) or not step["tool"].isascii() or not step["tool"].isidentifier():
             raise Refused(f"{sp}.tool is not a tool word")

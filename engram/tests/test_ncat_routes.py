@@ -153,6 +153,34 @@ def test_a_bad_walk_is_refused_by_place_and_never_repeats_a_value(why, change):
     assert MARKER not in str(refused.value) and "f.jsonl line 1" in str(refused.value), why
 
 
+def test_steps_numbered_from_0_are_read_and_a_detour_can_be_at_seq_0(tmp_path):
+    # The room numbers a turn's steps from 0 (the lead, on the first pilot's 21 real walks); revision 4 refused them.
+    def from_zero(w):
+        for step in w["steps"]:
+            step["seq"] -= 1
+        return w
+    walks = [from_zero(walk("t1", ["target", "b"])), from_zero(walk("t2", [["a", "target"]])),
+             from_zero(walk("t3", ["target"]))]
+    assert [s["seq"] for s in walks[0]["steps"]] == [0, 1] and walks[1]["steps"][0]["seq"] == 0
+    (back,) = R.read_walks(line(walks[0]), "f")
+    assert back == walks[0]
+    out, list_id, _ = experiment(tmp_path, walks)
+    r = route_of(ask(out, ["target"], list_id))
+    assert r["paths"] == ["target"]
+    assert [(d["attempt"], d["visit"], d["seq"]) for d in r["detours"]] == [("t2", 2, 0)]   # a detour at seq 0
+    with R.open_store(out) as s:
+        assert s.check() > 0
+    for bad in (-1, None, True):
+        w = walk("t9", ["a", "b"])
+        w["steps"][0]["seq"] = bad
+        with pytest.raises(R.Refused):
+            R.read_walks(line(w), "f")
+    w = walk("t9", ["a", "b"])
+    w["steps"][1]["seq"] = w["steps"][0]["seq"]
+    with pytest.raises(R.Refused):
+        R.read_walks(line(w), "f")
+
+
 @pytest.mark.parametrize("data", [b"\xff\xfe\n", ('{"v": NaN}\n').encode(), b'{"v":1,"v":1}\n',
                                   (json.dumps({MARKER: "x" * (1 << 20)}) + "\n").encode(), line(walk("t", ["a"]))[:-1]])
 def test_bytes_that_are_no_walk_are_refused_without_their_content(data):
