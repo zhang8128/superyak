@@ -7,6 +7,7 @@ use crate::{
     ItemId, ItemState, Room, RoomError,
     item::{item_view, parse},
     limits,
+    offer::{OFFERS_COLUMNS, OFFERS_TABLE},
 };
 
 const SCHEMA: &str = "
@@ -105,6 +106,9 @@ ALTER TABLE steps ADD COLUMN result_ms INTEGER;
 UPDATE meta SET schema_version=2;
 "#;
 
+/// From version 2 to 3: what each turn was offered (`offer::OFFERS_TABLE`), and nothing else.
+const MIGRATE_V2: &str = "UPDATE meta SET schema_version=3;";
+
 impl Room {
     /// Create a new room; never replace an existing store, including a damaged one.
     pub fn init(dir: &Path) -> Result<Self, RoomError> {
@@ -125,6 +129,7 @@ impl Room {
         configure(&conn)?;
         let tx = conn.transaction().map_err(db)?;
         tx.execute_batch(SCHEMA).map_err(db)?;
+        tx.execute_batch(OFFERS_TABLE).map_err(db)?;
         tx.execute(
             "INSERT INTO meta VALUES (?1, ?2, ?3)",
             (
@@ -140,6 +145,7 @@ impl Room {
             dir: dir.into(),
             _lock: Some(lock),
             lease_secs: limits::LEASE_SECS,
+            offers: true,
         })
     }
 
@@ -174,25 +180,37 @@ impl Room {
         if !read_only {
             configure(&conn)?;
         }
-        if version == 1 {
-            if read_only {
+        // A store of version 2 lacks only what turns were offered. Read as it is, every turn of it reads as
+        // given nothing recorded; opened for writing, it is brought forward.
+        let offers = if version == limits::SCHEMA_VERSION {
+            true
+        } else if read_only {
+            if version == 1 {
                 return Err(RoomError::OlderSchema {
                     found: 1,
                     known: limits::SCHEMA_VERSION,
                 });
             }
+            false
+        } else {
             let tx = conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(db)?;
-            tx.execute_batch(MIGRATE_V1).map_err(db)?;
+            if version == 1 {
+                tx.execute_batch(MIGRATE_V1).map_err(db)?;
+            }
+            tx.execute_batch(OFFERS_TABLE).map_err(db)?;
+            tx.execute_batch(MIGRATE_V2).map_err(db)?;
             validate(&tx)?;
             tx.commit().map_err(db)?;
-        }
+            true
+        };
         Ok(Self {
             conn,
             dir: dir.into(),
             _lock: lock,
             lease_secs: limits::LEASE_SECS,
+            offers,
         })
     }
 
@@ -238,6 +256,7 @@ impl Room {
         }
         tx.pragma_update(None, "secure_delete", true).map_err(db)?;
         for sql in [
+            "DELETE FROM offers WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM step_files WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM measured WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
             "DELETE FROM changes WHERE attempt IN (SELECT id FROM attempts WHERE item=?1)",
@@ -300,7 +319,7 @@ fn validate(conn: &Connection) -> Result<u32, RoomError> {
             known: limits::SCHEMA_VERSION,
         });
     }
-    if version != 1 && version != limits::SCHEMA_VERSION {
+    if version == 0 {
         return Err(RoomError::Damaged(format!(
             "unsupported schema version {version}"
         )));
@@ -326,7 +345,7 @@ fn validate(conn: &Connection) -> Result<u32, RoomError> {
     ] {
         conn.prepare(query).map_err(damaged)?;
     }
-    if version == 2 {
+    if version >= 2 {
         for query in [
             "SELECT seen_ms,result_ms FROM steps",
             "SELECT attempt,seq,ordinal,path,blob FROM step_files",
@@ -335,6 +354,10 @@ fn validate(conn: &Connection) -> Result<u32, RoomError> {
         ] {
             conn.prepare(query).map_err(damaged)?;
         }
+    }
+    if version >= 3 {
+        conn.prepare(&format!("SELECT {OFFERS_COLUMNS} FROM offers"))
+            .map_err(damaged)?;
     }
     Ok(version)
 }

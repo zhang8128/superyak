@@ -18,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use room::limits::TERM_GRACE_SECS;
+use room::offer::Block;
 
 use crate::jail::{self, Jail};
 use crate::process::{Identity, Supervisor, marker};
@@ -107,6 +108,8 @@ pub struct Sandbox {
     worker_tmp: Mutex<Option<(PathBuf, (u64, u64))>>,
     /// The turn's name, when the room gave it one for its worker's prompt to begin with.
     turn: Option<String>,
+    /// The block the room offers this turn's worker in its prompt, when it offers one.
+    block: Option<Block>,
 }
 
 /// Which directory `path` is: its device and its number on that device. A link is not a directory.
@@ -374,6 +377,7 @@ impl Sandbox {
             hidden_from_worker: vec![repo],
             worker_tmp: Mutex::new(None),
             turn: None,
+            block: None,
         })
     }
 
@@ -418,6 +422,17 @@ impl Sandbox {
     /// The turn's name, when it was given one.
     pub fn turn(&self) -> Option<&str> {
         self.turn.as_deref()
+    }
+
+    /// Gives this turn's worker the block in its prompt (`worker::prompt_with`). Only the room's renderer makes
+    /// a block (`room::offer::render`), so what is given here was made from a file the room read and found whole.
+    pub fn give_block(&mut self, block: Block) {
+        self.block = Some(block);
+    }
+
+    /// The block this turn's worker is offered, when it was given one.
+    pub fn block(&self) -> Option<&Block> {
+        self.block.as_ref()
     }
 
     /// What a model worker's shell is not shown, as real paths: first the item's repository, then what was

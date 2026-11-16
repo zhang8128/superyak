@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use room::offer::{self, Arm};
 use room::{CheckOrigin, CheckSpec, ItemId, NewItem, Room, RoomError, limits};
-use yak::clock::{self, Event, Mode, Options, Outcome};
+use yak::clock::{self, Event, Mode, Offering, Options, Outcome};
 use yak::{View, one_line, read_view};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -39,6 +40,48 @@ enum Command {
     Status(Json),
     Disagreements(Json),
     Mcp,
+    Offer {
+        #[command(subcommand)]
+        command: OfferCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum OfferCommand {
+    /// Print the block an arm gives from an offer file, byte for byte: to make again what a turn was given.
+    Render(Render),
+}
+
+#[derive(Args)]
+struct Render {
+    #[arg(long, value_enum)]
+    arm: Offers,
+    /// The offer file, as the clock was given it.
+    #[arg(long)]
+    offer: PathBuf,
+    /// The seed of the draw, as the clock was given it.
+    #[arg(long)]
+    seed: u64,
+    /// With --base: check, as the clock does, that every path not gone is tracked there and every gone one is not.
+    #[arg(long, requires = "base")]
+    repo: Option<PathBuf>,
+    #[arg(long, requires = "repo")]
+    base: Option<String>,
+}
+
+/// The arms of the experiment.
+#[derive(Clone, Copy, ValueEnum)]
+enum ArmName {
+    Nothing,
+    Route,
+    Shuffled,
+}
+
+/// The arms that offer a block.
+#[derive(Clone, Copy, ValueEnum)]
+enum Offers {
+    Route,
+    Shuffled,
 }
 
 #[derive(Args)]
@@ -120,6 +163,18 @@ struct Run {
     /// alike. For measuring what a worker's program keeps of a prompt it has seen before.
     #[arg(long)]
     own_prompts: bool,
+    /// The experiment's arm for every turn of this clock, kept with each turn. Without it the clock is as it was.
+    #[arg(long, value_enum, requires_all = ["order", "seed"])]
+    arm: Option<ArmName>,
+    /// The offer file the arms route and shuffled make their block from; the arm nothing takes none.
+    #[arg(long, requires = "arm")]
+    offer: Option<PathBuf>,
+    /// This clock's place in the experiment's order, kept with each turn.
+    #[arg(long, requires = "arm")]
+    order: Option<u32>,
+    /// The seed of the experiment's draw, kept with each turn; the shuffled arm's order is drawn from it.
+    #[arg(long, requires = "arm")]
+    seed: Option<u64>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -148,6 +203,13 @@ async fn main() -> ExitCode {
 }
 
 async fn execute(cli: Cli) -> Result<()> {
+    // Making a block again needs no room.
+    if let Command::Offer {
+        command: OfferCommand::Render(render),
+    } = cli.command
+    {
+        return render_offer(render);
+    }
     let dir = match cli.room {
         Some(dir) => dir,
         None => {
@@ -184,7 +246,43 @@ async fn execute(cli: Cli) -> Result<()> {
             command: ClockCommand::Run(run),
         } => run_clock(&dir, run)?,
         Command::Mcp => yak::mcp::serve(&dir).await?,
+        // Rendered above, before a room was looked for.
+        Command::Offer { .. } => {}
     }
+    Ok(())
+}
+
+fn arm(name: ArmName) -> Arm {
+    match name {
+        ArmName::Nothing => Arm::Nothing,
+        ArmName::Route => Arm::Route,
+        ArmName::Shuffled => Arm::Shuffled,
+    }
+}
+
+/// Prints the block the arm makes from the offer file and the seed, and nothing else: its bytes are the ones a
+/// turn was given, and their SHA-256 and length are the ones kept with it.
+fn render_offer(render: Render) -> Result<()> {
+    let read = yak::offer::read_file(&render.offer)?;
+    if let (Some(repo), Some(base)) = (&render.repo, &render.base) {
+        let commit = resolve_commit(repo, base).ok_or_else(|| {
+            RoomError::Refused(format!(
+                "--base {base} is not a commit of the repository {}",
+                repo.display()
+            ))
+        })?;
+        let limit = std::time::Duration::from_secs(turn::sandbox::ROOM_GIT_SECS);
+        let tracked = yak::offer::tracked_at(repo, &commit, limit)?;
+        read.check_tracked(&|path| tracked.contains(path))?;
+    }
+    let arm = match render.arm {
+        Offers::Route => Arm::Route,
+        Offers::Shuffled => Arm::Shuffled,
+    };
+    let block = offer::render(&read, arm, render.seed).ok_or("the arm renders no block")?;
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(block.text().as_bytes())?;
+    stdout.flush()?;
     Ok(())
 }
 
@@ -311,6 +409,25 @@ fn run_clock(dir: &Path, run: Run) -> Result<()> {
             }
         }
     }
+    // The offer file is read first: one the room refuses stops the clock before it opens the room.
+    let offering = match run.arm {
+        None => None,
+        Some(name) => {
+            let (Some(order), Some(seed)) = (run.order, run.seed) else {
+                return Err("--arm needs --order and --seed".into());
+            };
+            Some(Offering {
+                arm: arm(name),
+                offer: run
+                    .offer
+                    .as_deref()
+                    .map(yak::offer::read_file)
+                    .transpose()?,
+                order,
+                seed,
+            })
+        }
+    };
     let mut room = Room::open(dir)?;
     // Said at the start, and nothing is made to say it.
     if turn::jail::wanted() {
@@ -337,6 +454,7 @@ fn run_clock(dir: &Path, run: Run) -> Result<()> {
             turn_secs: run.turn_secs,
             report: Some(&mut report),
             own_prompts: run.own_prompts,
+            offer: offering,
             ..Options::default()
         },
     )?;

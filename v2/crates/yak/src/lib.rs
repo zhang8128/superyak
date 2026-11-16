@@ -2,6 +2,7 @@
 
 pub mod clock;
 pub mod mcp;
+pub mod offer;
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};

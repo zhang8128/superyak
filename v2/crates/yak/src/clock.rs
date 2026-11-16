@@ -11,7 +11,7 @@
 //! The clock holds the room's only writing connection, so nothing else changes the room while a turn runs: what a
 //! turn sees in the room at the start is still true at its end, except for the passing of time.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
 use room::limits::{CLOCK_POLL_SECS, RECHECK_ONE_IN, TURN_SECS};
+use room::offer::{Arm, Block, Offer, Offered};
 use room::{
     AttemptId, Change, ChangedFile, Ended, Frozen, ItemId, ItemSpec, ItemState, Lease, Measured,
     Room, RoomError, Tokens, Ts,
@@ -265,6 +266,9 @@ pub enum ClockError {
     },
     #[error("{0}")]
     Io(String),
+    /// The offer could not be made into a block for every item a turn may still be given. No turn was started.
+    #[error("{0}; the clock started no turn")]
+    Offer(String),
 }
 
 /// What the clock did, as it does it, for whoever runs it to show. Nothing in an event comes from a transcript.
@@ -337,6 +341,25 @@ pub struct Options<'a> {
     /// Whether each turn's prompt begins with a line of that turn's own (its attempt's id). Off unless asked
     /// for: it is there to measure what a worker's program keeps of a prompt it has seen before.
     pub own_prompts: bool,
+    /// The experiment's arm for every turn of this clock, and what is kept with each. None: the clock is as it
+    /// was, and its turns keep nothing of an offer.
+    pub offer: Option<Offering>,
+}
+
+/// What every turn of a clock is given beside its prompt, as asked for: an arm; for an arm that offers, the offer
+/// read from its file; this clock's place in the experiment's order; and the seed of its draw.
+pub struct Offering {
+    pub arm: Arm,
+    pub offer: Option<Offer>,
+    pub order: u32,
+    pub seed: u64,
+}
+
+/// What `Offering` came to, once, before any turn: the block every turn of the clock is given, when its arm
+/// offers one, and the record kept with each turn.
+struct Given {
+    block: Option<Block>,
+    offered: Offered,
 }
 
 impl Default for Options<'_> {
@@ -347,6 +370,7 @@ impl Default for Options<'_> {
             report: None,
             git_secs: turn::sandbox::ROOM_GIT_SECS,
             own_prompts: false,
+            offer: None,
         }
     }
 }
@@ -385,14 +409,21 @@ pub fn run_with(
         worker::from_name(name)?;
         ready(name)?;
     }
+    // The block is made here, once, before any turn: every turn of this clock is given the same one.
+    let git_limit = Duration::from_secs(options.git_secs);
+    let given = match &options.offer {
+        Some(offering) => Some(give(room, offering, git_limit)?),
+        None => None,
+    };
     let mut clock = Clock {
         room,
         workers,
         turn_secs: options.turn_secs,
         poll: options.poll,
         report: options.report,
-        git_limit: Duration::from_secs(options.git_secs),
+        git_limit,
         own_prompts: options.own_prompts,
+        given,
         next: 0,
         unfreezable: HashMap::new(),
         ceiling_day: None,
@@ -434,6 +465,48 @@ pub fn run_with(
         }
         clock.sleep(clock.poll);
     }
+}
+
+/// Makes what every turn of the clock is given, or refuses it before any turn: the block, from the offer and the
+/// arm, and the record of how it was made. Every path the offer names is checked at the base of each item a turn
+/// may still be given (any item not passed and not abandoned), by the room's own listing of that base; a path
+/// that fails refuses the whole offer.
+fn give(room: &Room, offering: &Offering, git_limit: Duration) -> Result<Given, ClockError> {
+    let (block, offered) = room::offer::give(
+        offering.arm,
+        offering.offer.as_ref(),
+        offering.order,
+        offering.seed,
+    )
+    .map_err(|e| ClockError::Offer(e.to_string()))?;
+    if let Some(offer) = &offering.offer {
+        // Each base once, named by the first item at it.
+        let mut bases: BTreeMap<(PathBuf, String), ItemId> = BTreeMap::new();
+        for item in room.items()? {
+            if matches!(
+                item.state,
+                ItemState::PassedVerified | ItemState::PassedUnverified | ItemState::Abandoned
+            ) {
+                continue;
+            }
+            let spec = room.item_spec(&item.id)?;
+            bases
+                .entry((spec.repo, spec.base_commit))
+                .or_insert(item.id);
+        }
+        for ((repo, base), item) in bases {
+            let tracked = crate::offer::tracked_at(&repo, &base, git_limit).map_err(|e| {
+                ClockError::Offer(format!(
+                    "the files tracked at the base of {} could not be listed: {e}",
+                    item.0
+                ))
+            })?;
+            offer
+                .check_tracked(&|path| tracked.contains(path))
+                .map_err(|e| ClockError::Offer(format!("{e}, at the base of {}", item.0)))?;
+        }
+    }
+    Ok(Given { block, offered })
 }
 
 /// Refuses a model worker when the jail or the watch on a run's processes is switched off. A worker that is not
@@ -555,6 +628,8 @@ struct Clock<'r, 'o> {
     git_limit: Duration,
     /// Whether each turn's prompt begins with a line of its own.
     own_prompts: bool,
+    /// The block each turn is given and the record kept with each, when the clock was given an arm.
+    given: Option<Given>,
     /// The worker whose turn it is next.
     next: usize,
     /// Drafts that failed to freeze, and when: a broken one is tried again after `FREEZE_RETRY`, not every pass.
@@ -806,6 +881,10 @@ impl Clock<'_, '_> {
         rng: &mut dyn Rng,
         make_worker: impl FnOnce(&str) -> Result<Box<dyn turn::Worker>, TurnError> + Send,
     ) -> Result<Outcome, ClockError> {
+        // What the turn is given is kept before it is given.
+        if let Some(given) = &self.given {
+            self.room.record_offer(&lease.attempt, &given.offered)?;
+        }
         let mut record = TurnRecord::new();
         let outcome = self.work(lease, taken_at, &mut record, make_worker);
         // `work` writes the record before it removes the sandbox; a turn that never had one is written here.
@@ -909,6 +988,10 @@ impl Clock<'_, '_> {
                 return Ok(Outcome::NotRun { reason });
             }
         };
+        // The block this clock made before its first turn, the same for every turn of it.
+        if let Some(block) = self.given.as_ref().and_then(|given| given.block.clone()) {
+            sandbox.give_block(block);
+        }
         // No worker's shell may read the room's own directory: the store, the other turns' directories, the
         // checks. It was found a moment ago, so this fails only if it went away since; then no worker runs.
         // And when the clock was asked for it, the turn is named by its attempt's id, for its prompt's first
@@ -2115,6 +2198,7 @@ mod measurement_tests {
             report,
             git_limit: Duration::from_secs(5),
             own_prompts: false,
+            given: None,
             next: 0,
             unfreezable: HashMap::new(),
             ceiling_day: None,

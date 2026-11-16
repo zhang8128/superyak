@@ -5,6 +5,7 @@ use crate::{
     AttemptId, ChangedFile, ItemId, Measured, Room, RoomError, Tokens,
     item::{from_key, key},
     limits,
+    offer::Offered,
     store::db,
     walk::plain_path,
 };
@@ -23,6 +24,9 @@ pub struct TurnView {
     pub changes: Vec<ChangedFile>,
     pub steps: u32,
     pub steps_with_a_name: u32,
+    /// What the turn was offered and how its block was made, when its clock was given an arm. `None` for a turn
+    /// of a clock that was given none, and for every turn of a store from before offers were kept.
+    pub offered: Option<Offered>,
 }
 
 impl Room {
@@ -145,6 +149,7 @@ impl Room {
                     changes: Vec::new(),
                     steps: r.get(6)?,
                     steps_with_a_name: r.get(7)?,
+                    offered: None,
                 })
             })
             .map_err(db)?;
@@ -153,6 +158,7 @@ impl Room {
             let mut view = row.map_err(db)?;
             view.measured = self.measured(&view.attempt)?;
             view.changes = self.changes(&view.attempt)?;
+            view.offered = self.offered(&view.attempt)?;
             out.push(view);
         }
         drop(q);

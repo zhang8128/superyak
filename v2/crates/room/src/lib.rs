@@ -8,6 +8,7 @@ pub mod item;
 mod lease;
 pub mod limits;
 mod measured;
+pub mod offer;
 mod store;
 pub mod types;
 mod views;
@@ -24,4 +25,6 @@ pub struct Room {
     pub(crate) dir: std::path::PathBuf,
     pub(crate) _lock: Option<std::fs::File>,
     pub(crate) lease_secs: i64,
+    /// Whether the store keeps what each turn was offered: false only for a store of version 2 opened to read.
+    pub(crate) offers: bool,
 }

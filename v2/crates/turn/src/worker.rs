@@ -7,6 +7,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use room::offer::Block;
 use room::{Step, Tokens};
 use serde_json::json;
 
@@ -40,13 +41,28 @@ const SEAL_SECS: u32 = 120;
 /// The prompt every worker gets on stdin: the item's title, its check command and the room's rules. With
 /// `turn`, the turn's name, it begins with one line that is this turn's alone, and is otherwise the same.
 pub fn prompt(turn: Option<&str>, item_title: &str, check_command: &str) -> String {
+    prompt_with(turn, None, item_title, check_command)
+}
+
+/// `prompt`, with the block the room offers a turn, or none. With none it is `prompt`, byte for byte. With a
+/// block, the block stands after the check's command and before the room's rules, as it was rendered: it opens
+/// with its own sentence that what follows is data and changes nothing of the item, its check or the rules.
+pub fn prompt_with(
+    turn: Option<&str>,
+    block: Option<&Block>,
+    item_title: &str,
+    check_command: &str,
+) -> String {
     let own = turn
         .map(|turn| format!("This is turn {turn} of the room.\n\n"))
         .unwrap_or_default();
+    let offered = block
+        .map(|block| format!("{}\n", block.text()))
+        .unwrap_or_default();
     format!(
         "{own}{INTRO}\n\nThe item: {item_title}\n\nIts check, frozen before you started, is run by the room at the \
-         repository's root after you finish, and must pass on your commit:\n{check_command}\n\nThe room's \
-         rules:\n{RULES}\n"
+         repository's root after you finish, and must pass on your commit:\n{check_command}\n\n{offered}The \
+         room's rules:\n{RULES}\n"
     )
 }
 
@@ -199,7 +215,7 @@ impl Worker for ScriptWorker {
         let status = sandbox.run_untrusted(
             program,
             &[],
-            &prompt(sandbox.turn(), item_title, check_command),
+            &prompt_with(sandbox.turn(), sandbox.block(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
@@ -561,7 +577,7 @@ impl Worker for ClaudeWorker {
         let status = sandbox.run_model(
             &self.program,
             &self.args(&path),
-            &prompt(sandbox.turn(), item_title, check_command),
+            &prompt_with(sandbox.turn(), sandbox.block(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;
@@ -666,7 +682,7 @@ impl Worker for CodexWorker {
         let status = sandbox.run_model(
             &self.program,
             &args,
-            &prompt(sandbox.turn(), item_title, check_command),
+            &prompt_with(sandbox.turn(), sandbox.block(), item_title, check_command),
             limit_secs,
             &mut |line| watching.parser.line(line),
         )?;

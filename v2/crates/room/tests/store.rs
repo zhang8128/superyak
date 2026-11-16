@@ -29,12 +29,27 @@ fn a_newer_schema_is_refused() {
     let d = tempfile::tempdir().unwrap();
     drop(Room::init(d.path()).unwrap());
     let conn = rusqlite::Connection::open(d.path().join("room.sqlite3")).unwrap();
-    conn.execute("UPDATE meta SET schema_version = 3", [])
+    conn.execute("UPDATE meta SET schema_version = 4", [])
         .unwrap();
     drop(conn);
     assert!(matches!(
         Room::open(d.path()),
-        Err(RoomError::NewerSchema { found: 3, known: 2 })
+        Err(RoomError::NewerSchema { found: 4, known: 3 })
+    ));
+}
+
+#[test]
+fn a_store_of_version_0_is_damaged() {
+    let d = tempfile::tempdir().unwrap();
+    drop(Room::init(d.path()).unwrap());
+    let conn = rusqlite::Connection::open(d.path().join("room.sqlite3")).unwrap();
+    conn.execute("UPDATE meta SET schema_version = 0", [])
+        .unwrap();
+    drop(conn);
+    assert!(matches!(Room::open(d.path()), Err(RoomError::Damaged(_))));
+    assert!(matches!(
+        Room::open_read_only(d.path()),
+        Err(RoomError::Damaged(_))
     ));
 }
 
@@ -208,7 +223,7 @@ fn a_version_1_store_is_brought_forward_when_opened_for_writing() {
         c.query_row("SELECT schema_version FROM meta", [], |r| r
             .get::<_, u32>(0))
             .unwrap(),
-        2
+        3
     );
     for table in ["items", "attempts", "steps", "verdicts"] {
         assert_eq!(
@@ -218,7 +233,7 @@ fn a_version_1_store_is_brought_forward_when_opened_for_writing() {
             1
         );
     }
-    for table in ["step_files", "measured", "changes"] {
+    for table in ["step_files", "measured", "changes", "offers"] {
         assert_eq!(
             c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
                 .get::<_, u32>(0))
@@ -240,7 +255,7 @@ fn a_version_1_store_opened_read_only_says_how() {
     version_1(d.path());
     let e = Room::open_read_only(d.path()).err().unwrap();
     assert!(e.to_string().contains("opening it once for writing"));
-    assert!(matches!(e, RoomError::OlderSchema { found: 1, known: 2 }));
+    assert!(matches!(e, RoomError::OlderSchema { found: 1, known: 3 }));
 }
 
 /// Another writer holding the store's write lock keeps the migration from starting, and the store stays as the
@@ -282,6 +297,7 @@ fn a_failed_migration_rolls_back_the_tables_it_already_created() {
     assert!(c.prepare("SELECT * FROM step_files").is_err());
     assert!(c.prepare("SELECT * FROM measured").is_err());
     assert!(c.prepare("SELECT seen_ms FROM steps").is_err());
+    assert!(c.prepare("SELECT * FROM offers").is_err());
 }
 
 #[test]

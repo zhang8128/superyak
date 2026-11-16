@@ -13,7 +13,7 @@ use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use room::{AttemptId, CheckOrigin, CheckSpec, ItemId, NewItem, Room};
-use yak::clock::{ClockError, Event, Mode, Options, Outcome, run_with};
+use yak::clock::{ClockError, Event, Mode, Offering, Options, Outcome, run_with};
 
 /// How many answer files the repository has, and so how many standard items it can hold.
 pub const ANSWERS: usize = 4;
@@ -107,6 +107,8 @@ pub struct World {
     pub git_secs: u64,
     /// The time limit of each check added from here on, in seconds.
     pub check_secs: u32,
+    /// What the next run's turns are offered: taken by that run.
+    pub offer: Option<Offering>,
 }
 
 impl World {
@@ -144,6 +146,7 @@ impl World {
             items: Vec::new(),
             git_secs: Options::default().git_secs,
             check_secs: 30,
+            offer: None,
         };
         for n in 1..=items {
             world.add(n);
@@ -272,6 +275,7 @@ impl World {
                 report: Some(&mut report),
                 git_secs: self.git_secs,
                 own_prompts: false,
+                offer: self.offer.take(),
             },
         );
         (result, events)
