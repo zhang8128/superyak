@@ -62,7 +62,8 @@ target and no list, is written with that one file as its list.
 
 **Refused, the whole file with it:** a field missing or unknown, or of another type; a word outside its
 vocabulary; a `seq` that does not increase; a path the rule refuses; a blob that is not 40 or 64 lowercase hex;
-a line longer than 1 MiB; bytes that are not UTF-8. The refusal names the file, the line and the field by
+a line whose bytes before its newline are more than 1 MiB (the newline does not count, so a line of
+exactly 1 MiB is read); bytes that are not UTF-8. The refusal names the file, the line and the field by
 its place in this schema (a step by its index), and never repeats a value or an unknown key. Nothing is dropped
 silently: a failed step and a failed turn are read and kept as what they are.
 

@@ -153,6 +153,17 @@ def test_a_bad_walk_is_refused_by_place_and_never_repeats_a_value(why, change):
     assert MARKER not in str(refused.value) and "f.jsonl line 1" in str(refused.value), why
 
 
+def test_a_lines_limit_is_its_bytes_before_the_newline():
+    # The room's spec asks that both sides count a walk line alike: 1 MiB before the newline is read, one byte more is not.
+    exact = b"x" * R.MAX_LINE + b"\n"
+    over = b"x" * (R.MAX_LINE + 1) + b"\n"
+    with pytest.raises(R.Refused) as at_limit:
+        R.read_walks(exact, "f")
+    with pytest.raises(R.Refused) as past_limit:
+        R.read_walks(over, "f")
+    assert "not one JSON object" in str(at_limit.value) and "longer than 1 MiB" in str(past_limit.value)
+
+
 def test_steps_numbered_from_0_are_read_and_a_detour_can_be_at_seq_0(tmp_path):
     # The room numbers a turn's steps from 0 (the lead, on the first pilot's 21 real walks); revision 4 refused them.
     def from_zero(w):
