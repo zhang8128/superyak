@@ -462,6 +462,46 @@ It also held that the choice of this rule, made with stand-ins drawn from the co
 view, is an exploratory choice and not a blind one, and that the number of history items, once fixed, is
 not to be moved by a scored result. Both are now said in section 6.
 
+**What building the room's second half showed, and what its reader left open.** The walks, the list, the
+admission, the goals and the offer file were built by one family and read by the other before they were
+pushed. Two things were found by running, and not by reading:
+
+- **A step's number begins at nought.** The room numbers a turn's steps from nought, in every store there
+  is. The store's spec said "positive", its fixture numbered from one, and the export, built to those
+  words, refused every real walk. The first test that ran a real turn showed it. A walk is written as it
+  was recorded.
+- **The whole path runs on real walks, with no turn run.** The first pilot's 21 stores gave 21 walks and a
+  list that the admission takes; a changed walk and an extra file were each refused by name. With the turns
+  at two of its items as history for the third, the ranker chose three turns and two files, a store built
+  from those walks answered in 2,256 bytes, and the room's renderer made a block of the offer file. The
+  store there was a copy with its rule on a step's number relaxed, until its owner's own change.
+
+The reader named three changes, all made (the ranker's narrowing in section 5 is one). It left these open.
+None bears on the pilot, which offers nothing. Each is to be settled, or said to stand, before any scored
+turn is offered anything:
+
+- **The counts in an offer are the store's.** How many turns taught, how many walked a road and how many
+  went a dearer way are not held by the room against the list. The store's own check holds them. For the
+  room to hold them too, the offer file's maker would need the list.
+- **A road's path is held to be plain, and not to have been tracked at a history turn's base.** A path that
+  is gone at the scored item's base is rendered, marked as gone, under the opening sentence.
+- **A goal that no turn named, and that is tracked at the scored item's base, is marked as changed,**
+  though nothing shows that it changed.
+- **The base given to the offer file's maker is the operator's.** The offer file does not carry it, so a
+  run's record must.
+- **More than 64 goals** are refused where the offer file is made, after the store has answered, and not
+  where the goals are made.
+- **A refusal of the list's maker or of the admission does not name the turn.** One turn that changed a
+  file whose name is not plain stops the whole plan, and the repository tracks two such names.
+- **The admission's reads have no bound,** and it follows a link at the list's own name. Its inputs are the
+  room's own.
+- **The clock's listing of tracked files does not turn git's replacement objects off,** where the export's
+  does. No worker can make one in an item's repository.
+- **An answer's size.** The bound is 1 MiB. An answer carries each detour's whole way, so it grows with the
+  history. It is to be measured on the scored history before the scored run.
+- **A walk line's limit:** whether the line's end counts toward the 1 MiB is to be made the same on both
+  sides.
+
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
 
