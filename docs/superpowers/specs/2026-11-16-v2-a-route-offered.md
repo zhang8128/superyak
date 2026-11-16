@@ -1,12 +1,13 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 4. A change to the design of stage 2
+Serenity, 2026-11-16, revision 5. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
 
-A fresh reader of the other family approved revision 1 with seven named changes, and confirmed revision 2
-with four more. All eleven are made here; the last section says where. Two things came from the ship
+A fresh reader of the other family approved revision 1 with seven named changes, confirmed revision 2
+with four more, and confirmed revision 4's change of where the items come from with two more. All thirteen
+are made here; the last section says where. Two things came from the ship
 Tardis, which owns the store this rests on, and one from a measurement; that section names them too.
 
 ## Why the design changes
@@ -146,9 +147,9 @@ the id is the root that is first in byte order among those the turn's base reach
 - **The store keeps how the block was made, not the block:** the arm; the order and the seed of the draw;
   the hash of the list in section 3; the turns the ranker chose and their scores; the files asked for, in
   order; the versions of the ranker, the store, its measure of cost, the kernel and the renderer; the
-  block's SHA-256 and its length. An arm that offers, with nothing to offer, is recorded as that and not as the arm that offers
-  nothing. From what is kept, the block can be made again, byte for byte, for as
-  long as the list and the named versions are kept; they are kept with the experiment's records.
+  block's SHA-256 and its length. An arm that offers, with nothing to offer, is recorded as that and not as
+  the arm that offers nothing. From what is kept, the block can be made again, byte for byte, for as long
+  as the list and the named versions are kept; they are kept with the experiment's records.
 
 ## 5. What is compared
 
@@ -223,7 +224,7 @@ items beside them, and each of those 20 would need its check written by hand.
 **So the items are made from the repository's own merged work.** A commit of the main branch is taken
 when all of these hold, by a program and not by eye:
 
-1. It is not a merge, and it lies between a stated first commit and a stated last one.
+1. It is not a merge, and it is reached from a stated last commit and not from a stated first one.
 2. It changes test files and source files of one component, and nothing outside that component but
    documents. The first component is the peer, whose tests are the ones shown to run in the room.
 3. At most three test files and five source files; Python only; no test file that needs a browser.
@@ -231,27 +232,46 @@ when all of these hold, by a program and not by eye:
    the room's jail, within the check's limit.
 5. No commit taken earlier names one of its test files. Where two do, the earlier is the item.
 
+**Earlier, exactly.** The commits are put in one order, the same on any machine and however they are read
+out: a commit comes after every commit it descends from; among commits free to come next, the one with
+the earlier committer time comes first, and at one time, the one whose id is first in byte order.
+
 Measured on 2026-11-16 by the first three rules: 256 such commits for the peer since October. Of the ten
-most recent, all ten met the fourth, in 1 to 31 seconds each.
+most recent, all ten met the fourth, in 1 to 31 seconds each. That is not yet a count of items: the list,
+when made, says how many all five rules leave, and what each rule left out.
+
+**Disjoint in their test files, and no more than that.** Rule 5 keeps two items from naming one test file.
+It does not keep two items from coming from one fault or one feature, mended in two places with two test
+files. The first design said no two items come from one fault. That is not claimed here. Whether items are
+related, and what that does to the sizing and to the intervals, is for the reader of the scored design to
+judge from the list and the history, before any scored turn.
 
 **What such an item is.**
 
-- **Its base** is the commit's parent with the commit's test files laid over it, made as one commit.
+- **Its base** is the commit's parent with the commit's test files laid over it, made as one commit whose
+  only parent is that parent, with one fixed message that says nothing of the fix, and a fixed name and
+  time, so that the same item has the same base on any machine.
 - **Its title** names those test files and asks that they be made to pass by changing the component's
   code, and not the tests. It is the same sentence for every item. It never holds the commit's own first
   line, which says what the fix was.
-- **Its check** runs those test files. The test files are among the check's own files, so the room, which
-  fails a commit that changes a check's file, fails a turn that changed a test.
+- **Its check** runs those test files, and is one program for every item, made by the item-maker and not
+  by hand. It fails a turn that:
+  - changed anything outside the component's source directory. So not the tests, not a helper the tests
+    use, not the tests' configuration, and not another component. It is the whole source directory that
+    may change, never a list of the files the fix touched, which would say where the answer is;
+  - did not run the tests that the reference ran: the check holds how many tests passed and how many were
+    skipped on the reference, and a run with fewer passed or more skipped is not a pass, though it ends
+    well.
 - **Its wrong commit** is the base with one unrelated file added. That shows the check is red on a change
   that fixes nothing. It does not show the tests would catch a clever wrong fix; they are the tests the
-  project itself took.
+  project itself took. A pass here means: the protected tests pass. Nothing more is to be read into it.
 - **Its reference** is the commit's own source changes over the base, shown to pass before the item is
   listed. No turn sees it: a sandbox holds only what its base reaches.
 
-**History and scored, by time.** The taken commits are put in the order they were made. A stated commit
-divides them: the earlier are history, the later are scored, and the pilot's three are the three just
-before the scored. So no turn is ever offered a way learned from a change made after its own. How many
-history items are run is fixed with the scored design, by its reader, with the pilot's results in hand.
+**History and scored, by that order.** A stated commit divides the taken commits: the earlier are history,
+the later are scored, and the pilot's three are the three just before the scored. So no turn is ever
+offered a way learned from a change made after its own. How many history items are run is fixed with the
+scored design, by its reader, with the pilot's results in hand.
 
 **What this narrows, said before any turn.**
 
@@ -261,14 +281,29 @@ history items are run is fixed with the scored design, by its reader, with the p
   the room gives an item only to a worker of another. So the network is made of one program's walks, many
   times over, and not of two programs' together.
 - **One component of one repository.** The conclusion is about that work.
-- **It is work already done once.** The fix is in the project's public history after the base. A worker has
-  no network and its sandbox no later commit, and the models were made before these commits were.
+- **It is work already done once, and chosen by knowing its answer.** A commit is taken because its tests
+  go from failing to passing, which is known only from the fix. That is how a set of past work is made, and
+  it is not a choice by how well a route might serve. The fix is in the project's public history after the
+  base. A worker has no network and its sandbox no later commit. So the conclusion is about small merged
+  Python changes of one component, done again, and not about the project's waiting work.
 
 **The list of items is fixed before any route is looked at and before any measured turn:** the first and
 last commits; every commit that met rules 1 to 3, in order; for each, whether rules 4 and 5 took it or
-left it out, and why; the dividing commit; and the three for the pilot. Written down and hashed. The
-program that makes the list is in the repository, with tests of its own. No item is chosen, left out or
-reworded for how well a route might serve it.
+left it out, and why; how many each rule left; the dividing commit; and the three for the pilot. Written
+down and hashed. No item is chosen, left out or reworded for how well a route might serve it.
+
+**The item-maker is in the repository, with tests of its own.** They show, on a small repository made for
+the purpose: the same list whatever order the commits are read out in, and with two commits at one time;
+a base with one parent and the fixed message; a reference that passes; and the check failing each of
+these, by name: the base, the wrong commit, a turn that changed a test file, one that changed a helper
+the tests use, one that changed the tests' configuration, and one that made the tests be skipped.
+
+**For the reader of the scored design, beside the pilot's results:** how often the ranker finds a history
+turn at all. Every title is one sentence with test files' names in it, and the ranker drops a word that
+most titles hold. So a scored item whose test file's name shares no word with a history item's is offered
+nothing. The scores and the goals reached are reported as they fall. No item is renamed or left out to
+make a match, and an experiment in which most offers are empty is reported as that, and not as a test of
+routes.
 
 ## 7. Ready to test, and the one pilot
 
@@ -353,10 +388,18 @@ file against its store. Sections 1 to 5 and the rows of section 8 are fixed here
 | R3. Finish what is fixed beforehand: the list of items, the turns thrown away, what enters sizing; and say what the measurement does not show | Sections 6 and 7 |
 | R4. Carry across the seam which turns may teach and the measure of cost | Sections 1, 2 and 3, and three rows of section 8 |
 
-**Changed in revision 4, and to be read by the same reader before any pilot turn: where the items come
-from.** Revision 3 took them from the project's board. Section 6 now takes them from merged commits, each
-made into failing tests to be made to pass, with history and scored divided by time, and the pilot offers
-nothing. The reasons, each measured, are in section 6.
+**Changed in revision 4: where the items come from.** Revision 3 took them from the project's board.
+Section 6 now takes them from merged commits, each made into failing tests to be made to pass, with history
+and scored divided by order, and the pilot offers nothing. The reasons, each measured, are in section 6.
+The same reader confirmed it with two named changes, both made in revision 5:
+
+| Named change | Where |
+| --- | --- |
+| S1. Say exactly what order the commits are in and what a base descends from, and that items disjoint in their test files are not shown to come from different faults | Section 6: "Earlier, exactly", "Disjoint in their test files", "Its base" |
+| S2. Protect the whole of the tests' machinery and not only the chosen test files, and do not take a run that skipped the tests for a pass | Section 6: "Its check", and the item-maker's own tests |
+
+It also asked that the reader of the scored design be shown how often the ranker offers anything at all
+under these titles. That is in section 6's last paragraph.
 
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
