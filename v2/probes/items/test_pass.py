@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -78,7 +79,15 @@ PASS_FAKE = PASS_FAKE.replace('mode = config.get("mode", "passed")', '''mode = c
     if root.parent.name in config.get("reference_modes", {}):
         mode = config["reference_modes"][root.parent.name]
     if manifest.get("slot") == config.get("failed_at"):
-        mode = "failed"''')
+        mode = "failed"
+    if config.get("hex_fails_under"):
+        import re
+        # As a test of the component the items are made from does: it refuses what it writes when that holds 32
+        # hexadecimal characters in a row, and what it writes holds the path it runs under. Only the part of the
+        # path below the given directory is read: what lies above it is the operator's.
+        if re.search(r"[0-9a-f]{32}", os.path.relpath(str(root), config["hex_fails_under"])):
+            mode = "failed"''')
+assert "hex_fails_under" in PASS_FAKE
 PASS_FAKE = PASS_FAKE.replace('turn = {"worker": worker', '''import hashlib
     offered = None
     if "--arm" in words:
@@ -414,6 +423,72 @@ class PassScripts(unittest.TestCase):
         self.refused(self.plan(), "failed")
         self.assertFalse(self.out.exists())
 
+    def test_no_planned_turn_directory_holds_a_whole_commit(self):
+        self.ok(self.plan(extra=("--rounds", "2")))
+        rows = self.read("plan.json")["order"]
+        for row in rows:
+            self.assertIsNone(re.search(r"[0-9a-f]{32}", row["directory"]), row["directory"])
+            # Hand-worked: the item's first ten characters are there, so the name still says which item it is.
+            self.assertEqual(row["directory"], "turns/%03d-%s-%s" % (row["order"], row["kind"],
+                row["commit"][:10] if row["commit"] else "first-kept"))
+        self.assertEqual(len({row["directory"] for row in rows}), len(rows))
+
+    def renamed(self, pairs):
+        """Give list items other commit ids, each with its item's refs, and write the list again."""
+        for old, new in pairs:
+            row = next(e for e in self.entries if e["commit"] == old)
+            row["commit"] = new
+            for kind in ("base", "wrong", "reference"):
+                self.git("update-ref", "refs/yak-items/%s/%s" % (new, kind), row[kind])
+        self.write_list()
+        return dict(pairs)
+
+    def test_items_sharing_their_first_ten_characters_are_refused(self):
+        three, history = self.three, self.history_commits
+        cases = [("one of the three and one of the history", [(three[0], "a" * 10 + "1" * 30), (history[0], "a" * 10 + "2" * 30)]),
+                 ("two of the history", [(history[1], "b" * 10 + "1" * 30), (history[2], "b" * 10 + "2" * 30)]),
+                 ("two of the three", [(three[1], "c" * 10 + "1" * 30), (three[2], "c" * 10 + "2" * 30)])]
+        for which, pairs in cases:
+            with self.subTest(which=which):
+                names = self.renamed(pairs)
+                done = self.plan([names.get(c, c) for c in three], [names.get(c, c) for c in history])
+                self.refused(done, "share their first ten characters")
+                for new in names.values():
+                    self.assertIn(new, done.stdout + done.stderr)
+                self.assertFalse(self.out.exists())
+                self.assertFalse((self.bin / "calls.jsonl").exists())
+                self.renamed([(new, old) for old, new in pairs])
+        # The control: items that share only their first nine characters are told apart, and planned.
+        names = self.renamed([(history[3], "d" * 9 + "1" * 31), (history[4], "d" * 9 + "2" * 31)])
+        self.ok(self.plan(three, [names.get(c, c) for c in history]))
+        directories = [row["directory"] for row in self.read("plan.json")["order"]]
+        self.assertEqual(len(set(directories)), len(directories))
+        self.assertIn("turns/005-history-ddddddddd1", directories)
+
+    def test_a_check_that_reads_its_own_path_passes_under_the_pass_names(self):
+        """The fault: a test of the component the items are made from refuses what it writes when that holds 32
+        hexadecimal characters in a row, and what it writes holds its path. The stand-in room's check fails so too."""
+        self.configure(hex_fails_under=str(self.tmp))
+        # The control: the stand-in reads its directory, and under one named by a whole commit its check fails.
+        named = self.tmp / ("three-%s-1" % self.three[0])
+        done = self.run_script("reference.sh", named, self.items, self.three[0])
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(json.loads((named / "reference.json").read_text())["outcome"], "check failed")
+        self.ok(self.plan(history=self.history_commits[:4]))
+        self.ok(self.run_script("pass.sh", "screen", self.out))
+        screened = self.read("screen.json")
+        self.assertEqual(len(screened["results"]), 22)
+        self.assertEqual({r["receipt"]["outcome"] for r in screened["results"]}, {"passed"})
+        self.ok(self.run_script("pass.sh", "history", self.out))
+        turns = self.read("history.json")["turns"]
+        self.assertEqual([t["passed"] for t in turns], [True] * 5)
+        self.assertEqual(turns[0]["directory"], str(self.out / "turns" / ("001-thrown-away-" + self.history_commits[0][:10])))
+        for stage in ("screen", "turns"):
+            made = [path for path in (self.out / stage).rglob("*") if path.is_dir()]
+            self.assertTrue(made, stage)
+            for path in made:
+                self.assertIsNone(re.search(r"[0-9a-f]{32}", str(path.relative_to(self.out))), path)
+
     def test_existing_output_and_missing_store_leave_nothing(self):
         for key in ("YAK_STORE", "YAK_STORE_FILES"):
             self.refused(self.plan(env=dict(self.env, **{key: ""})), key)
@@ -554,7 +629,7 @@ class PassScripts(unittest.TestCase):
         self.assertEqual(self.read("screen.json")["kept_history"], self.history_commits[4:])
 
     def test_screen_any_of_six_three_failures_stops(self):
-        self.configure(reference_modes={"three-%s-6" % self.three[1]: "failed"})
+        self.configure(reference_modes={"three-%s-6" % self.three[1][:10]: "failed"})
         self.ok(self.plan(history=self.history_commits[:4]))
         self.refused(self.run_script("pass.sh", "screen", self.out), "rehearsal is not run")
         result = self.read("screen.json")
@@ -1159,6 +1234,18 @@ class SecondHalf(unittest.TestCase):
         self.assertEqual(len(arms["turns"]), turns)
         return arms
 
+    def test_arms_turns_pass_a_check_that_reads_its_own_path(self):
+        # The stand-in room's check fails where the path below the test's directory holds a whole commit id.
+        self.to_offers(hex_fails_under=str(self.tmp))
+        self.ok(self.stage("arms"))
+        turns = self.read("arms.json")["turns"]
+        self.assertEqual(len(turns), 9)
+        self.assertEqual({t["passed"] for t in turns}, {True})
+        made = [path for path in (self.out / "turns").rglob("*") if path.is_dir()]
+        self.assertTrue(made)
+        for path in made:
+            self.assertIsNone(re.search(r"[0-9a-f]{32}", str(path.relative_to(self.out))), path)
+
     def test_block_changed_between_turns_stops(self):
         self.to_list()
         self.ok(self.stage("offers"))
@@ -1166,7 +1253,7 @@ class SecondHalf(unittest.TestCase):
         self.configure(mutate_list=block, mutate_at=10)
         self.refused(self.stage("arms"), "changed after it was kept")
         self.assertEqual(len(self.read("arms.json")["turns"]), 1)
-        self.assertTrue((self.out / "turns" / ("010-arms-%s" % self.three[0]) / "turns.json").exists())
+        self.assertTrue((self.out / "turns" / ("010-arms-%s" % self.three[0][:10]) / "turns.json").exists())
 
     def test_record_block_differs_stops(self):
         self.to_list()

@@ -390,6 +390,9 @@ def pilot(args):
             say("stopped before turn " + slot)
             return 1
         say("turn %s begins: %s %s %s %s" % (slot, kind, commit, worker, flag))
+        # A known limit: this name holds the item's whole commit id, so a test that looks for 32 hexadecimal
+        # characters in a path it prints fails under it, whatever the code under test does. The pass names its
+        # own directories by ten characters for that reason; records.py's tables find these names again whole.
         turn_out = out / ("%s-%s-%s" % (slot, kind, commit))
         with (out / "pilot.log").open("a", encoding="utf-8") as log:
             code = subprocess.call(["sh", str(HERE / "turn.sh"), str(turn_out), str(items), commit, worker, flag],

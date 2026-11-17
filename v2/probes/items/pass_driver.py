@@ -79,6 +79,24 @@ SOURCE_DIR = "peer/superyak_peer"
 MARKS = {"same": "", "changed": " (changed since)", "gone": " (gone)"}
 KEPT = ("goals.json", "question.json", "answer.json", "offer.json", "block-route.txt", "block-shuffled.txt")
 ERRORS = (Refused, OSError, ValueError, TypeError, KeyError, AttributeError)
+SHORT = 10
+
+
+def short(commit):
+    """The item's name in a directory the pass makes for a room, a turn or a reference: its commit's first ten
+    characters. Every test of a check runs under that directory, and a test may refuse any text holding 32
+    hexadecimal characters in a row, as a secret; a whole commit id in its path would fail that test."""
+    return commit[:SHORT]
+
+
+def distinct_short(commits):
+    """Ten characters must still tell the items apart: refuse two different items whose names would be the same."""
+    seen = {}
+    for commit in commits:
+        held = seen.setdefault(short(commit), commit)
+        if held != commit:
+            raise Refused("%s and %s share their first ten characters: a directory's name would not tell them apart"
+                % (held, commit))
 
 
 def arm_order(seed, round_number, commit):
@@ -118,8 +136,9 @@ def clock_environment():
 
 
 def turn_row(number, kind, commit, arm="nothing", round_number=None):
+    # A turn's directory names its item by ten characters (short), never by the whole commit.
     return {"order": number, "kind": kind, "commit": commit, "arm": arm, "round": round_number,
-        "directory": "turns/%03d-%s-%s" % (number, kind, commit or "first-kept")}
+        "directory": "turns/%03d-%s-%s" % (number, kind, short(commit) if commit else "first-kept")}
 
 
 def make_plan(args):
@@ -133,6 +152,7 @@ def make_plan(args):
         raise Refused("a commit is repeated")
     if set(args.three) & set(args.history):
         raise Refused("three and history overlap")
+    distinct_short(args.three + args.history)
     if args.rounds < 1 or args.seed < 0:
         raise Refused("rounds must be positive and seed nonnegative")
     if not args.worker or any(c.isspace() for c in args.worker):
@@ -254,7 +274,7 @@ def screen(out):
                         load_plan(out)
                         if (out / "STOP").exists():
                             raise Refused("STOP before reference; the rehearsal is not run")
-                        directory = root / ("%s-%s-%d" % (kind, commit, repetition))
+                        directory = root / ("%s-%s-%d" % (kind, short(commit), repetition))
                         try:
                             pilot.reference(directory, plan["items_dir"], commit)
                             receipt = pilot.load(directory / "reference.json")
@@ -322,7 +342,8 @@ def kept_history(plan, screened):
 
 def history_rows(plan, kept):
     """The turns the history stage runs, worked from plan.json's order and screen.json's kept history only."""
-    rows = [dict(plan["order"][0], commit=kept[0], directory="turns/001-thrown-away-" + kept[0])]
+    # The thrown-away turn's commit is known only now; its directory is named as turn_row names every turn.
+    rows = [dict(plan["order"][0], commit=kept[0], directory=turn_row(1, "thrown-away", kept[0])["directory"])]
     return rows + [row for row in plan["order"] if row["kind"] == "history" and row["commit"] in kept]
 
 
