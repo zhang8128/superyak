@@ -15,23 +15,30 @@ room-plan.json: items (room/item), the strict projection the room CLI accepts.
 list.json: v, status, reason, list_sha256 (the room's printed admission hash),
 history_file_sha256, walks (file/sha256), teaching_count, not_teaching
 (attempt/item/standing/reason), turns (room/item/attempt), teach_plan_sha256,
-room_plan (path/sha256). Later room commands use room_plan.path as --plan.
+room_plan (path/sha256), rooms (room/item/attempt/sha256: what `yak offer goals` reads of each
+teaching room, as `item list`, `item turns` and `item walks` print it, canonically hashed).
+Later room commands use room_plan.path as --plan. Which turns may teach is worked from plan.json
+and screen.json; history.json and history-turns.jsonl are held against that.
 history.json: v, status, reason, turns: only the turns actually run, with
 order/kind/commit/directory/room/item/attempt/passed/clock_exit/driver_exit.
 The discarded turn is recorded here but never in teach-plan.json. Interrupted
 stages leave their directories and cannot be retried; use a new pass directory.
-offers.json: v, status, reason, list_sha256, store_check (the store's own check, as printed),
+offers.json: v, status, reason, list_sha256, store_check (the store's own check, as printed), store_file
+(file/sha256/bytes of the built store, kept after its check and verified before each ask),
 goal_limit (true only when the room refused an offer file for more than 64 goals), items (in the
 list's order: commit/title/base/directory/goals/answer_bytes/empty/refused, files (name ->
 file/sha256/bytes for goals.json, question.json, answer.json, offer.json, block-route.txt,
 block-shuffled.txt), and route/shuffled: sha256/bytes/places/roads/first_tracked_path/
-first_source_file/gone/changed). Kept under offers/<commit>/; offers/store is the store's file.
+first_source_file/gone/changed). Kept under offers/<commit>/; offers/store is the store's file. The
+store's error text is kept beside its output as <word>.stderr, never copied into a refusal.
 arms.json: v, status, reason, left_out (commits whose offer is empty), turns: order/kind/commit/
 arm/round/directory/room/began/ended/load_before/load_after (the pass's own, before and after
 the turn), driver_exit, item, base, attempt, passed, clock_exit. arms-turns.jsonl holds each
 finished turn as it ends.
-report.json / report.md: section 5's tables, from the files above and the rooms' walks. They
-may be made again; nothing else changes.
+report.json / report.md: section 5's tables, from the files above and the rooms' walks, made only
+after the plan's inputs, the list's files and rooms and the kept offer files are rechecked. Each
+stage's status and stop reason heads them; each turn is a result, rejected (with the arms stage's
+reason) or no verdict. They may be made again; nothing else changes.
 """
 import argparse
 import contextlib
@@ -278,20 +285,27 @@ def screen(out):
     return 0 if result["status"] == "ready" else 1
 
 
-def run_history(out):
-    out = Path(out).resolve()
-    plan = load_plan(out)
-    screened = pilot.load(out / "screen.json")
+def kept_history(plan, screened):
     if screened.get("status") != "ready" or screened.get("instrument_failure"):
         raise Refused("screen does not let the pass go on")
     kept = screened["kept_history"]
     if len(kept) < MIN_HISTORY or kept != [c for c in plan["history"] if c in kept]:
         raise Refused("screen has no usable kept history")
+    return kept
+
+
+def history_rows(plan, kept):
+    """The turns the history stage runs, worked from plan.json's order and screen.json's kept history only."""
+    rows = [dict(plan["order"][0], commit=kept[0], directory="turns/001-thrown-away-" + kept[0])]
+    return rows + [row for row in plan["order"] if row["kind"] == "history" and row["commit"] in kept]
+
+
+def run_history(out):
+    out = Path(out).resolve()
+    plan = load_plan(out)
+    rows = history_rows(plan, kept_history(plan, pilot.load(out / "screen.json")))
     new_stage(out, "turns")
     result = {"v": 1, "status": "stopped", "reason": None, "turns": []}
-    rows = [dict(plan["order"][0], commit=kept[0],
-        directory="turns/001-thrown-away-" + kept[0])]
-    rows += [row for row in plan["order"] if row["kind"] == "history" and row["commit"] in kept]
     try:
         with planned_environment(plan):
             for row in rows:
@@ -357,6 +371,35 @@ def checked_teach_rooms(plan, teach):
     return bindings
 
 
+PROVENANCE = ("kind", "commit", "directory", "room")
+
+
+def held_history(out, plan):
+    """Section 4 step 3: which turns may teach is worked from the plan and the screen, never from
+    history.json's own kind. history.json and its journal are held against that before any plan is made."""
+    rows = history_rows(plan, kept_history(plan, pilot.load(out / "screen.json")))
+    expected = [{"kind": row["kind"], "commit": row["commit"], "directory": str(out / row["directory"]),
+        "room": str(out / row["directory"] / "room")} for row in rows]
+    turns = pilot.load(out / "history.json")["turns"]
+    if [{key: turn.get(key) for key in PROVENANCE} for turn in turns] != expected:
+        raise Refused("history.json differs from the history turns the plan and screen allow")
+    journal = [json.loads(line) for line in (out / "history-turns.jsonl").read_text(encoding="utf-8").splitlines()]
+    if journal != turns:
+        raise Refused("history-turns.jsonl differs from the history turns in history.json")
+    # The first row is the thrown-away turn; it never teaches.
+    return turns[1:]
+
+
+def room_fingerprint(yak, room, item):
+    """What `yak offer goals` reads of a teaching room (its item's title, its turns with their standings and
+    changes, and its walks), as the room's own commands print it, canonically encoded and hashed."""
+    walks = pilot.command([yak, "--room", room, "item", "walks", item, "--json"]).decode("utf-8")
+    printed = {"items": json.loads(pilot.command([yak, "--room", room, "item", "list", "--json"])),
+        "turns": json.loads(pilot.command([yak, "--room", room, "item", "turns", item, "--json"])),
+        "walks": [json.loads(line) for line in walks.split("\n") if line.strip()]}
+    return pilot.digest(json.dumps(printed, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
+
+
 def check_walk_lines(path):
     """Count bytes including LF; bounded reads also handle a missing newline."""
     with Path(path).open("rb") as held:
@@ -376,13 +419,14 @@ def make_list(out):
         raise Refused("history did not complete")
     if (out / "history").exists() or (out / "list.json").exists():
         raise Refused("list already begun; begin again only in a new pass directory")
-    ran = [row for row in history["turns"] if row["kind"] == "history"]
+    ran = held_history(out, plan)
     expected = {"items": [{key: row[key] for key in ("room", "item", "attempt")} for row in ran]}
     teach_path = out / "teach-plan.json"
     if not teach_path.exists():
         pilot.write_json(teach_path, expected)
     teach = pilot.load(teach_path)
-    bindings = checked_teach_rooms(plan, teach)
+    with planned_environment(plan):
+        bindings = checked_teach_rooms(plan, teach)
     if teach != expected or bindings != expected["items"]:
         raise Refused("teach plan differs from the history turns actually run")
     # The room's PlanItem denies unknown fields. Keep the required attempt in
@@ -396,36 +440,40 @@ def make_list(out):
         pilot.write_json(room_plan_path, room_plan)
     result = {"v": 1, "status": "stopped", "reason": None, "list_sha256": None,
         "history_file_sha256": None, "walks": [], "teaching_count": 0, "not_teaching": [],
-        "turns": bindings, "teach_plan_sha256": records.sha256(teach_path), "room_plan": file_record(room_plan_path)}
+        "turns": bindings, "teach_plan_sha256": records.sha256(teach_path), "room_plan": file_record(room_plan_path),
+        "rooms": []}
     yak = plan["programs"]["yak"]["path"]
     walks = out / "history"
     try:
-        load_plan(out)
-        made = pilot.command([yak, "history", "make", "--plan", room_plan_path, "--measure", "share:1", "--out", walks]).decode().strip()
-        listing = pilot.load(walks / "history.json")
-        # Iterate the room's list, never directories, for walks and classifications.
-        for row in listing["turns"]:
-            path = walks / (row["attempt"] + ".jsonl")
-            check_walk_lines(path)
-            result["walks"].append({"file": str(path), "sha256": records.sha256(path)})
-            walk = pilot.load(path)
-            if walk.get("standing") == "passed_verified":
-                result["teaching_count"] += 1
-            else:
-                result["not_teaching"].append({"attempt": row["attempt"], "item": row["item"],
-                    "standing": walk.get("standing"), "reason": "share:1 requires passed_verified"})
-        admitted = pilot.command([yak, "history", "check", "--plan", room_plan_path,
-            "--list", walks / "history.json", "--walks", walks]).decode().strip()
-        if not re.fullmatch("[0-9a-f]{64}", admitted) or admitted != made:
-            raise Refused("history make and check disagree on the list hash")
-        result["list_sha256"] = admitted
-        result["history_file_sha256"] = records.sha256(walks / "history.json")
-        if result["history_file_sha256"] != admitted:
-            raise Refused("history check printed another list hash")
-        if result["teaching_count"] < MIN_HISTORY:
-            raise Refused("fewer than four turns teach")
-        load_plan(out)
-        result["status"] = "ready"
+        with planned_environment(plan):
+            load_plan(out)
+            made = pilot.command([yak, "history", "make", "--plan", room_plan_path, "--measure", "share:1", "--out", walks]).decode().strip()
+            listing = pilot.load(walks / "history.json")
+            # Iterate the room's list, never directories, for walks and classifications.
+            for row in listing["turns"]:
+                path = walks / (row["attempt"] + ".jsonl")
+                check_walk_lines(path)
+                result["walks"].append({"file": str(path), "sha256": records.sha256(path)})
+                walk = pilot.load(path)
+                if walk.get("standing") == "passed_verified":
+                    result["teaching_count"] += 1
+                else:
+                    result["not_teaching"].append({"attempt": row["attempt"], "item": row["item"],
+                        "standing": walk.get("standing"), "reason": "share:1 requires passed_verified"})
+            admitted = pilot.command([yak, "history", "check", "--plan", room_plan_path,
+                "--list", walks / "history.json", "--walks", walks]).decode().strip()
+            if not re.fullmatch("[0-9a-f]{64}", admitted) or admitted != made:
+                raise Refused("history make and check disagree on the list hash")
+            result["list_sha256"] = admitted
+            result["history_file_sha256"] = records.sha256(walks / "history.json")
+            if result["history_file_sha256"] != admitted:
+                raise Refused("history check printed another list hash")
+            if result["teaching_count"] < MIN_HISTORY:
+                raise Refused("fewer than four turns teach")
+            # What `offer goals` reads again from each teaching room, fingerprinted as the list is made.
+            result["rooms"] = [dict(row, sha256=room_fingerprint(yak, row["room"], row["item"])) for row in bindings]
+            load_plan(out)
+            result["status"] = "ready"
     except (Refused, OSError, ValueError, TypeError, KeyError) as error:
         result["reason"] = str(error)
     pilot.write_json(out / "list.json", result)
@@ -457,8 +505,9 @@ def unchanged(held, what):
         raise Refused("%s changed after it was kept: %s" % (what, held["file"]))
 
 
-def check_list(out, listed):
-    """Step 4's list, walks and plans are hashed and never change afterwards."""
+def check_list(out, listed, plan):
+    """Step 4's list, walks and plans are hashed and never change afterwards; nor does what `offer goals`
+    reads of each teaching room."""
     held = [(Path(out) / "history" / "history.json", listed["list_sha256"]),
             (Path(out) / "teach-plan.json", listed["teach_plan_sha256"]),
             (Path(listed["room_plan"]["path"]), listed["room_plan"]["sha256"])]
@@ -470,6 +519,10 @@ def check_list(out, listed):
             raise Refused("the list's file is missing: %s" % path) from None
         if actual != wanted:
             raise Refused("the list's file changed after the list: %s" % path)
+    with planned_environment(plan):
+        for row in listed["rooms"]:
+            if room_fingerprint(plan["programs"]["yak"]["path"], row["room"], row["item"]) != row["sha256"]:
+                raise Refused("a teaching room changed after the list: %s" % row["room"])
 
 
 def offer_empty(offer):
@@ -517,11 +570,14 @@ def block_summary(offer, arm, text):
 
 
 def store_call(store, words, kept, stdin=None):
-    done = subprocess.run([str(word) for word in [store, *words]], input=stdin, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE)
+    said = Path(kept).parent / ("%s.stderr" % words[0])
+    with said.open("xb") as stderr:
+        done = subprocess.run([str(word) for word in [store, *words]], input=stdin, stdout=subprocess.PIPE,
+            stderr=stderr)
     kept.write_bytes(done.stdout)
     if done.returncode:
-        raise Refused("the store's %s failed: %s" % (words[0], done.stderr.decode("utf-8", "replace").strip()))
+        # Another program's bytes never travel into the pass's own files: name where they are kept.
+        raise Refused("the store's %s failed with exit %d; its error text is kept in %s" % (words[0], done.returncode, said))
     return done.stdout
 
 
@@ -529,10 +585,10 @@ def make_offers(out):
     out = Path(out).resolve()
     plan = load_plan(out)
     listed = ready(out, "list.json", "pass.sh list")
-    check_list(out, listed)
+    check_list(out, listed, plan)
     root = new_stage(out, "offers")
     result = {"v": 1, "status": "stopped", "reason": None, "list_sha256": listed["list_sha256"],
-        "store_check": None, "goal_limit": False, "items": []}
+        "store_check": None, "store_file": None, "goal_limit": False, "items": []}
     yak, store = plan["programs"]["yak"]["path"], plan["programs"]["store"]["path"]
     repo = Path(plan["items_dir"]) / "repo"
     history = out / "history" / "history.json"
@@ -544,9 +600,10 @@ def make_offers(out):
                 root / "build.out")
             result["store_check"] = store_call(store, ["check", "--store", store_file], root / "check.out").decode(
                 "utf-8", "replace").strip()
+            result["store_file"] = kept_file(store_file)
             for commit in plan["three"]:
                 load_plan(out)
-                check_list(out, listed)
+                check_list(out, listed, plan)
                 entry = pilot.item_from(data, commit)
                 here = root / commit
                 here.mkdir()
@@ -561,6 +618,7 @@ def make_offers(out):
                 # The prototype's bytes: canonical JSON of the room's question, ASCII, one newline.
                 question = json.dumps(goals["question"], sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
                 (here / "question.json").write_bytes(question.encode("ascii"))
+                unchanged(result["store_file"], "the built store file")
                 item["answer_bytes"] = len(store_call(store, ["ask", "--store", store_file], here / "answer.json",
                     stdin=question.encode("ascii")))
                 made = subprocess.run([str(word) for word in (yak, "offer", "make", "--goals", here / "goals.json",
@@ -586,7 +644,7 @@ def make_offers(out):
         if all(item["empty"] for item in result["items"]):
             raise Refused("every offer is empty: no turn runs under the arms")
         load_plan(out)
-        check_list(out, listed)
+        check_list(out, listed, plan)
         result["status"] = "ready"
     except ERRORS as error:
         result["reason"] = str(error)
@@ -617,7 +675,7 @@ def run_arms(out):
     plan = load_plan(out)
     listed = ready(out, "list.json", "pass.sh list")
     offered = ready(out, "offers.json", "pass.sh offers")
-    check_list(out, listed)
+    check_list(out, listed, plan)
     kept = check_offers(plan, offered)
     new_stage(out, "arms")
     yak = plan["programs"]["yak"]["path"]
@@ -628,7 +686,7 @@ def run_arms(out):
         with planned_environment(plan):
             for row in rows:
                 load_plan(out)
-                check_list(out, listed)
+                check_list(out, listed, plan)
                 if (out / "STOP").exists():
                     raise Refused("STOP before turn %d" % row["order"])
                 item = check_offers(plan, offered)[row["commit"]]
@@ -686,6 +744,7 @@ def run_arms(out):
                 with (out / "arms-turns.jsonl").open("a", encoding="utf-8") as journal:
                     journal.write(json.dumps(held, sort_keys=True) + "\n")
         load_plan(out)
+        check_list(out, listed, plan)
         check_offers(plan, offered)
         result["status"] = "complete"
     except ERRORS as error:
@@ -696,13 +755,14 @@ def run_arms(out):
 
 
 def first_named(steps, wanted):
-    """By the time a step was first seen (seen_ms), then its place; a step's number counts from nought."""
-    found = [(step.get("seen_ms") is None, step.get("seen_ms") or 0, number, path)
-        for number, step in enumerate(steps) for path, _ in (step.get("named") or []) if wanted(path)]
+    """By the time a step was first seen (seen_ms), then the step's recorded seq, then the name's place in the
+    step's own named list; a step with no seen_ms comes after every step with one. The step reported is its seq."""
+    found = [((step.get("seen_ms") is None, step.get("seen_ms") or 0, step["seq"], place), step, path)
+        for step in steps for place, (path, _) in enumerate(step.get("named") or []) if wanted(path)]
     if not found:
         return None
-    unseen, seen, number, path = min(found)
-    return {"step": number, "second": None if unseen else seen / 1000, "path": path}
+    (unseen, seen, seq, _), step, path = min(found, key=lambda held: held[0])
+    return {"step": seq, "second": None if unseen else seen / 1000, "path": path}
 
 
 def turn_walk(yak, row):
@@ -728,14 +788,31 @@ def turn_numbers(directory):
         ("fresh_in", "cache_write", "cache_read", "output")}, "tokens_whole": tokens.get("complete")}
 
 
+def recorded_verdict(directory):
+    """The verdict the turn's room recorded for its one attempt, or None where it recorded none."""
+    try:
+        attempt, _ = turn_numbers(directory)
+    except (OSError, ValueError):
+        return None
+    return attempt.get("passed") if type(attempt.get("passed")) is bool else None
+
+
 def make_report(out):
     out = Path(out).resolve()
     plan = load_plan(out)
     if not (out / "arms.json").exists():
         raise Refused("arms.json is missing: run pass.sh arms first")
-    arms = pilot.load(out / "arms.json")
+    # Nothing is read for the report until every input it rests on is what the stages kept.
+    listed = ready(out, "list.json", "pass.sh list")
+    check_list(out, listed, plan)
     offered = pilot.load(out / "offers.json")
-    listed = pilot.load(out / "list.json")
+    check_offers(plan, offered)
+    with planned_environment(plan):
+        return write_report(out, plan, listed, offered)
+
+
+def write_report(out, plan, listed, offered):
+    arms = pilot.load(out / "arms.json")
     history = pilot.load(out / "history.json")
     screened = pilot.load(out / "screen.json")
     yak = plan["programs"]["yak"]["path"]
@@ -751,9 +828,15 @@ def make_report(out):
         line = {key: row.get(key) for key in ("order", "round", "commit", "arm", "passed", "began", "ended",
             "load_before", "load_after", "clock_exit")}
         if row.get("attempt") is None:
-            line["note"] = "no verdict recorded: the pass stopped here"
+            # The arms stage stopped at this turn. A verdict the room recorded and the stage did not accept is a
+            # rejected observation, with the stage's reason; a turn with no verdict is told apart from it.
+            if recorded_verdict(row["directory"]) is None:
+                line.update(outcome="no verdict", note="no verdict recorded: the pass stopped here")
+            else:
+                line.update(outcome="rejected", reason=arms["reason"], note="rejected: %s" % arms["reason"])
             turns.append(line)
             continue
+        line["outcome"] = "result"
         attempt, numbers = turn_numbers(row["directory"])
         line.update(numbers)
         made = (attempt.get("offered") or {}).get("made")
@@ -786,7 +869,9 @@ def make_report(out):
         _, numbers = turn_numbers(row["directory"])
         history_rows.append({"commit": row["commit"], "passed": row.get("passed"),
             "worker_seconds": numbers["worker_seconds"], "active_seconds": numbers["active_seconds"]})
-    report = {"v": 1, "conventions": CONVENTIONS, "arms_status": arms["status"], "arms_reason": arms["reason"],
+    stages = [{"stage": name, "status": held.get("status"), "reason": held.get("reason")} for name, held in
+        (("screen", screened), ("history", history), ("list", listed), ("offers", offered), ("arms", arms))]
+    report = {"v": 1, "conventions": CONVENTIONS, "stages": stages, "arms_status": arms["status"], "arms_reason": arms["reason"],
         "offers_status": offered["status"], "offers_reason": offered["reason"], "list_sha256": offered["list_sha256"],
         "store_check": offered["store_check"], "left_out": arms["left_out"], "turns": turns, "blocks": blocks,
         "reference_changes": changes, "items": items, "items_with_ratios": sum(item["ratios"] is not None for item in items),
@@ -801,8 +886,9 @@ def make_report(out):
     return 0
 
 
-CONVENTIONS = ("Conventions: a step's number counts from nought; \"first names\" is by seen_ms; a source file is one "
-    "under %s/; where a walk names none, the cell says so." % SOURCE_DIR)
+CONVENTIONS = ("Conventions: a step's number is the seq its walk records, counted from nought; \"first names\" is by "
+    "seen_ms, then seq, then the name's place within its step; a step with no seen_ms comes after every step with "
+    "one; a source file is one under %s/; where a walk names none, the cell says so." % SOURCE_DIR)
 
 
 def cell(value):
@@ -815,14 +901,17 @@ def cell(value):
 
 def report_markdown(report):
     lines = ["# The pass: what was recorded", "", report["conventions"], "",
-        "Nothing here is tested for a difference, and no spread is worked from it.", "",
-        "The list: %s. The store's own check: %s." % (report["list_sha256"], report["store_check"]), ""]
+        "Nothing here is tested for a difference, and no spread is worked from it.", ""]
+    lines += ["- %s: %s%s" % (stage["stage"], stage["status"], "" if stage["reason"] is None else ", because " + stage["reason"])
+        for stage in report["stages"]]
+    lines += ["", "The list: %s. The store's own check: %s." % (report["list_sha256"], report["store_check"]), ""]
     lines += ["## Each turn", "", "| place | round | item | arm | passed | worker s | active s | steps | unknown steps | "
         "tokens | whole | began | ended | load before | load after | block sha256 | block bytes | empty | first reference file | "
         "first source file |", "|" + " --- |" * 20]
     for t in report["turns"]:
         block = t.get("block") or {}
-        lines.append("| %s |" % " | ".join(str(x) for x in (t["order"], t["round"], t["commit"][:10], t["arm"], t["passed"],
+        lines.append("| %s |" % " | ".join(str(x) for x in (t["order"], t["round"], t["commit"][:10], t["arm"],
+            t["passed"] if t["outcome"] == "result" else t["note"],
             t.get("worker_seconds"), t.get("active_seconds"), t.get("steps"), t.get("unknown_steps"), t.get("tokens"),
             t.get("tokens_whole"), t["began"], t["ended"], t["load_before"], t["load_after"], block.get("block_sha256", "-"),
             block.get("block_bytes", "-"), block.get("empty", "-"),

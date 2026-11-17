@@ -87,12 +87,18 @@ PASS_FAKE = PASS_FAKE.replace('turn = {"worker": worker', '''import hashlib
         offered.update(config.get("offered", {}))
     turn = {"attempt": "a" + hashlib.sha256(str(room).encode()).hexdigest()[:12], "offered": offered,
         "worker": worker''')
+PASS_FAKE = PASS_FAKE.replace('    out.write(json.dumps(args) + "\\n")\n', '''    out.write(json.dumps(args) + "\\n")
+with (here / "paths.jsonl").open("a") as out:
+    out.write(json.dumps([args, os.environ.get("PATH")]) + "\\n")
+''', 1)
 PASS_FAKE = PASS_FAKE.replace('(root.parent / "STOP").touch()', '(root.parent.parent / "STOP").touch()')
 PASS_FAKE = PASS_FAKE.replace('(room / "turns.json").write_text', '''if config.get("no_verdict"):
         turn["passed"] = None
     (room / "turns.json").write_text''')
 PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif words[:2] == ["item", "list"]:
-    print(json.dumps(config.get("items", [{"id": "i0123456789ab"}])))
+    add = json.loads((room / "add.json").read_text()) if (room / "add.json").is_file() else []
+    title = add[add.index("--title") + 1] if "--title" in add else None
+    print(json.dumps(config.get("items", [{"id": "i0123456789ab", "title": title}])))
 elif words[:2] == ["item", "turns"]:''')
 
 # The second half: the room's offer commands, a block in the prompt, the record of
@@ -196,7 +202,7 @@ PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif wo
             "base": (room / "base.txt").read_text(), "steps": config.get("walks", {}).get(slot,
             %s), "changed": []}, sort_keys=True, separators=(",", ":")))
 elif words[:2] == ["item", "turns"]:''' % json.dumps(WALK_STEPS))
-for _needle in ("block = render", "input=prompt", 'offered["made"]', "base.txt", '["item", "walks"]', 'args[:2] == ["offer", "make"]'):
+for _needle in ("paths.jsonl", "block = render", "input=prompt", 'offered["made"]', "base.txt", '["item", "walks"]', 'args[:2] == ["offer", "make"]'):
     assert _needle in PASS_FAKE, _needle
 
 STORE = r'''
@@ -208,6 +214,8 @@ with (here / "store-calls.jsonl").open("a") as out:
     out.write(json.dumps(args) + "\n")
 def word(name):
     return args[args.index(name) + 1]
+if args[0] in config.get("fail", {}):
+    print(config["fail"][args[0]], file=sys.stderr); sys.exit(4)
 if args[0] == "build":
     walks = args[args.index("--list") + 2:]
     listed = hashlib.sha256(pathlib.Path(word("--list")).read_bytes()).hexdigest()
@@ -219,6 +227,9 @@ if args[0] == "check":
 if args[0] == "ask":
     question = json.loads(sys.stdin.read())
     store = json.loads(pathlib.Path(word("--store")).read_text())
+    if config.get("touch_store"):
+        with pathlib.Path(word("--store")).open("a") as held:
+            held.write(" ")
     answers = []
     for goal in question["goals"]:
         if config.get("all_none") or goal in config.get("none", ["added.txt"]):
@@ -723,18 +734,56 @@ class PassScripts(unittest.TestCase):
         true = history["turns"][1]["attempt"]
         self.assertNotEqual(true, "afedcba987654")
         history["turns"][1]["attempt"] = "afedcba987654"
-        (self.out / "history.json").write_text(json.dumps(history))
+        self.write_history(history)
         teach = {"items": [{key: t[key] for key in ("room", "item", "attempt")} for t in history["turns"][1:]]}
         (self.out / "teach-plan.json").write_text(json.dumps(teach))
-        self.refused(self.run_script("pass.sh", "list", self.out), "differs from the history turns")
+        self.refused(self.run_script("pass.sh", "list", self.out), "teach plan differs from the history turns")
         self.assertFalse((self.out / "list.json").exists())
         # The control: the room's own attempt back in both files, and the list is made.
         history["turns"][1]["attempt"] = true
-        (self.out / "history.json").write_text(json.dumps(history))
+        self.write_history(history)
         teach["items"][0]["attempt"] = true
         (self.out / "teach-plan.json").write_text(json.dumps(teach))
         self.ok(self.run_script("pass.sh", "list", self.out))
         self.assertEqual(self.read("list.json")["status"], "ready")
+
+    def write_history(self, history):
+        """history.json and its journal, edited together."""
+        (self.out / "history.json").write_text(json.dumps(history))
+        (self.out / "history-turns.jsonl").write_text("".join(json.dumps(t, sort_keys=True) + "\n" for t in history["turns"]))
+
+    def test_list_works_the_teaching_turns_from_the_plan_and_screen(self):
+        """history.json's own kind and rooms never say which turns teach: each edit is refused, nothing written."""
+        self.ready_history()
+        history = self.read("history.json")
+        journal = (self.out / "history-turns.jsonl").read_text()
+        probe = history["turns"][0]  # the thrown-away turn's room: a real room, one attempt, under nothing
+        cases = [("thrown-away kind", lambda t: t[0].update(kind="history")),
+                 ("history kind", lambda t: t[2].update(kind="thrown-away")),
+                 ("room", lambda t: t[1].update(room=probe["room"])),
+                 ("directory", lambda t: t[1].update(directory=probe["directory"])),
+                 ("commit", lambda t: t[1].update(commit=t[2]["commit"])),
+                 ("added", lambda t: t.append(dict(t[1]))),
+                 ("dropped", lambda t: t.pop(3)),
+                 ("swapped", lambda t: t.__setitem__(slice(1, 3), [t[2], t[1]]))]
+        for name, edit in cases:
+            edited = json.loads(json.dumps(history))
+            edit(edited["turns"])
+            self.write_history(edited)
+            self.refused(self.run_script("pass.sh", "list", self.out), "history.json differs from the history turns the plan")
+            for left in ("teach-plan.json", "room-plan.json", "list.json", "history"):
+                self.assertFalse((self.out / left).exists(), (name, left))
+        # The journal is held too: a room moved in it alone is refused.
+        (self.out / "history.json").write_text(json.dumps(history))
+        lines = journal.splitlines(True)
+        moved = json.loads(lines[1])
+        moved["room"] = probe["room"]
+        (self.out / "history-turns.jsonl").write_text("".join(lines[:1] + [json.dumps(moved) + "\n"] + lines[2:]))
+        self.refused(self.run_script("pass.sh", "list", self.out), "history-turns.jsonl differs")
+        self.assertFalse((self.out / "teach-plan.json").exists())
+        # The control: both files as the history stage wrote them, and the list is made.
+        (self.out / "history-turns.jsonl").write_text(journal)
+        self.ok(self.run_script("pass.sh", "list", self.out))
 
     def test_list_stops_on_admission_failure(self):
         self.ready_history(check_refuses=True)
@@ -891,7 +940,8 @@ class SecondHalf(unittest.TestCase):
         self.ok(self.stage("report"))
         report = self.read("report.json")
         self.assertEqual(len(report["turns"]), 18)
-        self.assertIn("Conventions: a step's number counts from nought", (self.out / "report.md").read_text())
+        self.assertIn("Conventions: a step's number is the seq its walk records", (self.out / "report.md").read_text())
+        self.assertEqual({t["outcome"] for t in report["turns"]}, {"result"})
         for t in report["turns"]:
             self.assertEqual(t["first_source_file"], {"step": 2, "second": 2.5, "path": "peer/superyak_peer/ref.py"})
             self.assertEqual(t["first_reference_file"], {"step": 2, "second": 2.5, "path": "peer/superyak_peer/ref.py"})
@@ -1004,6 +1054,7 @@ class SecondHalf(unittest.TestCase):
         self.configure(made={str(offering[0]): {"block_sha256": "0" * 64}})
         self.refused(self.stage("arms"), "hash or length is not the one kept")
         self.assertEqual(len(self.read("arms.json")["turns"]), offering[0] - 9)
+        self.reported(offering[0], "rejected", "turn %d: the block's hash or length is not the one kept" % offering[0])
 
     def test_record_block_length_differs_stops(self):
         self.to_list()
@@ -1024,6 +1075,22 @@ class SecondHalf(unittest.TestCase):
 
     def test_room_at_another_base_stops(self):
         self.arms_stop("another base", 2, room_bases={"11": "0" * 40})
+        self.reported(11, "rejected", "turn 11: the item's room holds another base than its offer's")
+
+    def reported(self, order, outcome, reason):
+        """The report tells a result, a rejected observation and no verdict apart, and gives the stop reason."""
+        self.ok(self.stage("report"))
+        row = next(t for t in self.read("report.json")["turns"] if t["order"] == order)
+        self.assertEqual(row["outcome"], outcome)
+        self.assertIsNone(row["passed"])
+        markdown = (self.out / "report.md").read_text()
+        self.assertIn("- arms: stopped, because " + reason, markdown)
+        if outcome == "rejected":
+            self.assertEqual(row["reason"], reason)
+            self.assertIn("| rejected: " + reason + " |", markdown)
+        else:
+            self.assertNotIn("reason", row)
+            self.assertIn("| no verdict recorded: the pass stopped here |", markdown)
 
     def test_the_base_is_read_from_the_rooms_walk_of_the_turns_own_attempt(self):
         """The real room prints an item's base only in the walk it exports; `item show` does not give it."""
@@ -1034,6 +1101,7 @@ class SecondHalf(unittest.TestCase):
 
     def test_lost_turn_stops(self):
         self.arms_stop("no verdict", 3, lost_at=12)
+        self.reported(12, "no verdict", "turn 12 has no verdict or not exactly one attempt")
 
     def test_STOP_between_turns(self):
         arms = self.arms_stop("STOP before turn 12", 2, stop_at=11)
@@ -1051,6 +1119,7 @@ class SecondHalf(unittest.TestCase):
         report = self.read("report.json")
         row = next(t for t in report["turns"] if t["order"] == 13)
         self.assertFalse(row["passed"])
+        self.assertEqual(row["outcome"], "result")
         self.assertEqual((row["worker_seconds"], row["active_seconds"]), (0.002, 0.006))
         self.assertEqual(report["items_with_ratios"], 2)
         ratios = {i["commit"]: i["ratios"] for i in report["items"]}
@@ -1060,7 +1129,10 @@ class SecondHalf(unittest.TestCase):
 
     def test_report_blocks_apart_and_a_walk_naming_no_source_file(self):
         quiet = [{"seq": 0, "named": [["README.md", "5" * 40]], "seen_ms": 900}]
-        self.to_offers(walks={"10": quiet}, states={"docs/notes.md": "gone", "README.md": "changed"})
+        sparse = [{"seq": 0, "named": [["README.md", "5" * 40]], "seen_ms": 900},
+                  {"seq": 3, "named": [["docs/notes.md", "5" * 40]], "seen_ms": 950},
+                  {"seq": 7, "named": [["peer/superyak_peer/ref.py", "7" * 40]], "seen_ms": 990}]
+        self.to_offers(walks={"10": quiet, "11": sparse}, states={"docs/notes.md": "gone", "README.md": "changed"})
         self.ok(self.stage("arms"))
         self.ok(self.stage("report"))
         report = self.read("report.json")
@@ -1068,6 +1140,8 @@ class SecondHalf(unittest.TestCase):
         self.assertIsNone(row["first_source_file"])
         self.assertIsNone(row["first_reference_file"])
         self.assertEqual(row["steps"], 1)
+        row = next(t for t in report["turns"] if t["order"] == 11)
+        self.assertEqual(row["first_source_file"], {"step": 7, "second": 0.99, "path": "peer/superyak_peer/ref.py"})
         block = report["blocks"][0]
         self.assertEqual(block["route"]["first_tracked_path"], "peer/superyak_peer/start.py")
         self.assertEqual(block["route"]["first_source_file"], "peer/superyak_peer/start.py")
@@ -1120,6 +1194,106 @@ class SecondHalf(unittest.TestCase):
         self.refused(self.stage("list"), "fewer than four")
         self.refused(self.stage("offers"), "list.json does not let")
         self.assertFalse((self.out / "offers").exists())
+
+    def test_a_teaching_room_changed_after_the_list_stops_offers_and_arms(self):
+        """`offer goals` reads the rooms again: their title and turns are held as the room prints them."""
+        self.to_list()
+        room = Path(self.read("list.json")["rooms"][2]["room"])
+        add = (room / "add.json").read_text()
+        words = json.loads(add)
+        words[words.index("--title") + 1] = "another title"
+        (room / "add.json").write_text(json.dumps(words))
+        self.refused(self.stage("offers"), "a teaching room changed after the list: " + str(room))
+        self.assertFalse((self.out / "offers").exists())
+        (room / "add.json").write_text(add)
+        turns = (room / "turns.json").read_text()
+        (room / "turns.json").write_text(json.dumps(json.loads(turns) * 2))
+        self.refused(self.stage("offers"), "a teaching room changed after the list: " + str(room))
+        (room / "turns.json").write_text(turns)
+        self.ok(self.stage("offers"))
+        (room / "turns.json").write_text(json.dumps(json.loads(turns) * 2))
+        self.refused(self.stage("arms"), "a teaching room changed after the list: " + str(room))
+        self.assertFalse((self.out / "arms").exists())
+
+    def test_the_built_store_file_changed_between_asks_stops_offers(self):
+        self.store_config(touch_store=True)
+        self.to_list()
+        self.refused(self.stage("offers"), "the built store file changed after it was kept")
+        offers = self.read("offers.json")
+        self.assertEqual(offers["store_file"]["file"], str(self.out / "offers" / "store"))
+        self.assertEqual(len(offers["items"]), 2)
+        self.assertIsNone(offers["items"][1]["answer_bytes"])
+
+    def test_the_stores_own_error_text_stays_in_its_file(self):
+        self.store_config(fail={"check": "the store's own words"})
+        self.to_list()
+        self.refused(self.stage("offers"), "the store's check failed with exit 4; its error text is kept in "
+            + str(self.out / "offers" / "check.stderr"))
+        self.assertNotIn("own words", (self.out / "offers.json").read_text())
+        self.assertEqual((self.out / "offers" / "check.stderr").read_text(), "the store's own words\n")
+
+    def test_list_and_report_run_under_the_planned_environment(self):
+        decoy = self.tmp / "decoy"
+        decoy.mkdir()
+        for name in ("git", "python3"):
+            (decoy / name).write_text("#!/bin/sh\necho %s >> %s\nexit 1\n" % (name, decoy / "ran"))
+            (decoy / name).chmod(0o755)
+        self.ok(self.plan())
+        self.assertEqual(self.screen(), 0)
+        self.ok(self.stage("history"))
+        planned = self.read("plan.json")["environment"]["PATH"]
+        caller = dict(self.env, PATH=str(decoy) + os.pathsep + self.env["PATH"])
+        driver = module("pass_driver")
+        paths = self.bin / "paths.jsonl"
+        for stage in ("list", "report"):
+            if stage == "report":
+                self.ok(self.stage("offers"))
+                self.ok(self.stage("arms"))
+            paths.unlink()
+            with mock.patch.dict(os.environ, caller, clear=True), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(getattr(driver, "make_" + stage)(self.out), 0, stage)
+            self.assertEqual({held for _, held in map(json.loads, paths.read_text().splitlines())}, {planned}, stage)
+            self.assertFalse((decoy / "ran").exists(), stage)
+        # A planned program that has moved is refused, as for the other stages.
+        (self.bin / "python3").rename(self.tmp / "moved")
+        self.refused(self.stage("report"), "program lookup changed: python3")
+
+    def test_arms_end_and_report_recheck_every_kept_input(self):
+        self.to_offers()
+        listed = self.read("list.json")
+        exported = self.out / "history" / "history.json"
+        original = exported.read_bytes()
+        # The stand-in room writes over the list's history.json during the last arm turn.
+        self.configure(mutate_list=str(exported), mutate_at=18)
+        self.refused(self.stage("arms"), "the list's file changed after the list: " + str(exported))
+        arms = self.read("arms.json")
+        self.assertEqual((arms["status"], len(arms["turns"])), ("stopped", 9))
+        self.assertIsNotNone(arms["turns"][-1]["attempt"])
+        self.refused(self.stage("report"), "the list's file changed after the list: " + str(exported))
+        self.assertFalse((self.out / "report.json").exists())
+        exported.write_bytes(original)
+        item = self.read("offers.json")["items"][0]
+        room = Path(listed["rooms"][0]["room"])
+        for path, changed, reason in (
+                (self.out / "teach-plan.json", None, "the list's file changed after the list: "),
+                (Path(listed["walks"][0]["file"]), None, "the list's file changed after the list: "),
+                (Path(item["files"]["block-route.txt"]["file"]), None, "a kept offer file changed after it was kept: "),
+                (room / "turns.json", lambda data: json.dumps(json.loads(data) * 2).encode(),
+                    "a teaching room changed after the list: ")):
+            data = path.read_bytes()
+            path.write_bytes(changed(data) if changed else data + b" ")
+            self.refused(self.stage("report"), reason + str(room if changed else path))
+            self.assertFalse((self.out / "report.json").exists())
+            path.write_bytes(data)
+        self.ok(self.stage("report"))
+
+    def test_a_manifest_without_its_answer_key_is_refused_before_arms(self):
+        self.to_offers()
+        offers = self.read("offers.json")
+        del offers["items"][1]["files"]["answer.json"]
+        (self.out / "offers.json").write_text(json.dumps(offers))
+        self.refused(self.stage("arms"), "offers.json does not keep every file of " + self.three[1])
+        self.assertFalse((self.out / "arms").exists())
 
     def run_in_process(self, failures=()):
         driver = module("pass_driver")
@@ -1202,6 +1376,38 @@ class UtilityContracts(unittest.TestCase):
             self.assertIsNone(driver.jail_program())
         with mock.patch.object(driver.sys, "platform", "unsupported"), mock.patch.object(driver.Path, "is_file", return_value=True):
             self.assertIsNone(driver.jail_program())
+
+    def test_first_named_keeps_the_steps_order_of_names_and_its_seq(self):
+        driver = module("pass_driver")
+        source = lambda path: path.startswith("peer/superyak_peer/")
+        one = [{"seq": 0, "named": [["peer/superyak_peer/z.py", "1" * 40], ["peer/superyak_peer/a.py", "2" * 40]],
+            "seen_ms": 1000}]
+        self.assertEqual(driver.first_named(one, source), {"step": 0, "second": 1.0, "path": "peer/superyak_peer/z.py"})
+        sparse = [{"seq": 0, "named": [["README.md", "1" * 40]], "seen_ms": 10},
+                  {"seq": 3, "named": [["peer/superyak_peer/b.py", "1" * 40]], "seen_ms": 30},
+                  {"seq": 7, "named": [["peer/superyak_peer/a.py", "1" * 40]], "seen_ms": 30}]
+        # Seen at the same time: the lower seq first, and the step reported is the seq recorded.
+        self.assertEqual(driver.first_named(sparse, source), {"step": 3, "second": 0.03, "path": "peer/superyak_peer/b.py"})
+        self.assertEqual(driver.first_named(sparse[2:], source)["step"], 7)
+        # A step with no seen_ms comes after every step with one, and alone gives no second.
+        unseen = [{"seq": 0, "named": [["peer/superyak_peer/early.py", "1" * 40]], "seen_ms": None},
+                  {"seq": 1, "named": [["peer/superyak_peer/late.py", "1" * 40]], "seen_ms": 5000}]
+        self.assertEqual(driver.first_named(unseen, source)["path"], "peer/superyak_peer/late.py")
+        self.assertEqual(driver.first_named(unseen[:1], source), {"step": 0, "second": None, "path": "peer/superyak_peer/early.py"})
+
+    def test_block_listing_refuses_a_path_left_out_twice_or_with_another_mark(self):
+        driver = module("pass_driver")
+        offer = {"goals": [{"path": "docs/a.md", "state": "same", "route": {"roads": [
+            {"to": "peer/superyak_peer/b.py", "state": "changed"}, {"to": "docs/c.md", "state": "gone"}]}}]}
+        route = "ROUTE\n1. docs/a.md\n   to peer/superyak_peer/b.py (changed since)\n   then to docs/c.md (gone)\n"
+        self.assertEqual(len(driver.block_listing(offer, "route", route)), 3)
+        with self.assertRaisesRegex(driver.Refused, "route block does not name every path"):
+            driver.block_listing(offer, "route", route.replace("docs/c.md", "docs/other.md"))
+        lines = ["- docs/c.md (gone)", "- docs/a.md", "- peer/superyak_peer/b.py (changed since)"]
+        self.assertEqual(len(driver.block_listing(offer, "shuffled", "\n".join(lines) + "\n")), 3)
+        for text in (lines[:2], lines + lines[:1], lines[:1] + ["- docs/a.md (changed since)"] + lines[2:]):
+            with self.assertRaisesRegex(driver.Refused, "shuffled block does not list each path of its offer once"):
+                driver.block_listing(offer, "shuffled", "\n".join(text) + "\n")
 
     def test_clock_environment_matches_pilot_defaults_and_optionals(self):
         driver = module("pass_driver")
@@ -1592,7 +1798,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 40, "cached_input_toke
             self.equal([[p for p, _ in s["named"]] for s in walk["steps"]],
                 [["README.md"], [self.START], [self.SOURCE]], walk_path, "real walk's named paths")
             for field, number, path in (("first_source_file", 1, self.START), ("first_reference_file", 2, self.SOURCE)):
-                expected = {"step": number, "path": path, "second": walk["steps"][number]["seen_ms"] / 1000}
+                expected = {"step": walk["steps"][number]["seq"], "path": path, "second": walk["steps"][number]["seen_ms"] / 1000}
                 self.equal(line[field], expected, self.out / "report.json", field + " from " + str(walk_path))
         return ran, listed
 
