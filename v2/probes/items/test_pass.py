@@ -709,6 +709,27 @@ class PassScripts(unittest.TestCase):
         (self.out / "history.json").write_text(json.dumps(history))
         self.refused(self.run_script("pass.sh", "list", self.out), "differs from the history turns")
 
+    def test_list_holds_each_rooms_own_attempt_against_both_files(self):
+        """The history's record and the teach plan can agree with each other and still not be what a room
+        holds. Only the room's own attempt tells: a mutant that dropped that comparison passed every test."""
+        self.ready_history()
+        history = self.read("history.json")
+        true = history["turns"][1]["attempt"]
+        self.assertNotEqual(true, "afedcba987654")
+        history["turns"][1]["attempt"] = "afedcba987654"
+        (self.out / "history.json").write_text(json.dumps(history))
+        teach = {"items": [{key: t[key] for key in ("room", "item", "attempt")} for t in history["turns"][1:]]}
+        (self.out / "teach-plan.json").write_text(json.dumps(teach))
+        self.refused(self.run_script("pass.sh", "list", self.out), "differs from the history turns")
+        self.assertFalse((self.out / "list.json").exists())
+        # The control: the room's own attempt back in both files, and the list is made.
+        history["turns"][1]["attempt"] = true
+        (self.out / "history.json").write_text(json.dumps(history))
+        teach["items"][0]["attempt"] = true
+        (self.out / "teach-plan.json").write_text(json.dumps(teach))
+        self.ok(self.run_script("pass.sh", "list", self.out))
+        self.assertEqual(self.read("list.json")["status"], "ready")
+
     def test_list_stops_on_admission_failure(self):
         self.ready_history(check_refuses=True)
         self.refused(self.run_script("pass.sh", "list", self.out), "stand-in admission")
