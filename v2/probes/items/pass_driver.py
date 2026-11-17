@@ -49,8 +49,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
+import urllib.parse
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -390,13 +392,32 @@ def held_history(out, plan):
     return turns[1:]
 
 
+def verdict_times(room):
+    """When each verdict arrived. The room's ranker breaks ties by it and none of the room's commands prints
+    it, so it is read from the room's own record, opened for reading only."""
+    path = Path(room) / "room.sqlite3"
+    if not path.is_file():
+        raise Refused("the room's record is missing: " + str(path))
+    try:
+        held = sqlite3.connect("file:" + urllib.parse.quote(str(path)) + "?mode=ro", uri=True)
+        try:
+            return [[attempt, recorded] for attempt, recorded in
+                held.execute("SELECT attempt, recorded FROM verdicts ORDER BY attempt")]
+        finally:
+            held.close()
+    except sqlite3.Error:
+        raise Refused("the room's record of when verdicts arrived cannot be read: " + str(path)) from None
+
+
 def room_fingerprint(yak, room, item):
     """What `yak offer goals` reads of a teaching room (its item's title, its turns with their standings and
-    changes, and its walks), as the room's own commands print it, canonically encoded and hashed."""
+    changes, its walks, and when each verdict arrived), canonically encoded and hashed. All but the last is
+    as the room's own commands print it."""
     walks = pilot.command([yak, "--room", room, "item", "walks", item, "--json"]).decode("utf-8")
     printed = {"items": json.loads(pilot.command([yak, "--room", room, "item", "list", "--json"])),
         "turns": json.loads(pilot.command([yak, "--room", room, "item", "turns", item, "--json"])),
-        "walks": [json.loads(line) for line in walks.split("\n") if line.strip()]}
+        "walks": [json.loads(line) for line in walks.split("\n") if line.strip()],
+        "verdict_times": verdict_times(room)}
     return pilot.digest(json.dumps(printed, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
 
 

@@ -95,6 +95,17 @@ PASS_FAKE = PASS_FAKE.replace('(root.parent / "STOP").touch()', '(root.parent.pa
 PASS_FAKE = PASS_FAKE.replace('(room / "turns.json").write_text', '''if config.get("no_verdict"):
         turn["passed"] = None
     (room / "turns.json").write_text''')
+# The real room keeps when each verdict arrived in its own record; the stand-in keeps one of the same form.
+PASS_FAKE = PASS_FAKE.replace('json.dumps([] if mode == "lost" else [None] if mode == "malformed" else [turn]))',
+    '''json.dumps([] if mode == "lost" else [None] if mode == "malformed" else [turn]))
+    import sqlite3
+    record = sqlite3.connect(str(room / "room.sqlite3"))
+    record.execute("CREATE TABLE IF NOT EXISTS verdicts (attempt TEXT PRIMARY KEY, recorded INTEGER NOT NULL)")
+    if mode not in ("lost", "malformed"):
+        record.execute("INSERT OR REPLACE INTO verdicts VALUES (?, ?)", (turn["attempt"], 1000 + len(turn["attempt"])))
+    record.commit()
+    record.close()''')
+assert "room.sqlite3" in PASS_FAKE
 PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif words[:2] == ["item", "list"]:
     add = json.loads((room / "add.json").read_text()) if (room / "add.json").is_file() else []
     title = add[add.index("--title") + 1] if "--title" in add else None
@@ -785,6 +796,13 @@ class PassScripts(unittest.TestCase):
         (self.out / "history-turns.jsonl").write_text(journal)
         self.ok(self.run_script("pass.sh", "list", self.out))
 
+    def test_a_teaching_room_without_its_record_stops_the_list(self):
+        self.ready_history()
+        room = Path(self.read("history.json")["turns"][2]["room"])
+        (room / "room.sqlite3").unlink()
+        self.refused(self.run_script("pass.sh", "list", self.out), "the room's record is missing")
+        self.assertEqual(self.read("list.json")["status"], "stopped")
+
     def test_list_stops_on_admission_failure(self):
         self.ready_history(check_refuses=True)
         self.refused(self.run_script("pass.sh", "list", self.out), "stand-in admission")
@@ -1214,6 +1232,21 @@ class SecondHalf(unittest.TestCase):
         (room / "turns.json").write_text(json.dumps(json.loads(turns) * 2))
         self.refused(self.stage("arms"), "a teaching room changed after the list: " + str(room))
         self.assertFalse((self.out / "arms").exists())
+
+    def test_a_verdicts_arrival_time_changed_after_the_list_stops_offers(self):
+        """The ranker breaks ties by when a verdict arrived, which no room command prints: it is held too."""
+        import sqlite3
+        self.to_list()
+        room = Path(self.read("list.json")["rooms"][2]["room"])
+        for step in (1, -1):
+            record = sqlite3.connect(str(room / "room.sqlite3"))
+            record.execute("UPDATE verdicts SET recorded = recorded + ?", (step,))
+            record.commit()
+            record.close()
+            if step == 1:
+                self.refused(self.stage("offers"), "a teaching room changed after the list: " + str(room))
+                self.assertFalse((self.out / "offers").exists())
+        self.ok(self.stage("offers"))
 
     def test_the_built_store_file_changed_between_asks_stops_offers(self):
         self.store_config(touch_store=True)
