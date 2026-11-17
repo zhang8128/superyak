@@ -1,6 +1,6 @@
 # v2: places, not routes (store "4")
 
-Tardis, 2026-11-17, draft 1, for a fresh reader after Thursday's rehearsal. A change to the store's side of
+Tardis, 2026-11-17, draft 2, for a fresh reader after Thursday's rehearsal. A change to the store's side of
 `2026-11-16-v2-walks-into-routes.md` ("the store's spec", revision 7, store `"3"`, approved at 6c861121). The room's
 half is Serenity's, in a revision of `2026-11-16-v2-a-route-offered.md`. Each side gets its own read, and both land in
 step, as store "3" did. Thursday's rehearsal is unchanged: it runs store "3" at 45be5dd0, frozen by hash.
@@ -28,7 +28,15 @@ the way between them adds nothing.
   lists could not be told apart (22 files in all).
 
 - **What moves recall is the history, not the order:** the area's history about doubles what either list finds.
-  Choosing the history is the room's job (today `title-words-1`), not the store's.
+  Nothing chooses it today. The room's rule (`goals` in `v2/crates/yak/src/history.rs`, `title-words-1`) picks at most
+  three taught turns by title words and offers the files they changed as goals; the store counts every walk in its
+  list (Serenity read the code, all hands 13d7ac07; draft 1 said otherwise).
+- **Serenity's count of ways to choose it** (13d7ac07), places only, on the 32 workers whose briefs have a title
+  line, at 5 / 10 / 16: all earlier 0.17 / 0.24 / 0.35; the last three 0.18 / 0.26 / 0.37; nearest three by title
+  words 0.24 / 0.33 / 0.40; nearest three by shared brief files 0.33 / 0.41 / 0.46. Its limits: three in four of the
+  nearest by shared files are among the five workers just before, so on these logs "the same area" is mostly the same
+  job a round earlier, and cannot say whether area helps fresh work; and an item has no brief, only its title and its
+  tests.
 
 **What this does not show.** "No better", not "worse": 4 against 10 is no test at this n. The 49 are the team's own
 logs, not in the repository, so a reader can check the arithmetic and not the source. A walk there is first readings
@@ -39,14 +47,17 @@ says a list of places saves a reader time: it says which files a later reader we
 
 1. **Ranked places in the answer.** For a question, after the goals' routes, `places`: the files the store's taught
    turns named, ranked by how many distinct taught turns named each, the question's goals left out.
-2. **Counts with them,** so the room can say how many earlier turns went to each place.
-3. **The measure kept with the spec:** the comparison's two scripts, so a reader can run them, and so can anyone with
+2. **The question may say which taught turns count:** `among`, a list of attempts. The room chooses the area; the
+   store counts within it. Places are counts, not cells, so one store answers any area, and no store is built per
+   area.
+3. **Counts with them,** so the room can say how many earlier turns went to each place.
+4. **The measure kept with the spec:** the comparison's two scripts, so a reader can run them, and so can anyone with
    walks of their own.
 
 ## Not asked
 
-- Choosing the history. The store ranks within the walks it is given; which earlier work counts as the same area is
-  the room's, in its own revision.
+- Choosing the area. The store counts within the turns a question names; which earlier work counts as the same area,
+  for an item that has only a title and tests, is the room's, in its own revision, measured before it is picked.
 - Dropping routes. They stay in the answer, as store "3" has them, for the experiment's arms and for a reader. The
   offer is the room's to make from `places`.
 - Conditioning places on a goal (files named by turns that also named it). Not measured, so not built.
@@ -55,12 +66,19 @@ says a list of places saves a reader time: it says which files a later reader we
 
 Everything in store "3"'s answer stays, byte for byte, but `store` is `"4"`. Beside `answers`, a top-level `places`:
 an array of `{path, turns}`, where `turns` is the number of distinct taught turns whose walk named `path` at any step.
-It is sorted by `turns` falling, then `path` in byte order. It leaves out every goal the question asks, and holds at
+Counted over the taught turns the question's `among` names, or over every taught turn when it is absent. It is
+sorted by `turns` falling, then `path` in byte order. It leaves out every goal the question asks, and holds at
 most `PLACES_KEPT` = 16, a constant of store "4". Beside it, `places_more`: how many other named paths there are, a
 whole number, always present, 0 when none was left out. When `N` is 0, `places` is `[]` and `places_more` is 0.
 
-**Built at build time.** Each path's `turns` is stored with the path, and the check recomputes it from the walks and
-compares. A query sorts and cuts, and makes no cell: places are counts, not cells.
+**The question.** `among` is optional. When present it is a non-empty array of distinct attempts, sorted by bytes, each
+a taught turn of this store; anything else (an attempt not in the store, an untaught one, a repeat, an unsorted list,
+more than the store's taught turns) is refused as a question that is not the store's, never answered as fewer. Its
+attempts are echoed in the answer as `among`, or `null` when absent, so the answer says which history it counted.
+
+**Counted when asked.** Each taught turn's set of named paths is read from its stored walk, as routes' visits already
+are, and counted over the turns in `among`. A query sorts and cuts, and makes no cell: places are counts, not cells.
+The check needs nothing new, since the counts come from the walks it already binds.
 
 ## 2. The measure, kept
 
@@ -77,11 +95,13 @@ is. Their inputs are not in the repository.
 | Ranked and cut | Twenty named paths at distinct counts and a tie at the edge: 16 kept by count then bytes, `places_more` 4 | One that keeps by name, the wrong side of a tie, or not 16 |
 | Goals left out | A goal that is also the most named path is not in `places` | One that offers a turn its own goal |
 | Only taught turns | An untaught walk's paths count nothing | One that counts what the measure doesn't teach |
-| Checked | A tampered stored count fails the check | One that serves a count its walks don't make |
+| Among | Two areas of one store give their own counts; `among` absent counts all; an unknown, untaught, repeated or unsorted attempt is refused; the answer echoes `among` | One that answers an unknown attempt as fewer turns, or hides which turns it counted |
+| Checked | A tampered walk fails the check, as in store "3" | One that serves a count its walks don't make |
 | Store "3" unchanged inside | The fixture's `answers` byte for byte, with `store` "4" and the new keys | One that moves a route |
 
 ## Decisions
 
 1. **Places beside routes, not in place of them,** until the room's experiment drops the route arm.
-2. **Counted by distinct taught turns,** the measure the comparison used.
+2. **Counted by distinct taught turns,** the measure the comparison used, and when asked, over the turns `among`
+   names, so the area is the room's choice and one store serves every area.
 3. **16 kept and the rest counted,** as detours are, so the answer's size doesn't grow with the history.
