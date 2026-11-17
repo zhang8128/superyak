@@ -1,8 +1,12 @@
 # A program inside the Linux jail cannot start a child: the cause, and the mend
 
-Serenity, 2026-11-16, revision 2. It changes the jail's boundary by one kind of socket pair. A fresh reader
+Serenity, 2026-11-16, revision 3. It changes the jail's boundary by one kind of socket pair. A fresh reader
 of the other family read revision 1 as a change to the boundary and approved it with three named changes,
-all made here; the last section says where. The code is read again before it is pushed.
+all made in revision 2; a later section says where. The code was read again before it was pushed.
+
+Revision 3 corrects one row of the argument. A second Linux machine, on a later kernel, answered one try
+otherwise than the row said. Nothing that decides what an end can reach or be reached by differed. The last
+section says what was found, what was changed and what was not.
 
 ## What was found
 
@@ -73,7 +77,7 @@ source at version 6.12, the second machine's (`net/unix/af_unix.c`):
 | Join a named socket | Joining needs an end that is not joined; a joined end is refused (`unix_stream_connect`) |
 | Close the other end, then join a named socket | The end left over is shut down and is not made unjoined again; a send then fails, and it still cannot join |
 | Unjoin, by joining "no family" | Refused: that way of unjoining belongs to datagram sockets (`unix_validate_addr`) |
-| Give it a name, then listen and accept | Naming does not unjoin it. Listening needs an end that is not joined; accepting needs one that listens |
+| Give it a name, then listen and accept | Naming does not unjoin it. A joined end does not come to listen: 6.12 refuses the telling, and 7.0 answers yes and leaves the end as it was (corrected in revision 3, from runs on both). Accepting needs an end that listens, and a socket made for the end's name is refused because nothing listens there |
 
 - **Open files.** A pair of either kind can carry an open file from one end to the other. That hands on
   something the sender already holds and makes nothing new, and both ends are inside the jail. An end
@@ -81,22 +85,24 @@ source at version 6.12, the second machine's (`net/unix/af_unix.c`):
 - **How sure.** This is reading of the kernel's source at that one version, not a run on that machine and
   not an audit of the kernel. The tests below try each row. A finite set of tries cannot show that an end
   can never reach anything else; the reading is the argument, and the tests are there to fail if a kernel
-  behaves otherwise.
+  behaves otherwise. One did, in the last row: see "What a second machine found".
 
 ## How we know
 
-Each row has a case that must pass and a case that must be refused. The first row is a run already made.
-None of the tests in the rows after it exists yet.
+Each row has a case that must pass and a case that must be refused. The first row is a run made before the
+mend was built. The tests in the rows after it were written with the mend: the filter's in
+`v2/crates/turn/src/filter.rs`, the jail's in `v2/crates/turn/tests/jail.rs`.
 
 | What | Shown by |
 | --- | --- |
 | The controlled run | Made, before the mend is built: ladder 3's build through the jail with only this pair let through ended with 0, where it had ended with 112 |
 | The filter's program | Run as the kernel would, for both kinds of machine. A Unix seqpacket pair is let through, alone and with each of the two flags the kernel takes; the two cases that today hold it refused become cases that hold it let through. A Unix datagram pair, and a seqpacket pair of another family, are refused. Every other case the tests hold now (stream pairs, sockets, the seven calls, another kind of machine, the other numbering) holds unchanged |
 | A program of ours starts a child inside the jail | On Linux, inside the jail, a helper built with this toolchain starts a child by a bare name found on a path it is given, which is what makes the standard library take the way that asks for the pair. Without the mend it fails at starting the child, with "operation not permitted", and the test says so; with it, the helper reads a marker the child wrote |
-| A seqpacket end reaches only its other end | On Linux. The test itself listens, outside the jail, on a socket of the seqpacket kind with a name inside a directory the jail shows. Control: from outside the jail a socket of that kind joins it and a marker arrives, which is read and set aside. Then inside the jail: the name is seen and is a socket; a pair is made and one end's message reaches the other; a send that names the listener arrives at the other end and nothing arrives at the listener; joining the listener is refused; the same two again after the other end is closed; unjoining is refused; and naming an end, then listening and accepting, is refused. Every wait has a limit, and an error of the helper that is not one of those refusals fails the test |
+| A seqpacket end reaches only its other end | On Linux. The test itself listens, outside the jail, on a socket of the seqpacket kind with a name inside a directory the jail shows. Control: from outside the jail a socket of that kind joins it and a marker arrives, which is read and set aside. Then inside the jail: the name is seen and is a socket; a pair is made and one end's message reaches the other; a send that names the listener arrives at the other end and nothing arrives at the listener; joining the listener is refused; the same two again after the other end is closed; and unjoining is refused. Every wait has a limit, and an error of the helper that is not one of those refusals fails the test |
+| A named end of a pair takes no caller in | On Linux, for both kinds of pair the filter lets through, with no jail and inside it (revision 3). Control: with no jail, a socket of the kind that is joined to nothing, given a name and told to listen, listens; a socket made for its name joins it and is accepted. Then an end of a pair, treated the same way: the kernel says it does not listen; accepting is refused; with no jail a socket made for its name is refused, and in the jail none can be made; nothing has arrived at the end; and it still reaches its other end. The same again after the other end is closed. What the kernel answers to the telling is not held |
 | What was refused is still refused | Inside the jail, as now: a Unix socket by `socket`, a Unix datagram pair, and the keyring by one of its three calls. The other six of the seven calls are held by the filter's program run as the kernel would, not by a live try, and that is said where the tests are |
 | The old items can be judged on Linux | On the second machine, by the lead, through the room's own check: for each of the three old items, a commit known to be right passes, and the base and the wrong commit fail |
-| Both kinds of machine | The project's checks run the whole suite on x86-64 Linux, with the tests that need the room asked for, so the filter's tests and the jail's tests run there. The numbers for that kind of machine were checked by the reader against the kernel's table. A filter's program run as the kernel would is not a showing that the jail installs it there: the live tests are |
+| Both kinds of machine | The project's checks run the whole suite on x86-64 Linux, with the tests that need the room asked for, so the filter's tests and the jail's tests run there. The numbers for that kind of machine were checked by the reader against the kernel's table. A filter's program run as the kernel would is not a showing that the jail installs it there: the live tests are. Since revision 3 the jail's tests have also been run by hand on a second x86-64 machine, on a later kernel: the last section |
 
 ## What is not changed
 
@@ -118,3 +124,60 @@ None of the tests in the rows after it exists yet.
 It also asked that the row on a program of ours be made to take the way that asks for the pair, that the
 row on what is still refused say truly which calls are tried live, and that all three old items be shown.
 Those are in their rows.
+
+## What a second machine found (revision 3)
+
+Another ship ran the jail's tests on a machine of its own: x86-64, kernel 7.0, with `bwrap` under its
+distribution's own confinement, which the project's checks never meet because they turn it off.
+
+- **At the pushed mend, 23 of the jail's 24 tests passed there,** among them the child started inside the
+  jail. One failed, and in its control, with no jail at all: an end of a seqpacket pair, given a name and
+  told to listen, was answered "yes", where the row above said it would be refused.
+- **A probe in plain Python, run on both kernels, with no jail.** An end of a pair is given a name and told
+  to listen; then a socket made for that name tries to join it.
+
+  | What is tried | 6.12 (aarch64) | 7.0 (x86-64) |
+  | --- | --- | --- |
+  | Told to listen | Refused: "invalid" | Answered yes |
+  | Does the kernel say it listens | No | No |
+  | A socket made for the name joins it | Refused: "connection refused" | The same |
+  | Accepting | Refused: "invalid" | The same |
+  | What arrives at the end | Nothing | Nothing |
+  | The end sends to its own other end | Arrives | Arrives |
+
+  On each kernel a stream pair and a seqpacket pair gave the same lines, with the other end open and with
+  it closed.
+- **So the yes is empty.** On 7.0 the telling is answered yes and changes nothing: the end does not listen,
+  and nothing can join it. Every line that decides who can reach the end is the same on both kernels.
+- **It is the kernel's difference, not the mend's.** A stream pair, which the filter has let through from
+  the first, answers the same way on each kernel.
+- **The fault was in the test, and in the row's words.** The test held what the kernel answers, where it
+  should have held what the answer leaves. The row said listening "needs an end that is not joined", which
+  was a reading of one version. The test did what this spec says tests are for, and failed when a kernel
+  behaved otherwise.
+- **The same test's tries inside the jail, on that machine,** run by themselves: but for the answer to the
+  telling they were as on the first machine. A Unix socket could not be made, joining was refused, and
+  accepting was refused.
+- **The old rule, tried there.** With the filter made to refuse a seqpacket pair again, the child started
+  inside the jail fails on that machine as it did on the first. So the fault this spec is about, and its
+  mend, are each shown by a live run on both kinds of machine.
+- **The whole suite at the pushed mend, on that machine:** 512 tests passed and 1 failed, the one above,
+  with none ignored.
+
+**What was changed.** The tries at listening left the seqpacket test, and a test of their own holds what
+must hold on any kernel, for both kinds of pair, with a control that shows its lines can tell an end that
+listens from one that does not: the row "A named end of a pair takes no caller in" under "How we know". The
+filter's opening comment no longer says a joined end cannot be made to listen. With the change, the jail's
+25 tests pass on 6.12 (aarch64) and on 7.0 (x86-64).
+
+**What was not changed: the filter.** It sees a call's number and not the kind of socket the call is made
+on, and a run may listen on its own empty network, as some of the tests it is there to run do. So it cannot
+refuse the telling. That a named end of a pair takes no caller in is the kernel's doing, and is tried by a
+test on every machine the jail's tests run on.
+
+**What this does not show.**
+
+- Why 7.0 answers yes. Its source was not read. The corrected row rests on runs on two kernels, not on a
+  reading of the later one.
+- The other rows on 7.0 by reading. They are held there by the tests that try them, which passed.
+- Any kernel but these two.
