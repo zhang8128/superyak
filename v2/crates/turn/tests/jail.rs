@@ -555,10 +555,10 @@ fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let
 }
 
 /// What a run can try with one end of a Unix pair of the seqpacket kind, to reach a socket that listens by
-/// name. `argv[1]` is that socket's path, and `argv[2]` a name the run may give an end of its own. Each try
-/// says one line. A try the kernel must refuse is held to the error the kernel is known to give for it, read
-/// from a run on Linux 6.12 with no jail: a timeout, or any other error, is this helper failing and not the
-/// kernel refusing, and it ends the helper there with an error, which fails the test.
+/// name. `argv[1]` is that socket's path. Each try says one line. A try the kernel must refuse is held to the
+/// error the kernel is known to give for it, read from a run on Linux 6.12 with no jail: a timeout, or any
+/// other error, is this helper failing and not the kernel refusing, and it ends the helper there with an
+/// error, which fails the test.
 #[cfg(target_os = "linux")]
 const AN_END_OF_A_SEQPACKET_PAIR: &str = r#"import ctypes, errno, os, socket, stat, sys
 target = sys.argv[1]
@@ -612,11 +612,15 @@ refused("join-after-close", lambda: a.connect(target), errno.EISCONN)
 /// one try. As in the script above, an error that is not the refusal expected ends the helper with an error.
 /// Asked for "a-socket-joined-to-nothing" it is the control: such a socket, treated the same way, listens
 /// and takes a caller in, so the lines can tell an end that does from one that does not.
+/// With a fourth word it waits, each time it has told the end to listen, for a caller outside to have tried
+/// the end's name: it leaves a file beside the name to say it is ready, and goes on when the caller has left
+/// one to say it has called. That is how the run inside the jail is called from outside it.
 #[cfg(target_os = "linux")]
-const A_NAMED_END_OF_A_PAIR: &str = r#"import errno, socket, sys
+const A_NAMED_END_OF_A_PAIR: &str = r#"import errno, os, socket, sys, time
 kind = {"stream": socket.SOCK_STREAM, "seqpacket": socket.SOCK_SEQPACKET}[sys.argv[1]]
 mine = sys.argv[2]
 joined = {"an-end-of-a-pair": True, "a-socket-joined-to-nothing": False}[sys.argv[3]]
+called_from_outside = len(sys.argv) > 4
 def say(name, word):
     print(name + ":" + word, flush=True)
 def refused(name, attempt, expected):
@@ -637,22 +641,32 @@ end.bind(mine)
 say("bind", "made")
 # Not blocking, so that accepting is asked of the kernel at once and never waited for.
 end.setblocking(False)
-def told_to_listen(name):
-    # What the kernel answers is not held: it is not the same on every kernel. What is held is what the answer
-    # leaves, in the lines after: an end that does not listen, that takes no caller in, and that a socket made
-    # for its name cannot join.
+def told_to_listen(name, step):
+    # Whether the kernel answers yes or "invalid" is not held: it is not the same on every kernel. Any other
+    # error ends the helper. What is held is what the answer leaves, in the lines after: an end that does not
+    # listen, that takes no caller in, and that a socket made for its name cannot join.
     try:
-        end.listen(1)
+        end.listen(4)
     except OSError as e:
         if e.errno != errno.EINVAL:
             raise
     say(name, "listens" if end.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) else "does-not-listen")
+    if called_from_outside:
+        open(mine + ".ready-" + step, "w").close()
+        until = time.monotonic() + 60
+        while not os.path.exists(mine + ".called-" + step):
+            if time.monotonic() > until:
+                raise TimeoutError("no caller outside said it had called")
+            time.sleep(0.05)
 def a_caller(name):
-    # A socket made for the end's name. With no jail one is made, and the kernel refuses its joining. In the
-    # jail none can be made: the filter's own refusal, "operation not permitted".
+    # A socket made for the end's name, by this same process. With no jail one is made, and the kernel refuses
+    # its joining. In the jail none can be made: the filter's own refusal, "operation not permitted", and no
+    # other error. That line says nothing of the end: the caller from outside is what tries the end there.
     try:
         caller = socket.socket(socket.AF_UNIX, kind)
-    except PermissionError:
+    except OSError as e:
+        if e.errno != errno.EPERM:
+            raise
         say(name, "none-can-be-made")
         return
     caller.settimeout(2)
@@ -666,7 +680,7 @@ def heard(name):
     except BlockingIOError:
         arrived = b""
     say(name, "nothing" if arrived == b"" else "something")
-told_to_listen("listen")
+told_to_listen("listen", "1")
 if not joined:
     a_caller("a-caller")
     refused("accept", lambda: end.accept()[0].close(), errno.EINVAL)
@@ -678,7 +692,7 @@ heard("heard")
 end.send(b"still")
 say("own-pair", "works" if other.recv(16) == b"still" else "broken")
 other.close()
-told_to_listen("listen-after-close")
+told_to_listen("listen-after-close", "2")
 refused("accept-after-close", lambda: end.accept(), errno.EINVAL)
 a_caller("a-caller-after-close")
 heard("heard-after-close")
@@ -903,9 +917,8 @@ fn call_the_listener(target: &Path) {
 /// makes one before it starts a child. This holds an end of such a pair to its other end. A socket of that
 /// kind listens by name inside the checkout, which the jail shows. From inside, the name is seen; a pair is
 /// made and works; and nothing a run tries with an end of it reaches the listener: a send that names the
-/// listener goes to the other end, joining the listener is refused, unjoining is refused, the same again
-/// once the other end is closed, and an end given a name cannot listen or accept, before or after its other
-/// end is closed.
+/// listener goes to the other end, joining the listener is refused, unjoining is refused, and the same again
+/// once the other end is closed. Whether an end given a name can be reached is the next test's.
 ///
 /// Two controls. A socket made for the listener, outside the jail, reaches it: so the listener was there to
 /// be reached. And the same tries with no jail give the same lines but one: there a socket of that kind can
@@ -977,12 +990,58 @@ fn on_linux_an_end_of_a_seqpacket_pair_reaches_only_its_other_end() {
     );
 }
 
+/// A caller outside the jail, for an end that a jailed run has named inside its checkout, which is a directory
+/// of the machine's own and so is seen from outside. Each time the run says it is ready, this looks at the
+/// name, makes a socket of the kind for it, and tries to join; then it says that it has called. If it joins
+/// it sends a marker, which the run's own lines would then show as heard. `argv[3]` is how many times it is
+/// to call: twice for an end of a pair, before and after its other end is closed, and once for the control.
+#[cfg(target_os = "linux")]
+const A_CALLER_FROM_OUTSIDE: &str = r#"import errno, os, socket, stat, sys, time
+kind = {"stream": socket.SOCK_STREAM, "seqpacket": socket.SOCK_SEQPACKET}[sys.argv[1]]
+mine = sys.argv[2]
+def say(name, word):
+    print(name + ":" + word, flush=True)
+for step, name in (("1", "from-outside"), ("2", "from-outside-after-close"))[:int(sys.argv[3])]:
+    until = time.monotonic() + 60
+    while not os.path.exists(mine + ".ready-" + step):
+        if time.monotonic() > until:
+            raise TimeoutError("the run inside never said it was ready")
+        time.sleep(0.05)
+    say(name + "-the-name-is", "a-socket" if stat.S_ISSOCK(os.stat(mine).st_mode) else "not-a-socket")
+    caller = socket.socket(socket.AF_UNIX, kind)
+    caller.settimeout(2)
+    try:
+        caller.connect(mine)
+    except OSError as e:
+        if isinstance(e, TimeoutError) or e.errno != errno.ECONNREFUSED:
+            raise
+        say(name, "refused")
+    else:
+        caller.send(b"FROM-OUTSIDE")
+        say(name, "joined")
+    caller.close()
+    open(mine + ".called-" + step, "w").close()
+"#;
+
 /// The filter sees a call's number and not the kind of socket it is made on, and a run may listen on its own
 /// empty network: so it cannot refuse an end of a pair being told to listen. That such an end, given a name,
 /// takes no caller in rests on the kernel, for both kinds of pair the filter lets through, and this tries it
 /// on every machine it runs on. What the kernel answers to the telling is not held: it differs from kernel to
-/// kernel (6.12 refuses a joined end; 7.0 says yes, and the end is as it was). With no jail, where a socket
-/// for the name can be made, the kernel refuses its joining; in the jail no such socket can be made at all.
+/// kernel (6.12 refuses a joined end; 7.0 says yes, and the end is as it was).
+///
+/// Who could call such an end, if it did listen: not the run itself, which the filter keeps from making a
+/// Unix socket, but anything outside the jail that can reach the name, since the checkout and the scratch
+/// are directories of the machine's own. A caller let in could hand the run bytes, or an open file. So the
+/// end named inside the jail is called from outside it, by a process with no jail, before and after the
+/// other end is closed: it sees the name as a socket, and its joining is refused.
+///
+/// Three controls. A socket of the kind joined to nothing, treated the same way with no jail in the same
+/// directory, listens, and takes in both a caller of its own making and the caller from outside: so the
+/// lines can tell, and the caller from outside is one that joins where something listens. The same tries on
+/// an end of a pair with no jail, where the caller is the process itself. And the caller from outside sees
+/// the name the jailed run bound as a socket: so it tried the end, and not a name that was not there. There
+/// is no control in which a caller outside reaches a listener inside the jail, since nothing inside can
+/// make a Unix socket that listens.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs the room: a list of processes and a jail"]
@@ -997,7 +1056,7 @@ fn on_linux_a_named_end_of_a_pair_takes_no_caller_in() {
     };
     for kind in ["stream", "seqpacket"] {
         let tries = |own_name: String, which: &str| {
-            [
+            vec![
                 "-c".to_string(),
                 A_NAMED_END_OF_A_PAIR.to_string(),
                 kind.to_string(),
@@ -1005,17 +1064,38 @@ fn on_linux_a_named_end_of_a_pair_takes_no_caller_in() {
                 which.to_string(),
             ]
         };
+        let outside = |own_name: String, times: &str| {
+            let mut outside = Command::new("/usr/bin/python3");
+            outside.args([
+                "-c",
+                A_CALLER_FROM_OUTSIDE,
+                kind,
+                g.checkout.join(own_name).to_str().unwrap(),
+                times,
+            ]);
+            // Started first: it waits for the helper to say it is ready.
+            std::thread::spawn(move || {
+                within(outside, A_COMMAND_MAY_TAKE, "the caller from outside")
+            })
+        };
+        let caller = outside(format!("alone-{kind}.sock"), "1");
         let mut alone = Command::new("/usr/bin/python3");
-        alone.args(tries(
-            format!("alone-{kind}.sock"),
-            "a-socket-joined-to-nothing",
-        ));
+        let mut words = tries(format!("alone-{kind}.sock"), "a-socket-joined-to-nothing");
+        words.push("called-from-outside".to_string());
+        alone.args(words);
         let alone = within(alone, A_COMMAND_MAY_TAKE, "the control with no jail");
+        let caller = caller.join().expect("the caller from outside");
         assert_eq!(
             String::from_utf8_lossy(&alone.stdout),
             "bind:made\nlisten:listens\na-caller:made\naccept:made\n",
             "control failed: a {kind} socket joined to nothing did not listen and take a caller in: {}",
             String::from_utf8_lossy(&alone.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&caller.stdout),
+            "from-outside-the-name-is:a-socket\nfrom-outside:joined\n",
+            "control failed: the caller from outside did not join a {kind} socket that listens: {}",
+            String::from_utf8_lossy(&caller.stderr)
         );
         let mut free = Command::new("/usr/bin/python3");
         free.args(tries(format!("free-{kind}.sock"), "an-end-of-a-pair"));
@@ -1031,11 +1111,22 @@ fn on_linux_a_named_end_of_a_pair_takes_no_caller_in() {
             "control failed, a {kind} pair: {}",
             String::from_utf8_lossy(&free.stderr)
         );
-        let out = run_in_within(
-            &jail(&g),
-            "/usr/bin/python3",
-            &tries(format!("jailed-{kind}.sock"), "an-end-of-a-pair"),
-            A_COMMAND_MAY_TAKE,
+        let caller = outside(format!("jailed-{kind}.sock"), "2");
+        let mut jailed = tries(format!("jailed-{kind}.sock"), "an-end-of-a-pair");
+        jailed.push("called-from-outside".to_string());
+        let out = run_in_within(&jail(&g), "/usr/bin/python3", &jailed, A_COMMAND_MAY_TAKE);
+        let outside = caller.join().expect("the caller from outside");
+        assert_eq!(
+            String::from_utf8_lossy(&outside.stdout),
+            "from-outside-the-name-is:a-socket\nfrom-outside:refused\n\
+             from-outside-after-close-the-name-is:a-socket\nfrom-outside-after-close:refused\n",
+            "a {kind} pair, called from outside the jail: {}",
+            String::from_utf8_lossy(&outside.stderr)
+        );
+        assert!(
+            outside.status.success(),
+            "a {kind} pair, called from outside the jail: {}",
+            String::from_utf8_lossy(&outside.stderr)
         );
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
