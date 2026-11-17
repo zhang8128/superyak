@@ -1,6 +1,6 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 8. A change to the design of stage 2
+Serenity, 2026-11-16, revision 9. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
@@ -10,6 +10,9 @@ with four more, confirmed revision 4's change of where the items come from with 
 revision 6's change to the reach of one rule with one more. All fourteen are made here; the last section
 says where. Two things came from the ship
 Tardis, which owns the store this rests on, and one from a measurement; that section names them too.
+
+Revision 9 adds section 9, after the pilot: what the pilot fixed, two measurements made before any scored
+turn, and what they ask of the scored design's reader. It changes nothing in sections 1 to 8.
 
 ## Why the design changes
 
@@ -428,6 +431,114 @@ Each row has a case that must pass and a case that must be refused.
 | The offer is data, and the prompt without it is unchanged | The pinned prompt test. A tracked file whose name reads as an instruction is rendered inside the block, after its opening sentence, and nowhere else. Route JSON holding a path that is not plain is refused by the renderer itself |
 | What a turn was given can be made again | A stand-in worker's received block has the recorded hash and length; the block made again from what the store kept is the same bytes; an empty offer is told from no offer |
 | Two machines can run it | The same fixture gives the same route bytes on both, and one turn with a block that is not empty runs on the second |
+
+## 9. After the pilot: what it fixed, and what was measured before any scored turn
+
+The pilot ran once, as section 7 says. Its report is `docs/reports/2026-11-16-v2-second-pilot.md`.
+
+**What it fixed.** The largest of its three spreads is 0.1286; the first design's rule gives 14.72, which
+is under its floor. So `n` is 20: the first twenty of the list's forty scored items. The list has 51
+history items before the pilot's three.
+
+**Two things were then measured with no turn run.** Each bears on whether the scored turns, run as
+sections 5 and 6 have them, could show anything.
+
+### What the ranker would choose
+
+The ranker of section 5 counts the words a scored item's title shares with a history item's, leaving out
+any word that more than half the history titles hold. Every title here is made by one sentence around the
+names of an item's test files, so the only words left to count are the parts of those names: 34 of the 49
+words in the history's titles. Worked on the real list, with every history item's turn taken to arrive:
+
+| Scored item | Its tests | History turns chosen | Files asked for | Of them, files its own reference changes |
+| --- | --- | --- | --- | --- |
+| 65fc994f | `test_imprint_receipts.py` | 1 | 1 | 1 |
+| 003e87b7 | `test_imprint_withdrawal.py` | 1 | 1 | 1 |
+| 2516153f | `test_imprint_approval.py` | 1 | 1 | 1 |
+| 134cce9c | `test_imprint_verify.py` | 1 | 1 | 1 |
+| bb8ae833 | `test_station_cli.py` | 2 | 2 | 1 |
+| 9a3f21cf | `test_chat_paging.py` | 0 | 0 | 0 |
+| 71a593d5 | `test_public_route.py` | 0 | 0 | 0 |
+| d20c739b | `test_login.py` | 0 | 0 | 0 |
+| c1f7804e | `test_federation.py` | 3 | 1 | 0 |
+| c7aee496 | `test_auth.py` | 0 | 0 | 0 |
+| d0ed1fe9 | `test_inbox.py` | 1 | 1 | 0 |
+| d7c8869c | `test_lessons.py` | 0 | 0 | 0 |
+| b97d4761 | `test_lessons_room.py` | 3 | 2 | 0 |
+| e62cbe2d | `test_lessons_index.py` | 0 | 0 | 0 |
+| cd884db7 | `test_identity.py` | 0 | 0 | 0 |
+| 6ceb5cb8 | `test_imprint_off_loop.py` | 1 | 1 | 0 |
+| df359a98 | `test_imprint_counting.py` | 1 | 1 | 1 |
+| b64e2e93 | `test_cli.py` | 2 | 2 | 0 |
+| fde213d5 | `test_lessons_repeats.py` | 0 | 0 | 0 |
+| df8b4b99 | `test_transport.py` | 0 | 0 | 0 |
+
+- **Nine of the twenty would be offered nothing.** For those the three arms are one arm.
+- **Eleven would be offered a route to one or two files.** For six of them, one of those files is a file
+  the item's own reference changes.
+- **The history is of other work.** Its commonest counted words are federation, ship, agent, alerts and
+  room; the scored items begin with the feature the pilot's three belong to, whose earlier commits are
+  the pilot's and not history.
+
+### Where a turn's time goes
+
+From the pilot's sixteen walks, by each step's own times.
+
+| Of a turn's worker seconds | Least | Median | Most |
+| --- | --- | --- | --- |
+| Until the last read before the first change to the source | 33% | 47% | 61% |
+| From there until that first change is seen | 0% | 20% | 32% |
+
+- **Before the first change a turn takes about seven steps:** two that read the repository's own notes,
+  one to five that read the item's tests or its check, and one to four that read the source.
+- **The finding is over in seconds.** The title names the test file, and the test file names the source
+  it imports. In the walk looked at step by step, the worker had read the test, the check and the source
+  file it would change within 18 seconds of a 97-second turn. What fills the rest of the reading is
+  reading: the source file all three items change is some fifteen hundred lines.
+- Three of the sixteen walks have no step that shows a source file changing, since their edits were made
+  inside shell steps; they are left out of the table.
+
+### What this asks of the scored design
+
+Section 6 said beforehand that "the tests are in the sandbox, and they point at the code", and that there
+is less to find than when work begins from a report of a fault. The two measurements say how much less.
+
+- **A route can shorten finding, and here there is almost none to shorten.** What a route says is where
+  earlier turns went on the way to a file. A turn at these items is told where to go by its tests.
+- **For nearly half the scored items nothing would be offered,** and the sizing rule took every item to
+  be offered something. For a mean gain of 15% over twenty items, the eleven that are offered a route
+  would each need to gain about 27%.
+- **So the scored turns, run as designed, would most likely be read as "nothing shown either way",** and
+  for a reason known before they are run. That reading would not bear on whether ways worn by use
+  shorten work that has to find its way.
+
+**The choices, for the reader of the scored design to weigh.** None is taken here.
+
+| Choice | What it costs | What it could show |
+| --- | --- | --- |
+| A. Run as designed: 51 history turns with nothing offered, then 60 scored turns | About 111 turns of two to five minutes; no new code | That the whole path runs on real turns at this size. Most likely nothing either way about a route, for the reasons above |
+| B. A ranker that reads what an item's tests name, in place of title words | A new ranker and its version; the history turns as in A | More items offered a route, to files nearer their work. Still files a turn reaches by itself in seconds |
+| C. Items whose work begins from a description, with the tests kept from the sandbox until the check | The room must lay an item's tests over a turn's commit when it judges; a new form of item; a new list | Whether a route shortens work that has to find where to go, which is the question the design was made for |
+
+**The lead's recommendation.** Not A as the experiment that decides. Run the history turns in any case:
+A and B both need them, they give the spread across the whole component in place of three neighbours, and
+they give the store real walks at its real size. Have C written as a spec and read. And say in the
+report, whichever is run, that on items whose tests point at the code a route has little to add, with
+these two measurements as the reason.
+
+**Also for that reader, from the pilot's report:**
+
+- **A check is judged once.** One commit's tests passed in one run and failed in another; run six times
+  they failed twice, on one timing test. No item in the list uses that test. Before a scored or a history
+  item is used, its reference should be shown to pass through the jail several times, not once.
+- **A turn can fail by its housekeeping.** One pilot turn committed the test runner's temporary files and
+  was refused by the check's first rule. That is a failure by the item's rule, it can happen under any
+  arm, and the guard of section 5 counts it.
+- **The pilot's own turns are not history,** by section 6. They are the nearest earlier work to the first
+  scored items. Whether its passing turns may teach is for the reader: no turn would be offered a way
+  learned from a change made after its own.
+- **The points left open at the end of this spec** are still open, and each is still to be settled, or
+  said to stand, before any scored turn is offered anything.
 
 ## What it costs
 
