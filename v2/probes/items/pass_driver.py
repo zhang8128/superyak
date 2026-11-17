@@ -287,11 +287,35 @@ def screen(out):
     return 0 if result["status"] == "ready" else 1
 
 
+def screen_decision(plan, results):
+    """Which commits the screen's own recorded references leave out: every planned reference must be there,
+    each once and in the plan's order, and each a verified pass or a failed check."""
+    planned = [(kind, commit, repetition)
+        for kind, commits, repeats in (("three", plan["three"], REFERENCE_RUNS), ("history", plan["history"], 1))
+        for commit in commits for repetition in range(1, repeats + 1)]
+    if [(r.get("kind"), r.get("commit"), r.get("repetition")) for r in results] != planned:
+        raise Refused("screen.json does not hold every planned reference, each once and in order")
+    excluded = []
+    for held in results:
+        receipt = held.get("receipt") or {}
+        if receipt.get("outcome") == "check failed":
+            if held["commit"] not in excluded:
+                excluded.append(held["commit"])
+        elif receipt.get("outcome") != "passed" or receipt.get("verified") is not True:
+            raise Refused("screen.json holds a reference that is neither a verified pass nor a failed check")
+    return excluded
+
+
 def kept_history(plan, screened):
+    """Section 3: the history items the screen kept, held against the screen's own recorded references, so
+    that a kept list edited by hand does not put back an item whose reference failed."""
     if screened.get("status") != "ready" or screened.get("instrument_failure"):
         raise Refused("screen does not let the pass go on")
-    kept = screened["kept_history"]
-    if len(kept) < MIN_HISTORY or kept != [c for c in plan["history"] if c in kept]:
+    excluded = screen_decision(plan, screened.get("results") or [])
+    kept = [c for c in plan["history"] if c not in excluded]
+    if screened.get("kept_history") != kept or [e.get("commit") for e in screened.get("excluded") or []] != excluded:
+        raise Refused("screen.json's kept history is not what its recorded references say")
+    if any(c in excluded for c in plan["three"]) or len(kept) < MIN_HISTORY:
         raise Refused("screen has no usable kept history")
     return kept
 
@@ -307,7 +331,9 @@ def run_history(out):
     plan = load_plan(out)
     rows = history_rows(plan, kept_history(plan, pilot.load(out / "screen.json")))
     new_stage(out, "turns")
-    result = {"v": 1, "status": "stopped", "reason": None, "turns": []}
+    # The screening record these turns are run from; the list holds the screen to it.
+    result = {"v": 1, "status": "stopped", "reason": None, "turns": [],
+        "screen_sha256": records.sha256(out / "screen.json")}
     try:
         with planned_environment(plan):
             for row in rows:
@@ -379,10 +405,13 @@ PROVENANCE = ("kind", "commit", "directory", "room")
 def held_history(out, plan):
     """Section 4 step 3: which turns may teach is worked from the plan and the screen, never from
     history.json's own kind. history.json and its journal are held against that before any plan is made."""
+    history = pilot.load(out / "history.json")
+    if records.sha256(out / "screen.json") != history.get("screen_sha256"):
+        raise Refused("screen.json is not the screening record the history turns were run from")
     rows = history_rows(plan, kept_history(plan, pilot.load(out / "screen.json")))
     expected = [{"kind": row["kind"], "commit": row["commit"], "directory": str(out / row["directory"]),
         "room": str(out / row["directory"] / "room")} for row in rows]
-    turns = pilot.load(out / "history.json")["turns"]
+    turns = history["turns"]
     if [{key: turn.get(key) for key in PROVENANCE} for turn in turns] != expected:
         raise Refused("history.json differs from the history turns the plan and screen allow")
     journal = [json.loads(line) for line in (out / "history-turns.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -443,13 +472,15 @@ def make_list(out):
     ran = held_history(out, plan)
     expected = {"items": [{key: row[key] for key in ("room", "item", "attempt")} for row in ran]}
     teach_path = out / "teach-plan.json"
-    if not teach_path.exists():
-        pilot.write_json(teach_path, expected)
-    teach = pilot.load(teach_path)
+    # Validated in memory first: its rooms' own attempts, and against the history. Only then is a new
+    # plan written, so that a refusal leaves neither teaching plan behind.
+    teach = pilot.load(teach_path) if teach_path.exists() else expected
     with planned_environment(plan):
         bindings = checked_teach_rooms(plan, teach)
     if teach != expected or bindings != expected["items"]:
         raise Refused("teach plan differs from the history turns actually run")
+    if not teach_path.exists():
+        pilot.write_json(teach_path, expected)
     # The room's PlanItem denies unknown fields. Keep the required attempt in
     # our authoritative plan and give the CLI its exact, checked projection.
     room_plan = {"items": [{key: row[key] for key in ("room", "item")} for row in bindings]}

@@ -600,12 +600,28 @@ class PassScripts(unittest.TestCase):
         self.ok(self.plan())
         self.assertEqual(self.screen(), 0)
         original = self.read("screen.json")
+        # A kept list that is not the one the recorded references give: too few, out of order, one too many.
         for kept in (self.history_commits[:3], self.history_commits[::-1], self.history_commits + self.three[:1]):
             (self.out / "screen.json").write_text(json.dumps(dict(original, kept_history=kept)))
-            self.refused(self.run_script("pass.sh", "history", self.out), "no usable kept history")
+            self.refused(self.run_script("pass.sh", "history", self.out), "not what its recorded references say")
             self.assertFalse((self.out / "turns").exists())
         (self.out / "screen.json").write_text(json.dumps(dict(original, instrument_failure=True)))
         self.refused(self.run_script("pass.sh", "history", self.out), "screen does not let")
+
+    def test_history_rejects_a_stopped_screen_made_to_say_ready(self):
+        """The references themselves say too few are kept, or one of the three failed: the word ready is not enough."""
+        for which in ("five of the history", "one of the three"):
+            with self.subTest(which=which):
+                self.tearDown()
+                self.setUp()
+                # Taken after the fixture is made again: its commits are new each time.
+                failures = self.history_commits[:5] if which == "five of the history" else self.three[:1]
+                self.ok(self.plan())
+                self.assertEqual(self.screen(failures=failures), 1)
+                stopped = self.read("screen.json")
+                (self.out / "screen.json").write_text(json.dumps(dict(stopped, status="ready", reason=None)))
+                self.refused(self.run_script("pass.sh", "history", self.out), "no usable kept history")
+                self.assertFalse((self.out / "turns").exists())
 
     def test_history_moves_discard_and_records_failed_clock(self):
         self.configure(failed_at=3, clock_exit=1)
@@ -757,6 +773,73 @@ class PassScripts(unittest.TestCase):
         (self.out / "teach-plan.json").write_text(json.dumps(teach))
         self.ok(self.run_script("pass.sh", "list", self.out))
         self.assertEqual(self.read("list.json")["status"], "ready")
+
+    def test_a_forged_attempt_is_refused_before_either_teaching_plan_is_written(self):
+        """No teaching plan to begin with: the room's own attempt is held before one is written."""
+        self.ready_history()
+        history = self.read("history.json")
+        history["turns"][1]["attempt"] = "afedcba987654"
+        self.write_history(history)
+        self.assertFalse((self.out / "teach-plan.json").exists())
+        self.refused(self.run_script("pass.sh", "list", self.out), "teach plan differs from the history turns")
+        for name in ("teach-plan.json", "room-plan.json", "list.json"):
+            self.assertFalse((self.out / name).exists(), name)
+        self.assertFalse((self.out / "history").exists())
+
+    def test_a_failed_reference_put_back_among_the_kept_is_refused(self):
+        """The screen's kept list is held against the screen's own recorded references."""
+        self.ok(self.plan())
+        failed = self.history_commits[0]
+        self.assertEqual(self.screen(failures=[failed]), 0)
+        honest = (self.out / "screen.json").read_text()
+        screened = json.loads(honest)
+        self.assertNotIn(failed, screened["kept_history"])
+        # Only the kept list edited; then the kept list and the exclusions together. The results still say failed.
+        for also_excluded in (False, True):
+            edited = json.loads(honest)
+            edited["kept_history"] = self.history_commits
+            if also_excluded:
+                edited["excluded"] = []
+            (self.out / "screen.json").write_text(json.dumps(edited))
+            self.refused(self.run_script("pass.sh", "history", self.out), "not what its recorded references say")
+            self.assertFalse((self.out / "turns").exists())
+        # Only the exclusions edited: the record no longer agrees with itself.
+        edited = json.loads(honest)
+        edited["excluded"] = []
+        (self.out / "screen.json").write_text(json.dumps(edited))
+        self.refused(self.run_script("pass.sh", "history", self.out), "not what its recorded references say")
+        # A reference dropped from the record, and one that is neither a pass nor a failed check.
+        edited = json.loads(honest)
+        edited["results"] = edited["results"][:-1]
+        (self.out / "screen.json").write_text(json.dumps(edited))
+        self.refused(self.run_script("pass.sh", "history", self.out), "every planned reference")
+        edited = json.loads(honest)
+        edited["results"][0]["receipt"]["verified"] = False
+        (self.out / "screen.json").write_text(json.dumps(edited))
+        self.refused(self.run_script("pass.sh", "history", self.out), "neither a verified pass nor a failed check")
+        self.assertFalse((self.out / "turns").exists())
+        # The control: the screen as it was written lets the history run.
+        (self.out / "screen.json").write_text(honest)
+        self.ok(self.run_script("pass.sh", "history", self.out))
+
+    def test_a_screen_changed_after_the_history_is_refused_before_any_teaching_plan(self):
+        """The list holds the screen to the record the history turns were run from."""
+        self.ready_history()
+        honest = (self.out / "screen.json").read_text()
+        edited = json.loads(honest)
+        dropped = edited["kept_history"][-1]
+        # A consistent edit, which the screen's own check would pass: one more reference made to have failed.
+        for held in edited["results"]:
+            if held["commit"] == dropped:
+                held["receipt"] = dict(held["receipt"], outcome="check failed")
+        edited["excluded"] = [{"commit": dropped, "reason": "reference check failed"}]
+        edited["kept_history"] = edited["kept_history"][:-1]
+        (self.out / "screen.json").write_text(json.dumps(edited))
+        self.refused(self.run_script("pass.sh", "list", self.out), "not the screening record the history turns were run from")
+        for name in ("teach-plan.json", "room-plan.json", "list.json"):
+            self.assertFalse((self.out / name).exists(), name)
+        (self.out / "screen.json").write_text(honest)
+        self.ok(self.run_script("pass.sh", "list", self.out))
 
     def write_history(self, history):
         """history.json and its journal, edited together."""
