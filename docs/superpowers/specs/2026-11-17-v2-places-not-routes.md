@@ -74,7 +74,11 @@ says a list of places saves a reader time: it says which files a later reader we
   for an item that has only a title and tests, is the room's, in its own revision, measured before it is picked.
 - Dropping routes. They stay in the answer, as store "3" has them, for the experiment's arms and for a reader. The
   offer is the room's to make from `places`.
-- Conditioning places on a goal (files named by turns that also named it). Not measured, so not built.
+- Conditioning places on a goal (files named by turns that also named it). Not built. Serenity measured its nearest
+  kin since (all hands 119973f2, no turn): on the item list's 64 multi-file changes, given one file of a change, the
+  files earlier commits changed together with it named 0.15 / 0.26 / 0.28 of the change's other files in their first
+  1 / 3 / 5; the files earlier commits changed most, whatever they went with, named 0.10 / 0.29 / 0.38. A plain count
+  of places again, by a fourth instrument. The draft waits unread until something would use it (aa181cc6).
 
 ## 1. The answer, store "4"
 
