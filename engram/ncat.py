@@ -58,14 +58,14 @@ def _built(source=None):
         raise RuntimeError('ncat needs a C compiler at /usr/bin/cc, /usr/bin/gcc or /usr/bin/clang')
     flags = FLAGS + (LINUX_FLAGS if sys.platform.startswith('linux') else ())
     machine = f'{sys.platform} {platform.machine()}'  # a home shared across architectures keeps one library each
-    # CACHE_FORMAT salts the name: a library the old loader compiled by rereading the file may hold other bytes than
-    # the source it was named for, so none of those is taken as this source's.
+    # A library the old loader compiled, by rereading the file, may hold other bytes than the source it was named for.
+    # So this loader's names are its own: a literal `ncat-2-` the old ones never had, and CACHE_FORMAT in the digest.
     tag = hashlib.blake2b(CACHE_FORMAT + source + compiler.encode() + ' '.join(flags).encode() + machine.encode(),
                           digest_size=12).hexdigest()
     cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'superyak' / 'ncat'
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     _private(cache, 'cache folder')
-    out = cache / f'ncat-{tag}.so'
+    out = cache / f'ncat-2-{tag}.so'
     if not out.exists():
         partial = cache / f'.{out.name}.{os.getpid()}'
         try:

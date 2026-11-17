@@ -563,7 +563,7 @@ def _write(path, net, meta, bodies, budget_bytes, list_bytes=None):
 def _read_at_most(source, limit, refusal):
     """At most `limit` bytes of a file or stream, refused past it: one more byte is read to tell, and never the rest,
     whatever size the file reports or however it grows."""
-    if isinstance(source, (str, os.PathLike)):
+    if isinstance(source, (str, bytes, os.PathLike)):
         with open(source, "rb") as f:
             data = f.read(limit + 1)
     else:
@@ -579,6 +579,9 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
     out = Path(out).resolve()
     if len(walk_files) > MAX_WALKS:
         raise Refused(f"more than {MAX_WALKS} walk files")
+    # Every file is named by a path: str, bytes or any path-like object, decoded once here; a stream is no name.
+    walk_files = [Path(os.fsdecode(os.fspath(f))) for f in walk_files]
+    list_file = None if list_file is None else Path(os.fsdecode(os.fspath(list_file)))
     files = {Path(f).name: _read_at_most(f, MAX_FILE, f"{Path(f).name} is longer than 64 MiB") for f in walk_files}
     if len(files) != len(walk_files):
         raise Refused("two walk files have one name")
@@ -624,6 +627,12 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
         os.close(lock)
 
 
+# What a damaged file can raise while it is read: each becomes an IntegrityError (exit 3), never a traceback, and never
+# "the kernel stopped the build" (exit 5), which RecursionError, a RuntimeError, would otherwise reach.
+STORED_DAMAGE = (sqlite3.Error, Refused, ValueError, KeyError, TypeError, AttributeError, ZeroDivisionError,
+                 OverflowError, RecursionError)
+
+
 class RouteStore:
     """A finished file: answers read from it, and a check that replays every cell and recomputes every row."""
 
@@ -635,11 +644,15 @@ class RouteStore:
             # Nothing stored comes out whole past a walk file's bound, and the header and listing are measured inside
             # SQLite before a byte of them is fetched.
             self._db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_FILE)
-            rows, longest_key, longest = self._db.execute(
-                "SELECT count(*), max(length(CAST(key AS BLOB))), max(length(CAST(value AS BLOB))) FROM meta").fetchone()
-            listed, longest_list = self._db.execute("SELECT count(*), max(length(body)) FROM listing").fetchone()
-            if rows != len(META_KEYS) or (longest_key or 0) > MAX_HEADER or (longest or 0) > MAX_HEADER \
-                    or listed > 1 or (longest_list or 0) > MAX_LIST:
+            # Lengths are of bytes (a TEXT value's length() counts characters and stops at a NUL), and each column is
+            # the type it was written as.
+            rows, longest_key, longest, mistyped = self._db.execute(
+                "SELECT count(*), max(length(CAST(key AS BLOB))), max(length(CAST(value AS BLOB))), "
+                "sum(typeof(key) != 'text' OR typeof(value) != 'text') FROM meta").fetchone()
+            listed, longest_list, mistyped_list = self._db.execute(
+                "SELECT count(*), max(length(CAST(body AS BLOB))), sum(typeof(body) != 'blob') FROM listing").fetchone()
+            if rows != len(META_KEYS) or (longest_key or 0) > MAX_HEADER or (longest or 0) > MAX_HEADER or mistyped \
+                    or listed > 1 or (longest_list or 0) > MAX_LIST or mistyped_list:
                 raise ValueError("header")
             meta = dict(self._db.execute("SELECT key, value FROM meta"))
             listings = [body for (body,) in self._db.execute("SELECT body FROM listing")]
@@ -655,6 +668,8 @@ class RouteStore:
             self.for_experiment = _json(meta["for_experiment"])
             self.budget, self.kernel = _undec(meta["budget"]), meta["kernel"]
             self.listing = listings[0] if listings else None
+            if self.listing is not None:
+                read_list(self.listing)   # its form and depth, on open: the check also admits the walks against it
             if not _hex(self.kernel, (16,)) or self.budget <= 0 or self.measure not in TEACHES \
                     or not (self.repo is None or _hex(self.repo)) or len(listings) > 1:
                 raise ValueError("header")
@@ -663,7 +678,7 @@ class RouteStore:
             ship = self.measure == SHIP_SHARE and self.list is None and self.for_experiment is False and not listings
             if not (experiment or ship):
                 raise ValueError("header")
-        except (sqlite3.Error, KeyError, ValueError, TypeError):
+        except STORED_DAMAGE:
             self._db.close()
             raise IntegrityError(f"the route store at {path} can't be read; build it") from None
         except IntegrityError:
@@ -674,9 +689,12 @@ class RouteStore:
         self._db.close()
 
     def _walks(self):
-        (rows,) = self._db.execute("SELECT count(*) FROM walk").fetchone()
+        rows, mistyped = self._db.execute(
+            "SELECT count(*), sum(typeof(attempt) != 'text' OR typeof(body) != 'blob') FROM walk").fetchone()
         if rows > MAX_WALKS:
             raise IntegrityError(f"the route store holds more than {MAX_WALKS} walks; build it")
+        if mistyped:
+            raise IntegrityError("a stored walk is not the type it was written as; build the store")
         return [_walk(_json(body.decode().rstrip("\n")), f"stored walk {attempt}")
                 for attempt, body in self._db.execute("SELECT attempt, body FROM walk ORDER BY attempt")]
 
@@ -701,7 +719,7 @@ class RouteStore:
             net = self._network()   # N and what was named, from the stored walks themselves, which the check binds
             N, named = net.N, {p for vs in net.visits.values() for p, _, _ in vs}
             answers = [self._goal(goal, N, named) for goal in q["goals"]]
-        except (sqlite3.Error, Refused, ValueError, KeyError, TypeError) as error:
+        except STORED_DAMAGE as error:
             raise IntegrityError(f"the route store can't be read ({type(error).__name__}); build it") from None
         return canonical({"v": 1, "store": STORE_VERSION, "kernel": self.kernel, "repo": self.repo, "list": self.list,
                           "for_experiment": self.for_experiment,
@@ -721,7 +739,7 @@ class RouteStore:
         route, num, den, roads_n, _, code, reason, more = row
         if code is not None:
             return {"goal": goal, "none": "refused", "code": code, "reason": reason}
-        route = json.loads(route)
+        route = _json(route)
         net = self._network()
         roads = [{"from": a, "to": b, "turns": net.k[a, b], "witness": net.witness[a, b]}
                  for a, b in zip([None] + route, route)]
@@ -729,7 +747,7 @@ class RouteStore:
         detours = []
         for attempt, visit, seq, way, d_num, d_den in self._db.execute(
                 "SELECT attempt, visit, seq, way, num, den FROM detour WHERE path = ?", (goal,)):
-            way = json.loads(way)
+            way = _json(way)
             detours.append({"attempt": attempt, "item": families[attempt]["item"], "family": families[attempt]["family"],
                             "visit": visit, "seq": seq, "paths": way,
                             "cost": cost(Fraction(_undec(d_num), _undec(d_den))), "roads_n": len(way)})
@@ -770,12 +788,12 @@ class RouteStore:
             expected = _cells(net, self.budget)
             stored_gens = list(self._db.execute("SELECT id, dim, kind, ref, key FROM generator ORDER BY id"))
             stored_comp = {k: (d, r) for k, d, r in self._db.execute("SELECT key, dim, recipe FROM composite")}
-            stored_goals = {p: (json.loads(r), c, code, reason, more) for p, r, c, code, reason, more in
+            stored_goals = {p: (_json(r), c, code, reason, more) for p, r, c, code, reason, more in
                             self._db.execute("SELECT path, route, cell, code, reason, more FROM goal")}
             stored_detours = sorted(self._db.execute(
                 "SELECT path, attempt, visit, seq, way, num, den, way_cell, gen FROM detour"))
             stored_goal_costs = {p: (n, d, rn) for p, n, d, rn in self._db.execute("SELECT path, num, den, roads_n FROM goal")}
-        except (sqlite3.Error, ValueError, KeyError, TypeError, Refused, NCatError) as error:
+        except STORED_DAMAGE + (NCatError,) as error:
             raise IntegrityError(f"the route store can't be read ({type(error).__name__}); build it") from None
         generators, composites, goals, detours = expected
         if stored_gens != generators:

@@ -70,8 +70,9 @@ silently: a failed step and a failed turn are read and kept as what they are.
 
 **Bounds, each refused by name before the work it bounds:** a walk file over 64 MiB, a list over 4 MiB and a question
 over 1 MiB, each read to one byte past its bound and no further, whatever size the file reports or however it grows
-(the command line reads its question the same way; a file may be named by any path-like object, and a file of exactly
-its bound is read); JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
+(the command line reads its question the same way; a file is named by a path, a `str`, `bytes` or any path-like
+object, and a stream is no file's name; a file of exactly its bound is read, and lowering the bound one byte below
+it refuses it); JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
 on a list; more than 1,000,000 named files over all of a store's steps, before any network or cell is made; and a
 string holding a lone surrogate, which no UTF-8 file can hold.
 
@@ -166,7 +167,8 @@ whenever an answer's bytes could change for the same walks, list and question; `
 source that built the store's cells (the first 16 hex digits of the SHA-256 of the bytes the loaded library was
 compiled from, read once when it was loaded and given to the compiler as read, an installed wheel's shared copy
 included; a source changed later in the same process is not named for the old library's cells, and no library the
-loader's earlier form compiled, by rereading the file, is taken, since its cache names carry a format), recorded at build
+loader's earlier form compiled, by rereading the file, is taken: this loader's library names begin `ncat-2-`, which the
+old ones never did, and carry a format in their digest), recorded at build
 time; `repo`;
 `list`; `for_experiment`; `measure` (`name`,
 `version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
@@ -234,10 +236,14 @@ it names and admits the stored walks against them again, compares every walk row
 standing and whether it teaches) with the walk it holds, and holds every walk to the store's repository. Opening a
 store refuses a header out of its form: an unknown or missing key, a kernel digest that is not 16 lowercase hex, a
 measure that is not exactly `[name, version]` with a string name and a whole-number version (not `true`, not `1.0`),
-header values over 4 KiB or a stored list over 4 MiB, measured inside SQLite before they are fetched, JSON in them
-nested deeper than 8, a
+header values over 4 KiB or a stored list over 4 MiB, measured in bytes inside SQLite before they are fetched (a
+TEXT value's `length()` counts characters and stops at a NUL, so each is cast to bytes), a column of another type than
+it was written as, a stored list `read_list` refuses, JSON in any of them nested deeper than 8, a
 measure, list and flag that disagree (an experiment's is `share`, a list and `true`; a ship's is `ship-share`,
-`null` and `false`), and a file built by another store version, which is to be built again.
+`null` and `false`), and a file built by another store version, which is to be built again. No stored value comes out
+whole past a walk file's bound. Whatever a damaged file raises while it is opened, answered from or checked, a bad
+cost, a stored route nested 10,000 deep or a walk stored as text, is damage: an IntegrityError, exit 3 on the command
+line, never a traceback and never "the kernel stopped" (exit 5).
 
 **What a detour shows, and no more.** The kernel checks that its two sides start and end at the same 0-cells,
 and keeps it in the category's structure. That the way was walked, that the route is cheaper and that it is
@@ -307,7 +313,7 @@ Each row names what a right store does, and what a wrong one would do that its t
 | What is not there is said | Each told apart and in precedence: no history, with a goal never named and one only untaught; a file no walk named; a file only an untaught walk named; a kernel refusal for a route and for a way, forced through the budget, with its code | One that conflates two kinds, or answers a route made of what was left |
 | A question is the store's | Answered when its `repo`, `list` and `measure` are the store's | One that answers a question of another list, repository or measure, or answers it as no route |
 | The store is the store | It rebuilds whole and renames into place; a failed build leaves the old file and says so; its check rebuilds every key and every witness; a recall run with this file present reads nothing of it | One that serves a partial or old file as the new list's, or accepts a damaged 2-cell recipe or witness |
-| Bounds are on what is read | A walk file and a list read from `/dev/zero`, which reports a size of 0 and never ends, refused one byte past the bound; the command line asks its stdin for 1 MiB and one byte, once; a `seq` of 2^63 − 1 stored and checked, and 2^63 refused by name; a header whose measure version is `true`, `1.0`, or has a third part, refused; a source changed after the library loaded is not the digest a new store records; a library the old loader named for this source is compiled again; each bound takes its last byte and refuses the next; a stored list over 4 MiB, a 5,000-digit budget, a header nested 2,000 deep, walks past the bound or over the count, and a garbled walk are each damage, never a refusal of the question | One that trusts a reported size, reads a question whole, fails on an integer SQLite can't hold, takes `true` for 1, names a source the loaded library wasn't built from, refuses a file at its exact bound, or fetches a stored value whole before measuring it |
+| Bounds are on what is read | A walk file and a list read from `/dev/zero`, which reports a size of 0 and never ends, refused one byte past the bound; the command line asks its stdin for 1 MiB and one byte, once; a `seq` of 2^63 − 1 stored and checked, and 2^63 refused by name; a header whose measure version is `true`, `1.0`, or has a third part, refused; a source changed after the library loaded is not the digest a new store records; a library the old loader named for this source is compiled again; each bound takes its last byte and refuses the next; a stored list over 4 MiB, a 5,000-digit budget, a header nested 2,000 deep, walks past the bound or over the count, a garbled walk, a walk or list stored as text, a key stored as bytes, a list nested 2,000 deep, a zero denominator and a stored route nested 10,000 deep are each damage, exit 3, never a refusal of the question; a header or list too long is never fetched, and a deep header never parsed; a header of exactly 4 KiB and a stored walk of exactly the length limit are read, one byte more is damage | One that trusts a reported size, reads a question whole, fails on an integer SQLite can't hold, takes `true` for 1, names a source the loaded library wasn't built from, refuses a file at its exact bound, or fetches a stored value whole before measuring it |
 
 ## Decisions
 
@@ -398,3 +404,14 @@ float fault made as named, R2 made otherwise, and four more changes:
 | 2. A stored file's header, list and walks measured before they are fetched, and their JSON read with the depth bound | Section 7, "What the check binds" |
 | 3. A file named by any path-like object | Section 2's bounds |
 | 4. Each bound's exact length read, and the next refused | Section 2's bounds; section 10 |
+
+**A third reader (w78, Sol) on 9777476a, approve with named changes, all made.** It found 1 and 4 made as named, 2 and
+3 made otherwise, and five changes:
+
+| Named change | Where |
+| --- | --- |
+| 1. Stored damage is an IntegrityError on every path: column types, bad costs, deep stored JSON | Section 7, "What the check binds" |
+| 2. The stored list measured in bytes, of its type, and read by `read_list` on open | Section 7, "What the check binds" |
+| 3. A literal `ncat-2-` in the cache's names, a namespace the old loader never wrote in | Section 6 |
+| 4. `bytes` and bytes-returning path-like names; a stream is no name | Section 2's bounds |
+| 5. Tests that a too-long header or list is never fetched, that header JSON is parsed only after its depth is measured, and that stored bounds take their last byte | Section 10 |

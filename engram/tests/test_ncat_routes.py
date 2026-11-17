@@ -631,15 +631,23 @@ def test_a_library_the_old_loader_named_for_this_source_is_not_reused(tmp_path, 
     old = cache / f"ncat-{old_tag}.so"
     old.write_bytes(b"compiled by the old loader, from bytes the file held a moment later")
     old.chmod(0o700)
+    salted = hashlib.blake2b(ncat.CACHE_FORMAT + source + compiler.encode() + " ".join(flags).encode()
+                             + machine.encode(), digest_size=12).hexdigest()
+    clash = cache / f"ncat-{salted}.so"   # an old-loader name that equals this loader's digest: w78's history
+    clash.write_bytes(b"compiled by the old loader under a name this digest also gives")
+    clash.chmod(0o700)
     built = ncat._built(source)
-    assert built != old and len(seen) == 1                       # compiled again, not taken from the old name
+    assert built.name == f"ncat-2-{salted}.so"                  # a namespace the old loader never wrote in
+    assert built not in (old, clash) and len(seen) == 1          # compiled again, neither old name taken
     argv, given = seen[0]
     assert argv[argv.index("-x") + 1:argv.index("-x") + 3] == ["c", "-"] and given == source   # from the bytes hashed
     assert ncat._built(source) == built and len(seen) == 1     # and its own name is then reused
 
 
 @pytest.mark.parametrize("damage", ["a long listing", "a long header", "a deep header", "a long walk", "many walks",
-                                    "a garbled walk"])
+                                    "a garbled walk", "a walk stored as text", "a zero denominator", "a deep route",
+                                    "a list stored as text", "a NUL in a text list", "a deep list", "a key stored as blob",
+                                    "a right list stored as text"])
 def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, damage):   # w73 2
     """Opening or answering from a damaged store refuses it as damage, having fetched nothing past a bound: the
     listing and header are measured inside SQLite first, and no stored value comes out whole past a walk's bound."""
@@ -654,7 +662,23 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
         db.execute("UPDATE meta SET value = ? WHERE key = 'measure'", ("[" * 2000 + "]" * 2000,))   # 4,000 bytes
     elif damage == "a garbled walk":
         db.execute("UPDATE walk SET body = CAST('not a walk' AS BLOB) WHERE attempt = 't1'")
-    (listing_bytes,) = db.execute("SELECT length(body) FROM listing").fetchone()
+    elif damage == "a walk stored as text":
+        db.execute("UPDATE walk SET body = CAST(body AS TEXT) WHERE attempt = 't1'")
+    elif damage == "a zero denominator":
+        db.execute("UPDATE goal SET den = '0' WHERE path = 'g'")
+    elif damage == "a deep route":
+        db.execute("UPDATE goal SET route = ? WHERE path = 'g'", ("[" * 10000 + "]" * 10000,))
+    elif damage == "a list stored as text":   # 4 MiB of characters, 8 MiB of bytes
+        db.execute("UPDATE listing SET body = ?", ("\u00e9" * R.MAX_LIST,))
+    elif damage == "a NUL in a text list":    # SQLite's length() of TEXT stops at a NUL
+        db.execute("UPDATE listing SET body = ?", ("\x00" + "x" * (R.MAX_LIST + 1),))
+    elif damage == "a deep list":             # 4,000 bytes, nested 2,000 deep
+        db.execute("UPDATE listing SET body = ?", (b"[" * 2000 + b"]" * 2000,))
+    elif damage == "a right list stored as text":
+        db.execute("UPDATE listing SET body = CAST(body AS TEXT)")
+    elif damage == "a key stored as blob":
+        db.execute("UPDATE meta SET key = CAST(key AS BLOB) WHERE key = 'budget'")
+    (listing_bytes,) = db.execute("SELECT length(CAST(body AS BLOB)) FROM listing").fetchone()
     (shortest_walk,) = db.execute("SELECT min(length(body)) FROM walk").fetchone()
     db.commit()
     db.close()
@@ -663,6 +687,80 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
         monkeypatch.setattr(R, "MAX_FILE", listing_bytes)
     if damage == "many walks":
         monkeypatch.setattr(R, "MAX_WALKS", 1)
+    with pytest.raises(R.IntegrityError) as caught:
+        ask(out, ["g"], list_id)
+    if damage == "a walk stored as text":
+        assert "not the type it was written as" in str(caught.value)
+    with pytest.raises(R.IntegrityError), R.open_store(out) as s:
+        s.check()
+    assert R.main(["check", "--store", str(out)]) == 3      # damage, never a traceback or "the kernel stopped" (5)
+
+
+def test_a_header_or_list_too_long_is_never_fetched(tmp_path, monkeypatch):   # w78 5
+    """The header and the list are measured inside SQLite: when one is too long, the query that would fetch it is
+    never run."""
+    queries = []
+
+    class Recording(sqlite3.Connection):
+        def execute(self, sql, *args):
+            queries.append(sql)
+            return super().execute(sql, *args)
+    real = sqlite3.connect
+    monkeypatch.setattr(R.sqlite3, "connect", lambda *a, **k: real(*a, factory=Recording, **k))
+    for damage, fetch in ((("UPDATE meta SET key = ? WHERE key = 'budget'", ("k" * (R.MAX_HEADER + 1),)),
+                           "SELECT key, value FROM meta"),
+                          (("UPDATE listing SET body = zeroblob(?)", (R.MAX_LIST + 1,)), "SELECT body FROM listing")):
+        out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"]), walk("t2", ["g"])])
+        db = real(out)
+        db.execute(*damage)
+        db.commit()
+        db.close()
+        queries.clear()
+        with pytest.raises(R.IntegrityError):
+            R.RouteStore(out)
+        assert queries and fetch not in queries, (fetch, queries)
+
+
+def test_a_stored_header_is_parsed_only_after_its_depth_is_measured(tmp_path, monkeypatch):   # w78 5
+    import types
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"])])
+    db = sqlite3.connect(out)
+    db.execute("UPDATE meta SET value = ? WHERE key = 'measure'", ("[" * 2000 + "]" * 2000,))
+    db.commit()
+    db.close()
+    parsed = []
+
+    def loads(text, **kw):
+        parsed.append(text)
+        return json.loads(text, **kw)
+    monkeypatch.setattr(R, "json", types.SimpleNamespace(loads=loads, dumps=json.dumps))
+    with pytest.raises(R.IntegrityError):
+        R.RouteStore(out)
+    assert all(R._depth(t) <= R.MAX_DEPTH for t in parsed)   # the deep one never reached the parser
+
+
+def test_stored_bounds_take_their_last_byte(tmp_path, monkeypatch):   # w78 5
+    """A header value of exactly 4 KiB opens and answers, one byte more is damage; a stored walk of exactly the
+    length limit is fetched, one byte more is damage."""
+    for extra, opens in ((0, True), (1, False)):
+        out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"]), walk("t2", ["g"])])
+        db = sqlite3.connect(out)
+        db.execute("UPDATE meta SET value = ? WHERE key = 'budget'", ("1" + "0" * (R.MAX_HEADER - 1 + extra),))
+        db.commit()
+        db.close()
+        if opens:
+            assert ask(out, ["g"], list_id)["taught"] == 2
+        else:
+            with pytest.raises(R.IntegrityError):
+                ask(out, ["g"], list_id)
+    out, list_id, _ = experiment(tmp_path, [walk("t1", [f"p{i}" for i in range(10)] + ["g"]),
+                                            walk("t2", [f"q{i}" for i in range(10)] + ["g"])])
+    db = sqlite3.connect(out)
+    (longest,) = db.execute("SELECT max(length(body)) FROM walk").fetchone()
+    db.close()
+    monkeypatch.setattr(R, "MAX_FILE", longest)
+    assert ask(out, ["g"], list_id)["taught"] == 2
+    monkeypatch.setattr(R, "MAX_FILE", longest - 1)
     with pytest.raises(R.IntegrityError):
         ask(out, ["g"], list_id)
 
@@ -672,16 +770,23 @@ def test_a_file_named_by_any_path_like_object_is_read(tmp_path):   # w73 3
 
     class Named:
         def __init__(self, path):
-            self.path = str(path)
+            self.path = path if isinstance(path, bytes) else str(path)
 
         def __fspath__(self):
             return self.path
+    import os
     walks = sorted(FIXTURE.glob("walk-*.jsonl"))
-    for kind in (PurePosixPath, Named):
-        out = tmp_path / f"{kind.__name__}.db"
+    kinds = {"str": str, "bytes": os.fsencode, "PurePosixPath": PurePosixPath, "fspath str": Named,
+             "fspath bytes": lambda p: Named(os.fsencode(p))}
+    for name, kind in kinds.items():
+        out = tmp_path / f"{name.replace(' ', '-')}.db"
         R.build(out, [kind(w) for w in walks], kind(FIXTURE / "list.json"))
         with R.open_store(out) as s:
-            assert s.ask((FIXTURE / "question.json").read_bytes()) == fixture_answer()
+            assert s.ask((FIXTURE / "question.json").read_bytes()) == fixture_answer(), name
+    with open(walks[0], "rb") as stream, pytest.raises(TypeError):   # a stream is no file's name, for walk or list
+        R.build(tmp_path / "s.db", [stream])
+    with open(FIXTURE / "list.json", "rb") as stream, pytest.raises(TypeError):
+        R.build(tmp_path / "s.db", walks, stream)
 
 
 def test_each_bound_takes_its_last_byte_and_refuses_the_next(tmp_path, monkeypatch, capsys):   # w73 4
