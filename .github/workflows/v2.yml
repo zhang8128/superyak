@@ -22,7 +22,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The scripts' own tests now hold the pass's, which run a room and its jail many times over: about
+    # thirteen minutes on Linux and more than twenty on macOS, after the suite's four to nine.
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: v2
