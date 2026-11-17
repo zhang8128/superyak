@@ -16,11 +16,12 @@ that are not the check's own files; the binary files, listed and not read; and f
 named, by path, line number in the commit's file and word. Never a line's text. It ends with 0 whether or not
 anything is named: naming is not failing. It ends with 1 and one line on stderr only when it could not do its work.
 
-It runs nothing from the repository and changes nothing in it. git runs as check.py runs it: no filesystem monitor,
-no settings file but the repository's own, and no home. And, since what is read was written by a worker, with an
-empty work tree and no index, so that no attribute the commit carries can apply (a .gitattributes saying -diff, if
-read, would make every file binary, and so unread; the tests do not show that git reads one for a diff of two
-commits); with no renames followed, no external diff, no text conversion and no context.
+It runs nothing from the repository and changes nothing in it. Of the repository it reads the objects and nothing
+else: git runs in an empty repository of the program's own that borrows them, from an empty directory, with no
+settings file of the machine's and no home. A worker that could write in the repository may have left a setting, an
+attributes file or a replaced object there, and none of them is read (an attributes file saying -diff, or a low
+core.bigFileThreshold, would make every file binary, and so unread). No attributes file of a work tree applies
+either. No renames are followed, and there is no external diff, text conversion or context.
 
 The bound: git's diff of the source directory is read up to MAX_DIFF_BYTES, 64 MiB. A change whose diff there is
 longer is not read, and the program ends with 1 and says so. A line of a million characters is read whole, and its
@@ -68,15 +69,28 @@ class Fail(Exception):
 
 
 class Git:
-    """git on the repository at `repo`, reading objects only, with an empty work tree and no index."""
+    """git reading the objects of the repository at `repo`, and nothing else of it: it runs in a repository of the
+    program's own, made empty in `scratch`, that borrows them. So the repository's settings, its attributes file and
+    its replaced objects, which a worker may have written, are never read."""
 
     def __init__(self, repo, scratch):
         dot = os.path.join(repo, ".git")
+        objects = os.path.join(dot if os.path.isdir(dot) else repo, "objects")
+        if not os.path.isdir(objects):
+            raise Fail("%s is not a repository with objects of its own" % json.dumps(repo[:80]))
+        # The work tree is the directory git runs in: an empty one, so that no attributes file is found in it.
         self.cwd = os.path.join(scratch, "tree")
-        os.mkdir(self.cwd)
-        self.env = {"PATH": os.environ.get("PATH", ""), "GIT_DIR": dot if os.path.exists(dot) else repo, "GIT_WORK_TREE": self.cwd,
-                    "GIT_INDEX_FILE": os.path.join(scratch, "index"), "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"}
+        own = os.path.join(scratch, "own.git")
+        for made in (self.cwd, os.path.join(own, "refs"), os.path.join(own, "objects", "info")):
+            os.makedirs(made)
+        with open(os.path.join(own, "HEAD"), "w") as out:
+            out.write("ref: refs/heads/none\n")
+        # Borrowed through a link named here, so that no character of the repository's path is read as git's.
+        os.symlink(os.path.abspath(objects), os.path.join(scratch, "borrowed"))
+        with open(os.path.join(own, "objects", "info", "alternates"), "w") as out:
+            out.write(os.path.join(scratch, "borrowed") + "\n")
+        self.env = {"PATH": os.environ.get("PATH", ""), "GIT_DIR": own, "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_ATTR_NOSYSTEM": "1"}
 
     def __call__(self, args, limit):
         """git's output, or Fail if it is longer than `limit` bytes or git fails."""

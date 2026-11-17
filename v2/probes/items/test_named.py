@@ -205,9 +205,12 @@ class Named(unittest.TestCase):
             self.assertEqual(done.stderr.count(b"\n"), 1, done.stderr)
             self.assertTrue(done.stderr.startswith(b"named: "), done.stderr)
             self.assertNotIn(b"Traceback", done.stderr)
-        # Not a repository: git fails.
-        done = self.run_named("--repo", self.work, "--base", self.base, "--commit", commit, "--source", SOURCE)
-        self.assertEqual((done.returncode, done.stderr.count(b"\n"), done.stdout), (1, 1, b""))
+        # Not a repository, and a work tree whose objects are another repository's: each said, by name.
+        self.repo.git("worktree", "add", "-q", "--detach", os.path.join(self.work, "linked"), commit)
+        for path in (self.work, os.path.join(self.work, "linked")):
+            done = self.run_named("--repo", path, "--base", self.base, "--commit", commit, "--source", SOURCE)
+            self.assertEqual((done.returncode, done.stderr.count(b"\n"), done.stdout), (1, 1, b""))
+            self.assertIn(b"is not a repository with objects of its own", done.stderr)
         # A missing argument.
         done = self.run_named("--repo", self.repo.root, "--base", self.base, "--source", SOURCE)
         self.assertEqual((done.returncode, done.stderr.count(b"\n"), done.stdout), (1, 1, b""))
@@ -244,6 +247,42 @@ class Named(unittest.TestCase):
         self.assertEqual(out["binary"], [])
         out = self.named(moved, base=self.base)
         self.assertIn("docs/readme.md", out["outside"])
+
+    def test_what_a_worker_left_in_the_repository_beside_its_objects_is_not_read(self):
+        # Each of these alone makes git, run in the repository itself, call every file binary: nothing named, and
+        # no flag on git's command line undoes it. A worker that writes in the repository can leave any of them.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        elsewhere = os.path.join(self.work, "attributes")
+        with open(elsewhere, "w") as out:
+            out.write("* -diff\n")
+        info = os.path.join(self.repo.root, ".git", "info", "attributes")
+        for name, plant, lift in (
+                ("its attributes file", lambda: open(info, "w").write("* -diff\n"), lambda: os.remove(info)),
+                ("an attributes file its settings name", lambda: self.repo.git("config", "core.attributesFile", elsewhere),
+                 lambda: self.repo.git("config", "--unset", "core.attributesFile")),
+                ("a threshold for big files", lambda: self.repo.git("config", "core.bigFileThreshold", "1"),
+                 lambda: self.repo.git("config", "--unset", "core.bigFileThreshold"))):
+            plant()
+            # The control: git in the repository itself is misled by it.
+            seen = self.repo.git("diff", "--numstat", self.base, commit, "--", SOURCE)
+            self.assertTrue(seen.startswith(b"-\t-\t"), (name, seen))
+            out = self.named(commit)
+            self.assertEqual(out["binary"], [], name)
+            self.assertEqual(self.places(out)["runner"], [("toy/src/a.py", 3, "pytest")], name)
+            lift()
+
+    def test_a_repository_named_from_where_it_is_run_and_one_with_a_newline_in_its_path(self):
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        done = subprocess.run([sys.executable, "-I", NAMED, "--repo", "repo", "--base", self.base, "--commit", commit,
+                               "--source", SOURCE], cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=60)
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual(self.places(json.loads(done.stdout))["runner"], [("toy/src/a.py", 3, "pytest")])
+        odd = os.path.join(self.work, 'a "line\nbroken: path')
+        os.rename(self.repo.root, odd)
+        done = self.run_named("--repo", odd, "--base", self.base, "--commit", commit, "--source", SOURCE)
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual(self.places(json.loads(done.stdout))["runner"], [("toy/src/a.py", 3, "pytest")])
 
     def test_a_bare_repository(self):
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
