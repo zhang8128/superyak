@@ -10,7 +10,12 @@ that could be items, runs each one's tests (rule 4) with --python, makes each el
 a wrong commit and a reference, kept under refs/yak-items/<commit>/), gives each eligible commit its part
 (history, pilot, scored, or left out by rule 5), and writes <out>/items.json once. It prints that file's
 SHA-256. It runs no room and no model, and it never checks anything out in --repo: the repository's work tree,
-index and branches are not touched. Each item's check is check.py, beside this file.
+index and branches are not touched, and it may be bare or a linked worktree. Rule 4 runs each tree laid out from
+its stored blobs' own bytes and modes, so no attribute, filter or line-end setting of the repository's applies.
+Each item's check is check.py, beside this file, run in a clone made with no settings of the repository's.
+
+It runs the project's own merged tests on the machine it is run on, outside the room's jail, and holds them only by
+a limit on time and by ending their process group.
 
 It is one file that imports nothing of its own but check.py, so that it runs with python3 -I.
 """
@@ -67,7 +72,7 @@ PAST_LIMIT = "rule 4: past the limit"
 TITLE_TOO_LONG = "the title would be too long"
 REASONS = (PASS_BEFORE, FAIL_AFTER, PAST_LIMIT, TITLE_TOO_LONG)
 # The settings every git here runs with, whatever the repository's own say: no hook (update-ref would run one),
-# no filesystem monitor, commits made the same on any machine, and files written as they are stored.
+# no filesystem monitor, commits made the same on any machine, and line ends as stored in the clone's checkout.
 GIT_FLAGS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "i18n.commitEncoding=UTF-8",
              "-c", "core.autocrlf=false"]
 
@@ -79,13 +84,14 @@ class Refused(Exception):
 
 
 class Git:
-    """git in one repository, with nothing of the caller's environment but its search path: no settings file of
-    the machine's or a home's, and no replaced object, which would make one commit's parents differ by machine."""
+    """git in one repository, with nothing of the caller's environment but its search path: no settings file or
+    attributes file of the machine's or a home's, and no replaced object, which would make one commit's parents
+    differ by machine."""
 
     def __init__(self, repo):
         self.repo = repo
-        self.env = {"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_NO_REPLACE_OBJECTS": "1"}
+        self.env = {"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"}
 
     def __call__(self, *args, data=None, env=None, where=None):
         done = subprocess.run(["git"] + GIT_FLAGS + ["-C", where or self.repo] + list(args), input=data,
@@ -168,8 +174,10 @@ def sort_out(component, found):
         return None
     if len(tests) > MAX_TEST_FILES or len(sources) > MAX_SOURCE_FILES:
         return None
+    # Added or changed, none deleted or renamed. A change of type (T) is a change: a link that became a regular file
+    # is taken, and a file that became a link is refused by its mode, as is a deletion.
     for change in tests + sources:
-        if change.status not in ("A", "M") or change.mode not in REGULAR or not change.path.endswith(".py"):
+        if change.status not in ("A", "M", "T") or change.mode not in REGULAR or not change.path.endswith(".py"):
             return None
     if any(BROWSER in posixpath.basename(change.path) for change in tests):
         return None
@@ -256,13 +264,61 @@ class Maker:
         self.git("update-index", "-z", "--index-info", data=info, env=env)
         return self.git("write-tree", env=env).decode("ascii").strip()
 
+    def lay_out(self, tree, root):
+        """Writes `tree` at the new directory `root` from the stored objects' own bytes and recorded modes: each
+        regular file with its mode, each link as a link, and each submodule as an empty directory. Nothing is checked
+        out, so no attribute, filter or line-end setting applies, and no filter runs."""
+        entries = []
+        for line in self.git("ls-tree", "-r", "-z", tree).split(b"\0"):
+            if line:
+                meta, _, path = line.partition(b"\t")
+                mode, kind, name = meta.decode("ascii").split(" ")
+                # git's ls-tree itself refuses an empty name.
+                if any(part in (b".", b"..") or part.lower() == b".git" for part in path.split(b"/")):
+                    raise Refused("tree %s holds a path that cannot be laid out: %s" % (
+                        tree, check.shown(path.decode("utf-8", "replace"))))
+                entries.append((mode, kind, name, path))
+        data = self.contents([name for _, kind, name, _ in entries if kind == "blob"])
+        base = os.fsencode(root)
+        os.mkdir(base)
+        made = set()
+        for mode, _, name, path in entries:
+            parts = path.split(b"/")
+            # Every directory is made here, so none is a link that a later path could be written through.
+            for depth in range(1, len(parts)):
+                directory = b"/".join(parts[:depth])
+                if directory not in made:
+                    os.mkdir(os.path.join(base, directory))
+                    made.add(directory)
+            at = os.path.join(base, path)
+            if mode in REGULAR:
+                fd = os.open(at, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o755 if mode == "100755" else 0o644)
+                with os.fdopen(fd, "wb") as out:
+                    out.write(data[name])
+            elif mode == "120000":
+                os.symlink(data[name], at)
+            elif mode == "160000":
+                os.mkdir(at)
+            else:
+                raise Refused("tree %s holds an entry of mode %s" % (tree, mode))
+
+    def contents(self, blobs):
+        """The stored bytes of each blob, as cat-file gives them: no filter, no conversion."""
+        out = self.git("cat-file", "--batch", data=b"".join(blob.encode("ascii") + b"\n" for blob in blobs))
+        found, at = {}, 0
+        for _ in blobs:
+            end = out.index(b"\n", at)
+            name, _, size = out[at:end].decode("ascii").split(" ")
+            found[name] = out[end + 1:end + 1 + int(size)]
+            at = end + 1 + int(size) + 1
+        return found
+
     def run(self, tree, tests):
         """The tests run in a clean copy of `tree`: (exit code, past the limit, counts)."""
         copy = os.path.join(self.scratch, "tree")
-        env = {"GIT_INDEX_FILE": self.index}
-        self.git("read-tree", tree, env=env)
-        self.git("checkout-index", "-a", "-f", "--prefix=" + copy + "/", env=env)
         try:
+            self.lay_out(tree, copy)
             return check.run_tests(self.python, copy, self.component, tests, self.limit)
         finally:
             shutil.rmtree(copy, ignore_errors=True)
@@ -275,13 +331,19 @@ class Maker:
 
     def check_passes(self, commit):
         """Whether the check passes on `commit`, run as the room runs it, at the root of a clone: (passed, past the
-        limit). A run ended at the limit has not passed."""
+        limit). A run ended at the limit has not passed.
+
+        The clone holds none of the repository's settings, attributes or hooks: it is made with no template, and
+        every git here reads no settings or attributes file of the machine's or a home's. Its checkout applies only
+        what the commit's own tree says, as the room's does. The check runs in a session of its own, and the tests
+        it runs stay in its process group, so that ending the group at the limit, or when the check ends, ends them
+        and what they left before the clone is deleted."""
         clone = os.path.join(self.scratch, "clone")
         try:
             self.git("clone", "-q", "--shared", "--no-checkout", "--template=", os.path.abspath(self.git.repo), clone)
             self.git("checkout", "-q", "--detach", commit, where=clone)
-            code, late = check.run_limited([self.python, "-I", check.CHECK], clone, {"PATH": self.git.env["PATH"]},
-                                           self.limit)
+            code, late = check.run_limited([self.python, "-I", check.CHECK], clone,
+                                           {"PATH": self.git.env["PATH"], check.SHARE_GROUP: "1"}, self.limit)
             return code == 0, late
         finally:
             shutil.rmtree(clone, ignore_errors=True)

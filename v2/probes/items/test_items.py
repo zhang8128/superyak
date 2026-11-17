@@ -11,6 +11,7 @@ program. The stand-in runs the named files' test_* functions and writes the four
 It is not pytest, and nothing here shows how pytest itself behaves.
 """
 import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import io
@@ -229,6 +230,43 @@ CRLF_TEST = (b"from src import m_crlf\n\n\ndef test_value():\n"
              b"    assert b'\\r' not in open(__file__, 'rb').read() and m_crlf.VALUE == 1\n")
 # Sources that behave apart in a clone, where .git is beside the component, and in a plain copy of the tree.
 IN_A_CLONE = b"import os\n\nCLONE = os.path.isdir(os.path.join(os.path.dirname(__file__), '..', '..', '.git'))\n"
+# A test whose reference skips one of its two tests: a turn that makes it run skips fewer.
+FEWER_SKIPPED_TEST = (b"import pytest\nfrom src import m_fs\n\n\ndef test_value():\n    assert m_fs.VALUE == 1\n\n\n"
+                      b"def test_later():\n    if not getattr(m_fs, 'LATER', False):\n        pytest.skip('later')\n")
+# A test that passes only when its own file is executable and the link beside its directory is a link.
+LAID_OUT_TEST = (b"import os\n\nfrom src import m_lo\n\n\ndef test_value():\n    assert m_lo.VALUE == 1\n"
+                 b"    assert os.access(__file__, os.X_OK)\n"
+                 b"    assert os.readlink(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'linked')) "
+                 b"== 'src'\n")
+
+
+def slow_in_a_clone(lock, pid_file):
+    """A source that, in a clone only, holds a lock on `lock`, writes its process's id to `pid_file` and sleeps."""
+    return IN_A_CLONE + ("if CLONE:\n    import fcntl\n    import time\n    held = open(%r, 'a')\n"
+                         "    fcntl.flock(held, fcntl.LOCK_EX)\n    open(%r, 'w').write(str(os.getpid()))\n"
+                         "    time.sleep(60)\nVALUE = 1\n" % (lock, pid_file)).encode()
+
+
+def held(lock):
+    """Whether a process holds `lock`. A process's locks go when it ends, before anything waits for it, so a lock
+    that is free shows its holder has ended, where a signal to its id would still find it until it is waited for."""
+    with open(lock, "a") as file:
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(file, fcntl.LOCK_UN)
+        return False
+
+
+def end_if_held(test, lock, pid_file):
+    """Fails `test` if the process that wrote `pid_file` still holds `lock`, and then ends it."""
+    with open(pid_file) as file:
+        pid = int(file.read())
+    if held(lock):
+        with contextlib.suppress(OSError):
+            os.kill(pid, 9)
+        test.fail("the tests the check ran (process %d) are still running" % pid)
 
 
 def title_key(length):
@@ -335,6 +373,7 @@ class Fixture:
             t(key, {"toy/tests/test_%s.py" % key: test, "toy/src/m_%s.py" % key: b"VALUE = %d\n" % (
                 2 if key == "x1" else 1)})
         t("crlf", {"toy/tests/test_crlf.py": CRLF_TEST, "toy/src/m_crlf.py": b"VALUE = 1\n"})
+        t("fewer skipped", {"toy/tests/test_fs.py": FEWER_SKIPPED_TEST, "toy/src/m_fs.py": b"VALUE = 1\n"})
         # The parts: history, the pilot's, scored and left out by rule 5.
         t("H1", dict(item("k1", 1), **item("s1", 0)))
         t("H2", item("k1", 2, executable=True))
@@ -488,8 +527,8 @@ class TheList(unittest.TestCase):
     def test_each_rule_by_a_commit_that_meets_it_and_one_that_does_not(self):
         f = self.f
         met = ["three tests", "five sources", "pass before", "fail after", "title 200", "title 201", "side",
-               "main after the fork", "judged", "x1", "x2", "x3", "x4", "x5", "crlf", "H1", "H2", "P1", "P2a", "P2b",
-               "A", "B", "C", "E"]
+               "main after the fork", "judged", "x1", "x2", "x3", "x4", "x5", "crlf", "fewer skipped", "H1", "H2",
+               "P1", "P2a", "P2b", "A", "B", "C", "E"]
         not_met = ["root", "out", "first", "helper", "subdir", "other", "only tests", "only source", "four tests",
                    "six sources", "deleted", "browser", "space", "quote", "source space", "symlink", "not python",
                    "beside the source",
@@ -518,11 +557,12 @@ class TheList(unittest.TestCase):
         # B names test_s1.py, which A, scored before it, names; H1, history, names it too and stays history. C names
         # test_q.py, which "fail after" named: rule 4 left that one out, so C is not left out for it.
         self.assertEqual([f.entry(name).get("place") for name in ("A", "B", "C", "E")], [1, None, 2, 3])
-        self.assertEqual({f.entry(name)["part"] for name in ("judged", "x1", "crlf", "side")}, {items.HISTORY})
+        self.assertEqual({f.entry(name)["part"] for name in ("judged", "x1", "crlf", "fewer skipped", "side")},
+                         {items.HISTORY})
 
     def test_the_counts_add_up_to_the_commits_that_met_rules_1_to_3(self):
         counts = self.f.list["counts"]
-        self.assertEqual(counts["by_part"], {"history": 14, "pilot": 2, "scored": 3, "left out by rule 5": 2})
+        self.assertEqual(counts["by_part"], {"history": 15, "pilot": 2, "scored": 3, "left out by rule 5": 2})
         self.assertEqual(counts["by_reason"], {"rule 4: the tests pass before the change": 1,
                                                "rule 4: the tests fail after the change": 1,
                                                "rule 4: past the limit": 0, "the title would be too long": 1})
@@ -706,8 +746,8 @@ class TheCheck(unittest.TestCase):
         cls.item = cls.f.entry("judged")
         cls.parent = git(cls.f.repo, "rev-parse", cls.f.toy.named["judged"] + "^").decode().strip()
 
-    def judged(self, commit, also=(), gone=False, path_first=None, then=None):
-        f = self.f
+    def judged(self, commit, also=(), gone=False, path_first=None, then=None, entry=None):
+        f, entry = self.f, entry or self.item
         where = tempfile.mkdtemp(dir=WORK, prefix="judged-")
         clone = os.path.join(where, "clone")
         if gone:
@@ -720,8 +760,8 @@ class TheCheck(unittest.TestCase):
         git(clone, "-c", "protocol.version=2", "-c", "protocol.file.allow=always", "fetch", "-q", "--no-tags",
             "--no-write-fetch-head", f.repo, commit, *also)
         git(clone, "checkout", "-q", "-b", "turn", commit)
-        for path in self.item["check"]["files"]:
-            place(clone, path, git(f.repo, "cat-file", "blob", "%s:%s" % (self.item["base"], path)))
+        for path in entry["check"]["files"]:
+            place(clone, path, git(f.repo, "cat-file", "blob", "%s:%s" % (entry["base"], path)))
         if gone:
             shutil.rmtree(os.path.join(clone, ".git"))
         if then:
@@ -749,6 +789,28 @@ class TheCheck(unittest.TestCase):
     def test_a_turn_with_only_source_changes_that_passes_passes(self):
         turn = self.turn({"toy/src/judged.py": FIXED + b"# tidied\n", "toy/src/new.py": b"X = 1\n"})
         self.assertEqual(self.judged(turn), (0, "ok\n", ""))
+
+    def test_more_passed_than_the_reference_passes(self):
+        # Three cases where the reference had two, none skipped.
+        turn = self.turn({"toy/src/judged.py": FIXED + b"CASES = (1, 2)\n"})
+        self.assertEqual(self.judged(turn), (0, "ok\n", ""))
+
+    def test_fewer_skipped_than_the_reference_passes(self):
+        entry = self.f.entry("fewer skipped")
+        self.assertEqual(entry["counts"], {"passed": 1, "skipped": 1})
+        turn = commit(self.f.repo, [entry["base"]], {"toy/src/m_fs.py": b"VALUE = 1\nLATER = True\n"}, 1_800_000_000)
+        self.assertEqual(self.judged(turn, entry=entry), (0, "ok\n", ""))
+
+    def test_what_the_tests_left_is_ended_when_the_check_ends(self):
+        # Run as the room runs it, with no word to share a group: the process the tests leave holds a lock until it
+        # is ended, and the check ends it.
+        lock, pid_file = os.path.join(WORK, "left-by-a-turn.lock"), os.path.join(WORK, "left-by-a-turn.pid")
+        left = ("import fcntl\nimport subprocess\n\n_held = open(%r, 'a')\nfcntl.flock(_held, fcntl.LOCK_EX)\n"
+                "_left = subprocess.Popen(['/bin/sleep', '60'], pass_fds=(_held.fileno(),))\n"
+                "open(%r, 'w').write(str(_left.pid))\n" % (lock, pid_file)).encode()
+        turn = self.turn({"toy/src/judged.py": FIXED + left})
+        self.assertEqual(self.judged(turn), (0, "ok\n", ""))
+        end_if_held(self, lock, pid_file)
 
     def test_each_failure_by_name(self):
         outside = "1: a path outside toy/src changed: "
@@ -1123,6 +1185,20 @@ class TheTestsRun(unittest.TestCase):
         self.assertTrue(late)
         self.assertLess(time.monotonic() - started, 10)
 
+    def test_a_run_in_the_callers_group_stays_in_it_and_alone_is_ended_at_the_limit(self):
+        said = os.path.join(WORK, "group.txt")
+        says_group = [sys.executable, "-I", "-c", "import os\nopen(%r, 'w').write(str(os.getpgrp()))\n" % said]
+        for own_group, same in ((False, True), (True, False)):
+            with self.subTest(own_group=own_group):
+                self.assertEqual(check.run_limited(says_group, WORK, {}, 30, own_group=own_group), (0, False))
+                with open(said) as file:
+                    self.assertEqual(int(file.read()) == os.getpgrp(), same)
+        started = time.monotonic()
+        code, late = check.run_limited([sys.executable, "-c", "import time; time.sleep(30)"], WORK, {}, 0.5,
+                                       own_group=False)
+        self.assertTrue(late)
+        self.assertLess(time.monotonic() - started, 10)
+
 
 class TheGitRun(unittest.TestCase):
     """The words and the environment that check.py and items.py give git, as TheTestsRun shows the test runner's.
@@ -1169,6 +1245,7 @@ class TheGitRun(unittest.TestCase):
                                    "-c", "i18n.commitEncoding=UTF-8", "-c", "core.autocrlf=false", "-C", repo,
                                    "read-tree", "HEAD"], {
             "input": b"given", "env": {"PATH": "/opt/a/bin:/usr/bin", "GIT_CONFIG_NOSYSTEM": "1",
+                                       "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ATTR_NOSYSTEM": "1",
                                        "GIT_NO_REPLACE_OBJECTS": "1", "GIT_INDEX_FILE": "/an/index"},
             "stdout": subprocess.PIPE, "stderr": subprocess.PIPE})])
 
@@ -1198,6 +1275,120 @@ class ThePeerComponent(unittest.TestCase):
         self.assertEqual(items.COMPONENTS["peer"]["lock"], "peer/uv.lock")
 
 
+class AChangeOfType(unittest.TestCase):
+    """Rule 3's "added or changed", on what git itself says of a link that became a file and the other way."""
+
+    def test_a_link_that_became_a_regular_file_is_taken_and_a_file_that_became_a_link_is_not(self):
+        toy = Toy(os.path.join(tempfile.mkdtemp(dir=WORK, prefix="type-"), "repo"))
+        root = toy.main("root", dict(ROOT_FILES, **{"toy/src/m_ln.py": Link(b"judged.py"),
+                                                    "toy/src/m_rl.py": b"VALUE = 1\n"}))
+        became_a_file = toy.main("became a file", {"toy/src/m_ln.py": b"VALUE = 1\n",
+                                                   "toy/tests/test_ln.py": wants("ln", 1)})
+        became_a_link = toy.main("became a link", {"toy/src/m_rl.py": Link(b"judged.py"),
+                                                   "toy/tests/test_rl.py": wants("rl", 1)})
+        repo = items.Git(toy.path)
+        for name, parent, commit_, path, mode, taken in (
+                ("a link that became a file", root, became_a_file, "toy/src/m_ln.py", "100644", True),
+                ("a file that became a link", became_a_file, became_a_link, "toy/src/m_rl.py", "120000", False)):
+            with self.subTest(name):
+                found = items.changes(repo, parent, commit_)
+                self.assertIn(("T", mode, path), [(change.status, change.mode, change.path) for change in found])
+                sorted_out = items.sort_out("toy", found)
+                self.assertEqual(sorted_out and [change.path for change in sorted_out[1]],
+                                 [path] if taken else None)
+
+
+class TheSameListFromAnyRepository(unittest.TestCase):
+    """Rule 4 runs each tree laid out from its blobs, and the check runs in a clone with no settings of the
+    repository's: so one list from an ordinary repository, a bare one, a linked worktree, one whose HEAD is unborn,
+    and one whose settings would change the files or run a filter if a checkout took them in."""
+
+    def test_the_same_list_and_no_filter_run(self):
+        work = tempfile.mkdtemp(dir=WORK, prefix="any-")
+        toy = Toy(os.path.join(work, "repo"))
+        toy.main("root", dict(ROOT_FILES, **{"toy/linked": Link(b"src")}))
+        first = toy.main("first", {"docs/first.md": b"first\n"})
+        toy.main("crlf", {"toy/tests/test_crlf.py": CRLF_TEST, "toy/src/m_crlf.py": b"VALUE = 1\n"})
+        toy.main("laid out", {"toy/tests/test_lo.py": Exe(LAID_OUT_TEST), "toy/src/m_lo.py": b"VALUE = 1\n"})
+        toy.main("e1", item("e1", 1))
+        toy.finish()
+        last = toy.tip
+
+        def made_from(repo, name):
+            out = os.path.join(work, "out-" + name)
+            code, printed, said = run_main(list_args(repo, first, last, out, scored=1, pilot=1))
+            self.assertEqual(code, 0, printed + said)
+            with open(os.path.join(out, "items.json"), "rb") as file:
+                return file.read()
+
+        ordinary = made_from(toy.path, "ordinary")
+        written = json.loads(ordinary)
+        self.assertEqual([entry.get("reason") for entry in written["commits"]], [None] * 3)
+
+        def cloned(name, *how):
+            path = os.path.join(work, name)
+            subprocess.run(["git", "clone", "-q"] + list(how) + [toy.path, path], env=GIT_ENV, check=True)
+            return path
+
+        bare = cloned("bare.git", "--bare")
+        holder = cloned("holder")
+        linked = os.path.join(work, "linked")
+        git(holder, "worktree", "add", "-q", "--detach", linked, first)
+        unborn = os.path.join(work, "unborn")
+        git(work, "init", "-q", unborn)
+        git(unborn, "fetch", "-q", toy.path, "main:refs/heads/kept")
+        hostile = cloned("hostile")
+        marker = os.path.join(work, "a filter ran")
+        git(hostile, "config", "core.autocrlf", "true")
+        git(hostile, "config", "filter.mark.smudge", "touch '%s'; cat" % marker)
+        git(hostile, "config", "filter.mark.clean", "cat")
+        for path in (os.path.join(hostile, ".git", "info", "attributes"), os.path.join(hostile, ".gitattributes")):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as out:
+                out.write("* text eol=crlf filter=mark\n")
+        # The hostile settings are live: a checkout in that repository runs the filter.
+        git(hostile, "checkout-index", "-f", "--prefix=%s/" % os.path.join(work, "a checkout"), "toy/uv.lock")
+        self.assertTrue(os.path.exists(marker))
+        os.unlink(marker)
+        for name, repo in (("bare", bare), ("linked", linked), ("unborn", unborn), ("hostile", hostile)):
+            with self.subTest(name):
+                self.assertEqual(made_from(repo, name), ordinary)
+        self.assertEqual(git(linked, "rev-parse", "HEAD").decode().strip(), first)
+        self.assertNotEqual(subprocess.run(["git", "-C", unborn, "rev-parse", "--verify", "-q", "HEAD"], env=GIT_ENV,
+                                           stdout=subprocess.DEVNULL).returncode, 0)
+        self.assertFalse(os.path.exists(marker), "a filter of the repository's ran")
+
+    def test_a_tree_is_laid_out_from_its_blobs_and_a_path_that_cannot_be_is_refused(self):
+        toy = Toy(os.path.join(tempfile.mkdtemp(dir=WORK, prefix="lay-"), "repo"))
+        toy.main("root", {"a/run.sh": Exe(b"#!/bin/sh\n"), "a/link": Link(b"run.sh"), "b.txt": b"one\r\ntwo\n"})
+        toy.finish()
+        repo = items.Git(toy.path)
+        maker = items.Maker(repo, "toy", PYTHON, 3, tempfile.mkdtemp(dir=WORK, prefix="maker-"))
+        blob = git(toy.path, "hash-object", "-w", "--stdin", data=b"X = 1\n").decode().strip()
+        # A submodule, written as git writes one in a tree, at a commit that is not in this repository.
+        index = {"GIT_INDEX_FILE": os.path.join(WORK, "lay-index")}
+        git(toy.path, "read-tree", toy.tip, env=index)
+        git(toy.path, "update-index", "--add", "--cacheinfo", "160000,%s,sub" % ("1" * 40), env=index)
+        tree = git(toy.path, "write-tree", env=index).decode().strip()
+        root = os.path.join(tempfile.mkdtemp(dir=WORK, prefix="laid-"), "tree")
+        maker.lay_out(tree, root)
+        self.assertEqual(sorted(os.listdir(root)), ["a", "b.txt", "sub"])
+        self.assertEqual(os.listdir(os.path.join(root, "sub")), [])
+        self.assertEqual(os.readlink(os.path.join(root, "a", "link")), "run.sh")
+        self.assertTrue(os.access(os.path.join(root, "a", "run.sh"), os.X_OK))
+        self.assertFalse(os.access(os.path.join(root, "b.txt"), os.X_OK))
+        with open(os.path.join(root, "b.txt"), "rb") as file:
+            self.assertEqual(file.read(), b"one\r\ntwo\n")
+        for name, says in ((b"..", "cannot be laid out"), (b".", "cannot be laid out"), (b".git", "cannot be laid out"),
+                           (b".Git", "cannot be laid out"), (b"", "git ls-tree failed")):
+            with self.subTest(name):
+                raw = b"100644 " + name + b"\0" + bytes.fromhex(blob)
+                bad = git(toy.path, "hash-object", "-t", "tree", "--literally", "-w", "--stdin",
+                          data=raw).decode().strip()
+                with self.assertRaisesRegex(items.Refused, says):
+                    maker.lay_out(bad, os.path.join(tempfile.mkdtemp(dir=WORK, prefix="laid-"), "tree"))
+
+
 class TheProgram(unittest.TestCase):
     """The program on small repositories of their own."""
 
@@ -1212,14 +1403,15 @@ class TheProgram(unittest.TestCase):
 
     def test_each_way_of_running_past_the_limit_and_failing_in_a_clone(self):
         sleeps = b"import time\n\ntime.sleep(60)\n"
+        lock, pid_file = os.path.join(WORK, "slow-in-a-clone.lock"), os.path.join(WORK, "slow-in-a-clone.pid")
         toy, first = self.small(
             ("slow before", {"toy/tests/test_sb.py": b"try:\n    from src import m_sb\nexcept ImportError:\n"
                                                      b"    import time\n    time.sleep(60)\n\n\n"
                                                      b"def test_value():\n    assert m_sb.VALUE == 1\n",
                              "toy/src/m_sb.py": b"VALUE = 1\n"}),
             ("slow after", {"toy/tests/test_sa.py": wants("sa", 1), "toy/src/m_sa.py": sleeps + b"VALUE = 1\n"}),
-            ("slow in a clone", {"toy/tests/test_sc.py": wants("sc", 1), "toy/src/m_sc.py": IN_A_CLONE +
-                                 b"if CLONE:\n    import time\n    time.sleep(60)\nVALUE = 1\n"}),
+            ("slow in a clone", {"toy/tests/test_sc.py": wants("sc", 1),
+                                 "toy/src/m_sc.py": slow_in_a_clone(lock, pid_file)}),
             ("fails in a clone", {"toy/tests/test_fc.py": wants("fc", 1), "toy/src/m_fc.py": IN_A_CLONE +
                                   b"VALUE = 0 if CLONE else 1\n"}),
             ("fails in a plain copy", {"toy/tests/test_fp.py": wants("fp", 1), "toy/src/m_fp.py": IN_A_CLONE +
@@ -1237,6 +1429,34 @@ class TheProgram(unittest.TestCase):
             "fails in a clone": items.FAIL_AFTER, "fails in a plain copy": items.FAIL_AFTER, "e1": items.PILOT,
             "e2": items.SCORED})
         self.assertEqual((written["dividing"], written["asked"]["limit_secs"]), (toy.named["e1"], 3))
+        # The tests the check ran in the clone were reached, and were ended with the check at the limit.
+        end_if_held(self, lock, pid_file)
+
+    def test_the_tests_a_check_ran_have_ended_before_its_clone_is_deleted(self):
+        lock, pid_file = os.path.join(WORK, "before-deleting.lock"), os.path.join(WORK, "before-deleting.pid")
+        toy, first = self.small(("slow", {"toy/tests/test_sl.py": wants("sl", 1),
+                                          "toy/src/m_sl.py": slow_in_a_clone(lock, pid_file)}))
+        repo = items.Git(toy.path)
+        maker = items.Maker(repo, "toy", PYTHON, 3, tempfile.mkdtemp(dir=WORK, prefix="maker-"))
+        found = items.sort_out("toy", items.changes(repo, first, toy.named["slow"]))
+        seen, real = [], items.shutil
+
+        class Watched:
+            @staticmethod
+            def rmtree(path, **how):
+                if os.path.basename(path) == "clone":
+                    seen.append((os.path.exists(pid_file), held(lock)))
+                return real.rmtree(path, **how)
+
+        items.shutil = Watched
+        try:
+            made = maker.make(toy.named["slow"], first, *found)
+        finally:
+            items.shutil = real
+        self.assertEqual(made, items.PAST_LIMIT)
+        # The tests in the clone had started (they wrote their id), and had ended when the clone was deleted.
+        self.assertEqual(seen, [(True, False)])
+        end_if_held(self, lock, pid_file)
 
     def test_too_few_for_the_scored_is_refused_and_writes_nothing(self):
         toy, first = self.small(("e1", item("e1", 1)))

@@ -17,7 +17,16 @@ form, or a check that could not run. Everything it reads from the checkout is ho
 item.json is held to its form, nothing read from it reaches a shell, and git runs with no hooks, no filesystem
 monitor and no settings file but the clone's own. Of the checkout it runs nothing but the tests.
 
-items.py loads this file for run_tests and plain, so that the item-maker runs the tests as the check does.
+What a pass shows: the path rule held, the frozen files are the item's blobs, and a run of the tests with the
+turn's code ended well and left a report of at least as many passes and no more skips than the reference's. What
+it does not show: the turn's code runs inside the test runner's own process, so code written to deceive the runner
+(to write the report itself and end the run, say) could make such a run without the tests having passed, and no
+check written here can tell.
+
+items.py loads this file for run_tests and plain, so that the item-maker runs the tests as the check does. It runs
+this file with YAK_CHECK_SHARE_GROUP=1 in its environment, so that the tests stay in the check's own process group
+and are ended with it at the item-maker's limit. The room does not set it, and then the tests run in a session of
+their own, which the check ends when they end.
 """
 import hashlib
 import json
@@ -52,6 +61,9 @@ COUNT = re.compile(r"[0-9]{1,9}")
 # Every git this runs reads objects only: no hook runs and no attribute applies. The filesystem monitor is off as
 # in v2/checks/worker-tests-done.sh, so that nothing configured is started.
 GIT_FLAGS = ["-c", "core.fsmonitor=false"]
+# The environment variable that, set to 1, keeps the tests in the check's own process group, for a caller that ends
+# that group (items.py does, at its limit and after the check ends).
+SHARE_GROUP = "YAK_CHECK_SHARE_GROUP"
 
 
 class Fail(Exception):
@@ -189,17 +201,25 @@ def regular_blob(entry, blob):
     return entry in (("100644", "blob", blob), ("100755", "blob", blob))
 
 
-def run_limited(argv, cwd, env, limit):
+def run_limited(argv, cwd, env, limit, own_group=True):
     """Runs `argv` in a session of its own, for at most `limit` seconds if one is given, and ends whatever it started
-    and left when it ends or at the limit. Returns (exit code, whether it ran past the limit)."""
+    and left when it ends or at the limit. Returns (exit code, whether it ran past the limit).
+
+    With `own_group` false it runs in the caller's process group instead, and what it leaves is the group owner's to
+    end: only the run itself is ended at the limit."""
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+                            stderr=subprocess.DEVNULL, start_new_session=own_group)
     try:
         code, late = proc.wait(timeout=limit), False
     except subprocess.TimeoutExpired:
-        end_group(proc)
+        if own_group:
+            end_group(proc)
+        else:
+            proc.kill()
         code, late = proc.wait(), True
-    end_group(proc)
+    # A run in the caller's group leads no group, and once it is waited for its id may be another group's.
+    if own_group:
+        end_group(proc)
     return code, late
 
 
@@ -232,12 +252,12 @@ def read_report(path):
     return counts
 
 
-def run_tests(python, root, component, tests, limit=None):
+def run_tests(python, root, component, tests, limit=None, own_group=True):
     """Runs the test files `tests` (paths from the repository's root) of the tree at `root`, as the spec says: from
     the component's directory, `<python> -m pytest -q -p no:cacheprovider --junit-xml <file> <the test files>`,
     with the component's directory first on PYTHONPATH, PYTHONDONTWRITEBYTECODE=1, and of the caller's
     environment nothing: PATH is /usr/bin:/bin and HOME and TMPDIR are a scratch directory. At most `limit`
-    seconds if one is given; the run and whatever it started are ended then.
+    seconds if one is given; the run and whatever it started are ended then. `own_group` is run_limited's.
 
     Returns (exit code, whether it ran past the limit, the report's counts or None). A caller reads the counts of
     a run past its limit as nothing."""
@@ -251,7 +271,7 @@ def run_tests(python, root, component, tests, limit=None):
                "PYTHONDONTWRITEBYTECODE": "1"}
         argv = [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junit-xml", report]
         argv += [test[len(component) + 1:] for test in tests]
-        code, late = run_limited(argv, directory, env, limit)
+        code, late = run_limited(argv, directory, env, limit, own_group)
         return code, late, read_report(report)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -260,7 +280,9 @@ def run_tests(python, root, component, tests, limit=None):
 def judge(root):
     item_bytes, item = read_item(root)
     judge_commit(root, item, item_bytes)
-    code, _, counts = run_tests(sys.executable, root, item["component"], [test["path"] for test in item["tests"]])
+    shared = os.environ.get(SHARE_GROUP) == "1"
+    code, _, counts = run_tests(sys.executable, root, item["component"], [test["path"] for test in item["tests"]],
+                                own_group=not shared)
     if counts is None:
         raise Fail("2: the tests wrote no report that can be read (exit %d)" % code)
     if code != 0 or counts["failures"] or counts["errors"]:
