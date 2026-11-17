@@ -171,20 +171,49 @@ was applied on its item's own base (the parent with the item's tests and its che
 in the worker's place, and the room judged that in its jail with the item's frozen check, as it judges a
 reference. Nothing new was built for it. The control is the item's own reference through the same path.
 
-| The item's own reference, through the same path | Items | The turn's change |
+| Items | The item's own reference, through the same path | The turn's change |
 | --- | --- | --- |
-| Passes (run once) | 37a887d3, 9490f597, d9860589, 6f57b4cb, 72889183 | Passes at one (72889183, three replays of three). Fails at four, one replay each |
-| Fails every time (three or four runs) | 5b0c8376, 113d188e, 79aaa586, 027834bf, 7c6cda37 | Passes at one (7c6cda37, three replays of three). Fails at four |
+| 37a887d3, 9490f597, 6f57b4cb, 72889183 | Passes, three runs of three | Passes at 72889183 (three replays of three). Fails at the other three, one replay each |
+| d9860589 | Passes, run once | Fails, one replay |
+| 79aaa586, 027834bf, 7c6cda37 | Fails from a directory named by the item's whole commit id: three runs of three at first, and again later at the two tried. Passes three of three from a directory not so named | From directories not so named: passes at 7c6cda37 (four replays of four), fails at the other two (two replays each) |
+| 5b0c8376 | Fails wherever it was run: three runs as at first, one from a short directory with another name | Cannot be judged |
+| 113d188e | Fails wherever it was run: four runs as at first, one from a short directory with another name | Cannot be judged |
 
-- **Where the control passes, a commit message got one turn in five through its item's tests.** That
-  one's task is 252 words and spells out each point. The four failures are single observations. At
-  37a887d3 the tests use names the reference adds (`SINCE_SQL`, `events_kind_room_id`) that the message
-  never gives; the other three were not looked into.
-- **Where the control fails, a failed replay says nothing of the turn.** Five of the ten items are such:
-  their reference's own tree fails the item's check in the jail each time, though two of them, tried by
-  hand, pass the same check outside it. At one, the turn's change passes three times of three. Why is not
-  known, because the room keeps no words from a failed check. The rehearsal's screen exists for this and
-  found none among its eleven items.
+- **Eight of the ten could be judged. A commit message got two turns' changes through their item's
+  tests, and six failed.** The two are 72889183, whose task is 252 words and spells out each point, and
+  7c6cda37. At 37a887d3 the tests use names the reference adds (`SINCE_SQL`, `events_kind_room_id`)
+  that the message never gives. The other five failures were not looked into and are undiagnosed.
+- **This table is a correction,** made the same day after both reads recorded below. It first said that
+  five references failed in the jail for a cause not known, and that only five items could be judged.
+
+**Why five references failed at first,** found afterwards with no new room code. A script in the
+worker's place applies the reference's change inside the jail, runs the item's tests there as the check
+runs them, and hands in what they printed as a file, which is read from the turn's repository. Only the
+repository's own merged code runs, and the room's store takes in no text, as the design's rule 9 asks. A
+passing item was run the same way first and passed.
+
+- **5b0c8376: twelve errors, "AF_UNIX path too long".** The room gives a check its temporary directory
+  inside the room's own directory; the item's check and the test runner nest theirs inside that; and
+  macOS holds a Unix socket's path to 104 bytes. In the worker's place the temporary directory's own
+  path was 118 characters. This item fails from the shorter directory too.
+- **113d188e: "Operation not permitted"** in a test over real HTTPS. The jail forbids the network. That
+  is the jail doing its work.
+- **79aaa586, 027834bf, 7c6cda37: the directory's name.** One test of these items asserts that what it
+  writes holds no secret, by finding in it no run of 32 hexadecimal characters; and what it writes holds
+  a path. The controls ran in directories named by the item's whole commit id, forty such characters, so
+  that test failed whatever the code. This was seen directly at 79aaa586, in the test's own words: one
+  test failed and 22 passed. At the other two it is inferred: the same test, unchanged, is in both, and
+  they show the same contrast. From directories not so named all three references pass three runs of
+  three. Only 7c6cda37 was also run at three depths under another name, the deepest the first
+  directory's own, and passed each. Run again as at first, 79aaa586 and 7c6cda37 failed again. So at
+  these it is the name, and not the depth, the hour or the load.
+- **The naming was the lead's, and it is the pass's too.** The lead's controls were named by whole
+  commit ids and the replays by ten characters of them, so at 7c6cda37 a turn's change passed where its
+  reference seemed to fail. The pass and the pilot's driver name every turn's directory, and every
+  screened reference's, by the whole commit id as well. The rehearsal's items hold no such test, and
+  passed. An item that holds one would fail its screen and its turns under the pass as it stands. That
+  naming is being changed.
+- The rehearsal's screen ran its eleven references where the rehearsal itself ran, and all passed.
 
 **What earlier work holds of the place,** counted with no turn over the list's 40 scored items and 51
 history items, every history item earlier:
@@ -228,11 +257,11 @@ read recorded below and has a read of its own.
   included. That is one more difference between a pair's two turns; all five turns here changed source,
   so no cell of the table rests on it. The title is "Make the change that TASK.md at the repository's
   root describes."
-- **The items:** the four of the earlier ten whose own reference passes in the jail and whose message
-  could bear a task, and one new item chosen by a rule (the first unused item in the list's order whose
-  reference changes two or more source files, whose message has sixty words or more, and whose
-  reference passed the jail three times of three). So four have a pair: their earlier turn, from the
-  commit message with the parent's tests there.
+- **The items:** the four of the earlier ten whose own reference was then known to pass in the jail and
+  whose message could bear a task, and one new item chosen by a rule (the first unused item in the
+  list's order whose reference changes two or more source files, whose message has sixty words or more,
+  and whose reference passed the jail three times of three). So four have a pair: their earlier turn,
+  from the commit message with the parent's tests there.
 
 In each cell the third probe's turn comes first and the item's earlier turn second.
 
@@ -330,7 +359,7 @@ are means of that share over workers.
   begun from a message every file its reference changes was named and changed. That says nothing of
   what came after a file was named. These observations establish no time saving and no upper bound on
   one.
-- **A commit message got a turn's change through its item's tests at one of the five items that could
+- **A commit message got a turn's change through its item's tests at two of the eight items that could
   be judged.** At the one failure looked into, what the message lacked was names the tests use.
 - **On the reading-work lists, counts of places scored as the store's routes did.** The store's owner
   has drafted places as a next store version.
@@ -369,8 +398,17 @@ are means of that share over workers.
   the nearest thing to it that was run: it needed no new room code. What was learnt for it
   is kept here: a task must travel in a file; the parent's tests would have to be withheld too; a turn
   can be judged against held-back tests by replay with no new room code; every item needs its screen.
-- **A failed check leaves no words in the room.** Five references failed in the jail and nothing says
-  why. Words kept from the check, held as data, could help explain such failures.
+- **Whether a test passes in the room can depend on where the room is and on what its directory is
+  called. These are two different failures.** On macOS one item's tests bind a Unix socket whose path
+  grows too long under the room's nested temporary directories; a short temporary directory for a check
+  would be a change to the room, and is neither made nor designed here. Three items' tests fail under a
+  directory whose name holds a commit id; a shorter path does not cure that, and another name does. The
+  pass and the pilot's driver give every turn such a name themselves, so this goes beyond the lead's own
+  directories, and that naming is being changed. A screen shows such things only when it is run where
+  and as the experiment runs, as the rehearsal's was.
+- **The room keeps no words from a failed check, and by the design's rule 9 its store should not.** A
+  script in the worker's place can hand in what a reference's tests printed, outside the store. That is
+  how the causes above were found.
 - **Open, and not decided here:** a larger repository; a grain finer than a file; help after a turn's
   first entry, which nothing here tries; whether a short list of places saves a reader anything, which
   only a trial with readers can say.
@@ -421,3 +459,14 @@ counts again from the walks and the records and got the same. All five are made 
 
 One sentence of the lead's own judgement, at the end of that section, was withdrawn by the lead after
 the read. The section now ends on what was observed.
+
+**The correction on references that failed in the jail** was made the same day and read at 61962697 by a
+third fresh reader of the other family: **push with named changes,** two. It counted every run again and
+got the same: eight items that can be judged, two changes that pass and six that fail. The draft it read
+put three items' failures down to the depth of the directory. The lead's own runs during the read showed
+that wrong, and the reader named the change:
+
+1. The depth is withdrawn as the cause. It is the directory's name, seen directly at one item and
+   inferred at the other two, with each run said for the item it was made at.
+2. What follows now tells the two failures apart, the socket's path and the name, and says that the
+   pass and the pilot's driver make such names themselves.
