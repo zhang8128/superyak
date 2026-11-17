@@ -78,7 +78,7 @@ source at version 6.12, the second machine's (`net/unix/af_unix.c`):
 | Join a named socket | Joining needs an end that is not joined; a joined end is refused (`unix_stream_connect`) |
 | Close the other end, then join a named socket | The end left over is shut down and is not made unjoined again; a send then fails, and it still cannot join |
 | Unjoin, by joining "no family" | Refused: that way of unjoining belongs to datagram sockets (`unix_validate_addr`) |
-| Give it a name, then listen and accept | Naming does not unjoin it. A joined end was not seen to come to listen: 6.12 refuses the telling; on 7.0 the telling was answered yes, and the end was then seen not to listen (corrected in revision 3, from runs on one machine of each, the later as reported by the ship that ran it; 7.0's source was not read). Accepting needs an end that listens, and a socket made for the end's name was refused on both |
+| Give it a name, then listen and accept | Naming does not unjoin it. A joined end was not seen to come to listen: 6.12 refuses the telling; on 7.0 the telling was answered yes, and the end was then seen not to listen (corrected in revision 3, from runs on one machine of each, the later by another ship, which sent what it printed; 7.0's source was not read). Accepting needs an end that listens, and a socket made for the end's name was refused on both |
 
 - **Open files.** A pair of either kind can carry an open file from one end to the other. That hands on
   something the sender already holds and makes nothing new, and both ends are inside the jail. An end
@@ -129,9 +129,10 @@ Those are in their rows.
 ## What a second machine found (revision 3)
 
 Another ship ran the jail's tests on a machine of its own: x86-64, kernel 7.0, with `bwrap` under its
-distribution's own confinement, which the project's checks never meet because they turn it off. What it ran
-is given here as it reported it; its output is on its machine and not in this repository. What the first
-Linux machine (6.12, aarch64) printed was read by the author.
+distribution's own confinement, which the project's checks never meet because they turn it off. Its runs of
+the tests are given here as it reported them. The probe's output on that machine was sent to the author
+whole, and the table's second column is read from it; what the first Linux machine (6.12, aarch64) printed
+was read by the author too. Neither output is in this repository.
 
 - **At the pushed mend, 23 of the jail's 24 tests were reported passed there,** among them the child
   started inside the jail. One failed, and in its control, with no jail at all: an end of a seqpacket pair,
@@ -139,7 +140,7 @@ Linux machine (6.12, aarch64) printed was read by the author.
 - **A probe in plain Python, run on both kernels, with no jail.** An end of a pair is given a name and told
   to listen; then a socket made for that name tries to join it.
 
-  | What is tried | 6.12 (aarch64), as printed | 7.0 (x86-64), as reported |
+  | What is tried | 6.12 (aarch64), as printed | 7.0 (x86-64), as printed |
   | --- | --- | --- |
   | Told to listen | Refused: "invalid" | Answered yes |
   | Does the kernel say it listens | No | No |
@@ -180,7 +181,8 @@ must hold on any kernel, for both kinds of pair: the row "A named end of a pair 
 "How we know". It has a control that shows its lines can tell an end that listens from one that does not,
 and it calls the jailed end from outside. The filter's opening comment no longer says a joined end cannot
 be made to listen, and says truly what a send that names another socket does from each kind of end. With
-the change the jail's 25 tests pass on 6.12 (aarch64).
+the change the jail's 25 tests pass on 6.12 (aarch64), and were reported passed on 7.0 (x86-64), the new
+test three times more on each.
 
 **What was not changed: the filter.** It is given a call's number and its arguments as numbers. It cannot
 see what kind of socket a descriptor is, nor read the address a call points at. And a run may listen on its
