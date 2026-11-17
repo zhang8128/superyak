@@ -599,8 +599,90 @@ each table again from the list and the walks. Its verdict: **do not run as desig
   reason.
 - **C is written next, as a spec of its own, and read.** Until it is, D is the experiment that could be
   run on what exists, and it is written beside C so that the choice between them is made on paper.
+  (Not done as written: see "A second design, read and withdrawn" below.)
 - **The points left open at the end of this spec** are still open. Each is settled, or said to stand,
   before any turn of whichever experiment is offered anything.
+
+### A second design, read and withdrawn
+
+Added 2026-11-17. Before C was written the lead tried a cheaper design on what exists: score the items
+whose tests import none of the source files their own reference changes, as items "where the way has to
+be found". It was written as a spec and read by a fresh reader of the other family, who said: do not
+approve. It is withdrawn and was never pushed. What was measured for it stays here, because the next
+design needs it. All of it is exploratory: none is a pilot, and none is history.
+
+| What was measured | How | What it showed |
+| --- | --- | --- |
+| How many items the rule chooses | Each item's tests' imports against the files its reference changes; no turn | 54 of the 188. For 102 the imports name every such file, for 32 some |
+| Whether those are items whose tests do not say where the work is | The tests' text read for the changed module's name, or for a name the reference defines or changes; no turn | They are not. 39 of the 54 say one or the other, as in a list holding `'ships.Ships.ship_key_is_valid'`. Four more are named by the test file's own name or by the command the test runs. Eleven are left, six of them in one run of like work |
+| Whether such an item's reference passes in the jail | Each of the 54 once, no model | 53 pass. One fails: its tests start a server |
+| When a turn first names a file its reference changes, nothing offered | Three turns at three of the 54 | At 24, 46 and 59 s. Two of the three are items whose tests name the place |
+| What a turn does with a route | Six turns at three more of the 54, all of one run whose tests name the place: at each, one turn offered the route and one offered nothing. Each offer was made by the whole path, from five or six earlier turns | The table below |
+
+| The item's reference changes | Goals offered | Arm | Worker's seconds | Steps | A file the reference changes is first named |
+| --- | --- | --- | --- | --- | --- |
+| `ships.py` | `ships.py` | nothing | 64 | 11 | at step 3, 20 s |
+| | | route | 97 | 12 | at step 1, 11 s |
+| `federation.py` | `ships.py`, which is not it | nothing | 51 | 9 | at step 4, 28 s |
+| | | route | 75 | 13 | at step 7, 36 s; the goal at step 1 |
+| `room_board.py` | `room_board.py` and `ships.py` | nothing | 85 | 13 | at step 4, 18 s |
+| | | route | 68 | 13 | at step 3, 16 s |
+
+All six passed, and each turn's record holds the hash of the block it was given, or none. They are single
+turns, on a machine whose load was between 9 and 16, so they show a mechanism and no size:
+
+- **A turn given a route goes where it points.** The first source file each route turn named was the
+  first goal offered, three times of three.
+- **It was not done sooner:** 240 s in all against 200 with nothing.
+- **A goal that was not the place cost steps:** thirteen against nine, the right file three steps later.
+
+**What the reader found, beside the cohort,** which stands for any later design:
+
+- **A history that grows along the pass makes the scored ratios depend on one another:** an earlier
+  item's turn is in its own ratio and in a later item's offer. Five pairs of items that share a test file
+  would alone bring twenty items to about thirteen, counted as independent ones.
+- **The rule for leaving an item out must say what follows:** whether the dividing commit and the pilot's
+  items move, and when the experiment stops for want of items. A reference that fails its check is one
+  thing; a run that could not be used is another.
+- **The room's export takes every arrived turn of an item and does not hold its arm.** A pass that lets
+  only turns offered nothing teach must keep them in rooms and plans of their own, and be tested for it.
+- **The arithmetic:** if ten of twenty items gain and ten do not, 15% overall needs 27.75% at each of the
+  ten; 15% at each gives 7.8% overall, which the pilot's spread would need about 59 items to tell.
+- **A sentence added to every title changes the nothing arm too.**
+
+### The most a route of files could remove
+
+Counted from the walks already recorded, with no new turn: the share of a walk's time that went to steps
+naming only files the turn neither changed nor was given as its tests or its check.
+
+| Turns | Share: least, median, most | Source files named, and of them changed (medians) |
+| --- | --- | --- |
+| The pilot's fifteen measured turns | 2%, 6%, 29% | 2, 2 |
+| The first probe's three | 6%, 11%, 18% | 4, 1 |
+| The three above offered nothing | 7%, 14%, 18% | 4, 1 |
+| The three above offered a route | 8%, 10%, 21% | 4, 1 |
+
+It is rough: a step that names a needed file beside others is counted as needed, the time after a walk's
+last step is left out, and a file a turn did not change may still have been worth reading. Read as the
+most a route could take away if it named exactly the files a turn needs and the turn then read no other,
+its median is under the 15% this experiment is sized to tell, at every kind of item tried.
+
+### What follows now
+
+- **The finding is wider than the choice of items.** At this package a turn is told where its work is, by
+  its tests; the project's own plans say it too (33 of the 52 list the files to create or modify, counted
+  by their lines beginning `- Create:` or `- Modify:`). A turn is at the place in seconds. What it then
+  spends is reading inside files, and a route made of file names does not carry that.
+- **So A and D, run here, could say only that a route does not help where nothing has to be found.**
+  Neither is run unless that answer is wanted for its own sake.
+- **C is not yet written.** As its reader put it, C needs tests the worker never sees that judge behavior
+  through a surface a description can state without naming the place. How many items have such tests is
+  counted, by reading them, before C is written.
+- **A pilot of the three arms at the pilot's three items** is written as its own small spec and read. It
+  is not sized to show a gain and none is expected. It shows the whole path in all three arms at listed
+  items, and it gives the spread of the ratio between arms, which no sizing has had.
+- **A place finer than a file is the next thing to look at.** A walk records a file's name and its blob,
+  not the part that was read.
 
 ## What it costs
 
