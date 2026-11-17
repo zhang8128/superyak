@@ -200,6 +200,72 @@ On these subjects the room's rule as it stands scored 11 where chance scored 8.3
 the three most-changed files scored 15. A walk names files its turn does not change, so the first row
 may undercount what walks would hold; that was not counted. The package is 38 to 54 Python files.
 
+## A third probe: a user's words, and every test of the component withheld
+
+Added the same day, after this report's reader said two things had given the description probes' turns
+quick entry: the parent's tests, and messages in the project's own words. Exploratory again: five turns,
+one worker program, nothing offered. This section was written after the read recorded below and has a
+read of its own.
+
+**What was changed from the first two probes.**
+
+- **Every test of the component is withheld, and there is no history.** The base is a commit with no
+  parent, holding the parent's tree without `peer/tests`. Each turn's copy was checked to hold none of
+  the parent's test blobs (45 to 90 of them), nor the parent commit, the reference, the commit or the
+  item's new tests. Other components' tests stayed.
+- **The task is in a user's words,** written by the lead from the commit's message by a rule fixed
+  first: what a person using or running the station would see or want, in everyday words; no
+  identifier; none of the project's own names for its parts or its work; at most 130 words; the same
+  change as the message asks. Two fresh readers of the other family read the tasks before any turn. The
+  first kept one, named changes to three, and had one item replaced because its one-line message could
+  not bear a faithful task. The second confirmed those and named two more changes. All were made. The
+  tasks run are 31 to 130 words.
+- **This takes away the project's own naming. It does not take away every clue.** "Conversation",
+  "board", "claim", "lessons" and "app" are everyday words and are also near to files' names.
+- **Neither the title nor the check names a folder.** The title is "Make the change that TASK.md at the
+  repository's root describes."
+- **The items:** the four of the earlier ten whose own reference passes in the jail and whose message
+  could bear a task, and one new item chosen by a rule (the first unused item in the list's order whose
+  reference changes two or more source files, whose message has sixty words or more, and whose
+  reference passed the jail three times of three). So four have a pair: their earlier turn, from the
+  commit message with the parent's tests there.
+
+In each cell the third probe's turn comes first and the item's earlier turn second.
+
+| Item | The reference changes | First of them named | Named and changed | Steps, last step | Its change against the held-back tests |
+| --- | --- | --- | --- | --- | --- |
+| 37a887d3 | `chats.py` | 20 s; 13 s | 1 of 1; 1 of 1 | 18, 91 s; 13, 96 s | fails; fails |
+| 9490f597 | `ships.py` | 20 s; 22 s | 1 of 1; 1 of 1 | 13, 64 s; 21, 129 s | fails; fails |
+| 317a6e0b | `lessons.py`, `room_board.py`, `room_claims.py` | 15 s, the last at 27 s; no earlier turn | 3 of 3 | 15, 82 s | fails |
+| 6f57b4cb | `chats.py`, `tickets.py`, `inbox.py` | 14 s; 10 s | named 2 and changed 1 of 3; 3 of 3 | 12, 72 s; 15, 84 s | fails; fails |
+| 72889183 | `connector_apps.py`, `connector_routes.py` | 17 s; 15 s | 2 of 2; 2 of 2 | 15, 95 s; 16, 103 s | passes; passes |
+
+Each item's own reference passed through the same path three times of three. Each replay of this
+probe's turns ran once.
+
+- **Every turn named a first file its reference changes at 14 to 20 seconds,** at its fourth to seventh
+  step. The four earlier turns did at 10 to 22 seconds.
+- **Of the ten files the five references change, eight were named and changed, one was named and not
+  changed, and one was never named.** The last two are both at 6f57b4cb.
+- **At 6f57b4cb the turn changed `chats.py` alone.** The reference makes the same kind of change in
+  three places: where a page's messages are looked up in `chats.py`, their replies in `inbox.py`, and
+  their sources in `tickets.py`. The item's earlier turn changed all three. Between the two turns the
+  task's words, the tests and the history all differ, and the task here speaks of looking up messages.
+  One pair cannot say which of those made the difference, or whether the turn took the other two
+  lookups to be outside what it was asked.
+- **One change of the five passes the held-back tests:** the same item as before, whose task spells
+  out five points. Held-back tests can ask for what a task never says, so a failure here is first a gap
+  between a task and its tests, and not a failure to find.
+- **No turn named a file of another component's code.** Beyond the root and the check's folder, four
+  turns named files under `peer` only, and one also named a file under `docs`.
+
+**What it adds, and no more.** With the component's tests, the history and the project's own naming
+taken away, a first file of the work was still named within about twenty seconds at all five items. And
+it is the first of the three probes in which a turn did not change a file its reference changes: at one
+item, in one pair. The lead's judgement, which is not a measurement: what happens after a turn's first
+entry, where the same kind of change belongs in several places, is where what earlier work knows could
+matter, and nothing here tries it.
+
 ## Reading work: the team's own workers
 
 The team's readers and builders are not in a room, but their logs record what each read. For each worker
@@ -291,16 +357,20 @@ are means of that share over workers.
 - **No scored experiment of routes is proposed for this repository's item work.** This is the lead's
   judgement from what was seen, and not a result: nothing here measures what a route could save. The
   rehearsal's design stands ready.
-- **The description-first experiment is not written now,** by the same judgement. What was learnt for it
+- **The description-first experiment is not written now,** by the same judgement. The third probe is
+  the nearest thing to it that was run: it needed no new room code. What was learnt for it
   is kept here: a task must travel in a file; the parent's tests would have to be withheld too; a turn
   can be judged against held-back tests by replay with no new room code; every item needs its screen.
 - **A failed check leaves no words in the room.** Five references failed in the jail and nothing says
   why. Words kept from the check, held as data, could help explain such failures.
 - **Open, and not decided here:** a larger repository; a grain finer than a file; help after a turn's
-  first entry; whether a short list of places saves a reader anything, which only a trial with readers
-  can say.
+  first entry, which the third probe's one pair points at and does not measure; whether a short list of
+  places saves a reader anything, which only a trial with readers can say.
 
 ## Read
+
+The reader's verdict is kept whole beside this report:
+`2026-11-17-v2-the-whole-stack-tested-read.md`.
 
 A fresh reader of the other model family read this report at 87e8ad9d against the run's records and
 said: **push with named changes.** It worked every table again and got the same numbers. What it changed
