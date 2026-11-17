@@ -129,3 +129,31 @@ Both final task-reader changes were made: the lessons task separates task action
 I found no private words or absolute machine paths in the added section or verdict file.
 
 I could not freshly inspect the synthetic item/turn Git object stores or worker patches, or determine why the four replays failed. Withholding verification rests on the supplied records and script, corroborated by the walks and original parent trees. No model, replay or heavy check was run; no file was changed.
+
+---
+
+# The fresh reader's verdict on the correction about references that failed in the jail
+
+Kept whole, as the reader gave it on 2026-11-17. A third fresh reader of the other model family (the team's
+worker w91), reading the correction at 61962697 against the records. Its line numbers are of the report at
+61962697. Two links in its words named a path on the lead's machine and are given here as "Report, line N".
+The folders it names (`depths/`, `run-5/`) are in the evidence kept with the read, not in the repository.
+
+---
+
+push with named changes
+
+1. **Report, line 201: withdraw the depth explanation.** New `depths/` receipts show 7c6cda37 passing with padded directory names at lengths 90, 108 and 126, but failing with a full-commit-ID name at 126. Base, check, reference tree and room binary match. At 79aaa586, `run-5/79aaa58602.txt` directly shows the test’s `[0-9a-f]{32}` assertion matching the commit ID in a printed path: one failure, 22 passes. That test function is identical at all three commits. Replace “That is why” and the depth attribution with this mechanism, directly observed at 79aaa586 and inferred at the other two. Keep trials item-specific: only 7c6cda37 received the padded-directory trials.
+
+2. **Report, line 393: revise the takeaway.** Distinguish the socket-length failure from the hexadecimal-name failure. The pilot and pass scripts themselves include full commit IDs in turn-directory names (`pilot_driver.py:393`, `pass_driver.py:122`), so this extends beyond the lead’s directory choice. A shorter path alone is not the established remedy for these three items.
+
+The recount holds:
+
+- The first four references passed three of three, including the newly supplied third-probe receipts; d9860589 passed once.
+- The three affected references each failed three original controls and passed three short controls.
+- 5b0c8376 failed three original controls and one short control; 113d188e failed four original controls and one short control.
+- Replays support **eight judgeable items, two successes and six failures**. Short-directory replays agree with the original outcomes.
+
+The socket and network diagnoses hold. Rule 9 permits the diagnostic hand-in: the store receives tracked-file metadata and verdicts; the file’s contents remain outside it. I found no stale denominator elsewhere or private names or machine paths in the changed lines.
+
+Could not check: failing output at 027834bf or 7c6cda37, or a rewritten report. No model, test suite or heavy run was executed; no file changed.
