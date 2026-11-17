@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Pass tests: toy item repositories and stand-in programs, no model or jail.
+"""Pass tests: toy item repositories and stand-in worker programs, no model.
 
 Run: python3 -I test_pass.py. Real-clock tests are selected with YAK_PASS_JAIL=1
 and YAK pointing to a built room program on a host that can enter its jail.
+The whole-pass class also needs YAK_PASS_REAL_STORE=1, executable YAK_STORE,
+and YAK_STORE_FILES naming the real store's sources.
 """
 import contextlib
 import hashlib
@@ -12,8 +14,10 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -1250,6 +1254,330 @@ class JailPass(unittest.TestCase):
             self.assertEqual(attempts[0]["offered"]["arm"], "nothing")
             self.assertEqual(attempts[0]["offered"]["seed"], 20261117)
             self.assertEqual(attempts[0]["offered"]["order"], row["order"])
+
+
+@unittest.skipUnless(
+    os.environ.get("YAK_PASS_JAIL") == "1" and os.environ.get("YAK_PASS_REAL_STORE") == "1"
+    and Path(os.environ.get("YAK_STORE", "")).is_file()
+    and os.access(os.environ.get("YAK_STORE", ""), os.X_OK),
+    "needs YAK_PASS_JAIL=1, YAK_PASS_REAL_STORE=1 and YAK_STORE naming an executable file")
+class RealRoomPass(unittest.TestCase):
+    """The entire pass with the actual clock, jail and external version-3 store.
+
+    The Codex *wrapper* runs outside the OS jail (sandbox.rs::run_model); its
+    shell permissions would be enforced by Codex itself. This no-model wrapper
+    can therefore save prompts beside the fixture, outside every checkout and
+    outside YAK_JAIL_READ. The room's checks still enter the real OS jail.
+    """
+    git = PassScripts.git
+    write_list = PassScripts.write_list
+    run_script = PassScripts.run_script
+    SEED = 20261117
+    SOURCE = "peer/superyak_peer/target.py"
+    START = "peer/superyak_peer/start.py"
+    TITLES = ("amber bridge", "cobalt bridge", "violet orchard", "sienna ridge", "teal arch")
+    ARM_TITLES = ("amber repair", "cobalt repair", "quartz obelisk")
+    ROADS = (
+        ("README.md", START, SOURCE),
+        ("docs/guide.md", "peer/superyak_peer/other.py", SOURCE),
+        ("README.md", "docs/detour.md", "peer/superyak_peer/other.py", START, SOURCE),
+        ("docs/guide.md", START, SOURCE),
+        ("README.md", "peer/superyak_peer/other.py", SOURCE),
+    )
+    CODEX = r'''
+import json, pathlib, re, shutil, subprocess, sys, time
+if sys.argv[1:] == ["--version"]:
+    print("codex pass-test 1")
+    sys.exit(0)
+prompt = sys.stdin.buffer.read()
+match = re.match(rb"This is turn (\S+) of the room\.\n", prompt)
+if match is None:
+    raise SystemExit("expected the room's own first line, found %r" % prompt[:120])
+attempt = match.group(1).decode("ascii")
+capture = pathlib.Path(config["capture"])
+capture.mkdir(exist_ok=True)
+(capture / (attempt + ".prompt")).write_bytes(prompt)
+title = next(line[len("The item: "):] for line in prompt.decode().splitlines() if line.startswith("The item: "))
+out = pathlib.Path(config["out"])
+before = capture / "before-arms"
+if title in config["arm_titles"] and not before.exists():
+    before.mkdir()
+    for name in ("teach-plan.json", "room-plan.json", "list.json"):
+        shutil.copyfile(str(out / name), str(before / name))
+    shutil.copytree(str(out / "history"), str(before / "history"))
+paths = config["roads"].get(title, config["arm_roads"])
+def emit(value):
+    print(json.dumps(value, separators=(",", ":")), flush=True)
+emit({"type": "thread.started", "thread_id": "00000000-0000-0000-0000-000000000000"})
+emit({"type": "turn.started"})
+for number, path in enumerate(paths):
+    item = {"id": "item_%d" % number, "type": "command_execution", "command": "cat " + path,
+            "aggregated_output": "", "exit_code": None, "status": "in_progress"}
+    emit({"type": "item.started", "item": item})
+    # Actually read the named file; the stream uses the same event pair and id
+    # as codex-json-sample.jsonl, so this is one Shell step, not two.
+    data = pathlib.Path(path).read_text()
+    item.update(aggregated_output=data, exit_code=0, status="completed")
+    emit({"type": "item.completed", "item": item})
+    time.sleep(0.01)  # Distinct seen_ms values make report ordering unambiguous.
+if title == config["fail_title"]:
+    pathlib.Path(config["source"]).write_text("still wrong\n")
+else:
+    subprocess.run(["git", "apply", "--binary", config["patch"]], check=True)
+# CodexWorker::seal commits the resulting change on the worker's behalf.
+emit({"type": "turn.completed", "usage": {"input_tokens": 40, "cached_input_tokens": 10,
+      "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+'''
+
+    def setUp(self):
+        self.succeeded = False
+        self.tmp = Path(tempfile.mkdtemp(prefix="pass-real-room-")).resolve()
+        self.addCleanup(self.clean_or_keep)
+        yak = Path(os.environ.get("YAK", ""))
+        self.assertTrue(yak.is_file() and os.access(str(yak), os.X_OK),
+            "expected YAK to name the real executable; found %r; fixture %s" % (str(yak), self.tmp))
+        self.assertTrue(os.environ.get("YAK_STORE_FILES"),
+            "expected YAK_STORE_FILES to name the real store's source files; found unset; fixture %s" % self.tmp)
+        self.items = self.tmp / "items"
+        self.repo = self.items / "repo"
+        self.repo.mkdir(parents=True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.capture = self.tmp / "captured"
+        self.capture.mkdir()
+        self.out = self.tmp / "pass"
+        self.git("init", "-q", "--template=")
+        # The JailPass toy repository, extended with tracked source paths and
+        # several roads to a shared goal. Checks are separate, frozen files.
+        files = {"README.md": "start here\n", "docs/guide.md": "another start\n",
+            "docs/detour.md": "a longer way\n", self.START: "start\n",
+            "peer/superyak_peer/other.py": "other\n", self.SOURCE: "wrong\n",
+            "check.sh": 'test "$(cat peer/superyak_peer/target.py)" = right\n'}
+        for name, data in files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(data)
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+        self.base = self.git("rev-parse", "HEAD")
+        (self.repo / "unrelated.txt").write_text("wrong answer\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wrong")
+        wrong = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "--detach", self.base)
+        (self.repo / self.SOURCE).write_text("right\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "reference")
+        reference = self.git("rev-parse", "HEAD")
+        self.entries = []
+        for n, title in enumerate(self.TITLES + self.ARM_TITLES):
+            self.git("commit", "-q", "--allow-empty", "-m", "item %d" % n)
+            commit = self.git("rev-parse", "HEAD")
+            for kind, value in (("base", self.base), ("wrong", wrong), ("reference", reference)):
+                self.git("update-ref", "refs/yak-items/%s/%s" % (commit, kind), value)
+            self.entries.append({"commit": commit, "part": "history" if n < 5 else "pilot",
+                "base": self.base, "wrong": wrong, "reference": reference, "title": title,
+                "check": {"command": "sh check.sh", "files": ["check.sh"]}})
+        self.history_commits = [e["commit"] for e in self.entries[:5]]
+        self.three = [e["commit"] for e in self.entries[5:]]
+        self.list = self.items / "list" / "items.json"
+        self.list.parent.mkdir()
+        self.write_list()
+        self.patch = self.bin / "reference.patch"
+        self.patch.write_bytes(subprocess.check_output(
+            ["git", "-C", str(self.repo), "diff", "--binary", self.base, reference]))
+        reads = [str(self.bin)] + [p for p in os.environ.get("YAK_JAIL_READ", "").split(os.pathsep) if p]
+        search = str(self.bin) + os.pathsep + os.environ.get("YAK_PROBE_PATH", os.environ["PATH"])
+        self.env = dict(os.environ, YAK=str(yak.resolve()), PATH=search, YAK_PROBE_PATH=search,
+            YAK_JAIL_READ=os.pathsep.join(reads), HOME=str(self.tmp), USER="test", LOGNAME="test")
+
+    def clean_or_keep(self):
+        if self.succeeded:
+            shutil.rmtree(str(self.tmp))
+        else:
+            print("\nReal-room pass failed; all artifacts kept at %s" % self.tmp, file=sys.stderr)
+
+    def write_worker(self, fail_title=None):
+        config = {"capture": str(self.capture), "out": str(self.out), "patch": str(self.patch),
+            "source": self.SOURCE, "fail_title": fail_title, "arm_titles": self.ARM_TITLES,
+            "roads": dict(zip(self.TITLES, self.ROADS)), "arm_roads": ["README.md", self.START, self.SOURCE]}
+        worker = self.bin / "codex"
+        worker.write_text("#!" + sys.executable + "\nconfig = " + repr(config) + "\n" + self.CODEX)
+        worker.chmod(0o755)
+
+    def load(self, path):
+        path = Path(path)
+        self.assertTrue(path.is_file(), "expected a JSON file at %s; found missing" % path)
+        try:
+            return json.loads(path.read_text())
+        except (ValueError, OSError) as error:
+            self.fail("expected readable JSON at %s; found %s" % (path, error))
+
+    def equal(self, found, expected, path, what):
+        self.assertEqual(found, expected, "%s: expected %r; found %r; inspect %s" % (what, expected, found, path))
+
+    def room(self, row, command):
+        done = subprocess.run([self.env["YAK"], "--room", row["room"], "item", command, row["item"], "--json"],
+            env=self.env, capture_output=True, text=True)
+        path = Path(row["directory"]) / ("real-%s.jsonl" % command)
+        path.write_text(done.stdout)
+        path.with_suffix(".stderr").write_text(done.stderr)
+        self.equal(done.returncode, 0, path, "real yak item %s exit" % command)
+        if command == "turns":
+            return path, self.load(path)
+        return path, [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+
+    def whole_pass(self, fail_title=None):
+        self.write_worker(fail_title)
+        done = self.run_script("pass.sh", "run", self.out, self.items, "codex:pass-test", "--three", *self.three,
+            "--history", *self.history_commits, "--seed", str(self.SEED))
+        log = self.tmp / "run.stdout"
+        log.write_text(done.stdout)
+        (self.tmp / "run.stderr").write_text(done.stderr)
+        self.equal(done.returncode, 0, log,
+            "pass.sh run exit (stderr %r; stage logs under %s)" % (done.stderr, self.out))
+        names = ("plan.json", "screen.json", "history.json", "list.json", "offers.json", "arms.json", "report.json")
+        stages = {name: self.load(self.out / name) for name in names}
+        for name, status in (("screen.json", "ready"), ("history.json", "complete"), ("list.json", "ready"),
+                ("offers.json", "ready"), ("arms.json", "complete")):
+            self.equal(stages[name].get("status"), status, self.out / name, "stage status")
+        try:
+            printed_plan, position = json.JSONDecoder().raw_decode(done.stdout)
+        except ValueError as error:
+            self.fail("expected the plan printed before any stage; found %s; inspect %s" % (error, log))
+        self.equal(printed_plan, stages["plan.json"], log, "printed plan matches plan.json")
+        messages = ("screen ready", "history complete", "list ready:", "offers ready", "arms complete:",
+            "report written:", "run complete")
+        for message in messages:
+            found = done.stdout.find(message, position)
+            self.assertGreaterEqual(found, position,
+                "expected %r after output offset %d; found %d; inspect %s" % (message, position, found, log))
+            position = found + len(message)
+        plan, history, listed = (stages[name] for name in ("plan.json", "history.json", "list.json"))
+        self.equal(plan.get("worker"), "codex:pass-test", self.out / "plan.json", "worker")
+        self.equal(plan["programs"]["worker"].get("version"), "codex pass-test 1", self.out / "plan.json", "worker version")
+        # Work section 4's rule here; never call pass_driver.arm_order.
+        for commit in self.three:
+            expected = sorted(("nothing", "route", "shuffled"), key=lambda arm: (
+                hashlib.sha256(("%d:1:%s:%s" % (self.SEED, commit, arm)).encode("utf-8")).hexdigest(), arm))
+            self.equal([r["arm"] for r in plan["order"] if r["kind"] == "arms" and r["commit"] == commit],
+                expected, self.out / "plan.json", "seeded arm order for " + commit)
+        ran = [row for row in history["turns"] if row["kind"] == "history"]
+        self.equal([row["kind"] for row in history["turns"]], ["thrown-away"] + ["history"] * 5,
+            self.out / "history.json", "one discarded turn followed by five history turns")
+        self.equal([r["commit"] for r in ran], self.history_commits, self.out / "history.json", "history turns")
+        bindings = [{key: row[key] for key in ("room", "item", "attempt")} for row in ran]
+        self.equal(self.load(self.out / "teach-plan.json"), {"items": bindings}, self.out / "teach-plan.json", "only history may teach")
+        self.equal(listed["turns"], bindings, self.out / "list.json", "admitted history bindings")
+        self.equal(listed["teaching_count"], 4 if fail_title else 5, self.out / "list.json", "verified teaching count")
+        before = self.capture / "before-arms"
+        self.assertTrue(before.is_dir(), "expected teaching-list snapshot before arms; found missing at %s" % before)
+        old = {p.relative_to(before): p.read_bytes() for p in before.rglob("*") if p.is_file()}
+        current_paths = [self.out / name for name in ("teach-plan.json", "room-plan.json", "list.json")]
+        current_paths += [p for p in (self.out / "history").rglob("*") if p.is_file()]
+        current = {p.relative_to(self.out): p.read_bytes() for p in current_paths}
+        self.equal(set(current), set(old), before, "teaching files before and after arms")
+        for name in old:
+            self.equal(current[name], old[name], self.out / name, "unchanged teaching bytes")
+        exported = self.load(self.out / "history" / "history.json")
+        self.equal({r["attempt"] for r in exported["turns"]}, {r["attempt"] for r in ran},
+            self.out / "history" / "history.json", "export contains exactly history turns")
+        for row, roads in zip(ran, self.ROADS):
+            walk = self.load(self.out / "history" / (row["attempt"] + ".jsonl"))
+            self.equal([name for step in walk["steps"] for name, _ in step["named"]], list(roads),
+                self.out / "history" / (row["attempt"] + ".jsonl"), "history's chosen road (including the detour)")
+        offers, arms, report = (stages[name] for name in ("offers.json", "arms.json", "report.json"))
+        self.equal([i["commit"] for i in offers["items"]], self.three, self.out / "offers.json", "offered items")
+        kept = {i["commit"]: i for i in offers["items"]}
+        blocks = {}
+        for commit in self.three:
+            item = kept[commit]
+            directory = Path(item["directory"])
+            answer = self.load(directory / "answer.json")
+            self.equal(answer.get("store"), "3", directory / "answer.json", "real store answer version")
+            self.equal(item["empty"], commit == self.three[2], self.out / "offers.json", "intentional empty offer")
+            goals = self.load(directory / "goals.json")
+            if commit != self.three[2]:
+                self.assertTrue(goals["chosen"], "expected ranked history for %s; found %r; inspect %s" % (commit, goals, directory / "goals.json"))
+                offer = self.load(directory / "offer.json")
+                roads = [len(g["route"]["roads"]) for g in offer["goals"] if g.get("route")]
+                self.assertTrue(any(n >= 2 for n in roads),
+                    "expected a route with at least two roads; found %r; inspect %s" % (roads, directory / "offer.json"))
+                self.assertGreaterEqual(item["route"]["roads"], 2,
+                    "expected at least two kept route roads; found %r; inspect %s" % (item["route"], self.out / "offers.json"))
+            else:
+                self.equal(goals["chosen"], [], directory / "goals.json", "unmatched title selects no history")
+            blocks[commit] = {arm: (directory / ("block-%s.txt" % arm)).read_bytes() for arm in ("route", "shuffled")}
+            if not item["empty"]:
+                for arm, block in blocks[commit].items():
+                    self.assertTrue(block, "expected nonempty %s block; found %r; inspect %s" % (arm, block, directory))
+                self.assertNotEqual(blocks[commit]["route"], blocks[commit]["shuffled"],
+                    "expected different route/shuffled blocks; found equal bytes; inspect %s" % directory)
+        for row in history["turns"]:
+            prompt_path = self.capture / (row["attempt"] + ".prompt")
+            self.assertTrue(prompt_path.is_file(), "expected saved nothing-arm stdin; found missing at %s" % prompt_path)
+            prompt = prompt_path.read_bytes()
+            for commit in self.three[:2]:
+                for block in blocks[commit].values():
+                    first = block.splitlines()[0]
+                    self.assertNotIn(first, prompt,
+                        "expected no block first line %r in history/discard; found it in %s" % (first, prompt_path))
+        self.equal(arms["left_out"], [self.three[2]], self.out / "arms.json", "empty offer left out")
+        expected_rows = [r for r in plan["order"] if r["kind"] == "arms" and r["commit"] != self.three[2]]
+        self.equal([(r["order"], r["commit"], r["arm"]) for r in arms["turns"]],
+            [(r["order"], r["commit"], r["arm"]) for r in expected_rows], self.out / "arms.json", "exact six planned arm turns")
+        self.equal(report["arms_status"], "complete", self.out / "report.json", "report arms status")
+        self.equal(report["offers_status"], "ready", self.out / "report.json", "report offers status")
+        self.equal([r["order"] for r in report["turns"]], [r["order"] for r in arms["turns"]],
+            self.out / "report.json", "one report row per arm turn")
+        self.equal([r["commit"] for r in report["history"]], self.history_commits,
+            self.out / "report.json", "one history report row per history turn")
+        for row, line in zip(arms["turns"], report["turns"]):
+            prompt_path = self.capture / (row["attempt"] + ".prompt")
+            self.assertTrue(prompt_path.is_file(), "expected saved stdin prompt; found missing at %s" % prompt_path)
+            prompt = prompt_path.read_bytes()
+            turns_path, turns = self.room(row, "turns")
+            self.equal(len(turns), 1, turns_path, "one attempt in real room")
+            turn = turns[0]
+            self.equal(turn["attempt"], row["attempt"], turns_path, "room attempt matches arms")
+            self.equal(turn["passed"], True, turns_path, "worker's reference change passes")
+            self.equal(row["base"], self.base, self.out / "arms.json", "real item base_commit")
+            made = turn["offered"].get("made")
+            if row["arm"] == "nothing":
+                self.equal(made, None, turns_path, "nothing has no block record")
+                for block in blocks[row["commit"]].values():
+                    first = block.splitlines()[0]
+                    self.assertNotIn(first, prompt, "expected no block first line %r; found it in %s" % (first, prompt_path))
+            else:
+                block = blocks[row["commit"]][row["arm"]]
+                self.equal(prompt.count(block), 1, prompt_path, "exactly one byte-for-byte kept block")
+                self.assertIsInstance(made, dict, "expected offered.made object; found %r; inspect %s" % (made, turns_path))
+                self.equal(made["block_sha256"], hashlib.sha256(block).hexdigest(), turns_path, "real prompt block hash")
+                self.equal(made["block_bytes"], len(block), turns_path, "real prompt block byte length")
+            walk_path, walks = self.room(row, "walks")
+            self.equal(len(walks), 1, walk_path, "one walk from real yak item walks")
+            walk = walks[0]
+            self.equal(walk["attempt"], row["attempt"], walk_path, "walk attempt matches arms")
+            self.equal([s["seq"] for s in walk["steps"]], [0, 1, 2], walk_path, "zero-based real shell steps")
+            self.equal([[p for p, _ in s["named"]] for s in walk["steps"]],
+                [["README.md"], [self.START], [self.SOURCE]], walk_path, "real walk's named paths")
+            for field, number, path in (("first_source_file", 1, self.START), ("first_reference_file", 2, self.SOURCE)):
+                expected = {"step": number, "path": path, "second": walk["steps"][number]["seen_ms"] / 1000}
+                self.equal(line[field], expected, self.out / "report.json", field + " from " + str(walk_path))
+        return ran, listed
+
+    def test_real_room_plan_through_report(self):
+        self.whole_pass()
+        self.succeeded = True
+
+    def test_real_failed_history_turn_does_not_teach_or_stop(self):
+        ran, listed = self.whole_pass(fail_title=self.TITLES[-1])
+        failed = ran[-1]
+        self.equal(failed["passed"], False, self.out / "history.json", "one deliberate history check failure")
+        self.equal([r["passed"] for r in ran[:-1]], [True] * 4, self.out / "history.json", "four remaining passes teach")
+        self.equal(listed["not_teaching"], [{"attempt": failed["attempt"], "item": failed["item"],
+            "standing": "failed", "reason": "share:1 requires passed_verified"}], self.out / "list.json", "failed turn excluded from teaching")
+        self.succeeded = True
 
 
 if __name__ == "__main__":
