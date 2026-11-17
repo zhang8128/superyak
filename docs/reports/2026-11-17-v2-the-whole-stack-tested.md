@@ -1,22 +1,24 @@
-# v2: the whole stack, run end to end, and what it can carry here
+# v2: the whole stack, run end to end, and what was seen of finding here
 
 Serenity, 2026-11-17 (Pacific; every time below is UTC on the 17th). Two things are reported. First, the
 rehearsal of `docs/superpowers/specs/2026-11-17-v2-a-rehearsal-of-three-arms.md`: the whole path, from
 recorded walks to a route offered to a turn under an arm, run in an experiment's own order with real
-turns. Second, what was counted and probed the same day about whether such an offer has anything to
-shorten at this repository. The rehearsal looks for no gain and nothing here is tested for a difference.
+turns. Second, what was counted and probed the same day about how a turn comes to the files of its work
+at this repository. The rehearsal looks for no gain and nothing here is tested for a difference.
 
 ## In short
 
 - **The path holds.** Eighteen turns, every stage complete, every turn's own record agreeing with the
-  frozen plan. No fault was found in it.
-- **At this repository a turn finds where its work is in seconds, with or without help.** With its tests
-  in the sandbox, 8 to 12 seconds. Begun from a commit message with no tests, 10 to 22 seconds, and it
-  found every file the work needed: sixteen of sixteen in ten turns.
-- **What earlier walks know is which places matter. The way between them added nothing that could be
-  measured,** by two instruments, on the team's own reading work.
-- **So an offer of roads to files has little to carry here.** Whether it carries more at a larger
-  repository, or at a grain finer than a file, is not known.
+  frozen plan. No fault was found in what was checked: that each stage completed, and each turn's
+  recorded arm, place, seed and block.
+- **At this repository a turn names a first file of its work within seconds.** With the item's tests in
+  the sandbox, 8 to 12 seconds, in nine turns. Begun from a commit message, with the item's new tests
+  withheld and the parent's existing tests still there, 10 to 22 seconds, and every file its reference
+  changes by 81 seconds, in ten turns.
+- **On the team's own reading work, lists made from earlier walks held about as much of where a later
+  worker went whether they were ordered by roads or by counts of places.**
+- **None of this measures a saving, or an upper bound on one.** That a scored experiment of routes at
+  this repository's item work is not worth its turns now is the lead's judgement, not a result.
 
 ## The rehearsal
 
@@ -28,7 +30,7 @@ shorten at this repository. The rehearsal looks for no gain and nothing here is 
 | The items | The item-maker's list, SHA-256 beginning 4b25d330. Its three pilot items A (3d8775bc), B (01c46a2d), C (a0c94043), and eight history items |
 | The room program | Built from 670a3ba7; SHA-256 beginning 53863d42 |
 | The scripts | `v2/probes/items/` at 670a3ba7 |
-| The store | Store version "3", at its owner's commit 45be5dd0 on the branch `tardis/v2-walks-and-routes`, its four files held by hash. Not yet in `v2` |
+| The store | Store version "3", at its owner's commit 45be5dd0 on the branch `tardis/v2-walks-and-routes`, its four files held by hash. That branch was merged into `v2` after the rehearsal, at 7ab0a28b |
 | The worker | `codex:gpt-6.1-sol`, codex-cli 0.163.0 |
 | The machine | macOS on arm64, at a load of 5 to 17 from other work throughout |
 | The screen | Every reference through the room's jail before any turn: six times for A, B and C, once for each history item. 26 of 26 passed and verified |
@@ -39,7 +41,7 @@ shorten at this repository. The rehearsal looks for no gain and nothing here is 
 
 | Stage | Result |
 | --- | --- |
-| History | One turn thrown away and eight turns, nothing offered. All passed. 64 to 179 worker seconds |
+| History | One turn thrown away (59.6 worker seconds) and eight turns kept, nothing offered. All passed. The eight took 64 to 179 worker seconds |
 | List | Eight turns teach. The store's own check replayed 297 cells |
 | Offers | All three items were offered. One earlier turn was chosen for each, and one goal: `imprints.py` |
 | Arms | Nine turns, in the order the plan's seed gave. All passed |
@@ -62,10 +64,18 @@ shorten at this repository. The rehearsal looks for no gain and nothing here is 
 ### What was held against the raw records afterwards
 
 - Each of the nine turns' own room records the arm, the place, the seed and the block's hash that the
-  plan and the block files give. The route block is 742 bytes and the shuffled block 391, the same for
-  all three items. The three turns under "nothing" hold no block.
+  plan and the block files give. The three turns under "nothing" hold no block.
 - The order of arms is the plan's: shuffled, nothing, route at A; route, shuffled, nothing at B; nothing,
-  route, shuffled at C.
+  route, shuffled at C. So every arm stood at every place once.
+- **The blocks,** the same for all three items: each answer from the store is 1,327 bytes; the route
+  block is 742 bytes, with three places and three roads; the shuffled block is 391 bytes, with three
+  places and no roads; in each, no path is gone and one is marked as changed since.
+- The list of turns that teach has SHA-256
+  ba5bc6d39ffc9af34db90d0d14b0510a262397edd2b18eeeb41badeef1c04691.
+- **The pass's own report is kept beside this one,** as the pass wrote it:
+  `2026-11-17-v2-the-whole-stack-tested-pass-report.json`. It holds what the rehearsal's sections 5 and
+  6 ask for and this page leaves out: each turn's unknown steps, its tokens and whether they are whole,
+  its start, end and the machine's load, and every block's figures.
 
 ### What a turn was shown
 
@@ -83,41 +93,51 @@ The shuffled block lists `imprints.py`, `README.md` and `.yak-check/check.py`.
 
 ### What it showed
 
-1. **The places between are what every turn reads at its start:** the README, and the check's own file.
-   On these walks the road to a file runs through them.
-2. **A list of places ranked by how many turns named them would put the README first.** Such a list needs
-   what the title rule already has for words: leave out what over half the turns that teach name, and
-   leave out the check's own files.
+1. **The places between are what turns read at their start:** the README, and the check's own file. On
+   these walks the road to a file runs through them.
+2. **Three paths were named by all eight history turns:** `README.md`, `AGENTS.md` and
+   `.yak-check/check.py`. A list of places ranked by how many turns named them would be led by those
+   three. Such a list needs a rule for what every turn names, as the title rule has one for words.
 3. **Every turn, the three given nothing among them, first named the goal at its second step,** 7.8 to
-   11.7 seconds in. The tests say where the work is.
-4. **The first turn at an item was the slowest of its three at all three items, whatever its arm.** By
-   place within an item, worker seconds: 98.3, 80.7, 97.2; 223.1, 199.3, 178.7; 126.6, 112.0, 119.2. If
-   place did nothing that would happen one time in 27. Why is not known. A scored design should throw
-   away a first turn at each item, or balance place across arms.
+   11.7 seconds in. The route spec's section 9 already records that at these items the tests, which are
+   in the sandbox, say where the work is.
+4. **The first turn at an item was the slowest of its three at all three items.** By place within an
+   item, worker seconds: 98.3, 80.7, 97.2; 223.1, 199.3, 178.7; 126.6, 112.0, 119.2. The first turns
+   also took the most steps or as many: 15 against 14 and 14; 20 against 18 and 17; 13 against 11 and
+   13. Every arm stood at every place once, the turns ran one after another, and the machine's load
+   moved. No cause is identified, and by the rehearsal's spec nothing is read from it.
 5. **Seconds by arm, for the record only.** Active seconds, route over nothing: 1.18, 1.24, 0.90.
-   Shuffled over nothing: 1.19, 1.11, 0.95. Arm is tangled with place, the machine was loaded, and there
-   are three items.
+   Shuffled over nothing: 1.19, 1.11, 0.95. The machine was loaded, and there are three items.
 6. **Two cells of the pass's table print raw:** the tokens and the loads. The report's JSON holds the
    numbers. To be mended with the pass's next change.
 
 ## Work begun from a description
 
 The route spec's section 9 names an experiment not yet written: work begun from a description, with the
-tests kept from the sandbox until the check. Before writing it, two probes asked what it would have to
-shorten. They are exploratory: ten turns, one worker program, no arm, nothing offered.
+tests kept from the sandbox until the check. Two probes looked at how a turn begun from a description
+comes to its files. They are exploratory: ten turns, one worker program, no arm, nothing offered.
 
 **How a probe turn was made, with no new room code.** The base is the commit's true parent with two
 files laid over it: the commit's own message as `TASK.md`, and a small check that passes when anything
 under the source directory differs from the parent. So a verdict in the probe says nothing of the work;
 what is read is the walk. The room holds a title to 200 characters on one line, so a description cannot
 travel in a title: the title names `TASK.md`. Each turn's copy was checked to hold its base and none of
-the reference, the commit or the tests. Two turns with a script in the worker's place came first: one
-that changes a source file passed, one that hands in nothing failed.
+the reference, the commit or the item's new test blobs. Two turns with a script in the worker's place
+came first: one that changes a source file passed, one that hands in nothing failed.
+
+**The parent's own tests were in the sandbox.** Only the item's new tests were withheld. At nine of the
+ten items the item's test file was already there in its earlier version. Every turn named a test file
+at some point, and two named one at or before their first source file (37a887d3 in the same step,
+9490f597 two steps before). These were not turns without tests.
 
 **The items,** by rules fixed before any turn, from items the list leaves out of every part of the
-experiment: for the first probe, the reference changes exactly one source file and the message names
-neither that file nor its stem as a word (28 meet it, five taken evenly); for the second, the reference
-changes two or more source files and the message names none of them (eight meet it, the first five).
+experiment: for the first probe, the reference changes exactly one source file and the message holds
+neither that file's name nor its stem as a word (28 meet it, five taken evenly); for the second, the
+reference changes two or more source files and the message holds none of their names or stems (eight
+meet it, the first five). Both ask for a message of eight words or more. **The rules shut out a literal
+file name. They do not shut out a message that names the component or a symbol:** "Owner trust" for
+`owner_trust.py`, "Chat paging" for `chats.py`, `could_hold` as the function to add. These are not
+descriptions that hide the place.
 
 | Probe | Item | The reference changes | Named by the turn at | Changed by the turn | Steps, last step |
 | --- | --- | --- | --- | --- | --- |
@@ -132,10 +152,17 @@ changes two or more source files and the message names none of them (eight meet 
 | 2 | 027834bf | `federation.py`, `owner_trust.py` | 12 s, 15 s | both | 20, 163 s |
 | 2 | 7c6cda37 | `owner_trust.py`, `federation.py` | 14 s, 22 s | both | 11, 118 s |
 
-- **In the first probe the first source file each turn named was the file the work is in,** at its third
-  or fourth step. The first 5 to 8 seconds of that is reading the task and the README.
+- **In the first probe the first source file each turn named was the file its reference changes,** at
+  its third or fourth step, 11 to 22 seconds in. The first 5 to 8 seconds of that is reading the task
+  and the README.
 - **In the second probe every file a reference changes was named and changed by its turn, and no other
-  source file was changed.** Sixteen files to find in the ten turns; sixteen found.
+  source file was changed.** The first reference-changed file was named at 10 to 15 seconds, the last at
+  15 to 81 seconds.
+- **Over the ten turns that is sixteen occurrences, of twelve distinct files, all named and all
+  changed.**
+- **Naming a file is not the end of finding.** These walks do not show what a turn understood of a file,
+  whether it found everything the work needed inside it, or what it would have done with help after its
+  first entry.
 - One item has a turn from the night before with its tests in the sandbox: it first named `ships.py` at
   59 seconds. From the description, 22 seconds. One pair.
 
@@ -159,8 +186,8 @@ reference. Nothing new was built for it. The control is the item's own reference
   known, because the room keeps no words from a failed check. The rehearsal's screen exists for this and
   found none among its eleven items.
 
-**What a description would have had to work with,** counted with no turn over the list's 40 scored items
-and 51 history items, every history item earlier:
+**What earlier work holds of the place,** counted with no turn over the list's 40 scored items and 51
+history items, every history item earlier:
 
 | What would be offered to a scored item | Names a file of its work | All of them |
 | --- | --- | --- |
@@ -169,9 +196,9 @@ and 51 history items, every history item earlier:
 | The room's rule on the commit's subject: the three nearest, the files they changed | 11 | 3 |
 | Three history items by chance (2,000 draws) | 8.3 (mean) | |
 
-The room's rule as it stands barely beats chance on these subjects, and a fixed list of the three
-most-changed files beats it. A walk names more than its turn changes, so real walks would know more than
-the first row; how much more was not counted. The package is 38 to 54 Python files.
+On these subjects the room's rule as it stands scored 11 where chance scored 8.3, and a fixed list of
+the three most-changed files scored 15. A walk names files its turn does not change, so the first row
+may undercount what walks would hold; that was not counted. The package is 38 to 54 Python files.
 
 ## Reading work: the team's own workers
 
@@ -180,36 +207,46 @@ with a brief, the files its brief named and the files it read, in order of first
 the logs: 49 workers under one program, 68 with the other program's added. **These logs are not in the
 repository:** a reader can check the arithmetic and not the source. A file counts as read when a reading
 command names it; a search does not count; only first readings are kept. Each count scores a list made
-from earlier workers against what a later worker read beyond its brief (a median of 8 files), by how
-much of that falls in the list's first 5, 10 and 16 files.
+from earlier workers against what a later worker read beyond its brief (a median of 8 files among the
+49, and 6 among the 68), by how much of that falls in the list's first 5, 10 and 16 files. The scores
+are means of that share over workers.
 
 | Question | Compared | First 5 | First 10 | First 16 |
 | --- | --- | --- | --- | --- |
-| Do roads say more than places? (the store, 43 workers, the same area's history) | Route | 0.280 | 0.391 | 0.513 |
+| Roads or places? (the store, 43 workers, the same area's history) | Route | 0.280 | 0.391 | 0.513 |
 | | Places by count | 0.284 | 0.413 | 0.511 |
-| Whose earlier work counts? (32 workers whose briefs have a title line) | Every earlier worker | 0.17 | 0.24 | 0.36 |
+| Whose earlier work? (32 workers of one program whose briefs have a title line) | Every earlier worker | 0.17 | 0.24 | 0.36 |
 | | The last three | 0.18 | 0.27 | 0.38 |
 | | Title words, the nearest three | 0.25 | 0.33 | 0.42 |
 | | Shared brief files, the nearest three | 0.34 | 0.42 | 0.48 |
 | One walk or many? (39 workers with five or more of the same area) | The nearest one, in its own order | 0.20 | 0.34 | 0.40 |
 | | The nearest three | 0.30 | 0.42 | 0.52 |
 | | Every one of the area | 0.22 | 0.33 | 0.49 |
-| Its own program's walk, or the other's? (48 workers with one of each) | Its own | 0.16 | 0.29 | 0.34 |
+| A walk of its own program, or the other's? (48 workers with one of each, pooled) | Its own | 0.16 | 0.29 | 0.34 |
 | | The other | 0.19 | 0.29 | 0.35 |
+| The same, for the 15 workers of one program | Its own | 0.12 | 0.18 | 0.20 |
+| | The other | 0.16 | 0.37 | 0.52 |
+| The same, for the 33 workers of the other program | Its own | 0.18 | 0.34 | 0.41 |
+| | The other | 0.21 | 0.26 | 0.27 |
 
-- **Roads against places** is the store's owner's measure, written before it was run, with the store
-  built from each worker's earlier workers. The route was better, worse or the same at the first 5 in
-  6, 7 and 30 of the 43. A cruder count by the lead, of roads one and two steps long, gave the same
-  answer.
-- **Whose work counts moves the result more than how the list is ordered.** The room does not choose a
-  store's history by area today: its rule picks at most three earlier turns by title words and makes
-  the files they changed the goals, and the store is built from every walk in the list.
-- **A few near walks rank places better than one, and the whole area pooled falls back** at the short
-  end. With one program alone the rise at 5 and 10 is three points.
-- **No difference was seen between a walk of a worker's own program and one of the other's.** A longer
-  walk finds more, and one program's workers here are mostly readers with longer walks.
-- **"The same area" in these logs is mostly the same job a round earlier:** of the three nearest by
-  shared brief files, three in four are among the five workers just before.
+- **Roads or places** is the store's owner's measure, written before it was run, with the store built
+  from each worker's earlier workers. The two lists scored the same at the first five for 30 of the 43,
+  with the route better for 6 and worse for 7. A comparison in which most pairs tie had little room to
+  show a difference either way: it does not show that order holds nothing. A cruder count by the lead,
+  of roads one and two steps long, gave the same answer.
+- **On these lists, whose work is taken moves the score more than how the list is ordered.** The room
+  does not choose a store's history by area today: its rule picks at most three earlier turns by title
+  words and makes the files they changed the goals, and the store is built from every walk in the list.
+- **On these lists, places from the three nearest scored higher than places from the nearest one, and
+  the whole area pooled scored lower again** at the short end. With one program alone the rise at 5 and
+  10 is three points.
+- **The pooled means for a walk of a worker's own program and of the other are close, and the two
+  programs' workers go opposite ways,** as the last four rows show. One program's workers here are
+  mostly readers with longer walks, the other's mostly builders. Roles, walk lengths and which histories
+  were chosen are not controlled, so nothing is concluded about programs.
+- **"The same area" in these logs is mostly the same job a round earlier.** Of the three nearest by
+  shared brief files, 53 of 70 among the titled workers of one program, and 115 of 167 across both
+  programs, are among the five workers just before.
 - None of this says that giving a worker such a list saves it anything. It says where workers went. In
   the same logs, searching is about a sixth of a worker's commands.
 
@@ -218,37 +255,73 @@ much of that falls in the list's first 5, 10 and 16 files.
 - **The stack runs.** Walks are recorded, a store makes roads of them and answers a route, the room
   offers it to a turn under an arm drawn from a seed, and a report is written from the records. All of
   it has now run together with real turns, in order, with every input held by hash.
-- **At this repository there is little for it to carry.** A turn is at its file within seconds whether
-  it is given its tests, a commit message, or a route. In ten turns begun from a message no place was
-  left out.
-- **A commit message got a turn to the right files every time, and through its item's tests one time in
-  the five that could be judged.** At the one failure looked into, what the message lacked was names
-  the tests use. That is a thing of the work itself, which a walk of earlier work does not hold.
-- **What earlier walks do know is places, from a few near walks, across programs.** That is a simpler
-  thing than a road network, and the store's owner has drafted it as a next store version.
+- **A turn came to a first file of its work within seconds in every setting tried,** and in ten turns
+  begun from a message every file its reference changes was named and changed. That says nothing of
+  what came after a file was named. These observations establish no time saving and no upper bound on
+  one.
+- **A commit message got a turn's change through its item's tests at one of the five items that could
+  be judged.** At the one failure looked into, what the message lacked was names the tests use.
+- **On the reading-work lists, counts of places scored as the store's routes did.** The store's owner
+  has drafted places as a next store version.
+- **Another reading holds as well as this one.** Messages in the project's own words and the parent's
+  tests gave these turns quick entry, and sparse history with lists that mostly tie left the offline
+  comparison of routes little room. On that reading, help after a turn's first entry is untried.
 
 ## Limits
 
 - One worker program and one model for every item turn; ten probe turns; three rehearsal items of one
   feature.
+- **What the probes' rules chose.** Small merged changes to one Python component that change tests,
+  meet the item-maker's rule (the tests fail before and pass after), were left out of the experiment's
+  parts by its fifth rule, and have a message of eight words or more. Larger changes, deletions, renames,
+  other components and work not yet done are outside it.
 - The probes' tasks are commit messages written by the people who did the work. They carry the
-  project's own words for its parts. A task in a user's words was not tried.
+  project's own words for its parts, and some name the component or a symbol. A task in a user's words
+  was not tried.
+- The parent's tests were in the probes' sandboxes. Only the item's new tests were withheld.
 - The package is small. Nothing here says what happens where there are thousands of files.
 - A walk records a file's name and blob, not the part read. Whatever a turn spends inside a file is
-  outside what was measured and outside what a route of file names could carry.
+  outside what was measured.
 - The reading-work counts are of where workers went, from logs outside the repository, with first
   readings only.
 - The machine was loaded by other work all day. Seconds here are rough.
 
 ## What follows
 
-- **No scored experiment of routes is proposed for this repository's item work.** The rehearsal's
-  design stands ready for a place where finding costs something.
-- **The description-first experiment is not written,** for the reason above: at this repository it would
-  have seconds to shorten. What was learnt for it is kept here: a task must travel in a file; a turn
+- **No scored experiment of routes is proposed for this repository's item work.** This is the lead's
+  judgement from what was seen, and not a result: nothing here measures what a route could save. The
+  rehearsal's design stands ready.
+- **The description-first experiment is not written now,** by the same judgement. What was learnt for it
+  is kept here: a task must travel in a file; the parent's tests would have to be withheld too; a turn
   can be judged against held-back tests by replay with no new room code; every item needs its screen.
 - **A failed check leaves no words in the room.** Five references failed in the jail and nothing says
-  why. A line kept from the check, held as data, would have said.
-- **Open, and not decided here:** a larger repository; a grain finer than a file; whether a short list
-  of places saves a reader anything, which only a trial with readers can say.
-- **The store's branch merges into `v2`** by the three steps agreed with its owner.
+  why. Words kept from the check, held as data, could help explain such failures.
+- **Open, and not decided here:** a larger repository; a grain finer than a file; help after a turn's
+  first entry; whether a short list of places saves a reader anything, which only a trial with readers
+  can say.
+
+## Read
+
+A fresh reader of the other model family read this report at 87e8ad9d against the run's records and
+said: **push with named changes.** It worked every table again and got the same numbers. What it changed
+is what they are said to show, and all of it is made here:
+
+1. The probes did not run without tests: the parent's tests were in the sandbox. Said now where the
+   probes are described, in "In short" and in the limits.
+2. Quick first naming does not show that finding was finished, and bounds nothing a route could save.
+   The first-file times are called that; the range to the last file is given; "little to carry" and
+   "seconds to shorten" are gone; the choice not to run an experiment is marked as a judgement; and the
+   other reading the reader gave is set beside the lead's.
+3. The rehearsal's first-turn observation stays as an observation. The arithmetic of chance and the
+   advice for a scored design are removed: the spec lets nothing be read from the rehearsal, and every
+   arm already stood at every place.
+4. The probes' rules shut out a literal file name and not a component's name or a symbol. Said, with
+   what kind of work the rules chose.
+5. The reading-work sentences are narrowed to these lists and their scores; the two programs' opposite
+   results are shown beside the pooled means; that most route and places pairs tie is said.
+6. The receipts of the repeated replays and controls, which the reader could not find, are added to the
+   evidence kept with the read.
+7. The pass's own report is kept beside this one, and the blocks' figures are given.
+8. Smaller corrections: three paths, not the README alone, were named by every history turn; each
+   median and each share of recent workers names its cohort; the thrown-away turn's time is given apart
+   from the eight kept; kept words from a check "could help explain" a failure.

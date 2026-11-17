@@ -1,0 +1,803 @@
+{
+ "arms_reason": null,
+ "arms_status": "complete",
+ "blocks": [
+  {
+   "answer_bytes": 1327,
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "empty": false,
+   "goals": 1,
+   "refused": null,
+   "route": {
+    "bytes": 742,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 3,
+    "sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac"
+   },
+   "shuffled": {
+    "bytes": 391,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 0,
+    "sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817"
+   }
+  },
+  {
+   "answer_bytes": 1327,
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "empty": false,
+   "goals": 1,
+   "refused": null,
+   "route": {
+    "bytes": 742,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 3,
+    "sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac"
+   },
+   "shuffled": {
+    "bytes": 391,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 0,
+    "sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817"
+   }
+  },
+  {
+   "answer_bytes": 1327,
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "empty": false,
+   "goals": 1,
+   "refused": null,
+   "route": {
+    "bytes": 742,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 3,
+    "sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac"
+   },
+   "shuffled": {
+    "bytes": 391,
+    "changed": 1,
+    "first_source_file": "peer/superyak_peer/imprints.py",
+    "first_tracked_path": "peer/superyak_peer/imprints.py",
+    "gone": 0,
+    "places": 3,
+    "roads": 0,
+    "sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817"
+   }
+  }
+ ],
+ "conventions": "Conventions: a step's number is the seq its walk records, counted from nought; \"first names\" is by seen_ms, then seq, then the name's place within its step; a step with no seen_ms comes after every step with one; a source file is one under peer/superyak_peer/; where a walk names none, the cell says so.",
+ "excluded": [],
+ "history": [
+  {
+   "active_seconds": 68.301,
+   "commit": "5d880a7d24bb036c77fcfa5747c583369ea9e5be",
+   "passed": true,
+   "worker_seconds": 64.049
+  },
+  {
+   "active_seconds": 80.982,
+   "commit": "d441e3759efc66c65aa381e11883450731e4bb1d",
+   "passed": true,
+   "worker_seconds": 75.556
+  },
+  {
+   "active_seconds": 172.474,
+   "commit": "9ee2c940074fa5265658538f294d427df0c6006d",
+   "passed": true,
+   "worker_seconds": 164.336
+  },
+  {
+   "active_seconds": 98.582,
+   "commit": "5cf7b32dfc65b5bf290859cee168673f2ae882bb",
+   "passed": true,
+   "worker_seconds": 87.517
+  },
+  {
+   "active_seconds": 145.893,
+   "commit": "1f9804d5c09ce6f9072590f11cfcdad04935b7e2",
+   "passed": true,
+   "worker_seconds": 132.706
+  },
+  {
+   "active_seconds": 191.674,
+   "commit": "9358357fe6302b8148f776d59b3f8bd1da920118",
+   "passed": true,
+   "worker_seconds": 178.548
+  },
+  {
+   "active_seconds": 117.545,
+   "commit": "0e5fb1afbc72a04a6891d4d3c40c55f2ce8839fc",
+   "passed": true,
+   "worker_seconds": 99.317
+  },
+  {
+   "active_seconds": 86.461,
+   "commit": "163aaa18c24d33b49c5a8b1b4b986d3c44b1392f",
+   "passed": true,
+   "worker_seconds": 77.756
+  }
+ ],
+ "items": [
+  {
+   "active_seconds": {
+    "nothing": 90.362,
+    "route": 106.786,
+    "shuffled": 107.738
+   },
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "ratios": {
+    "route/nothing": 1.1817578185520463,
+    "route/shuffled": 0.9911637490950268,
+    "shuffled/nothing": 1.1922932206015804
+   },
+   "round": 1
+  },
+  {
+   "active_seconds": {
+    "nothing": 187.399,
+    "route": 231.993,
+    "shuffled": 208.106
+   },
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "ratios": {
+    "route/nothing": 1.2379628493215011,
+    "route/shuffled": 1.1147828510470625,
+    "shuffled/nothing": 1.1104968543055191
+   },
+   "round": 1
+  },
+  {
+   "active_seconds": {
+    "nothing": 139.538,
+    "route": 125.085,
+    "shuffled": 131.889
+   },
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "ratios": {
+    "route/nothing": 0.8964224798979489,
+    "route/shuffled": 0.9484111639333075,
+    "shuffled/nothing": 0.9451833909042698
+   },
+   "round": 1
+  }
+ ],
+ "items_with_ratios": 3,
+ "left_out": [],
+ "list_sha256": "ba5bc6d39ffc9af34db90d0d14b0510a262397edd2b18eeeb41badeef1c04691",
+ "offers_reason": null,
+ "offers_status": "ready",
+ "reference_changes": {
+  "01c46a2d5299304e0645cececebca34a7152f89e": [
+   "peer/superyak_peer/__main__.py",
+   "peer/superyak_peer/imprints.py"
+  ],
+  "3d8775bc641ecd3fd2c92527348e5da8f6406d4a": [
+   "peer/superyak_peer/app.py",
+   "peer/superyak_peer/imprints.py"
+  ],
+  "a0c940438cfb80a87cca6d29423738ff4130ba72": [
+   "peer/superyak_peer/__main__.py",
+   "peer/superyak_peer/imprints.py"
+  ]
+ },
+ "screen": [
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 2
+  },
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 3
+  },
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 4
+  },
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 5
+  },
+  {
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 6
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 2
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 3
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 4
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 5
+  },
+  {
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 6
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 2
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 3
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 4
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 5
+  },
+  {
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "kind": "three",
+   "outcome": "passed",
+   "repetition": 6
+  },
+  {
+   "commit": "5d880a7d24bb036c77fcfa5747c583369ea9e5be",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "d441e3759efc66c65aa381e11883450731e4bb1d",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "9ee2c940074fa5265658538f294d427df0c6006d",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "5cf7b32dfc65b5bf290859cee168673f2ae882bb",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "1f9804d5c09ce6f9072590f11cfcdad04935b7e2",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "9358357fe6302b8148f776d59b3f8bd1da920118",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "0e5fb1afbc72a04a6891d4d3c40c55f2ce8839fc",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  },
+  {
+   "commit": "163aaa18c24d33b49c5a8b1b4b986d3c44b1392f",
+   "kind": "history",
+   "outcome": "passed",
+   "repetition": 1
+  }
+ ],
+ "stages": [
+  {
+   "reason": null,
+   "stage": "screen",
+   "status": "ready"
+  },
+  {
+   "reason": null,
+   "stage": "history",
+   "status": "complete"
+  },
+  {
+   "reason": null,
+   "stage": "list",
+   "status": "ready"
+  },
+  {
+   "reason": null,
+   "stage": "offers",
+   "status": "ready"
+  },
+  {
+   "reason": null,
+   "stage": "arms",
+   "status": "complete"
+  }
+ ],
+ "store_check": "297 cells checked",
+ "teaching_count": 8,
+ "turns": [
+  {
+   "active_seconds": 107.738,
+   "arm": "shuffled",
+   "began": "2026-11-17 20:01:26 UTC",
+   "block": {
+    "block_bytes": 391,
+    "block_sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "ended": "2026-11-17 20:03:24 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 9.36,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 9.36,
+    "step": 1
+   },
+   "load_after": [
+    9.0908203125,
+    10.2939453125,
+    8.64599609375
+   ],
+   "load_before": [
+    9.53955078125,
+    10.8369140625,
+    8.5556640625
+   ],
+   "order": 10,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 15,
+   "tokens": {
+    "cache_read": 571520,
+    "cache_write": 0,
+    "fresh_in": 57032,
+    "output": 2736
+   },
+   "tokens_whole": true,
+   "unknown_steps": 2,
+   "worker_seconds": 98.343
+  },
+  {
+   "active_seconds": 90.362,
+   "arm": "nothing",
+   "began": "2026-11-17 20:03:24 UTC",
+   "block": null,
+   "clock_exit": 0,
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "ended": "2026-11-17 20:05:04 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.404,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.404,
+    "step": 1
+   },
+   "load_after": [
+    8.3798828125,
+    9.6650390625,
+    8.5869140625
+   ],
+   "load_before": [
+    9.0908203125,
+    10.2939453125,
+    8.64599609375
+   ],
+   "order": 11,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 14,
+   "tokens": {
+    "cache_read": 409088,
+    "cache_write": 0,
+    "fresh_in": 45109,
+    "output": 2042
+   },
+   "tokens_whole": true,
+   "unknown_steps": 2,
+   "worker_seconds": 80.659
+  },
+  {
+   "active_seconds": 106.786,
+   "arm": "route",
+   "began": "2026-11-17 20:05:04 UTC",
+   "block": {
+    "block_bytes": 742,
+    "block_sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "3d8775bc641ecd3fd2c92527348e5da8f6406d4a",
+   "ended": "2026-11-17 20:07:01 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.807,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.807,
+    "step": 1
+   },
+   "load_after": [
+    7.67333984375,
+    8.92578125,
+    8.43701171875
+   ],
+   "load_before": [
+    8.3798828125,
+    9.6650390625,
+    8.5869140625
+   ],
+   "order": 12,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 14,
+   "tokens": {
+    "cache_read": 497024,
+    "cache_write": 0,
+    "fresh_in": 32611,
+    "output": 2138
+   },
+   "tokens_whole": true,
+   "unknown_steps": 2,
+   "worker_seconds": 97.189
+  },
+  {
+   "active_seconds": 231.993,
+   "arm": "route",
+   "began": "2026-11-17 20:07:02 UTC",
+   "block": {
+    "block_bytes": 742,
+    "block_sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "ended": "2026-11-17 20:11:05 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 10.838,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 10.838,
+    "step": 1
+   },
+   "load_after": [
+    9.9560546875,
+    8.52880859375,
+    8.4306640625
+   ],
+   "load_before": [
+    7.67333984375,
+    8.92578125,
+    8.43701171875
+   ],
+   "order": 13,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 20,
+   "tokens": {
+    "cache_read": 847616,
+    "cache_write": 0,
+    "fresh_in": 45220,
+    "output": 7496
+   },
+   "tokens_whole": true,
+   "unknown_steps": 4,
+   "worker_seconds": 223.109
+  },
+  {
+   "active_seconds": 208.106,
+   "arm": "shuffled",
+   "began": "2026-11-17 20:11:05 UTC",
+   "block": {
+    "block_bytes": 391,
+    "block_sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "ended": "2026-11-17 20:14:36 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 10.063,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 10.063,
+    "step": 1
+   },
+   "load_after": [
+    7.4619140625,
+    7.5703125,
+    8.037109375
+   ],
+   "load_before": [
+    9.9560546875,
+    8.52880859375,
+    8.4306640625
+   ],
+   "order": 14,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 18,
+   "tokens": {
+    "cache_read": 750976,
+    "cache_write": 0,
+    "fresh_in": 39468,
+    "output": 7109
+   },
+   "tokens_whole": true,
+   "unknown_steps": 4,
+   "worker_seconds": 199.296
+  },
+  {
+   "active_seconds": 187.399,
+   "arm": "nothing",
+   "began": "2026-11-17 20:14:37 UTC",
+   "block": null,
+   "clock_exit": 0,
+   "commit": "01c46a2d5299304e0645cececebca34a7152f89e",
+   "ended": "2026-11-17 20:17:47 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.355,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 8.355,
+    "step": 1
+   },
+   "load_after": [
+    7.6591796875,
+    7.3115234375,
+    7.84375
+   ],
+   "load_before": [
+    7.4619140625,
+    7.5703125,
+    8.037109375
+   ],
+   "order": 15,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 17,
+   "tokens": {
+    "cache_read": 699904,
+    "cache_write": 0,
+    "fresh_in": 43985,
+    "output": 5778
+   },
+   "tokens_whole": true,
+   "unknown_steps": 1,
+   "worker_seconds": 178.679
+  },
+  {
+   "active_seconds": 139.538,
+   "arm": "nothing",
+   "began": "2026-11-17 20:17:48 UTC",
+   "block": null,
+   "clock_exit": 0,
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "ended": "2026-11-17 20:20:21 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 11.686,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 11.686,
+    "step": 1
+   },
+   "load_after": [
+    6.4150390625,
+    7.2314453125,
+    7.7646484375
+   ],
+   "load_before": [
+    7.52587890625,
+    7.28955078125,
+    7.83251953125
+   ],
+   "order": 16,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 13,
+   "tokens": {
+    "cache_read": 594688,
+    "cache_write": 0,
+    "fresh_in": 38549,
+    "output": 3009
+   },
+   "tokens_whole": true,
+   "unknown_steps": 3,
+   "worker_seconds": 126.612
+  },
+  {
+   "active_seconds": 125.085,
+   "arm": "route",
+   "began": "2026-11-17 20:20:22 UTC",
+   "block": {
+    "block_bytes": 742,
+    "block_sha256": "86f0e7f45518813405ca9622e0266035531742e301fa75af0bbe4b324abdc3ac",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "ended": "2026-11-17 20:22:51 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 9.143,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 9.143,
+    "step": 1
+   },
+   "load_after": [
+    8.59033203125,
+    7.814453125,
+    7.93603515625
+   ],
+   "load_before": [
+    6.4150390625,
+    7.2314453125,
+    7.7646484375
+   ],
+   "order": 17,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 11,
+   "tokens": {
+    "cache_read": 586752,
+    "cache_write": 0,
+    "fresh_in": 47619,
+    "output": 3005
+   },
+   "tokens_whole": true,
+   "unknown_steps": 1,
+   "worker_seconds": 111.99
+  },
+  {
+   "active_seconds": 131.889,
+   "arm": "shuffled",
+   "began": "2026-11-17 20:22:52 UTC",
+   "block": {
+    "block_bytes": 391,
+    "block_sha256": "5fab8f4fa63710d7884541aba5f8885d25057c06c513ebfd071699f6a7d36817",
+    "empty": false
+   },
+   "clock_exit": 0,
+   "commit": "a0c940438cfb80a87cca6d29423738ff4130ba72",
+   "ended": "2026-11-17 20:25:17 UTC",
+   "first_reference_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 7.837,
+    "step": 1
+   },
+   "first_source_file": {
+    "path": "peer/superyak_peer/imprints.py",
+    "second": 7.837,
+    "step": 1
+   },
+   "load_after": [
+    7.14111328125,
+    7.5029296875,
+    7.8037109375
+   ],
+   "load_before": [
+    8.59033203125,
+    7.814453125,
+    7.93603515625
+   ],
+   "order": 18,
+   "outcome": "result",
+   "passed": true,
+   "round": 1,
+   "steps": 13,
+   "tokens": {
+    "cache_read": 487296,
+    "cache_write": 0,
+    "fresh_in": 42460,
+    "output": 3283
+   },
+   "tokens_whole": true,
+   "unknown_steps": 3,
+   "worker_seconds": 119.165
+  }
+ ],
+ "v": 1
+}
