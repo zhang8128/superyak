@@ -58,8 +58,8 @@ jobs:
         # script standing in for cargo; the scripts that run the pilot's turns and read what they leave, tried on
         # records made by hand; and the program that makes items from merged commits, with its check, tried on
         # small repositories it makes, with a module standing in for pytest; the merged-item pilot drivers,
-        # with a script standing in for yak; and the program that says which words a change names, tried on
-        # small repositories it makes: no model, no clock, no room.
+        # with a script standing in for yak; the pass with stand-ins and with the real room's jail; and the
+        # program that says which words a change names, tried on small repositories: no model.
         if: success() || failure()
         run: |
           status=0
@@ -68,6 +68,7 @@ jobs:
           python3 -I probes/pilot/test_records.py || status=1
           python3 -I probes/items/test_items.py || status=1
           python3 -I probes/items/test_pilot.py || status=1
+          YAK_PASS_JAIL=1 YAK="$PWD/target/debug/yak" python3 -I probes/items/test_pass.py || status=1
           python3 -I probes/items/test_named.py || status=1
           exit "$status"
       - name: The first run's three checks
