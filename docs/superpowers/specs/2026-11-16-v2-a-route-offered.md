@@ -634,32 +634,41 @@ design needs it. All of it is exploratory: none is a pilot, and none is history.
 | `room_board.py` | `room_board.py` and `ships.py` | nothing | 85 | 13 | at step 4, 18 s |
 | | | route | 68 | 13 | at step 3, 16 s |
 
-All six passed, and each turn's record holds the hash of the block it was given, or none. They are single
-turns, on a machine whose load was between 9 and 16, so they show a mechanism and no size:
+A step's number counts from nought, and its second is when the step was first seen, not when its result
+came. All six passed, and each turn's record holds the hash of the block it was given, or none. They are
+single turns, on a machine whose load was between 9 and 16, and nothing here says what a route causes:
 
-- **A turn given a route goes where it points.** The first source file each route turn named was the
-  first goal offered, three times of three.
-- **It was not done sooner:** 240 s in all against 200 with nothing.
-- **A goal that was not the place cost steps:** thirteen against nine, the right file three steps later.
+- **In these three turns the first source file a route turn named was the first goal of its block.** That
+  does not show a turn following the roads in their order.
+- **The three route turns took 240 s of the worker's time in all, and the three with nothing 200 s.** Two
+  route turns were the slower and the third the faster.
+- **Where the one goal was not the place,** the route turn took thirteen steps against nine, and named the
+  right file three steps later than the turn offered nothing did.
 
 **What the reader found, beside the cohort,** which stands for any later design:
 
 - **A history that grows along the pass makes the scored ratios depend on one another:** an earlier
   item's turn is in its own ratio and in a later item's offer. Five pairs of items that share a test file
-  would alone bring twenty items to about thirteen, counted as independent ones.
+  would, if each pair moved wholly together, bring twenty items to about thirteen counted as independent
+  ones: the reader's illustration, not a measurement.
 - **The rule for leaving an item out must say what follows:** whether the dividing commit and the pilot's
   items move, and when the experiment stops for want of items. A reference that fails its check is one
   thing; a run that could not be used is another.
 - **The room's export takes every arrived turn of an item and does not hold its arm.** A pass that lets
   only turns offered nothing teach must keep them in rooms and plans of their own, and be tested for it.
-- **The arithmetic:** if ten of twenty items gain and ten do not, 15% overall needs 27.75% at each of the
-  ten; 15% at each gives 7.8% overall, which the pilot's spread would need about 59 items to tell.
+- **The arithmetic:** if ten of twenty items gain and ten do not, 15% overall needs the ten to gain
+  27.75% as a geometric mean, not each alike; 15% so gives 7.8% overall, which the pilot's spread would
+  need about 59 items to tell.
 - **A sentence added to every title changes the nothing arm too.**
 
-### The most a route of files could remove
+### Where a walk's recorded time went, roughly
 
 Counted from the walks already recorded, with no new turn: the share of a walk's time that went to steps
-naming only files the turn neither changed nor was given as its tests or its check.
+naming only files the turn neither changed nor was given as its tests or its check. Steps are taken in the
+order of their numbers. A step's time is from the result of the step before it to its own result, and
+nought where that would be less than nought, since steps can overlap. A step that names no file is left
+out. A step counts when none of the files it names was changed by the turn or is under `peer/tests/` or
+`.yak-check/`. The share is of the time up to the last step's result.
 
 | Turns | Share: least, median, most | Source files named, and of them changed (medians) |
 | --- | --- | --- |
@@ -668,25 +677,36 @@ naming only files the turn neither changed nor was given as its tests or its che
 | The three above offered nothing | 7%, 14%, 18% | 4, 1 |
 | The three above offered a route | 8%, 10%, 21% | 4, 1 |
 
-It is rough: a step that names a needed file beside others is counted as needed, the time after a walk's
-last step is left out, and a file a turn did not change may still have been worth reading. Read as the
-most a route could take away if it named exactly the files a turn needs and the turn then read no other,
-its median is under the 15% this experiment is sized to tell, at every kind of item tried.
+**It is a rough allocation of recorded time, and not a bound on what a route could save.** Steps overlap,
+so these times are not a true division of a turn: with no floor at nought one walk's share comes out
+below nought, and with its steps ordered by their results it is 9% where this table's rule gives 6%. A
+file a turn did not change may have been needed. Finding can go on inside a file that was changed. A step
+that names a needed file beside others is counted as needed, and the time after the last step is left
+out. So these shares do not show that a route's effect must be under the 15% this experiment is sized to
+tell. They say only that, as recorded and by this rule, the medians are under it.
+
+**Read since,** by a fresh reader of the other family: the record stands with named changes, all made
+here. The reader worked the six turns' table and the last table again from the walks and got the same
+numbers; what it changed is what they are said to show.
 
 ### What follows now
 
-- **The finding is wider than the choice of items.** At this package a turn is told where its work is, by
-  its tests; the project's own plans say it too (33 of the 52 list the files to create or modify, counted
-  by their lines beginning `- Create:` or `- Modify:`). A turn is at the place in seconds. What it then
-  spends is reading inside files, and a route made of file names does not carry that.
-- **So A and D, run here, could say only that a route does not help where nothing has to be found.**
-  Neither is run unless that answer is wanted for its own sake.
-- **C is not yet written.** As its reader put it, C needs tests the worker never sees that judge behavior
-  through a surface a description can state without naming the place. How many items have such tests is
-  counted, by reading them, before C is written.
-- **A pilot of the three arms at the pilot's three items** is written as its own small spec and read. It
-  is not sized to show a gain and none is expected. It shows the whole path in all three arms at listed
-  items, and it gives the spread of the ratio between arms, which no sizing has had.
+- **What was seen is wider than the choice of items.** At this package's items a turn is told where its
+  work is by its tests, and first names that file within seconds. The project's own plans often say where
+  too: 33 of the 52 list files to create or modify, counted by their lines beginning `- Create:` or
+  `- Modify:`. That shows such cues outside these items; it measures no turn. And first naming a file is
+  not the end of finding: what a turn does after that, inside files, a route of file names does not carry.
+- **A and D are still what their readers said they are.** A would estimate the route's effect for this
+  package with its tests in view, and could show a gain or rule out one of 15%. D would ask whether learned
+  roads add anything once the places are given. Neither answer is known, and neither is run until it is
+  chosen for what it asks.
+- **C is not yet written.** The withdrawn design was not C, and its counts of what visible tests name say
+  nothing of C: tests a worker never sees may name any file. C still needs descriptions that say enough, a
+  boundary for its tests that is read on its own, and a rule for its history.
+- **A rehearsal of the whole path under the three arms,** at the list's three pilot items, is written as
+  its own small spec and read. It is not a pilot: it gives no `n`, and nothing from it enters a later
+  sizing or reading. It shows the path holding together in an experiment's own order, with every turn's
+  arm, block and inputs on record.
 - **A place finer than a file is the next thing to look at.** A walk records a file's name and its blob,
   not the part that was read.
 
