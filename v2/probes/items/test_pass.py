@@ -186,15 +186,17 @@ PASS_FAKE = PASS_FAKE.replace('        offered.update(config.get("offered", {}))
                 "empty": "left nothing" in (block or "")}
             offered["made"].update(config.get("made", {}).get(slot, {}))''')
 PASS_FAKE = PASS_FAKE.replace('(room / "view.json").write_text(json.dumps({"state": state}))',
-    '(room / "view.json").write_text(json.dumps({"state": state, '
-    '"base_commit": config.get("room_bases", {}).get(slot, add[add.index("--base") + 1])}))')
+    '(room / "view.json").write_text(json.dumps({"state": state})); '
+    '(room / "base.txt").write_text(config.get("room_bases", {}).get(slot, add[add.index("--base") + 1]))')
 PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif words[:2] == ["item", "walks"]:
     turn = json.loads((room / "turns.json").read_text())[0]
     slot = str(json.loads((room.parent / "manifest.json").read_text())["slot"])
-    print(json.dumps({"v": 1, "attempt": turn["attempt"], "item": words[2], "steps": config.get("walks", {}).get(slot,
-        %s), "changed": []}, sort_keys=True, separators=(",", ":")))
+    if slot not in config.get("no_walk", []):
+        print(json.dumps({"v": 1, "attempt": config.get("walk_attempts", {}).get(slot, turn["attempt"]), "item": words[2],
+            "base": (room / "base.txt").read_text(), "steps": config.get("walks", {}).get(slot,
+            %s), "changed": []}, sort_keys=True, separators=(",", ":")))
 elif words[:2] == ["item", "turns"]:''' % json.dumps(WALK_STEPS))
-for _needle in ("block = render", "input=prompt", 'offered["made"]', "base_commit", '["item", "walks"]', 'args[:2] == ["offer", "make"]'):
+for _needle in ("block = render", "input=prompt", 'offered["made"]', "base.txt", '["item", "walks"]', 'args[:2] == ["offer", "make"]'):
     assert _needle in PASS_FAKE, _needle
 
 STORE = r'''
@@ -1023,6 +1025,13 @@ class SecondHalf(unittest.TestCase):
     def test_room_at_another_base_stops(self):
         self.arms_stop("another base", 2, room_bases={"11": "0" * 40})
 
+    def test_the_base_is_read_from_the_rooms_walk_of_the_turns_own_attempt(self):
+        """The real room prints an item's base only in the walk it exports; `item show` does not give it."""
+        self.arms_stop("no one walk of its attempt", 2, walk_attempts={"11": "afedcba987654"})
+
+    def test_a_turn_with_no_walk_stops(self):
+        self.arms_stop("no one walk of its attempt", 2, no_walk=["11"])
+
     def test_lost_turn_stops(self):
         self.arms_stop("no verdict", 3, lost_at=12)
 
@@ -1562,7 +1571,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 40, "cached_input_toke
             turn = turns[0]
             self.equal(turn["attempt"], row["attempt"], turns_path, "room attempt matches arms")
             self.equal(turn["passed"], True, turns_path, "worker's reference change passes")
-            self.equal(row["base"], self.base, self.out / "arms.json", "real item base_commit")
+            self.equal(row["base"], self.base, self.out / "arms.json", "the item's base, from the real room's walk")
             made = turn["offered"].get("made")
             if row["arm"] == "nothing":
                 self.equal(made, None, turns_path, "nothing has no block record")

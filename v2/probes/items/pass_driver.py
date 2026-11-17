@@ -646,12 +646,8 @@ def run_arms(out):
                     with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
                         code = pilot.turn(directory, plan["items_dir"], row["commit"], plan["worker"], flags)
                 held.update(ended=pilot.now(), load_after=load_now(), driver_exit=code)
-                # Section 4 step 5: the room that ran the turns holds the item at the offer's base.
                 identity = (directory / "item.txt").read_text(encoding="utf-8").split()[1]
-                view = json.loads(pilot.command([yak, "--room", directory / "room", "item", "show", identity, "--json"]))
-                held.update(item=identity, base=view.get("base_commit"))
-                if held["base"] != item["base"]:
-                    raise Refused("turn %d: the item's room holds another base than its offer's" % row["order"])
+                held.update(item=identity)
                 attempts = pilot.load(directory / "turns.json")
                 if not isinstance(attempts, list) or len(attempts) != 1:
                     raise Refused("turn %d has no verdict or not exactly one attempt" % row["order"])
@@ -660,6 +656,15 @@ def run_arms(out):
                     raise Refused("turn %d has no verdict" % row["order"])
                 if code:
                     raise Refused("turn %d has no usable observation" % row["order"])
+                # Section 4 step 5: the room that ran the turn holds the item at the offer's base. The room
+                # prints an item's base in one place only: the walk it exports for the item's turn.
+                walks = [json.loads(line) for line in pilot.command([yak, "--room", directory / "room", "item", "walks",
+                    identity, "--json"]).decode("utf-8").splitlines() if line.strip()]
+                if len(walks) != 1 or walks[0].get("attempt") != attempt["attempt"]:
+                    raise Refused("turn %d: the room exports no one walk of its attempt" % row["order"])
+                held.update(base=walks[0].get("base"))
+                if held["base"] != item["base"]:
+                    raise Refused("turn %d: the item's room holds another base than its offer's" % row["order"])
                 record = attempt.get("offered") or {}
                 if (record.get("arm") != row["arm"] or record.get("order") != row["order"]
                         or record.get("seed") != plan["seed"]):
@@ -895,6 +900,11 @@ def parser():
 
 
 def main(argv):
+    # What the pass prints must reach the stream in the order it happened, also when the stream is a pipe:
+    # the programs it runs write straight to the same stream, and the plan is printed before any of them.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
     try:
         args = parser().parse_args(argv)
         if args.command == "plan":
