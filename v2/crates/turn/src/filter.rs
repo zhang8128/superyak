@@ -12,9 +12,18 @@
 //! - `socket`: the two internet families, which reach only the run's own empty network; and netlink for
 //!   routes, which a name lookup asks about. No other family: not Unix, not raw packets, not a virtual
 //!   machine's host, not one added to the kernel later;
-//! - `socketpair`: a Unix stream pair and nothing else. A stream pair is two ends joined to each other and
-//!   can reach nothing else; programs use one to talk to their own children. A datagram end could be sent
-//!   from to a named socket.
+//! - `socketpair`: a Unix pair of the stream kind or of the seqpacket kind, and nothing else. Either is two
+//!   ends joined to each other when it is made, and neither end can be made to reach anything else: a send
+//!   that names another socket does not reach it (from a stream end it is refused, and from a seqpacket end
+//!   it goes to the joined end), and a joined end cannot be joined to a named socket or unjoined. Nor is
+//!   one reached: given a name and told to listen, it takes no caller in. That last is the kernel's doing
+//!   and not this filter's, which sees a call's number and not the kind of socket it is made on; what the
+//!   kernel answers to the telling differs from kernel to kernel, and the jail's tests try what it leaves
+//!   on every machine they run on. Programs use a stream pair to talk to their own children, and the
+//!   standard library of the toolchain this is built with makes a seqpacket pair before it starts a child
+//!   one of its two ways: without it `cargo` cannot build inside the jail. A datagram end could be sent
+//!   from to a named socket. Why the seqpacket kind is held to be as closed as the stream kind is argued
+//!   in `docs/superpowers/specs/2026-11-16-v2-a-child-inside-the-linux-jail.md`.
 //!
 //! And it refuses seven calls outright: the three that reach the keyring (`add_key`, `request_key`, `keyctl`);
 //! `io_uring_setup`, whose interface can make sockets where a filter of system calls does not see; and
@@ -84,6 +93,7 @@ const NETLINK_FAMILY: u32 = 16;
 /// The one kind of netlink a run may open: the table of routes and addresses.
 const NETLINK_ROUTE: u32 = 0;
 const STREAM: u32 = 1;
+const SEQPACKET: u32 = 5;
 /// The part of a socket's type that says which kind it is; the rest are flags.
 const KIND_OF_TYPE: u32 = 0xf;
 
@@ -151,12 +161,13 @@ pub(crate) fn socket_filter(machine: Machine) -> Vec<u8> {
             None,
             IfEqual(NETLINK_ROUTE, Label("allow"), Label("refuse")),
         ),
-        // A pair: Unix, and a stream.
+        // A pair: Unix, and of the stream kind or the seqpacket kind.
         (Some("pair"), Load(AT_FIRST)),
         (None, IfEqual(UNIX_FAMILY, Next, Label("refuse"))),
         (None, Load(AT_SECOND)),
         (None, Mask(KIND_OF_TYPE)),
-        (None, IfEqual(STREAM, Label("allow"), Label("refuse"))),
+        (None, IfEqual(STREAM, Label("allow"), Next)),
+        (None, IfEqual(SEQPACKET, Label("allow"), Label("refuse"))),
         (Some("refuse"), Answer(REFUSE)),
         (Some("end"), Answer(END_THE_PROCESS)),
         (Some("allow"), Answer(ALLOW)),
@@ -277,14 +288,47 @@ mod tests {
                 answer(machine.socket, u64::from(INTERNET_FAMILY), stream),
                 ALLOW
             );
-            // A stream pair, with or without flags, and no other pair.
+            // A stream pair or a seqpacket pair, with or without flags, and no other pair. The flags are the
+            // two the kernel takes with a type; what it makes of any other bit is its own business.
             for flags in [0, CLOSE_ON_EXEC, NOT_BLOCKING, CLOSE_ON_EXEC | NOT_BLOCKING] {
                 assert_eq!(answer(machine.socketpair, unix, stream | flags), ALLOW);
+                assert_eq!(answer(machine.socketpair, unix, SEQUENCED | flags), ALLOW);
                 assert_eq!(answer(machine.socketpair, unix, DATAGRAM | flags), REFUSE);
-                assert_eq!(answer(machine.socketpair, unix, SEQUENCED | flags), REFUSE);
             }
+            // Every other kind of Unix pair: none, raw, reliable datagrams, and two more the kernel names.
+            for kind in [0, 3, 4, 6, 10, 15] {
+                assert_eq!(
+                    answer(machine.socketpair, unix, kind),
+                    REFUSE,
+                    "kind {kind}"
+                );
+                assert_eq!(
+                    answer(machine.socketpair, unix, kind | CLOSE_ON_EXEC),
+                    REFUSE,
+                    "kind {kind}"
+                );
+            }
+            // A pair of another family is refused, of whichever kind.
+            for family in [0, u64::from(INTERNET_FAMILY), 16, 40] {
+                for kind in [stream, DATAGRAM, SEQUENCED] {
+                    assert_eq!(
+                        answer(machine.socketpair, family, kind),
+                        REFUSE,
+                        "family {family}, kind {kind}"
+                    );
+                }
+            }
+            // The family is the low half of the argument here too, as the kernel reads it.
             assert_eq!(
-                answer(machine.socketpair, u64::from(INTERNET_FAMILY), DATAGRAM),
+                answer(machine.socketpair, unix | (7 << 32), SEQUENCED),
+                ALLOW
+            );
+            assert_eq!(
+                answer(
+                    machine.socketpair,
+                    u64::from(INTERNET_FAMILY) | (1 << 32),
+                    SEQUENCED
+                ),
                 REFUSE
             );
             for number in machine.refused {
@@ -374,11 +418,17 @@ mod tests {
                     "family {family}"
                 );
             }
-            // A pair is a Unix stream pair or nothing.
+            // A pair is a Unix pair of the stream kind (1) or the seqpacket kind (5), or nothing. The third
+            // of these is the very call a build was seen to make before it starts a child.
             assert_eq!(answer(table.socketpair, 1, 1, 0), ALLOW);
+            assert_eq!(answer(table.socketpair, 1, 5, 0), ALLOW);
+            assert_eq!(answer(table.socketpair, 1, 5 | CLOSE_ON_EXEC, 0), ALLOW);
             assert_eq!(answer(table.socketpair, 1, 2, 0), REFUSE);
+            assert_eq!(answer(table.socketpair, 1, 2 | CLOSE_ON_EXEC, 0), REFUSE);
             assert_eq!(answer(table.socketpair, INTERNET, 1, 0), REFUSE);
+            assert_eq!(answer(table.socketpair, INTERNET, 5, 0), REFUSE);
             assert_eq!(answer(table.socketpair, 40, 1, 0), REFUSE);
+            assert_eq!(answer(table.socketpair, 40, 5, 0), REFUSE);
             // The keyring, which a run would share with the person it runs for, and four ways into the kernel
             // that a test has no use for.
             for number in table.refused {

@@ -31,6 +31,14 @@ enum Command {
         #[command(subcommand)]
         command: ItemCommand,
     },
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
+    Offer {
+        #[command(subcommand)]
+        command: OfferCommand,
+    },
     Clock {
         #[command(subcommand)]
         command: ClockCommand,
@@ -40,14 +48,32 @@ enum Command {
     Status(Json),
     Disagreements(Json),
     Mcp,
-    Offer {
-        #[command(subcommand)]
-        command: OfferCommand,
-    },
 }
 
 #[derive(Subcommand)]
 enum OfferCommand {
+    /// Print the goals the ranker chooses for a scored item's title, and the question for the store.
+    Goals {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        list: PathBuf,
+        #[arg(long)]
+        title: String,
+    },
+    /// Write the room's offer file from the goals and the store's answer, with each path's state at a base.
+    Make {
+        #[arg(long)]
+        goals: PathBuf,
+        #[arg(long)]
+        answer: PathBuf,
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        base: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Print the block an arm gives from an offer file, byte for byte: to make again what a turn was given.
     Render(Render),
 }
@@ -104,8 +130,35 @@ enum ItemCommand {
         #[arg(long)]
         json: bool,
     },
+    Walks {
+        id: String,
+        #[arg(long, required = true)]
+        json: bool,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     Erase {
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommand {
+    Make {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        measure: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    Check {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        list: PathBuf,
+        #[arg(long)]
+        walks: PathBuf,
     },
 }
 
@@ -226,8 +279,52 @@ async fn execute(cli: Cli) -> Result<()> {
             ItemCommand::List(format) => print_view(&dir, View::ItemList, format.json)?,
             ItemCommand::Show { id, json } => print_view(&dir, View::ItemShow(ItemId(id)), json)?,
             ItemCommand::Turns { id, json } => print_view(&dir, View::ItemTurns(ItemId(id)), json)?,
+            ItemCommand::Walks { id, out, .. } => {
+                io::stdout().write_all(&yak::history::item_walks(
+                    &dir,
+                    &ItemId(id),
+                    out.as_deref(),
+                )?)?;
+            }
             ItemCommand::Erase { id } => Room::open(&dir)?.erase_item(&ItemId(id))?,
         },
+        Command::History { command } => match command {
+            HistoryCommand::Make { plan, measure, out } => {
+                println!(
+                    "{}",
+                    yak::history::make(
+                        &yak::history::read_plan(&plan)?,
+                        yak::history::Measure::parse(&measure)?,
+                        &out
+                    )?
+                );
+            }
+            HistoryCommand::Check { plan, list, walks } => {
+                println!(
+                    "{}",
+                    yak::history::check(&yak::history::read_plan(&plan)?, &list, &walks)?
+                );
+            }
+        },
+        Command::Offer {
+            command:
+                OfferCommand::Make {
+                    goals,
+                    answer,
+                    repo,
+                    base,
+                    out,
+                },
+        } => {
+            yak::route_offer::make(&goals, &answer, &repo, &base, &out)?;
+        }
+        Command::Offer {
+            command: OfferCommand::Goals { plan, list, title },
+        } => {
+            let bytes = yak::history::goals_json(&yak::history::read_plan(&plan)?, &list, &title)?;
+            io::stdout().write_all(&bytes)?;
+            println!();
+        }
         Command::Status(format) => print_view(&dir, View::Status, format.json)?,
         Command::Disagreements(format) => print_view(&dir, View::Disagreements, format.json)?,
         Command::Stop | Command::Resume => {
@@ -247,7 +344,9 @@ async fn execute(cli: Cli) -> Result<()> {
         } => run_clock(&dir, run)?,
         Command::Mcp => yak::mcp::serve(&dir).await?,
         // Rendered above, before a room was looked for.
-        Command::Offer { .. } => {}
+        Command::Offer {
+            command: OfferCommand::Render(_),
+        } => {}
     }
     Ok(())
 }

@@ -1,14 +1,18 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 5. A change to the design of stage 2
+Serenity, 2026-11-16, revision 10. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
 
 A fresh reader of the other family approved revision 1 with seven named changes, confirmed revision 2
-with four more, and confirmed revision 4's change of where the items come from with two more. All thirteen
-are made here; the last section says where. Two things came from the ship
+with four more, confirmed revision 4's change of where the items come from with two more, and confirmed
+revision 6's change to the reach of one rule with one more. All fourteen are made here; the last section
+says where. Two things came from the ship
 Tardis, which owns the store this rests on, and one from a measurement; that section names them too.
+
+Revision 9 adds section 9, after the pilot: what the pilot fixed, what was measured before any scored
+turn, what the scored design's reader then said, and what follows. It changes nothing in sections 1 to 8.
 
 ## Why the design changes
 
@@ -97,6 +101,21 @@ the order asked, the route to it from where every turn starts, or the plain answ
 - **A detour can be looked at.** Where a route is cheaper than the way a turn went to the same file, the
   answer names that turn, how far along its walk the file first came, the way it went and the way offered,
   each with its cost and its number of roads. A way that is not cheaper is not called a detour.
+- **At most 16 detours are carried, and the rest are counted** (revision 10; the store's version `"3"`).
+  For each file the answer keeps the 16 cheapest of the dearer ways and says, in `detours_more`, how many
+  it left out. The room reads an answer of store `"3"` and of no other: 16 is a constant of that version,
+  so an answer that names another is refused and is to be made again. Of a route the room refuses more
+  than 16 detours; a `detours_more` that is missing or is not a whole number; one that is more than 0
+  beside fewer than 16 detours; and a sum of the two that is more than the number of turns let teach,
+  since a turn goes one way to a file. The number of turns that went a dearer way, which is all the block
+  says of them, is that sum. Which 16 are the cheapest is the store's to hold, by its own check: the room
+  has not the walks.
+- **A kept detour costs more than the route** (revision 10, named by the code's reader). The room compares
+  the two costs as the exact fractions the answer gives, never as rounded numbers, and refuses a kept
+  detour that costs the same as the route or less. A cost's fraction is the share of turns, so the dearer
+  way is the one with the smaller fraction. A route's cost whose numerator or denominator has more than
+  8,192 digits is refused, which bounds the comparing by the answer's own size: with at most 256 roads a
+  route's fraction has under 5,200 digits, whatever whole number of turns taught.
 - **Three kinds of no route, told apart:** no turn that was let teach reached the file; no turn named it
   at all, as with a file a turn added; the kernel refused.
 - **A refusal is said.** If the kernel refuses a cell, there is no route for that file and the reason is
@@ -159,10 +178,14 @@ the id is the root that is first in byte order among those the turn's base reach
 | Route | The route to each file that the nearest history turns changed, over the whole of the history let teach: the files along each way in order, how many turns walked each road, how many turns went a dearer way, and for each file whether it has changed since or is gone |
 | The same places, shuffled | Every different file of the route arm's block, once, with the same mark of changed or gone, in an order drawn by the seeded draw, under the same opening sentence. Nothing of a road: no order, no counts, no dearer ways |
 
-- **The goals.** The first design's ranker, unchanged, picks up to three arrived history turns by shared
-  title words. The files asked for are the files those turns changed, in the ranker's order of turns and
-  each turn's recorded order, a file named twice kept where it first comes. A score of nought offers
-  nothing. The scored item's own answer is never consulted, to find goals or to mend a poor match.
+- **The goals.** The first design's ranker picks up to three arrived history turns by shared title words,
+  with one narrowing: it ranks only the turns the list lets teach under its measure, where the first
+  design ranked every arrived turn. A route can be made only from walks that teach, and a failed turn's
+  changed files are not where the work was done. Equal scores go to the turn whose verdict came later, and
+  then to the attempt id that is greater in byte order, which is a fixed order and not one of time. The
+  files asked for are the files those turns changed, in the ranker's order of turns and each turn's
+  recorded order, a file named twice kept where it first comes. A score of nought offers nothing. The
+  scored item's own answer is never consulted, to find goals or to mend a poor match.
 - **Route against nothing compares a package:** this ranker, these goals, this history, this rendering. A
   benefit would not say which part earned it.
 - **Route against shuffled is ordered routes with their roads, against the same places with no roads.**
@@ -221,30 +244,60 @@ rest are specs, work on a machine, decisions for a person, work that needs a bro
 text may not be published before they are fixed. The experiment's floor is 20 scored items with history
 items beside them, and each of those 20 would need its check written by hand.
 
-**So the items are made from the repository's own merged work.** A commit of the main branch is taken
-when all of these hold, by a program and not by eye:
+**So the items are made from the repository's own merged work.** A commit of the main branch can be an
+item when the first four of these hold, by a program and not by eye. The fifth says which of them are
+scored:
 
 1. It is not a merge, and it is reached from a stated last commit and not from a stated first one.
 2. It changes test files and source files of one component, and nothing outside that component but
    documents. The first component is the peer, whose tests are the ones shown to run in the room.
-3. At most three test files and five source files; Python only; no test file that needs a browser.
-4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Both inside
-   the room's jail, within the check's limit.
-5. No commit taken earlier names one of its test files. Where two do, the earlier is the item.
+3. At most three test files and five source files, each added or changed, a link made into a plain file
+   counting as changed; none deleted, renamed or made into a link. Python only; no test file that needs a
+   browser.
+4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Each within
+   a limit of time. These two runs are of the project's own merged tests, on the machine the list is made
+   on and outside the room's jail: the jail is for what a worker hands in. The trees they run on are laid
+   out from the stored files' own bytes, whatever the repository's settings for line endings and filters.
+   An item's reference is then shown through the jail before the item is used ("Its reference", below).
+5. Among the scored items no two name one test file, and among the pilot's three. Which of two is kept is
+   said below, under "The scored, the pilot's and history". History items are not held to this.
 
 **Earlier, exactly.** The commits are put in one order, the same on any machine and however they are read
 out: a commit comes after every commit it descends from; among commits free to come next, the one with
 the earlier committer time comes first, and at one time, the one whose id is first in byte order.
 
-Measured on 2026-11-16 by the first three rules: 256 such commits for the peer since October. Of the ten
-most recent, all ten met the fourth, in 1 to 31 seconds each. That is not yet a count of items: the list,
-when made, says how many all five rules leave, and what each rule left out.
+Measured on 2026-11-16 by the first three rules: 257 such commits for the peer since October. Of 30 spread
+over the whole period, 23 met the fourth. Of the seven that did not, the tests of two passed before the
+change, and the tests of five failed on the commit itself, in the environment made on the lead's machine.
+The two runs together took 10 seconds at the median and 105 at the most. That is not yet a count of items:
+the list, when made, says how many the rules leave, and what each left out.
 
-**Disjoint in their test files, and no more than that.** Rule 5 keeps two items from naming one test file.
-It does not keep two items from coming from one fault or one feature, mended in two places with two test
-files. The first design said no two items come from one fault. That is not claimed here. Whether items are
-related, and what that does to the sizing and to the intervals, is for the reader of the scored design to
-judge from the list and the history, before any scored turn.
+**Why rule 5 holds among the scored, and not between history and scored.** Revision 5 held every item to
+it. Measured, the project's work comes in runs: of those commits, 108 name a test file that the one just
+before also names. Held over every item, the rule left 64 of the 257, and by its making no scored item's
+tests had been visited by any history item. The idea under test is that ways worn by use shorten later work
+in the same places. A history from which every earlier visit to a scored item's tests has been taken out
+holds nothing of that. So history is every commit that can be an item, runs and all, as the project's work
+went.
+
+Among the scored the rule stays, so that one feature's run of commits is not a large part of the scored
+items: of the last 40 such commits, 10 name one test file.
+
+**What the lead looked at before choosing this.** From titles alone, with no turn run, by the first three
+rules only, and with the files each commit itself changed standing in for goals. Under revision 5's rule
+the ranker found a history item for 8 of the last 20 commits, and for 3 of the 20 a chosen history commit
+had changed a file that the scored commit also changed. With the rule among the scored only, and the 80
+commits before the pilot's as history: 13 of 20, and 10 of 20. With 40 commits as history: 4 of 20, and 2.
+So the figures are small and unsteady. This is a rule chosen knowing roughly how it bears on what a route
+could find. It rests on the reasoning above and not on the figures, which are here so that a reader can
+weigh the choice. That does not make it a blind choice: it was made with these stand-ins, drawn from the
+commits' own answers, in view. No commit is taken or left out by them.
+
+**Disjoint in their test files among the scored, and no more than that.** Rule 5 keeps two scored items
+from naming one test file. It does not keep two items from coming from one fault or one feature, mended in
+two places with two test files. The first design said no two items come from one fault. That is not claimed
+here. Whether items are related, and what that does to the sizing and to the intervals, is for the reader
+of the scored design to judge from the list and the history, before any scored turn.
 
 **What such an item is.**
 
@@ -259,19 +312,55 @@ judge from the list and the history, before any scored turn.
   - changed anything outside the component's source directory. So not the tests, not a helper the tests
     use, not the tests' configuration, and not another component. It is the whole source directory that
     may change, never a list of the files the fix touched, which would say where the answer is;
-  - did not run the tests that the reference ran: the check holds how many tests passed and how many were
-    skipped on the reference, and a run with fewer passed or more skipped is not a pass, though it ends
-    well.
+  - whose run of the tests reports fewer passed, or more skipped, than the reference's did: the check holds
+    those two counts from the reference, and a run that ends well with fewer passed or more skipped is not
+    a pass.
 - **Its wrong commit** is the base with one unrelated file added. That shows the check is red on a change
   that fixes nothing. It does not show the tests would catch a clever wrong fix; they are the tests the
-  project itself took. A pass here means: the protected tests pass. Nothing more is to be read into it.
+  project itself took.
+- **What a pass shows.** Four things the check observes. Between the base's parent and the commit, every
+  path that differs is under the source directory or is one of the check's own files. The test files in the
+  commit are the frozen ones. The test runner, started on those files, ended with nought. And the report it
+  left, read afterwards, says no failure and no error, at least as many passed as on the reference, and no
+  more skipped.
+- **What a pass cannot show.** That is a showing that the tests pass when the runner and its report did
+  what they are for. The check does not show that they did, nor what the worker meant. The turn's code runs
+  inside the runner's own process, and by accident or on purpose it can bear on what is gathered, on what a
+  test asserts, on the test files as they lie in the checkout while the run goes, on the report, or on how
+  the process ends. No check that runs there can rule that out. Two things are done about what that leaves.
+  Every passing turn's change is kept, and the pilot's and the experiment's reports say, for each passing
+  turn, whether its change names the test runner, its report or the ending of the process: something for a
+  person to look at. Such a thing can be done without naming any of those, so a change that names none is
+  not thereby shown to have left the run alone, nor to be in good faith. And no claim is made from these
+  outcomes that would need more: none about a worker set on cheating its check.
 - **Its reference** is the commit's own source changes over the base, shown to pass before the item is
   listed. No turn sees it: a sandbox holds only what its base reaches.
+- **Before an item is used on a machine, its reference is shown to pass that item's frozen check through
+  the room's jail on that machine,** for instance by a stand-in worker that hands in the reference's
+  changes. Freezing an item asks only that its check fail on the base and on the wrong commit, and a check
+  that cannot run in a machine's jail does both, so without this a right turn can be failed
+  (`2026-11-16-v2-a-child-inside-the-linux-jail.md` is how that was found). The run's report says, for each
+  item: the machine, the room's revision, the frozen check's hash, the reference commit, and that pass. It
+  is shown again after a change of the toolchain, of what the jail shows, or of the jail.
 
-**History and scored, by that order.** A stated commit divides the taken commits: the earlier are history,
-the later are scored, and the pilot's three are the three just before the scored. So no turn is ever
-offered a way learned from a change made after its own. How many history items are run is fixed with the
-scored design, by its reader, with the pilot's results in hand.
+**The scored, the pilot's and history, by that order.** One commit that can be an item divides them: the
+last that is not scored.
+
+- **Scored.** Going forward from the first such commit after the dividing one, each is scored unless it
+  names a test file that a scored commit before it names: of two, the earlier is kept. The dividing commit
+  is the latest for which at least forty are found so, forty being the most the sizing rule allows. The
+  scored are the first `n` of them.
+- **The pilot's three.** Going back from the dividing commit, itself included, each is the pilot's unless
+  it names a test file that one already taken names: so here, of two, the later is kept, where among the
+  scored it is the earlier. The first three so found are the pilot's.
+- **History.** Every commit that can be an item before the earliest of the pilot's three.
+- A commit passed over in either scan is listed as left out by rule 5. If forty scored, or three for the
+  pilot, cannot be found, no list is made, and that is said.
+
+So no turn is ever offered a way learned from a change made after its own. How many history items are run,
+the nearest first, is fixed with the scored design, by its reader, with the pilot's results in hand, with
+the limits on attempts and on cost, and with the reason written down. It is fixed before any scored turn is
+offered anything, and no scored result changes it.
 
 **What this narrows, said before any turn.**
 
@@ -281,6 +370,8 @@ scored design, by its reader, with the pilot's results in hand.
   the room gives an item only to a worker of another. So the network is made of one program's walks, many
   times over, and not of two programs' together.
 - **One component of one repository.** The conclusion is about that work.
+- **A pass is what the check observed, and no more.** It is not proof that the test run was left alone, by
+  accident or on purpose. See "What a pass cannot show", above.
 - **It is work already done once, and chosen by knowing its answer.** A commit is taken because its tests
   go from failing to passing, which is known only from the fix. That is how a set of past work is made, and
   it is not a choice by how well a route might serve. The fix is in the project's public history after the
@@ -288,15 +379,22 @@ scored design, by its reader, with the pilot's results in hand.
   Python changes of one component, done again, and not about the project's waiting work.
 
 **The list of items is fixed before any route is looked at and before any measured turn:** the first and
-last commits; every commit that met rules 1 to 3, in order; for each, whether rules 4 and 5 took it or
-left it out, and why; how many each rule left; the dividing commit; and the three for the pilot. Written
-down and hashed. No item is chosen, left out or reworded for how well a route might serve it.
+last commits; every commit that met rules 1 to 3, in order; for each, whether rule 4 left it out, and
+why, and whether it is history, the pilot's, scored, or left out by rule 5; how many of each; and the
+dividing commit. Written down and hashed. No item is chosen, left out or reworded for how well a route
+might serve it.
 
 **The item-maker is in the repository, with tests of its own.** They show, on a small repository made for
 the purpose: the same list whatever order the commits are read out in, and with two commits at one time;
-a base with one parent and the fixed message; a reference that passes; and the check failing each of
-these, by name: the base, the wrong commit, a turn that changed a test file, one that changed a helper
-the tests use, one that changed the tests' configuration, and one that made the tests be skipped.
+the same list and the same bases from an ordinary repository, a bare one and a linked worktree, and
+whatever that repository's settings for line endings and filters, none of which is run; a run past its
+limit ended together with what it started; the dividing commit found; a later scored commit left out for
+naming an earlier one's test file, while a history commit that names it stays; the pilot's three found
+going back, the dividing commit among them and the later of two kept; too few for the scored or for the
+pilot, refused; a base with one parent and the fixed message; a reference that passes; and the check
+failing each of these, by name: the base, the wrong commit, a turn that changed a test file, one that
+changed a helper the tests use, one that changed the tests' configuration, and one that made the tests be
+skipped.
 
 **For the reader of the scored design, beside the pilot's results:** how often the ranker finds a history
 turn at all. Every title is one sentence with test files' names in it, and the ranker drops a word that
@@ -319,7 +417,8 @@ routes.
 section 6; each one's base; each check, with the commit it fails on and the one it passes on; the room
 program, built from a commit that holds the repair; the worker program, its model and version; the
 environment the tests run in, by the hash of its lock file; the limits; the seeds; the order of the
-fifteen turns; and whether a turn has a first line of its own.
+fifteen turns; whether a turn has a first line of its own; and, for each of the three items, its reference
+shown to pass through the room's jail on the pilot's machine, as section 6 asks.
 
 - Five rounds with nothing offered. All fifteen turns are reported, and the first pilot's rules for a turn
   that is lost or an instrument that fails still stop it.
@@ -347,6 +446,269 @@ Each row has a case that must pass and a case that must be refused.
 | The offer is data, and the prompt without it is unchanged | The pinned prompt test. A tracked file whose name reads as an instruction is rendered inside the block, after its opening sentence, and nowhere else. Route JSON holding a path that is not plain is refused by the renderer itself |
 | What a turn was given can be made again | A stand-in worker's received block has the recorded hash and length; the block made again from what the store kept is the same bytes; an empty offer is told from no offer |
 | Two machines can run it | The same fixture gives the same route bytes on both, and one turn with a block that is not empty runs on the second |
+
+## 9. After the pilot: what it fixed, and what was measured before any scored turn
+
+The pilot ran once, as section 7 says. Its report is `docs/reports/2026-11-16-v2-second-pilot.md`.
+
+**What it fixed.** The largest of its three spreads is 0.1286; the first design's rule gives 14.72, which
+is under its floor. So `n` is 20: the first twenty of the list's forty scored items. The list has 51
+history items before the pilot's three.
+
+**Two things were then measured with no turn run.** Each bears on whether the scored turns, run as
+sections 5 and 6 have them, could show anything.
+
+### What the ranker would choose
+
+The ranker of section 5 counts the words a scored item's title shares with a history item's, leaving out
+any word that more than half the history titles hold. Every title here is made by one sentence around the
+names of an item's test files, so the only words left to count are the parts of those names: 34 of the 49
+words in the history's titles. Worked on the real list, with one turn of every history item taken to pass
+and so to teach, and equal scores settled by the list's order where the room settles them by which
+verdict came later:
+
+| Scored item | Its tests | History turns chosen | Files asked for | Of them, files its own reference changes |
+| --- | --- | --- | --- | --- |
+| 65fc994f | `test_imprint_receipts.py` | 1 | 1 | 1 |
+| 003e87b7 | `test_imprint_withdrawal.py` | 1 | 1 | 1 |
+| 2516153f | `test_imprint_approval.py` | 1 | 1 | 1 |
+| 134cce9c | `test_imprint_verify.py` | 1 | 1 | 1 |
+| bb8ae833 | `test_station_cli.py` | 2 | 2 | 1 |
+| 9a3f21cf | `test_chat_paging.py` | 0 | 0 | 0 |
+| 71a593d5 | `test_public_route.py` | 0 | 0 | 0 |
+| d20c739b | `test_login.py` | 0 | 0 | 0 |
+| c1f7804e | `test_federation.py` | 3 | 1 | 0 |
+| c7aee496 | `test_auth.py` | 0 | 0 | 0 |
+| d0ed1fe9 | `test_inbox.py` | 1 | 1 | 0 |
+| d7c8869c | `test_lessons.py` | 0 | 0 | 0 |
+| b97d4761 | `test_lessons_room.py` | 3 | 2 | 0 |
+| e62cbe2d | `test_lessons_index.py` | 0 | 0 | 0 |
+| cd884db7 | `test_identity.py` | 0 | 0 | 0 |
+| 6ceb5cb8 | `test_imprint_off_loop.py` | 1 | 1 | 0 |
+| df359a98 | `test_imprint_counting.py` | 1 | 1 | 1 |
+| b64e2e93 | `test_cli.py` | 2 | 2 | 0 |
+| fde213d5 | `test_lessons_repeats.py` | 0 | 0 | 0 |
+| df8b4b99 | `test_transport.py` | 0 | 0 | 0 |
+
+- **Nine of the twenty would be offered nothing.** For those the route arm and the shuffled arm are given
+  one block: the opening sentence and a line saying that earlier turns left nothing for this item. The
+  nothing arm is given no block. So two arms coincide there, and not three.
+- **Eleven would be offered a route to one or two files.** For six of them, one of those files is a file
+  the item's own reference changes. What a reference changes is a stand-in, said beforehand, for what a
+  turn would go on to change: a turn may mend it another way.
+- **It leans on which turns teach, and in what order they arrive.** With history run nearest first, one
+  item's goals are four files and not two; the counts of eleven and six do not change. Without the one
+  history item of the first scored items' own feature, eleven falls to five.
+- **The history is of other work.** Its commonest counted words are federation, ship, agent, alerts and
+  room; the scored items begin with the feature the pilot's three belong to, whose earlier commits are
+  the pilot's and not history.
+
+### Where a turn's time goes
+
+From the pilot's sixteen walks, by each step's own times.
+
+| Of a turn's worker seconds | Least | Median | Most |
+| --- | --- | --- | --- |
+| Until the result of the last step that names a file, before the first step that edits the source | 33% | 47% | 61% |
+| From there until that first edit is seen | 0% | 20% | 32% |
+
+- **Before its first edit a turn takes about seven steps.** By the paths they name, two are on the
+  repository's own notes, one to five on the item's tests or its check, and one to four on the source. A
+  walk holds the paths a step names and its times, not what the step did: a step that names a file may
+  have read it, run it or searched it.
+- **Every walk reaches the file where the work is within seconds.** All sixteen first name the source
+  file that all three items change between 8 and 15 seconds in. The title names the test file, and the
+  test file names the source it imports. That is quick entry to the file. It does not show that the place
+  within it, or what the change needs, was found then: that file is some fifteen hundred lines.
+- **What costly finding would look like in a walk:** a late first naming of the files that matter, steps
+  on files that do not, the same searches again, turning back. None of the sixteen shows it at the level
+  of files. Within one file a walk cannot show it.
+- Three of the sixteen walks have no step that edits the source, since their edits were made inside
+  shell steps; they are left out of the table.
+
+### What an item's tests name
+
+For each of the twenty scored items, the source files its test files import, set against the source files
+its own reference changes.
+
+- **For 15 of 20 the imports name at least one file the reference changes; for 11, every one.**
+- **For 5 of 20 they name none.** At those a turn has to find where the work is.
+- **A history item's reference changed an imported file for 15 of 20.** So a ranker that took an item's
+  goals from what its tests import would have history to draw on for 15, against 11 by title words.
+- Imports are read from `import` lines. A module reached through a fixture, a command line or a web
+  route is not seen. No overlap is not proof that finding is hard, nor overlap that it is over.
+
+### What the measurements show, and what they do not
+
+Section 6 said beforehand that "the tests are in the sandbox, and they point at the code", and that there
+is less to find than when work begins from a report of a fault. The measurements say how much less: the
+ranker matches little, and a turn is in the right file within seconds.
+
+- **They do not measure what a route does.** Neither estimates a route's effect, nor how much the ratio
+  of two arms differs from item to item.
+- **The scored turns as designed would give an answer, about this kind of item.** With twenty items and
+  the planning spread, a measured ratio of 1 would have an interval of about 0.90 to 1.11. By the first
+  design's four readings that is "a gain of 15% is ruled out", which closes the question for this
+  package. The lead had written that the likeliest reading was "nothing shown either way"; that would
+  need a modest benefit or more noise than planned, and the reader was right to say it did not follow.
+- **That answer would not bear on work that has to find its way,** which is the question the design was
+  made for.
+- **What nine un-offered items do to the size.** The measure is a ratio, so the arithmetic is by
+  geometric means. If the nine are taken to have a ratio of exactly 1, which takes the line they are
+  given to do nothing, the eleven need a mean ratio of `0.85^(20/11)`, or 0.744: a gain of 25.6% on
+  average over the eleven, and not from each. A gain of 15% on the eleven alone is 8.55% over the twenty,
+  and to show that the rule would ask for about 49 items, above its ceiling of 40.
+- **The twenty are not twenty unrelated things.** Six are of the feature the pilot's items belong to and
+  four of another. Rule 5 keeps their test files apart; it does not make them independent.
+
+### The choices
+
+| Choice | What it costs | What it could show |
+| --- | --- | --- |
+| A. Run as designed: history turns with nothing offered, then twenty items under three arms | 111 turns if none is tried again; a scored run is up to three turns, so the sixty can come to 180. No new code | This package's effect on items whose tests are in the sandbox, a 15% gain ruled out among its readings. Nothing about work that has to find its way |
+| B. A ranker that takes an item's goals from what its tests import | A rule for imports, with a version, and what it does with a module reached another way | More items offered a route. Not, by itself, whether a route saves anything |
+| C. Items whose work begins from a description, with the tests kept from the sandbox until the check | Descriptions that say enough of what is wanted, by a rule fixed beforehand and read by another; the room judging a turn's commit with the item's tests laid over it in a checkout of its own; a new list; a new pilot | Whether ways worn by earlier work shorten work that has to find where to go. Only if the descriptions say enough and the earlier walks went somewhere useful: keeping tests back gives neither |
+| D. The tests in the sandbox and the goals known from what they import; three arms: nothing, those goals as a plain list, the learned route to them | A ranker as in B; a new arm in place of the shuffled one; the history turns | Whether the roads add anything once the destination is known: the places between, and their order |
+
+Choice D is the reader's.
+
+### What the scored design's reader said
+
+A fresh reader of the other family read this section, the pilot's report and the evidence, and worked
+each table again from the list and the walks. Its verdict: **do not run as designed.**
+
+- **It got the same tables,** and named what they lean on and what their labels over-said. Those
+  corrections are made above: which arms coincide; 25.6% and not 27%; that the likeliest reading was
+  mis-said; what a walk's step shows; the order turns arrive in.
+- **It found the pilot's report wrong in one sentence,** on a second run of every passing check. The
+  report is corrected.
+- **Do not start A's scored turns, nor the history turns, now.** Choose the kind of work first: history
+  made with the tests in the sandbox would be a different kind of history from C's.
+- **Write C and have it read, for the question the design was made for.** Keep B or D as a narrower
+  experiment, each with its question, its history and its cost fixed before it is begun. A stands as an
+  experiment about this package, if that answer is wanted and what follows is settled.
+- **Before any of them is begun:**
+  - each item used has its reference shown through the jail six times, afresh, on the machine and with
+    the room and the environment of the run. A failure is settled by a rule said beforehand, and not by
+    running again until it passes, nor by quietly taking another item;
+  - the pilot's failed turn stays a failure, with its cost;
+  - the pilot's passing turns may teach the scored items only after this spec is changed to say so, and
+    then one turn of each pilot item, chosen beforehand, so that fifteen turns at three items do not
+    outweigh the rest;
+  - the related items are written down as groups, and how the result is read with a group left out is
+    said beforehand.
+
+### What follows
+
+- **No scored turn and no history turn is run on this design as it stands.**
+- **The lead had recommended running the history turns in any case. That is withdrawn,** for the reader's
+  reason.
+- **C is written next, as a spec of its own, and read.** Until it is, D is the experiment that could be
+  run on what exists, and it is written beside C so that the choice between them is made on paper.
+  (Not done as written: see "A second design, read and withdrawn" below.)
+- **The points left open at the end of this spec** are still open. Each is settled, or said to stand,
+  before any turn of whichever experiment is offered anything.
+
+### A second design, read and withdrawn
+
+Added 2026-11-17. Before C was written the lead tried a cheaper design on what exists: score the items
+whose tests import none of the source files their own reference changes, as items "where the way has to
+be found". It was written as a spec and read by a fresh reader of the other family, who said: do not
+approve. It is withdrawn and was never pushed. What was measured for it stays here, because the next
+design needs it. All of it is exploratory: none is a pilot, and none is history.
+
+| What was measured | How | What it showed |
+| --- | --- | --- |
+| How many items the rule chooses | Each item's tests' imports against the files its reference changes; no turn | 54 of the 188. For 102 the imports name every such file, for 32 some |
+| Whether those are items whose tests do not say where the work is | The tests' text read for the changed module's name, or for a name the reference defines or changes; no turn | They are not. 39 of the 54 say one or the other, as in a list holding `'ships.Ships.ship_key_is_valid'`. Four more are named by the test file's own name or by the command the test runs. Eleven are left, six of them in one run of like work |
+| Whether such an item's reference passes in the jail | Each of the 54 once, no model | 53 pass. One fails: its tests start a server |
+| When a turn first names a file its reference changes, nothing offered | Three turns at three of the 54 | At 24, 46 and 59 s. Two of the three are items whose tests name the place |
+| What a turn does with a route | Six turns at three more of the 54, all of one run whose tests name the place: at each, one turn offered the route and one offered nothing. Each offer was made by the whole path, from five or six earlier turns | The table below |
+
+| The item's reference changes | Goals offered | Arm | Worker's seconds | Steps | A file the reference changes is first named |
+| --- | --- | --- | --- | --- | --- |
+| `ships.py` | `ships.py` | nothing | 64 | 11 | at step 3, 20 s |
+| | | route | 97 | 12 | at step 1, 11 s |
+| `federation.py` | `ships.py`, which is not it | nothing | 51 | 9 | at step 4, 28 s |
+| | | route | 75 | 13 | at step 7, 36 s; the goal at step 1 |
+| `room_board.py` | `room_board.py` and `ships.py` | nothing | 85 | 13 | at step 4, 18 s |
+| | | route | 68 | 13 | at step 3, 16 s |
+
+A step's number counts from nought, and its second is when the step was first seen, not when its result
+came. All six passed, and each turn's record holds the hash of the block it was given, or none. They are
+single turns, on a machine whose load was between 9 and 16, and nothing here says what a route causes:
+
+- **In these three turns the first source file a route turn named was the first goal of its block.** That
+  does not show a turn following the roads in their order.
+- **The three route turns took 240 s of the worker's time in all, and the three with nothing 200 s.** Two
+  route turns were the slower and the third the faster.
+- **Where the one goal was not the place,** the route turn took thirteen steps against nine, and named the
+  right file three steps later than the turn offered nothing did.
+
+**What the reader found, beside the cohort,** which stands for any later design:
+
+- **A history that grows along the pass makes the scored ratios depend on one another:** an earlier
+  item's turn is in its own ratio and in a later item's offer. Five pairs of items that share a test file
+  would, if each pair moved wholly together, bring twenty items to about thirteen counted as independent
+  ones: the reader's illustration, not a measurement.
+- **The rule for leaving an item out must say what follows:** whether the dividing commit and the pilot's
+  items move, and when the experiment stops for want of items. A reference that fails its check is one
+  thing; a run that could not be used is another.
+- **The room's export takes every arrived turn of an item and does not hold its arm.** A pass that lets
+  only turns offered nothing teach must keep them in rooms and plans of their own, and be tested for it.
+- **The arithmetic:** if ten of twenty items gain and ten do not, 15% overall needs the ten to gain
+  27.75% as a geometric mean, not each alike; 15% so gives 7.8% overall, which the pilot's spread would
+  need about 59 items to tell.
+- **A sentence added to every title changes the nothing arm too.**
+
+### Where a walk's recorded time went, roughly
+
+Counted from the walks already recorded, with no new turn: the share of a walk's time that went to steps
+naming only files the turn neither changed nor was given as its tests or its check. Steps are taken in the
+order of their numbers. A step's time is from the result of the step before it to its own result, and
+nought where that would be less than nought, since steps can overlap. A step that names no file is left
+out. A step counts when none of the files it names was changed by the turn or is under `peer/tests/` or
+`.yak-check/`. The share is of the time up to the last step's result.
+
+| Turns | Share: least, median, most | Source files named, and of them changed (medians) |
+| --- | --- | --- |
+| The pilot's fifteen measured turns | 2%, 6%, 29% | 2, 2 |
+| The first probe's three | 6%, 11%, 18% | 4, 1 |
+| The three above offered nothing | 7%, 14%, 18% | 4, 1 |
+| The three above offered a route | 8%, 10%, 21% | 4, 1 |
+
+**It is a rough allocation of recorded time, and not a bound on what a route could save.** Steps overlap,
+so these times are not a true division of a turn: with no floor at nought one walk's share comes out
+below nought, and with its steps ordered by their results it is 9% where this table's rule gives 6%. A
+file a turn did not change may have been needed. Finding can go on inside a file that was changed. A step
+that names a needed file beside others is counted as needed, and the time after the last step is left
+out. So these shares do not show that a route's effect must be under the 15% this experiment is sized to
+tell. They say only that, as recorded and by this rule, the medians are under it.
+
+**Read since,** by a fresh reader of the other family: the record stands with named changes, all made
+here. The reader worked the six turns' table and the last table again from the walks and got the same
+numbers; what it changed is what they are said to show.
+
+### What follows now
+
+- **What was seen is wider than the choice of items.** At this package's items a turn is told where its
+  work is by its tests, and first names that file within seconds. The project's own plans often say where
+  too: 33 of the 52 list files to create or modify, counted by their lines beginning `- Create:` or
+  `- Modify:`. That shows such cues outside these items; it measures no turn. And first naming a file is
+  not the end of finding: what a turn does after that, inside files, a route of file names does not carry.
+- **A and D are still what their readers said they are.** A would estimate the route's effect for this
+  package with its tests in view, and could show a gain or rule out one of 15%. D would ask whether learned
+  roads add anything once the places are given. Neither answer is known, and neither is run until it is
+  chosen for what it asks.
+- **C is not yet written.** The withdrawn design was not C, and its counts of what visible tests name say
+  nothing of C: tests a worker never sees may name any file. C still needs descriptions that say enough, a
+  boundary for its tests that is read on its own, and a rule for its history.
+- **A rehearsal of the whole path under the three arms,** at the list's three pilot items, is written as
+  its own small spec and read. It is not a pilot: it gives no `n`, and nothing from it enters a later
+  sizing or reading. It shows the path holding together in an experiment's own order, with every turn's
+  arm, block and inputs on record.
+- **A place finer than a file is the next thing to look at.** A walk records a file's name and its blob,
+  not the part that was read.
 
 ## What it costs
 
@@ -401,8 +763,90 @@ The same reader confirmed it with two named changes, both made in revision 5:
 It also asked that the reader of the scored design be shown how often the ranker offers anything at all
 under these titles. That is in section 6's last paragraph.
 
+**Changed in revision 6: the reach of rule 5.** Revision 5 let no two items name one test file. Revision 6
+holds only the scored items to that, and the pilot's three, and makes history every commit that can be an
+item. The reason and what was measured are in section 6, under "Why rule 5 holds among the scored". The
+same reader confirmed it with one named change, made in revision 7:
+
+| Named change | Where |
+| --- | --- |
+| T1. Say which commit the split falls on, which way each scan goes and which of two commits it keeps, and what happens when the pilot's three cannot be found | Section 6: "The scored, the pilot's and history", and the item-maker's own tests |
+
+It also held that the choice of this rule, made with stand-ins drawn from the commits' own answers in
+view, is an exploratory choice and not a blind one, and that the number of history items, once fixed, is
+not to be moved by a scored result. Both are now said in section 6.
+
+**Changed in revision 8, from the reader of the item-maker's code, and confirmed by that reader.** That
+reader, of the other family from the builders, said the code was not to be pushed, for two faults in it,
+since mended, and for one thing that is the spec's: the spec said a pass means the protected tests pass,
+and the check cannot show that against code that bears on its own test run. Section 6 now says what a pass
+shows and what it cannot ("What a pass shows", "What a pass cannot show"), and "What this narrows" names
+it. The reader confirmed that with two changes of wording, both made: a pass is described by what the check
+observes, and not as tests known to have run or as a change known to be in good faith; and a passing change
+that names nothing of the runner is not thereby cleared. Two smaller things are made plain with it: rule
+4's two runs are on the machine the list is made on and outside the jail, from the stored files' own bytes;
+and rule 3 counts a link made into a plain file as a file changed.
+
+**What building the room's second half showed, and what its reader left open.** The walks, the list, the
+admission, the goals and the offer file were built by one family and read by the other before they were
+pushed. Two things were found by running, and not by reading:
+
+- **A step's number begins at nought.** The room numbers a turn's steps from nought, in every store there
+  is. The store's spec said "positive", its fixture numbered from one, and the export, built to those
+  words, refused every real walk. The first test that ran a real turn showed it. A walk is written as it
+  was recorded.
+- **The whole path runs on real walks, with no turn run.** The first pilot's 21 stores gave 21 walks and a
+  list that the admission takes; a changed walk and an extra file were each refused by name. With the turns
+  at two of its items as history for the third, the ranker chose three turns and two files, a store built
+  from those walks answered in 2,256 bytes, and the room's renderer made a block of the offer file. The
+  store there was a copy with its rule on a step's number relaxed, until its owner's own change.
+
+The reader named three changes, all made (the ranker's narrowing in section 5 is one). It left these open.
+None bears on the pilot, which offers nothing. Each is to be settled, or said to stand, before any scored
+turn is offered anything:
+
+- **The counts in an offer are the store's.** How many turns taught, how many walked a road and how many
+  went a dearer way are not held by the room against the list. The store's own check holds them. For the
+  room to hold them too, the offer file's maker would need the list.
+- **A road's path is held to be plain, and not to have been tracked at a history turn's base.** A path that
+  is gone at the scored item's base is rendered, marked as gone, under the opening sentence.
+- **A goal that no turn named, and that is tracked at the scored item's base, is marked as changed,**
+  though nothing shows that it changed.
+- **The base given to the offer file's maker is the operator's.** The offer file does not carry it, so a
+  run's record must.
+- **More than 64 goals** are refused where the offer file is made, after the store has answered, and not
+  where the goals are made.
+- **A refusal of the list's maker or of the admission does not name the turn.** One turn that changed a
+  file whose name is not plain stops the whole plan, and the repository tracks two such names.
+- **The admission's reads have no bound,** and it follows a link at the list's own name. Its inputs are the
+  room's own.
+- **The clock's listing of tracked files does not turn git's replacement objects off,** where the export's
+  does. No worker can make one in an item's repository.
+- **An answer's size.** The bound is 1 MiB. An answer carried each detour's whole way, so it grew with the
+  history. Settled in part by revision 10: the store's version `"3"` keeps at most 16 detours for a file.
+  What still grows is the blobs named along a route: the store's reader measured answers of 549, 1,368
+  and 4,810 bytes for 1, 20 and 100 blobs seen at one file. And each kept detour's own way and the digits
+  of its cost: the code's reader, in a model of the answer, lengthened one detour's way from 3 paths to
+  2,001 and the answer grew from 1,151 to 18,097 bytes. So the bound stays, an answer over it is refused
+  as now, and the size is still to be measured on the history of whichever experiment is run.
+- **A walk line's limit:** whether the line's end counts toward the 1 MiB is to be made the same on both
+  sides.
+
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
+
+**Changed in revision 10: the store's version `"3"`.** Asked of Tardis by the lead after the second pilot,
+because the block uses only how many turns went a dearer way and an answer's size grew with every one of
+them. The store's spec (its revision 7, decision 11) keeps 16 and counts the rest; a fresh reader of the
+other family approved that with named changes. By the lead's reading of them, not the reader's word, none
+changes an answer's bytes for the fixture; if one does, the room's copy is replaced with it. What the
+room holds of the change is in section 2. The fixture the room's tests read is the store's own at that
+revision: its answer's SHA-256 begins bb7e7d0a2d86a2d7, and its walks, list and question are unchanged.
+The store's owner has since said the same of its named changes. A fresh reader of the other family read
+the room's code and said: push with named changes, four: the cost comparison of section 2; the block's
+own numbers asserted where its tests stopped at the offer file; a version that only begins with the right
+one refused in a test; and the size paragraph above. A second fresh reader of that family found all four
+made as named, worked the comparison's arithmetic again in a model of its own, and named no finding.
 
 **Changed between the two reads, and confirmed in the second:**
 
