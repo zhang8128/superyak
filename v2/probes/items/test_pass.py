@@ -803,6 +803,26 @@ class PassScripts(unittest.TestCase):
         self.refused(self.run_script("pass.sh", "list", self.out), "the room's record is missing")
         self.assertEqual(self.read("list.json")["status"], "stopped")
 
+    def test_a_teaching_room_whose_record_cannot_be_read_stops_the_list(self):
+        """Not a database at all, and a database with no table of verdicts: neither is read as no verdicts."""
+        import sqlite3
+        for damage in ("not a database", "no table"):
+            with self.subTest(damage=damage):
+                self.tearDown()
+                self.setUp()
+                self.ready_history()
+                record = Path(self.read("history.json")["turns"][2]["room"]) / "room.sqlite3"
+                record.unlink()
+                if damage == "not a database":
+                    record.write_bytes(b"this is not a database" * 64)
+                else:
+                    held = sqlite3.connect(str(record))
+                    held.execute("CREATE TABLE other (attempt TEXT)")
+                    held.commit()
+                    held.close()
+                self.refused(self.run_script("pass.sh", "list", self.out), "cannot be read")
+                self.assertEqual(self.read("list.json")["status"], "stopped")
+
     def test_list_stops_on_admission_failure(self):
         self.ready_history(check_refuses=True)
         self.refused(self.run_script("pass.sh", "list", self.out), "stand-in admission")
