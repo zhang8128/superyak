@@ -4,8 +4,10 @@
 Run: python3 -I test_pass.py. Real-clock tests are selected with YAK_PASS_JAIL=1
 and YAK pointing to a built room program on a host that can enter its jail.
 """
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -88,6 +90,152 @@ PASS_FAKE = PASS_FAKE.replace('(room / "turns.json").write_text', '''if config.g
 PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif words[:2] == ["item", "list"]:
     print(json.dumps(config.get("items", [{"id": "i0123456789ab"}])))
 elif words[:2] == ["item", "turns"]:''')
+
+# The second half: the room's offer commands, a block in the prompt, the record of
+# the block, the item's base and its walks. The stand-in mirrors what the pass reads
+# (route_offer.rs: canonical answer naming the list and repository, goals as asked;
+# offer.rs: the offer file, Offer::empty, the blocks' lines and marks).
+OFFER_FAKE = r'''
+import hashlib, random
+MARK = {"same": "", "changed": " (changed since)", "gone": " (gone)"}
+def canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+def render(offer, arm, seed):
+    text = "OPENING the block\n\n"
+    if not any(g["route"] is not None for g in offer["goals"]):
+        return text + "Earlier turns left nothing for this item.\n"
+    named = []
+    for g in offer["goals"]:
+        named.append((g["path"], g["state"]))
+        named += [(r["to"], r["state"]) for r in (g["route"] or {}).get("roads", [])]
+    if arm == "shuffled":
+        places = sorted(dict(named).items())
+        random.Random(seed).shuffle(places)
+        return text + "SHUFFLED\n" + "".join("- %s%s\n" % (p, MARK[s]) for p, s in places)
+    text += "ROUTE\n"
+    for n, g in enumerate(offer["goals"], 1):
+        if g["route"] is None:
+            text += "%d. %s%s, with no way to it: %s\n" % (n, g["path"], MARK[g["state"]], g["none"])
+            continue
+        text += "%d. %s%s\n" % (n, g["path"], MARK[g["state"]])
+        for k, r in enumerate(g["route"]["roads"]):
+            text += "   %s %s%s: walked by %d\n" % ("then to" if k else "from where every turn starts to", r["to"],
+                MARK[r["state"]], r["walked_by"])
+        if g["route"]["dearer_ways"]:
+            text += "   %d went a dearer way to it\n" % g["route"]["dearer_ways"]
+    return text
+def word(name):
+    return args[args.index(name) + 1]
+if args[:2] == ["offer", "goals"]:
+    listed = hashlib.sha256(pathlib.Path(word("--list")).read_bytes()).hexdigest()
+    names = config.get("goals", {}).get(word("--title"), ["docs/notes.md", "peer/superyak_peer/b.py", "added.txt"])
+    measure = {"name": "share", "version": 1}
+    print(json.dumps({"ranker": "title-words-1", "history": listed, "measure": measure,
+        "chosen": [{"attempt": "a000000000001", "score": 2}, {"attempt": "a000000000002", "score": 1}], "goals": names,
+        "question": {"v": 1, "repo": "b" * 40, "list": listed, "measure": measure, "goals": names}}))
+    sys.exit(0)
+if args[:2] == ["offer", "make"]:
+    goals = json.loads(pathlib.Path(word("--goals")).read_text())
+    if len(goals["goals"]) > 64:
+        print("refused: goals.limit", file=sys.stderr); sys.exit(1)
+    raw = pathlib.Path(word("--answer")).read_bytes()
+    answer = json.loads(raw)
+    if (canonical(answer) != raw or answer["store"] != "3" or answer["list"] != goals["history"]
+            or answer["repo"] != goals["question"]["repo"] or [a["goal"] for a in answer["answers"]] != goals["goals"]):
+        print("refused: answer", file=sys.stderr); sys.exit(1)
+    states = config.get("states", {})
+    output = []
+    for a in answer["answers"]:
+        if "route" in a:
+            roads = [{"to": r["to"], "walked_by": r["turns"], "state": states.get(r["to"], "same")} for r in a["route"]["roads"]]
+            output.append({"path": a["goal"], "state": states.get(a["goal"], "same"), "route": {"roads": roads,
+                "cost_millis": 1504, "dearer_ways": len(a["route"]["detours"])}})
+        else:
+            output.append({"path": a["goal"], "state": states.get(a["goal"], "same"), "route": None, "none": a["none"]})
+    pathlib.Path(word("--out")).write_bytes(canonical({"offer": 1, "history": goals["history"], "ranker": goals["ranker"],
+        "store": "3", "kernel": answer["kernel"], "measure": {"name": "share", "version": "1"}, "chosen": goals["chosen"],
+        "goals": output}))
+    sys.exit(0)
+if args[:2] == ["offer", "render"]:
+    sys.stdout.write(render(json.loads(pathlib.Path(word("--offer")).read_text()), word("--arm"), int(word("--seed"))))
+    sys.exit(0)
+'''
+
+WALK_STEPS = [{"seq": 0, "named": [["README.md", "5" * 40]], "seen_ms": 1000},
+              {"seq": 1, "named": [["peer/superyak_peer/start.py", "4" * 40]], "seen_ms": 4000},
+              {"seq": 2, "named": [["peer/superyak_peer/ref.py", "7" * 40]], "seen_ms": 2500}]
+
+PASS_FAKE = PASS_FAKE.replace("\nroom = pathlib.Path(args[1]); words = args[2:]",
+    OFFER_FAKE + "\nroom = pathlib.Path(args[1]); words = args[2:]", 1)
+PASS_FAKE = PASS_FAKE.replace('    worker = words[words.index("--worker") + 1]\n', '''    worker = words[words.index("--worker") + 1]
+    block = None
+    if "--offer" in words:
+        block = render(json.loads(pathlib.Path(word("--offer")).read_text()), word("--arm"), int(word("--seed")))
+    prompt = ("This is turn of the room.\\n\\nThe item\\n\\n" + ("" if block is None else block + "\\n") + "The rules\\n").encode()
+''')
+PASS_FAKE = PASS_FAKE.replace('subprocess.check_call([worker.split(":", 1)[1]], cwd=scratch)',
+    'subprocess.run([worker.split(":", 1)[1]], cwd=scratch, input=prompt, check=True)')
+PASS_FAKE = PASS_FAKE.replace('        offered.update(config.get("offered", {}))', '''        offered.update(config.get("offered", {}))
+        if block is not None or config.get("made_under_nothing"):
+            text = (block or "a block").encode()
+            offered["made"] = {"block_sha256": hashlib.sha256(text).hexdigest(), "block_bytes": len(text),
+                "empty": "left nothing" in (block or "")}
+            offered["made"].update(config.get("made", {}).get(slot, {}))''')
+PASS_FAKE = PASS_FAKE.replace('(room / "view.json").write_text(json.dumps({"state": state}))',
+    '(room / "view.json").write_text(json.dumps({"state": state, '
+    '"base_commit": config.get("room_bases", {}).get(slot, add[add.index("--base") + 1])}))')
+PASS_FAKE = PASS_FAKE.replace('elif words[:2] == ["item", "turns"]:', '''elif words[:2] == ["item", "walks"]:
+    turn = json.loads((room / "turns.json").read_text())[0]
+    slot = str(json.loads((room.parent / "manifest.json").read_text())["slot"])
+    print(json.dumps({"v": 1, "attempt": turn["attempt"], "item": words[2], "steps": config.get("walks", {}).get(slot,
+        %s), "changed": []}, sort_keys=True, separators=(",", ":")))
+elif words[:2] == ["item", "turns"]:''' % json.dumps(WALK_STEPS))
+for _needle in ("block = render", "input=prompt", 'offered["made"]', "base_commit", '["item", "walks"]', 'args[:2] == ["offer", "make"]'):
+    assert _needle in PASS_FAKE, _needle
+
+STORE = r'''
+import hashlib, json, pathlib, sys
+here = pathlib.Path(__file__).resolve().parent
+config = json.loads((here / "store-config.json").read_text())
+args = sys.argv[1:]
+with (here / "store-calls.jsonl").open("a") as out:
+    out.write(json.dumps(args) + "\n")
+def word(name):
+    return args[args.index(name) + 1]
+if args[0] == "build":
+    walks = args[args.index("--list") + 2:]
+    listed = hashlib.sha256(pathlib.Path(word("--list")).read_bytes()).hexdigest()
+    pathlib.Path(word("--out")).write_text(json.dumps({"list": listed, "walks": walks}))
+    print("built from %d walks" % len(walks)); sys.exit(0)
+if args[0] == "check":
+    json.loads(pathlib.Path(word("--store")).read_text())
+    print(config.get("check", "store 3: whole")); sys.exit(config.get("check_exit", 0))
+if args[0] == "ask":
+    question = json.loads(sys.stdin.read())
+    store = json.loads(pathlib.Path(word("--store")).read_text())
+    answers = []
+    for goal in question["goals"]:
+        if config.get("all_none") or goal in config.get("none", ["added.txt"]):
+            answers.append({"goal": goal, "none": "never_named"})
+            continue
+        # A route stitched from three turns' roads, with two detours.
+        start, middle = "peer/superyak_peer/start.py", "README.md"
+        roads = [{"from": None, "to": start, "turns": 2, "witness": "a000000000001"},
+                 {"from": start, "to": middle, "turns": 1, "witness": "a000000000002"},
+                 {"from": middle, "to": goal, "turns": 1, "witness": "a000000000003"}]
+        detours = [{"attempt": "a00000000000%d" % n, "cost": {"den": "27", "nats": "2.602689685", "num": "2"},
+            "family": "claude", "item": "i00000000000%d" % n, "paths": [start, "x.txt", goal], "roads_n": 3, "seq": 3,
+            "visit": 3} for n in (1, 2)]
+        answers.append({"goal": goal, "route": {"blobs": {start: ["4" * 40], middle: ["5" * 40], goal: ["6" * 40]},
+            "cost": {"den": "9", "nats": "1.504077397", "num": "2"}, "detours": detours, "detours_more": 0,
+            "paths": [start, middle, goal], "roads": roads, "roads_n": 3}})
+    answer = {"answers": answers, "for_experiment": True, "kernel": "511bacd017146586", "list": store["list"],
+        "measure": {"name": "share", "teaches": ["passed_verified"], "version": 1}, "path_rule": 1,
+        "repo": question["repo"], "store": "3", "taught": 3, "v": 1}
+    sys.stdout.write(json.dumps(answer, sort_keys=True, indent=config.get("indent"),
+        separators=None if config.get("indent") else (",", ":")) + "\n"); sys.exit(0)
+sys.exit(9)
+'''
 
 
 class PassScripts(unittest.TestCase):
@@ -596,6 +744,380 @@ class PassScripts(unittest.TestCase):
         self.ok(self.run_script("pass.sh", "list", self.out))
         sizes = [Path(row["file"]).stat().st_size for row in self.read("list.json")["walks"]]
         self.assertEqual(max(sizes), 1048576)
+
+
+class SecondHalf(unittest.TestCase):
+    """offers, arms, report and run, with the stand-in room above and a stand-in store."""
+    git = PassScripts.git
+    write_list = PassScripts.write_list
+    configure = PassScripts.configure
+    run_script = PassScripts.run_script
+    plan = PassScripts.plan
+    ok = PassScripts.ok
+    refused = PassScripts.refused
+    read = PassScripts.read
+    screen = PassScripts.screen
+
+    def setUp(self):
+        PassScripts.setUp(self)
+        self.store.write_text("#!" + sys.executable + "\n" + STORE)
+        self.store_config()
+        # The worker keeps the prompt it was given beside its turn.
+        self.worker.write_text("#!/bin/sh\ncat > ../prompt.txt\n")
+        # A reference that changes a source file, so a walk can name one first.
+        self.git("checkout", "-q", "--detach", self.reference)
+        (self.repo / "peer" / "superyak_peer").mkdir(parents=True)
+        (self.repo / "peer" / "superyak_peer" / "ref.py").write_text("changed\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "reference with a source file")
+        reference = self.git("rev-parse", "HEAD")
+        for entry in self.entries:
+            entry["reference"] = reference
+            self.git("update-ref", "refs/yak-items/%s/reference" % entry["commit"], reference)
+        self.write_list()
+
+    def store_config(self, **config):
+        (self.bin / "store-config.json").write_text(json.dumps(config))
+
+    def stage(self, name):
+        return self.run_script("pass.sh", name, self.out)
+
+    def to_list(self, rounds=1, **config):
+        self.configure(**config)
+        self.ok(self.plan(extra=("--rounds", str(rounds))))
+        self.assertEqual(self.screen(), 0)
+        self.ok(self.stage("history"))
+        self.ok(self.stage("list"))
+
+    def to_offers(self, rounds=1, **config):
+        self.to_list(rounds, **config)
+        self.ok(self.stage("offers"))
+        return self.read("offers.json")
+
+    def calls(self):
+        return [json.loads(x) for x in (self.bin / "calls.jsonl").read_text().splitlines()]
+
+    def test_fixture_goes_through_offers_arms_report_in_two_rounds(self):
+        offers = self.to_offers(rounds=2)
+        self.assertEqual(offers["status"], "ready")
+        self.assertEqual(offers["store_check"], "store 3: whole")
+        self.assertFalse(offers["goal_limit"])
+        self.assertEqual([i["commit"] for i in offers["items"]], self.three)
+        store_calls = [json.loads(x) for x in (self.bin / "store-calls.jsonl").read_text().splitlines()]
+        self.assertEqual([c[0] for c in store_calls], ["build", "check", "ask", "ask", "ask"])
+        walks = [w["file"] for w in self.read("list.json")["walks"]]
+        self.assertEqual(store_calls[0][store_calls[0].index("--list") + 2:], walks)
+        for item in offers["items"]:
+            here = Path(item["directory"])
+            self.assertEqual(here, self.out / "offers" / item["commit"])
+            for name, held in item["files"].items():
+                data = (here / name).read_bytes()
+                self.assertEqual(held, {"file": str(here / name), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+            self.assertEqual(item["answer_bytes"], len((here / "answer.json").read_bytes()))
+            question = (here / "question.json").read_bytes()
+            self.assertEqual(question, (json.dumps(json.loads((here / "goals.json").read_text())["question"],
+                sort_keys=True, separators=(",", ":")) + "\n").encode())
+            self.assertEqual((item["goals"], item["empty"]), (3, False))
+            self.assertEqual(item["route"]["places"], 5)
+            self.assertEqual(item["route"]["roads"], 6)
+            self.assertEqual(item["shuffled"]["places"], 5)
+            self.assertEqual(item["shuffled"]["roads"], 0)
+            self.assertEqual(item["route"]["first_tracked_path"], "docs/notes.md")
+            self.assertEqual(item["route"]["first_source_file"], "peer/superyak_peer/start.py")
+            self.assertEqual(item["route"]["sha256"], item["files"]["block-route.txt"]["sha256"])
+            offer = json.loads((here / "offer.json").read_text())
+            self.assertEqual(sum(len(g["route"]["roads"]) for g in offer["goals"] if g["route"]), 6)
+            self.assertEqual([g["route"]["dearer_ways"] for g in offer["goals"] if g["route"]], [2, 2])
+        held = {name: (self.out / name).read_bytes() for name in ("teach-plan.json", "list.json", "room-plan.json")}
+        history = {p.name: p.read_bytes() for p in (self.out / "history").iterdir()}
+        self.ok(self.stage("arms"))
+        arms = self.read("arms.json")
+        self.assertEqual(arms["status"], "complete")
+        self.assertEqual(len(arms["turns"]), 18)
+        plan_rows = [r for r in self.read("plan.json")["order"] if r["kind"] == "arms"]
+        self.assertEqual([(t["order"], t["arm"], t["commit"], t["round"]) for t in arms["turns"]],
+            [(r["order"], r["arm"], r["commit"], r["round"]) for r in plan_rows])
+        kept = {i["commit"]: i for i in offers["items"]}
+        for t in arms["turns"]:
+            attempt = json.loads((Path(t["directory"]) / "turns.json").read_text())[0]
+            prompt = (Path(t["directory"]) / "prompt.txt").read_bytes()
+            self.assertEqual(t["base"], kept[t["commit"]]["base"])
+            for key in ("began", "ended", "load_before", "load_after", "attempt", "room", "item"):
+                self.assertIsNotNone(t[key], key)
+            if t["arm"] == "nothing":
+                self.assertNotIn("made", attempt["offered"])
+                self.assertNotIn(b"OPENING", prompt)
+                for arm in ("route", "shuffled"):
+                    self.assertNotIn((Path(kept[t["commit"]]["directory"]) / ("block-%s.txt" % arm)).read_bytes(), prompt)
+            else:
+                block = (Path(kept[t["commit"]]["directory"]) / ("block-%s.txt" % t["arm"])).read_bytes()
+                self.assertIn(block, prompt)
+                self.assertEqual(attempt["offered"]["made"]["block_sha256"], hashlib.sha256(block).hexdigest())
+                self.assertEqual(attempt["offered"]["made"]["block_bytes"], len(block))
+                run = next(c for c in self.calls() if c[2:4] == ["clock", "run"] and c[1] == t["room"])
+                self.assertEqual(run[run.index("--offer") + 1], kept[t["commit"]]["files"]["offer.json"]["file"])
+        # A turn of arms never teaches.
+        for name, data in held.items():
+            self.assertEqual((self.out / name).read_bytes(), data, name)
+        self.assertEqual({p.name: p.read_bytes() for p in (self.out / "history").iterdir()}, history)
+        self.refused(self.stage("list"), "new pass directory")
+        self.ok(self.stage("report"))
+        report = self.read("report.json")
+        self.assertEqual(len(report["turns"]), 18)
+        self.assertIn("Conventions: a step's number counts from nought", (self.out / "report.md").read_text())
+        for t in report["turns"]:
+            self.assertEqual(t["first_source_file"], {"step": 2, "second": 2.5, "path": "peer/superyak_peer/ref.py"})
+            self.assertEqual(t["first_reference_file"], {"step": 2, "second": 2.5, "path": "peer/superyak_peer/ref.py"})
+            self.assertEqual(t["active_seconds"], 0.006)
+        self.assertEqual(report["items_with_ratios"], 6)
+        self.assertEqual(report["teaching_count"], 8)
+        self.assertEqual(len(report["screen"]), 26)
+        for word in ("spread", "significan", "p-value", "confidence"):
+            self.assertNotIn(word, json.dumps(report).lower())
+        before = {name: (self.out / name).read_bytes() for name in ("arms.json", "offers.json", "list.json")}
+        self.ok(self.stage("report"))
+        self.assertEqual({name: (self.out / name).read_bytes() for name in before}, before)
+
+    def test_empty_offer_gets_no_turns_and_is_reported(self):
+        title = next(e["title"] for e in self.entries if e["commit"] == self.three[1])
+        offers = self.to_offers(goals={title: ["added.txt"]})
+        self.assertEqual([i["empty"] for i in offers["items"]], [False, True, False])
+        self.assertIn(b"left nothing", (self.out / "offers" / self.three[1] / "block-route.txt").read_bytes())
+        self.assertEqual(offers["items"][1]["route"]["places"], 0)
+        self.assertIsNone(offers["items"][1]["route"]["first_tracked_path"])
+        self.ok(self.stage("arms"))
+        arms = self.read("arms.json")
+        self.assertEqual(arms["left_out"], [self.three[1]])
+        self.assertEqual(len(arms["turns"]), 6)
+        self.assertNotIn(self.three[1], [t["commit"] for t in arms["turns"]])
+        self.ok(self.stage("report"))
+        self.assertEqual(self.read("report.json")["left_out"], [self.three[1]])
+        self.assertIn("Left out under the arms, for an empty offer: " + self.three[1], (self.out / "report.md").read_text())
+        self.assertIn("none named", (self.out / "report.md").read_text())
+
+    def test_all_empty_stops_before_any_turn(self):
+        self.store_config(all_none=True)
+        self.to_list()
+        self.refused(self.stage("offers"), "every offer is empty")
+        self.assertEqual(self.read("offers.json")["status"], "stopped")
+        self.assertEqual([i["empty"] for i in self.read("offers.json")["items"]], [True, True, True])
+        self.refused(self.stage("arms"), "offers.json does not let")
+        self.assertFalse((self.out / "arms").exists())
+
+    def test_more_than_64_goals_stops_with_its_own_reason_and_nothing_is_cut(self):
+        title = next(e["title"] for e in self.entries if e["commit"] == self.three[0])
+        names = ["peer/superyak_peer/m%02d.py" % n for n in range(65)]
+        self.to_list(goals={title: names})
+        self.refused(self.stage("offers"), "more than 64 goals")
+        offers = self.read("offers.json")
+        self.assertTrue(offers["goal_limit"])
+        self.assertEqual(offers["items"][0]["goals"], 65)
+        self.assertIn("goals.limit", offers["items"][0]["refused"])
+        self.assertEqual(json.loads((self.out / "offers" / self.three[0] / "question.json").read_text())["goals"], names)
+        self.assertFalse((self.out / "offers" / self.three[0] / "offer.json").exists())
+        self.assertEqual(len(offers["items"]), 1)
+
+    def test_another_refusal_of_the_offer_file_is_told_apart(self):
+        # An answer that is not canonical bytes: the room refuses the offer file for another reason.
+        self.store_config(indent=1)
+        self.to_list()
+        self.refused(self.stage("offers"), "the room refused the offer file at")
+        offers = self.read("offers.json")
+        self.assertFalse(offers["goal_limit"])
+        self.assertNotIn("more than 64", offers["reason"])
+        self.assertEqual(offers["items"][0]["refused"], "refused: answer")
+
+    def test_offering_arm_stops_on_changed_kept_files_and_store(self):
+        self.to_offers()
+        item = self.read("offers.json")["items"][0]
+        for name in ("block-route.txt", "offer.json"):
+            path = Path(item["files"][name]["file"])
+            data = path.read_bytes()
+            path.write_bytes(data + b" ")
+            self.refused(self.stage("arms"), "changed after it was kept")
+            self.assertFalse((self.out / "arms").exists())
+            path.write_bytes(data)
+        Path(item["files"]["offer.json"]["file"]).rename(self.tmp / "away")
+        self.refused(self.stage("arms"), "is missing")
+        (self.tmp / "away").rename(item["files"]["offer.json"]["file"])
+        for path in (self.store, self.store_file):
+            data = path.read_bytes()
+            path.write_bytes(data + b"\n")
+            self.refused(self.stage("arms"), "input changed after plan")
+            path.write_bytes(data)
+        self.assertFalse((self.out / "arms").exists())
+
+    def test_store_changed_after_plan_stops_offers(self):
+        self.to_list()
+        self.store_file.write_text("# another store\n")
+        self.refused(self.stage("offers"), "input changed after plan")
+        self.assertFalse((self.out / "offers").exists())
+
+    def arms_stop(self, reason, turns, **config):
+        self.to_offers(**config)
+        self.refused(self.stage("arms"), reason)
+        arms = self.read("arms.json")
+        self.assertEqual(arms["status"], "stopped")
+        self.assertEqual(len(arms["turns"]), turns)
+        return arms
+
+    def test_block_changed_between_turns_stops(self):
+        self.to_list()
+        self.ok(self.stage("offers"))
+        block = self.read("offers.json")["items"][0]["files"]["block-shuffled.txt"]["file"]
+        self.configure(mutate_list=block, mutate_at=10)
+        self.refused(self.stage("arms"), "changed after it was kept")
+        self.assertEqual(len(self.read("arms.json")["turns"]), 1)
+        self.assertTrue((self.out / "turns" / ("010-arms-%s" % self.three[0]) / "turns.json").exists())
+
+    def test_record_block_differs_stops(self):
+        self.to_list()
+        self.ok(self.stage("offers"))
+        offering = [r["order"] for r in self.read("plan.json")["order"] if r["kind"] == "arms" and r["arm"] != "nothing"]
+        self.configure(made={str(offering[0]): {"block_sha256": "0" * 64}})
+        self.refused(self.stage("arms"), "hash or length is not the one kept")
+        self.assertEqual(len(self.read("arms.json")["turns"]), offering[0] - 9)
+
+    def test_record_block_length_differs_stops(self):
+        self.to_list()
+        self.ok(self.stage("offers"))
+        offering = [r["order"] for r in self.read("plan.json")["order"] if r["kind"] == "arms" and r["arm"] != "nothing"]
+        self.configure(made={str(offering[1]): {"block_bytes": 1}})
+        self.refused(self.stage("arms"), "hash or length is not the one kept")
+        self.assertEqual(len(self.read("arms.json")["turns"]), offering[1] - 9)
+
+    def test_nothing_record_with_a_block_stops(self):
+        self.to_list()
+        self.ok(self.stage("offers"))
+        self.configure(made_under_nothing=True)
+        arms = self.read("plan.json")["order"][9:]
+        first_nothing = next(n for n, r in enumerate(arms) if r["arm"] == "nothing")
+        self.refused(self.stage("arms"), "under nothing holds a block")
+        self.assertEqual(len(self.read("arms.json")["turns"]), first_nothing + 1)
+
+    def test_room_at_another_base_stops(self):
+        self.arms_stop("another base", 2, room_bases={"11": "0" * 40})
+
+    def test_lost_turn_stops(self):
+        self.arms_stop("no verdict", 3, lost_at=12)
+
+    def test_STOP_between_turns(self):
+        arms = self.arms_stop("STOP before turn 12", 2, stop_at=11)
+        self.assertTrue(all("passed" in t for t in arms["turns"]))
+
+    def test_failed_turn_does_not_stop_and_is_reported_with_seconds(self):
+        self.to_offers(failed_at=13)
+        self.ok(self.stage("arms"))
+        arms = self.read("arms.json")
+        failed = next(t for t in arms["turns"] if t["order"] == 13)
+        self.assertFalse(failed["passed"])
+        self.assertEqual(failed["clock_exit"], 1)
+        self.assertEqual(len(arms["turns"]), 9)
+        self.ok(self.stage("report"))
+        report = self.read("report.json")
+        row = next(t for t in report["turns"] if t["order"] == 13)
+        self.assertFalse(row["passed"])
+        self.assertEqual((row["worker_seconds"], row["active_seconds"]), (0.002, 0.006))
+        self.assertEqual(report["items_with_ratios"], 2)
+        ratios = {i["commit"]: i["ratios"] for i in report["items"]}
+        self.assertIsNone(ratios[failed["commit"]])
+        self.assertIn("not all three passed", (self.out / "report.md").read_text())
+        self.assertIn("Items with ratios: 2", (self.out / "report.md").read_text())
+
+    def test_report_blocks_apart_and_a_walk_naming_no_source_file(self):
+        quiet = [{"seq": 0, "named": [["README.md", "5" * 40]], "seen_ms": 900}]
+        self.to_offers(walks={"10": quiet}, states={"docs/notes.md": "gone", "README.md": "changed"})
+        self.ok(self.stage("arms"))
+        self.ok(self.stage("report"))
+        report = self.read("report.json")
+        row = next(t for t in report["turns"] if t["order"] == 10)
+        self.assertIsNone(row["first_source_file"])
+        self.assertIsNone(row["first_reference_file"])
+        self.assertEqual(row["steps"], 1)
+        block = report["blocks"][0]
+        self.assertEqual(block["route"]["first_tracked_path"], "peer/superyak_peer/start.py")
+        self.assertEqual(block["route"]["first_source_file"], "peer/superyak_peer/start.py")
+        self.assertEqual((block["route"]["gone"], block["route"]["changed"]), (1, 1))
+        shuffled = (self.out / "offers" / self.three[0] / "block-shuffled.txt").read_text().splitlines()
+        listed = [line[2:].split(" (")[0] for line in shuffled if line.startswith("- ")]
+        self.assertEqual(block["shuffled"]["first_tracked_path"], next(p for p in listed if p != "docs/notes.md"))
+        self.assertEqual(block["shuffled"]["first_source_file"], next(p for p in listed if p.startswith("peer/superyak_peer/")))
+        self.assertEqual(len(report["turns"]), 9)
+        self.assertIn("none named", (self.out / "report.md").read_text())
+
+    def test_refusals_and_second_runs(self):
+        self.ok(self.plan())
+        self.refused(self.stage("offers"), "list.json is missing")
+        self.refused(self.stage("arms"), "list.json is missing")
+        self.refused(self.stage("report"), "arms.json is missing")
+        self.assertEqual(self.screen(), 0)
+        self.ok(self.stage("history"))
+        self.ok(self.stage("list"))
+        self.refused(self.stage("arms"), "offers.json is missing")
+        self.ok(self.stage("offers"))
+        offers = (self.out / "offers.json").read_bytes()
+        self.refused(self.stage("offers"), "new pass directory")
+        self.assertEqual((self.out / "offers.json").read_bytes(), offers)
+        self.ok(self.stage("arms"))
+        arms = (self.out / "arms.json").read_bytes()
+        self.refused(self.stage("arms"), "new pass directory")
+        self.assertEqual((self.out / "arms.json").read_bytes(), arms)
+
+    def test_list_files_changed_refuse_offers_and_arms(self):
+        self.to_list()
+        for name in ("teach-plan.json", "room-plan.json", "history/history.json"):
+            path = self.out / name
+            data = path.read_bytes()
+            path.write_bytes(data + b" ")
+            self.refused(self.stage("offers"), "changed after the list")
+            path.write_bytes(data)
+        self.assertFalse((self.out / "offers").exists())
+        self.ok(self.stage("offers"))
+        walk = Path(self.read("list.json")["walks"][0]["file"])
+        walk.write_bytes(walk.read_bytes() + b" ")
+        self.refused(self.stage("arms"), "changed after the list")
+        self.assertFalse((self.out / "arms").exists())
+
+    def test_list_that_stopped_refuses_offers(self):
+        self.configure(unverified=[0, 1, 2, 3, 4])
+        self.ok(self.plan())
+        self.assertEqual(self.screen(), 0)
+        self.ok(self.stage("history"))
+        self.refused(self.stage("list"), "fewer than four")
+        self.refused(self.stage("offers"), "list.json does not let")
+        self.assertFalse((self.out / "offers").exists())
+
+    def run_in_process(self, failures=()):
+        driver = module("pass_driver")
+
+        def reference(out, items, commit):
+            out.mkdir()
+            outcome = "check failed" if commit in failures else "passed"
+            driver.pilot.write_json(out / "reference.json", {"outcome": outcome, "verified": outcome == "passed"})
+            return 0 if outcome == "passed" else 1
+
+        argv = ["run", str(self.out), str(self.items), "script:" + str(self.worker), "--three", *self.three,
+            "--history", *self.history_commits, "--seed", "20261117"]
+        said = io.StringIO()
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(driver.pilot, "reference", side_effect=reference):
+            with contextlib.redirect_stderr(said):
+                code = driver.main(argv)
+        self.said = said.getvalue()
+        return code
+
+    def test_run_all_stages_in_order(self):
+        self.assertEqual(self.run_in_process(), 0)
+        for name in ("plan.json", "screen.json", "history.json", "list.json", "offers.json", "arms.json", "report.json"):
+            self.assertTrue((self.out / name).exists(), name)
+        self.assertEqual(self.read("arms.json")["status"], "complete")
+        self.assertEqual(len(self.read("report.json")["turns"]), 9)
+
+    def test_run_stops_at_the_screen_and_begins_no_later_stage(self):
+        self.assertEqual(self.run_in_process(failures=self.three[:1]), 1)
+        self.assertIn("run stopped at screen: a three-item reference check failed", self.said)
+        self.assertEqual(self.read("screen.json")["status"], "stopped")
+        for name in ("turns", "history.json", "list.json", "offers", "offers.json", "arms", "arms.json", "report.json"):
+            self.assertFalse((self.out / name).exists(), name)
 
 
 class ArmOrder(unittest.TestCase):
