@@ -1,6 +1,6 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 9. A change to the design of stage 2
+Serenity, 2026-11-16, revision 10. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
@@ -101,6 +101,15 @@ the order asked, the route to it from where every turn starts, or the plain answ
 - **A detour can be looked at.** Where a route is cheaper than the way a turn went to the same file, the
   answer names that turn, how far along its walk the file first came, the way it went and the way offered,
   each with its cost and its number of roads. A way that is not cheaper is not called a detour.
+- **At most 16 detours are carried, and the rest are counted** (revision 10; the store's version `"3"`).
+  For each file the answer keeps the 16 cheapest of the dearer ways and says, in `detours_more`, how many
+  it left out. The room reads an answer of store `"3"` and of no other: 16 is a constant of that version,
+  so an answer that names another is refused and is to be made again. Of a route the room refuses more
+  than 16 detours; a `detours_more` that is missing or is not a whole number; one that is more than 0
+  beside fewer than 16 detours; and a sum of the two that is more than the number of turns let teach,
+  since a turn goes one way to a file. The number of turns that went a dearer way, which is all the block
+  says of them, is that sum. Which 16 are the cheapest is the store's to hold, by its own check: the room
+  has not the walks.
 - **Three kinds of no route, told apart:** no turn that was let teach reached the file; no turn named it
   at all, as with a file a turn added; the kernel refused.
 - **A refusal is said.** If the kernel refuses a cell, there is no route for that file and the reason is
@@ -705,13 +714,24 @@ turn is offered anything:
   room's own.
 - **The clock's listing of tracked files does not turn git's replacement objects off,** where the export's
   does. No worker can make one in an item's repository.
-- **An answer's size.** The bound is 1 MiB. An answer carries each detour's whole way, so it grows with the
-  history. It is to be measured on the scored history before the scored run.
+- **An answer's size.** The bound is 1 MiB. An answer carried each detour's whole way, so it grew with the
+  history. Settled in part by revision 10: the store's version `"3"` keeps at most 16 detours for a file.
+  What still grows is the blobs named along a route: the store's reader measured answers of 549, 1,368
+  and 4,810 bytes for 1, 20 and 100 blobs seen at one file. So the bound stays, an answer over it is
+  refused as now, and the size is still to be measured on the history of whichever experiment is run.
 - **A walk line's limit:** whether the line's end counts toward the 1 MiB is to be made the same on both
   sides.
 
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
+
+**Changed in revision 10: the store's version `"3"`.** Asked of Tardis by the lead after the second pilot,
+because the block uses only how many turns went a dearer way and an answer's size grew with every one of
+them. The store's spec (its revision 7, decision 11) keeps 16 and counts the rest; a fresh reader of the
+other family approved that with named changes. By the lead's reading of them, not the reader's word, none
+changes an answer's bytes for the fixture; if one does, the room's copy is replaced with it. What the
+room holds of the change is in section 2. The fixture the room's tests read is the store's own at that
+revision: its answer's SHA-256 begins bb7e7d0a2d86a2d7, and its walks, list and question are unchanged.
 
 **Changed between the two reads, and confirmed in the second:**
 
