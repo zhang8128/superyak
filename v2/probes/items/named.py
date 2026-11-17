@@ -5,8 +5,12 @@
 
 It reads the lines the commit adds against the base and says, for each of three groups of words, where a word of it
 is named: the test runner (and how the run was started), its report, and the ending of the process. The list is
-fixed here, with a version. A word is found wherever it occurs in an added line, also inside a longer word, with its
-case kept as written, but for junit, found in any case.
+fixed here, with a version. A word is found wherever its bytes occur in an added line as git prints it, also inside
+a longer word, with its case kept as written, but for junit, found in any case.
+
+What is matched is bytes, and nothing is read as Python would read it. A word spelt another way is not found: built
+when the program runs; written with an escape; or in a file that declares another encoding for its source (in a
+file declared as UTF-7, "+AHAAeQB0AGUAcwB0-" is the name pytest, and is not found).
 
 A change that names none of these is not thereby shown to have left the test run alone.
 
@@ -23,9 +27,13 @@ attributes file or a replaced object there, and none of them is read (an attribu
 core.bigFileThreshold, would make every file binary, and so unread). No attributes file of a work tree applies
 either. No renames are followed, and there is no external diff, text conversion or context.
 
-The bound: git's diff of the source directory is read up to MAX_DIFF_BYTES, 64 MiB. A change whose diff there is
-longer is not read, and the program ends with 1 and says so. A line of a million characters is read whole, and its
-test asks that the program end within 20 seconds.
+The bounds. git's diff of the source directory is read up to MAX_DIFF_BYTES, 64 MiB: a change whose diff there is
+longer is not read, and the program ends with 1 and says so. A file of more than MAX_FILE_BYTES, 16 MiB, on either
+side is listed with the binary files and not read. All of git's runs together have MAX_SECONDS, 120: past that, git
+is ended, and the program ends with 1 and says so. That is for a repository whose files keep git waiting, which a
+worker that writes in it can arrange (a pipe where an object is looked for). git stays in this program's own process
+group, so that whoever ends the group ends git with it. A line of a million characters is read whole, and its test
+asks that the program end within 20 seconds.
 """
 import argparse
 import importlib.util
@@ -36,6 +44,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 _spec = importlib.util.spec_from_file_location("yak_named_check", os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "check.py"))
@@ -56,6 +66,10 @@ ANY_CASE = {"junit"}
 MAX_DIFF_BYTES = 67108864
 # The most bytes of the list of changed files that are read.
 MAX_LIST_BYTES = 16777216
+# A file of more bytes than this is not read: git is told to treat it as it treats a binary one. 16 MiB.
+MAX_FILE_BYTES = 16777216
+# How long all of git's runs together may take.
+MAX_SECONDS = 120
 # The check's own files, which a turn's commit may change outside the source directory.
 OWN = (check.CHECK, check.ITEM)
 DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"]
@@ -66,6 +80,10 @@ NOTE = "A change that names none of these is not thereby shown to have left the 
 
 class Fail(Exception):
     pass
+
+
+class Late(Fail):
+    """git was ended because the time for its runs was up."""
 
 
 class Git:
@@ -91,19 +109,37 @@ class Git:
             out.write(os.path.join(scratch, "borrowed") + "\n")
         self.env = {"PATH": os.environ.get("PATH", ""), "GIT_DIR": own, "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_ATTR_NOSYSTEM": "1"}
+        self.until = time.monotonic() + MAX_SECONDS
 
     def __call__(self, args, limit):
-        """git's output, or Fail if it is longer than `limit` bytes or git fails."""
-        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + args, cwd=self.cwd, env=self.env,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        assert proc.stdout is not None
-        with proc.stdout:
-            data = proc.stdout.read(limit + 1)
-        if len(data) > limit:
+        """git's output, or Fail if it is longer than `limit` bytes, if git fails, or if the time for all of git's
+        runs is up. As it is run here git starts no program of its own, so ending git ends all of it."""
+        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + ["-c", "core.bigFileThreshold=%d" % MAX_FILE_BYTES] + args,
+                                cwd=self.cwd, env=self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+        late = []
+
+        def end():
+            late.append(True)
             proc.kill()
-            proc.wait()
+
+        clock = threading.Timer(max(0.0, self.until - time.monotonic()), end)
+        clock.start()
+        try:
+            assert proc.stdout is not None
+            with proc.stdout:
+                data = proc.stdout.read(limit + 1)
+            if len(data) > limit:
+                end()
+            code = proc.wait()
+        finally:
+            clock.cancel()
+            clock.join()
+        if len(data) > limit:
             raise Fail("git's output is longer than %d bytes, so it is not read" % limit)
-        if proc.wait() != 0:
+        if late:
+            raise Late("git did not end within %d seconds, so it was ended" % MAX_SECONDS)
+        if code != 0:
             raise Fail("git failed (%s)" % args[0])
         return data
 
@@ -112,6 +148,8 @@ class Git:
         commit, so none is taken for one of its options."""
         try:
             out = self(["rev-parse", "--verify", "--quiet", given + "^{commit}"], 1024)
+        except Late:
+            raise
         except Fail:
             raise Fail("the %s %s is not a commit in the repository" % (name, json.dumps(given[:80]))) from None
         return out.decode("ascii").strip()
