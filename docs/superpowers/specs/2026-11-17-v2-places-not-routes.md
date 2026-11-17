@@ -1,6 +1,6 @@
 # v2: places, not routes (store "4")
 
-Tardis, 2026-11-17, draft 3, for a fresh reader once the rehearsal (begun 19:42 UTC on 11-17) has reported. A change to the store's side of
+Tardis, 2026-11-17, draft 4, for a fresh reader. The rehearsal ran on 11-17 (19:42 to 20:25 UTC), clean. A change to the store's side of
 `2026-11-16-v2-walks-into-routes.md` ("the store's spec", revision 7, store `"3"`, approved at 6c861121). The room's
 half is Serenity's, in a revision of `2026-11-16-v2-a-route-offered.md`. Each side gets its own read, and both land in
 step, as store "3" did. The rehearsal runs store "3" at 45be5dd0, frozen by hash, and nothing here touches it.
@@ -40,6 +40,18 @@ the way between them adds nothing.
   job a round earlier, and cannot say whether area helps fresh work; and an item has no brief, only its title and its
   tests.
 
+- **Boilerplate leads a plain list** (Serenity, after the rehearsal, all hands ae8df79c): there the route was start,
+  `README.md` (walked by 8), `.yak-check/check.py`, `imprints.py`, and every turn reads those at its start. Measured on
+  the 49 (draft 4, the same script): a path named by more than half the history is "common", a median of 2 files with
+  every earlier worker and 7 with the area. With the common files left out, recall of the whole target falls (the
+  area's @5 0.284 to 0.141), since workers do open them; recall of what a worker read beyond the common files, which
+  is what an offer can add, rises:
+
+  | History | @5 places / without common | @10 | @16 |
+  | --- | --- | --- | --- |
+  | every earlier worker (48) | 0.119 / 0.159 | 0.198 / 0.232 | 0.284 / 0.307 |
+  | the same area (39 with a target beyond them) | 0.094 / 0.203 | 0.230 / 0.294 | 0.356 / 0.412 |
+
 **What this does not show.** "No better", not "worse": 4 against 10 is no test at this n. The 49 are the team's own
 logs, not in the repository, so a reader can check the arithmetic and not the source. A walk there is first readings
 only, so a road is "read next for the first time". One repository; readers and builders, not item turns. Nothing here
@@ -68,8 +80,11 @@ says a list of places saves a reader time: it says which files a later reader we
 
 Everything in store "3"'s answer stays, byte for byte, but `store` is `"4"`. Beside `answers`, a top-level `places`:
 an array of `{path, turns}`, where `turns` is the number of distinct taught turns whose walk named `path` at any step.
-Counted over the taught turns the question's `among` names, or over every taught turn when it is absent. It is
-sorted by `turns` falling, then `path` in byte order. It leaves out every goal the question asks, and holds at
+Counted over the taught turns the question's `among` names, or over every taught turn when it is absent. A path named
+by more than half the counted turns is common: it is left out of `places` and listed in `common`, the same objects in
+the same order, at most 16, so the room can still say that every turn reads `README.md` without spending the offer on
+it. Paths under `.yak-check/` are the room's check, not the repository's, and are left out of both. `places` is sorted
+by `turns` falling, then `path` in byte order. It leaves out every goal the question asks, and holds at
 most `PLACES_KEPT` = 16, a constant of store "4". Beside it, `places_more`: how many other named paths there are, a
 whole number, always present, 0 when none was left out. When `N` is 0, `places` is `[]` and `places_more` is 0.
 
@@ -98,6 +113,7 @@ is. Their inputs are not in the repository.
 | Places are counted by turns | Three taught turns, one naming `a` twice in different steps: `a` has `turns` 1 from it | One that counts steps or visits |
 | Ranked and cut | Twenty named paths at distinct counts and a tie at the edge: 16 kept by count then bytes, `places_more` 4 | One that keeps by name, the wrong side of a tie, or not 16 |
 | Goals left out | A goal that is also the most named path is not in `places` | One that offers a turn its own goal |
+| Common apart | Of four counted turns, a path named by three is in `common`, one named by two (half, not more) is in `places`; `.yak-check/check.py` is in neither | One that offers boilerplate first, counts half as more, or offers the room's check |
 | Only taught turns | An untaught walk's paths count nothing | One that counts what the measure doesn't teach |
 | Among | Two areas of one store give their own counts; `among` absent counts all; an empty list, an unknown, untaught, repeated or unsorted attempt is refused; the answer echoes `among` | One that answers an unknown attempt as fewer turns, or hides which turns it counted |
 | Checked | A tampered walk fails the check, as in store "3" | One that serves a count its walks don't make |
@@ -109,3 +125,5 @@ is. Their inputs are not in the repository.
 2. **Counted by distinct taught turns,** the measure the comparison used, and when asked, over the turns `among`
    names, so the area is the room's choice and one store serves every area.
 3. **16 kept and the rest counted,** as detours are, so the answer's size doesn't grow with the history.
+4. **Common files apart, not dropped.** More than half, as the room's title rule leaves out words; measured to add what
+   an offer is for, and kept in the answer so nothing a turn will read anyway is hidden from the room.

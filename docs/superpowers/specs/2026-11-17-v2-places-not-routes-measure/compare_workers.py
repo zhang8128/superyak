@@ -76,12 +76,23 @@ for w in workers:
                 if p not in brief and p not in route_first:
                     route_first.append(p)
         route = route_first + [p for p in places if p not in route_first]
+        # Serenity's point 2 (all hands ae8df79c): leave out what over half the history named, as the room's title rule
+        # does for words. Scored against the same target, and against the target without those files, which a reader
+        # opens whatever it is offered.
+        common = {p for p in count if count[p] * 2 > len(history)}
+        uncommon = [p for p in places if p not in common]
+        rare_target = target - common
         row = {"worker": w["worker"], "order": w["order"], "mode": w["mode"], "history": history_name,
                "earlier": len(history), "target": len(target), "route_len": len(route_first),
                "brief_routed": sum(1 for a in answer["answers"] if a.get("route"))}
-        for name, seq in (("route", route), ("places", places)):
+        for name, seq in (("route", route), ("places", places), ("uncommon", uncommon)):
             for k in KS:
                 row[f"{name}@{k}"] = len(set(seq[:k]) & target) / len(target)
+        row["common"] = len(common)
+        row["rare_target"] = len(rare_target)
+        for name, seq in (("places", places), ("uncommon", uncommon)):
+            for k in KS:
+                row[f"{name}-rare@{k}"] = len(set(seq[:k]) & rare_target) / len(rare_target) if rare_target else None
         rows.append(row)
 
 (out / "rows.json").write_text(json.dumps(rows, indent=1))
@@ -101,3 +112,12 @@ for history_name in ("all earlier", "same area"):
         d = [x - y for x, y in zip(a, b)]
         print(f"  @{k:2d}: route mean {mean(a):.3f} | places mean {mean(b):.3f} | route - places mean {mean(d):+.3f}; "
               f"route better {sum(x > 0 for x in d)}, worse {sum(x < 0 for x in d)}, same {sum(x == 0 for x in d)}")
+    rr = [r for r in rs if r["rare_target"]]
+    print(f"  over half the history named: median {med([r['common'] for r in rs])} files; workers with a target left "
+          f"beyond them: {len(rr)}")
+    for k in KS:
+        u = [r[f"uncommon@{k}"] for r in rs]
+        b2 = [r[f"places-rare@{k}"] for r in rr]
+        u2 = [r[f"uncommon-rare@{k}"] for r in rr]
+        print(f"  @{k:2d}: uncommon, whole target {mean(u):.3f} | beyond the common files: places {mean(b2):.3f}, "
+              f"uncommon {mean(u2):.3f}")

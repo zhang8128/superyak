@@ -13,7 +13,18 @@
   "route@16": 0.3333333333333333,
   "places@5": 0.0,
   "places@10": 0.3333333333333333,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 10,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w18",
@@ -29,7 +40,18 @@
   "route@16": 0.3333333333333333,
   "places@5": 0.0,
   "places@10": 0.3333333333333333,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 10,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w19",
@@ -45,7 +67,18 @@
   "route@16": 0.4,
   "places@5": 0.1,
   "places@10": 0.3,
-  "places@16": 0.4
+  "places@16": 0.4,
+  "uncommon@5": 0.1,
+  "uncommon@10": 0.4,
+  "uncommon@16": 0.4,
+  "common": 2,
+  "rare_target": 10,
+  "places-rare@5": 0.1,
+  "places-rare@10": 0.3,
+  "places-rare@16": 0.4,
+  "uncommon-rare@5": 0.1,
+  "uncommon-rare@10": 0.4,
+  "uncommon-rare@16": 0.4
  },
  {
   "worker": "w20",
@@ -61,7 +94,18 @@
   "route@16": 0.3333333333333333,
   "places@5": 0.0,
   "places@10": 0.3333333333333333,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.3333333333333333,
+  "common": 6,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.3333333333333333,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.3333333333333333
  },
  {
   "worker": "w20",
@@ -77,7 +121,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 14,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w21",
@@ -93,7 +148,18 @@
   "route@16": 0.2608695652173913,
   "places@5": 0.08695652173913043,
   "places@10": 0.21739130434782608,
-  "places@16": 0.2608695652173913
+  "places@16": 0.2608695652173913,
+  "uncommon@5": 0.08695652173913043,
+  "uncommon@10": 0.21739130434782608,
+  "uncommon@16": 0.2608695652173913,
+  "common": 1,
+  "rare_target": 23,
+  "places-rare@5": 0.08695652173913043,
+  "places-rare@10": 0.21739130434782608,
+  "places-rare@16": 0.2608695652173913,
+  "uncommon-rare@5": 0.08695652173913043,
+  "uncommon-rare@10": 0.21739130434782608,
+  "uncommon-rare@16": 0.2608695652173913
  },
  {
   "worker": "w21",
@@ -109,7 +175,18 @@
   "route@16": 0.13043478260869565,
   "places@5": 0.13043478260869565,
   "places@10": 0.13043478260869565,
-  "places@16": 0.13043478260869565
+  "places@16": 0.13043478260869565,
+  "uncommon@5": 0.043478260869565216,
+  "uncommon@10": 0.043478260869565216,
+  "uncommon@16": 0.043478260869565216,
+  "common": 5,
+  "rare_target": 21,
+  "places-rare@5": 0.047619047619047616,
+  "places-rare@10": 0.047619047619047616,
+  "places-rare@16": 0.047619047619047616,
+  "uncommon-rare@5": 0.047619047619047616,
+  "uncommon-rare@10": 0.047619047619047616,
+  "uncommon-rare@16": 0.047619047619047616
  },
  {
   "worker": "w23",
@@ -125,7 +202,18 @@
   "route@16": 0.5,
   "places@5": 0.35714285714285715,
   "places@10": 0.35714285714285715,
-  "places@16": 0.5
+  "places@16": 0.5,
+  "uncommon@5": 0.14285714285714285,
+  "uncommon@10": 0.14285714285714285,
+  "uncommon@16": 0.14285714285714285,
+  "common": 8,
+  "rare_target": 9,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.2222222222222222,
+  "uncommon-rare@5": 0.2222222222222222,
+  "uncommon-rare@10": 0.2222222222222222,
+  "uncommon-rare@16": 0.2222222222222222
  },
  {
   "worker": "w23",
@@ -141,7 +229,18 @@
   "route@16": 0.42857142857142855,
   "places@5": 0.2857142857142857,
   "places@10": 0.42857142857142855,
-  "places@16": 0.42857142857142855
+  "places@16": 0.42857142857142855,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 8,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w26",
@@ -157,7 +256,18 @@
   "route@16": 0.15384615384615385,
   "places@5": 0.07692307692307693,
   "places@10": 0.07692307692307693,
-  "places@16": 0.15384615384615385
+  "places@16": 0.15384615384615385,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.07692307692307693,
+  "uncommon@16": 0.07692307692307693,
+  "common": 6,
+  "rare_target": 12,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.08333333333333333,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.08333333333333333,
+  "uncommon-rare@16": 0.08333333333333333
  },
  {
   "worker": "w26",
@@ -173,7 +283,18 @@
   "route@16": 0.15384615384615385,
   "places@5": 0.07692307692307693,
   "places@10": 0.15384615384615385,
-  "places@16": 0.15384615384615385
+  "places@16": 0.15384615384615385,
+  "uncommon@5": 0.07692307692307693,
+  "uncommon@10": 0.07692307692307693,
+  "uncommon@16": 0.3076923076923077,
+  "common": 7,
+  "rare_target": 12,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.08333333333333333,
+  "places-rare@16": 0.08333333333333333,
+  "uncommon-rare@5": 0.08333333333333333,
+  "uncommon-rare@10": 0.08333333333333333,
+  "uncommon-rare@16": 0.3333333333333333
  },
  {
   "worker": "w29",
@@ -189,7 +310,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.1111111111111111,
   "places@10": 0.3333333333333333,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.2222222222222222,
+  "uncommon@10": 0.4444444444444444,
+  "uncommon@16": 0.7777777777777778,
+  "common": 6,
+  "rare_target": 9,
+  "places-rare@5": 0.1111111111111111,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.2222222222222222,
+  "uncommon-rare@10": 0.4444444444444444,
+  "uncommon-rare@16": 0.7777777777777778
  },
  {
   "worker": "w29",
@@ -205,7 +337,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.1111111111111111,
   "places@10": 0.3333333333333333,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.2222222222222222,
+  "uncommon@10": 0.4444444444444444,
+  "uncommon@16": 0.7777777777777778,
+  "common": 6,
+  "rare_target": 9,
+  "places-rare@5": 0.1111111111111111,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.2222222222222222,
+  "uncommon-rare@10": 0.4444444444444444,
+  "uncommon-rare@16": 0.7777777777777778
  },
  {
   "worker": "w30",
@@ -221,7 +364,18 @@
   "route@16": 0.5714285714285714,
   "places@5": 0.2857142857142857,
   "places@10": 0.2857142857142857,
-  "places@16": 0.5714285714285714
+  "places@16": 0.5714285714285714,
+  "uncommon@5": 0.14285714285714285,
+  "uncommon@10": 0.14285714285714285,
+  "uncommon@16": 0.42857142857142855,
+  "common": 4,
+  "rare_target": 6,
+  "places-rare@5": 0.16666666666666666,
+  "places-rare@10": 0.16666666666666666,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.16666666666666666,
+  "uncommon-rare@10": 0.16666666666666666,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w30",
@@ -237,7 +391,18 @@
   "route@16": 0.42857142857142855,
   "places@5": 0.2857142857142857,
   "places@10": 0.2857142857142857,
-  "places@16": 0.42857142857142855
+  "places@16": 0.42857142857142855,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.2857142857142857,
+  "uncommon@16": 0.42857142857142855,
+  "common": 10,
+  "rare_target": 5,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.2,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.4,
+  "uncommon-rare@16": 0.6
  },
  {
   "worker": "w31",
@@ -253,7 +418,18 @@
   "route@16": 0.7692307692307693,
   "places@5": 0.3076923076923077,
   "places@10": 0.5384615384615384,
-  "places@16": 0.7692307692307693
+  "places@16": 0.7692307692307693,
+  "uncommon@5": 0.23076923076923078,
+  "uncommon@10": 0.46153846153846156,
+  "uncommon@16": 0.5384615384615384,
+  "common": 5,
+  "rare_target": 10,
+  "places-rare@5": 0.1,
+  "places-rare@10": 0.4,
+  "places-rare@16": 0.7,
+  "uncommon-rare@5": 0.3,
+  "uncommon-rare@10": 0.6,
+  "uncommon-rare@16": 0.7
  },
  {
   "worker": "w31",
@@ -269,7 +445,18 @@
   "route@16": 0.6923076923076923,
   "places@5": 0.3076923076923077,
   "places@10": 0.5384615384615384,
-  "places@16": 0.6923076923076923
+  "places@16": 0.6923076923076923,
+  "uncommon@5": 0.15384615384615385,
+  "uncommon@10": 0.3076923076923077,
+  "uncommon@16": 0.38461538461538464,
+  "common": 10,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.25,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.25,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.625
  },
  {
   "worker": "w32",
@@ -285,7 +472,18 @@
   "route@16": 0.8333333333333334,
   "places@5": 0.16666666666666666,
   "places@10": 0.5,
-  "places@16": 0.8333333333333334
+  "places@16": 0.8333333333333334,
+  "uncommon@5": 0.16666666666666666,
+  "uncommon@10": 0.5,
+  "uncommon@16": 0.8333333333333334,
+  "common": 5,
+  "rare_target": 6,
+  "places-rare@5": 0.16666666666666666,
+  "places-rare@10": 0.5,
+  "places-rare@16": 0.8333333333333334,
+  "uncommon-rare@5": 0.16666666666666666,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.8333333333333334
  },
  {
   "worker": "w32",
@@ -301,7 +499,18 @@
   "route@16": 0.8333333333333334,
   "places@5": 0.16666666666666666,
   "places@10": 0.5,
-  "places@16": 0.8333333333333334
+  "places@16": 0.8333333333333334,
+  "uncommon@5": 0.16666666666666666,
+  "uncommon@10": 0.5,
+  "uncommon@16": 0.8333333333333334,
+  "common": 5,
+  "rare_target": 6,
+  "places-rare@5": 0.16666666666666666,
+  "places-rare@10": 0.5,
+  "places-rare@16": 0.8333333333333334,
+  "uncommon-rare@5": 0.16666666666666666,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.8333333333333334
  },
  {
   "worker": "w33",
@@ -317,7 +526,18 @@
   "route@16": 0.4166666666666667,
   "places@5": 0.20833333333333334,
   "places@10": 0.2916666666666667,
-  "places@16": 0.4166666666666667
+  "places@16": 0.4166666666666667,
+  "uncommon@5": 0.08333333333333333,
+  "uncommon@10": 0.16666666666666666,
+  "uncommon@16": 0.2916666666666667,
+  "common": 6,
+  "rare_target": 19,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.10526315789473684,
+  "places-rare@16": 0.2631578947368421,
+  "uncommon-rare@5": 0.10526315789473684,
+  "uncommon-rare@10": 0.21052631578947367,
+  "uncommon-rare@16": 0.3684210526315789
  },
  {
   "worker": "w33",
@@ -333,7 +553,18 @@
   "route@16": 0.4583333333333333,
   "places@5": 0.16666666666666666,
   "places@10": 0.2916666666666667,
-  "places@16": 0.4583333333333333
+  "places@16": 0.4583333333333333,
+  "uncommon@5": 0.08333333333333333,
+  "uncommon@10": 0.25,
+  "uncommon@16": 0.2916666666666667,
+  "common": 9,
+  "rare_target": 18,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.05555555555555555,
+  "places-rare@16": 0.2777777777777778,
+  "uncommon-rare@5": 0.1111111111111111,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.3888888888888889
  },
  {
   "worker": "w34",
@@ -349,7 +580,18 @@
   "route@16": 0.07142857142857142,
   "places@5": 0.07142857142857142,
   "places@10": 0.07142857142857142,
-  "places@16": 0.07142857142857142
+  "places@16": 0.07142857142857142,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 6,
+  "rare_target": 26,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w35",
@@ -365,7 +607,18 @@
   "route@16": 0.5454545454545454,
   "places@5": 0.2727272727272727,
   "places@10": 0.2727272727272727,
-  "places@16": 0.45454545454545453
+  "places@16": 0.45454545454545453,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.18181818181818182,
+  "uncommon@16": 0.18181818181818182,
+  "common": 6,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.25,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.25,
+  "uncommon-rare@16": 0.25
  },
  {
   "worker": "w35",
@@ -381,7 +634,18 @@
   "route@16": 0.7272727272727273,
   "places@5": 0.36363636363636365,
   "places@10": 0.45454545454545453,
-  "places@16": 0.45454545454545453
+  "places@16": 0.45454545454545453,
+  "uncommon@5": 0.09090909090909091,
+  "uncommon@10": 0.09090909090909091,
+  "uncommon@16": 0.09090909090909091,
+  "common": 7,
+  "rare_target": 7,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.14285714285714285,
+  "places-rare@16": 0.14285714285714285,
+  "uncommon-rare@5": 0.14285714285714285,
+  "uncommon-rare@10": 0.14285714285714285,
+  "uncommon-rare@16": 0.14285714285714285
  },
  {
   "worker": "w36",
@@ -397,7 +661,18 @@
   "route@16": 0.2777777777777778,
   "places@5": 0.1111111111111111,
   "places@10": 0.16666666666666666,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.05555555555555555,
+  "uncommon@10": 0.2222222222222222,
+  "uncommon@16": 0.3333333333333333,
+  "common": 5,
+  "rare_target": 16,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0625,
+  "places-rare@16": 0.25,
+  "uncommon-rare@5": 0.0625,
+  "uncommon-rare@10": 0.25,
+  "uncommon-rare@16": 0.375
  },
  {
   "worker": "w36",
@@ -413,7 +688,18 @@
   "route@16": 0.2777777777777778,
   "places@5": 0.1111111111111111,
   "places@10": 0.2777777777777778,
-  "places@16": 0.2777777777777778
+  "places@16": 0.2777777777777778,
+  "uncommon@5": 0.1111111111111111,
+  "uncommon@10": 0.1111111111111111,
+  "uncommon@16": 0.1111111111111111,
+  "common": 9,
+  "rare_target": 15,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.13333333333333333,
+  "places-rare@16": 0.13333333333333333,
+  "uncommon-rare@5": 0.13333333333333333,
+  "uncommon-rare@10": 0.13333333333333333,
+  "uncommon-rare@16": 0.13333333333333333
  },
  {
   "worker": "w38",
@@ -429,7 +715,18 @@
   "route@16": 0.2857142857142857,
   "places@5": 0.14285714285714285,
   "places@10": 0.2857142857142857,
-  "places@16": 0.42857142857142855
+  "places@16": 0.42857142857142855,
+  "uncommon@5": 0.14285714285714285,
+  "uncommon@10": 0.14285714285714285,
+  "uncommon@16": 0.5714285714285714,
+  "common": 5,
+  "rare_target": 6,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.16666666666666666,
+  "places-rare@16": 0.3333333333333333,
+  "uncommon-rare@5": 0.16666666666666666,
+  "uncommon-rare@10": 0.16666666666666666,
+  "uncommon-rare@16": 0.6666666666666666
  },
  {
   "worker": "w38",
@@ -445,7 +742,18 @@
   "route@16": 0.14285714285714285,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 22,
+  "rare_target": 5,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w40",
@@ -461,7 +769,18 @@
   "route@16": 0.375,
   "places@5": 0.0,
   "places@10": 0.25,
-  "places@16": 0.375
+  "places@16": 0.375,
+  "uncommon@5": 0.25,
+  "uncommon@10": 0.375,
+  "uncommon@16": 0.5,
+  "common": 5,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.25,
+  "places-rare@16": 0.375,
+  "uncommon-rare@5": 0.25,
+  "uncommon-rare@10": 0.375,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w40",
@@ -477,7 +796,18 @@
   "route@16": 0.25,
   "places@5": 0.0,
   "places@10": 0.25,
-  "places@16": 0.25
+  "places@16": 0.25,
+  "uncommon@5": 0.25,
+  "uncommon@10": 0.25,
+  "uncommon@16": 0.375,
+  "common": 7,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.25,
+  "places-rare@16": 0.25,
+  "uncommon-rare@5": 0.25,
+  "uncommon-rare@10": 0.25,
+  "uncommon-rare@16": 0.375
  },
  {
   "worker": "w42",
@@ -493,7 +823,18 @@
   "route@16": 0.5454545454545454,
   "places@5": 0.18181818181818182,
   "places@10": 0.36363636363636365,
-  "places@16": 0.5454545454545454
+  "places@16": 0.5454545454545454,
+  "uncommon@5": 0.18181818181818182,
+  "uncommon@10": 0.2727272727272727,
+  "uncommon@16": 0.45454545454545453,
+  "common": 5,
+  "rare_target": 10,
+  "places-rare@5": 0.1,
+  "places-rare@10": 0.3,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.3,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w42",
@@ -509,7 +850,18 @@
   "route@16": 0.45454545454545453,
   "places@5": 0.18181818181818182,
   "places@10": 0.45454545454545453,
-  "places@16": 0.45454545454545453
+  "places@16": 0.45454545454545453,
+  "uncommon@5": 0.2727272727272727,
+  "uncommon@10": 0.36363636363636365,
+  "uncommon@16": 0.6363636363636364,
+  "common": 7,
+  "rare_target": 10,
+  "places-rare@5": 0.1,
+  "places-rare@10": 0.4,
+  "places-rare@16": 0.4,
+  "uncommon-rare@5": 0.3,
+  "uncommon-rare@10": 0.4,
+  "uncommon-rare@16": 0.7
  },
  {
   "worker": "w44",
@@ -525,7 +877,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 5,
+  "rare_target": 6,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w45",
@@ -541,7 +904,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.25,
+  "common": 5,
+  "rare_target": 4,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.25
  },
  {
   "worker": "w45",
@@ -557,7 +931,18 @@
   "route@16": 0.25,
   "places@5": 0.25,
   "places@10": 0.25,
-  "places@16": 0.25
+  "places@16": 0.25,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 10,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w46",
@@ -573,7 +958,18 @@
   "route@16": 0.25,
   "places@5": 0.05,
   "places@10": 0.05,
-  "places@16": 0.25
+  "places@16": 0.25,
+  "uncommon@5": 0.05,
+  "uncommon@10": 0.05,
+  "uncommon@16": 0.25,
+  "common": 4,
+  "rare_target": 20,
+  "places-rare@5": 0.05,
+  "places-rare@10": 0.05,
+  "places-rare@16": 0.25,
+  "uncommon-rare@5": 0.05,
+  "uncommon-rare@10": 0.05,
+  "uncommon-rare@16": 0.25
  },
  {
   "worker": "w46",
@@ -589,7 +985,18 @@
   "route@16": 0.25,
   "places@5": 0.05,
   "places@10": 0.1,
-  "places@16": 0.25
+  "places@16": 0.25,
+  "uncommon@5": 0.05,
+  "uncommon@10": 0.1,
+  "uncommon@16": 0.25,
+  "common": 5,
+  "rare_target": 20,
+  "places-rare@5": 0.05,
+  "places-rare@10": 0.1,
+  "places-rare@16": 0.25,
+  "uncommon-rare@5": 0.05,
+  "uncommon-rare@10": 0.1,
+  "uncommon-rare@16": 0.25
  },
  {
   "worker": "w47",
@@ -605,7 +1012,18 @@
   "route@16": 0.3,
   "places@5": 0.1,
   "places@10": 0.3,
-  "places@16": 0.4
+  "places@16": 0.4,
+  "uncommon@5": 0.15,
+  "uncommon@10": 0.25,
+  "uncommon@16": 0.4,
+  "common": 4,
+  "rare_target": 19,
+  "places-rare@5": 0.05263157894736842,
+  "places-rare@10": 0.2631578947368421,
+  "places-rare@16": 0.3684210526315789,
+  "uncommon-rare@5": 0.15789473684210525,
+  "uncommon-rare@10": 0.2631578947368421,
+  "uncommon-rare@16": 0.42105263157894735
  },
  {
   "worker": "w47",
@@ -621,7 +1039,18 @@
   "route@16": 0.35,
   "places@5": 0.15,
   "places@10": 0.35,
-  "places@16": 0.45
+  "places@16": 0.45,
+  "uncommon@5": 0.15,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.35,
+  "common": 10,
+  "rare_target": 15,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.13333333333333333,
+  "places-rare@16": 0.26666666666666666,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.26666666666666666,
+  "uncommon-rare@16": 0.4666666666666667
  },
  {
   "worker": "w50",
@@ -637,7 +1066,18 @@
   "route@16": 0.2,
   "places@5": 0.0,
   "places@10": 0.2,
-  "places@16": 0.2
+  "places@16": 0.2,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.2,
+  "common": 4,
+  "rare_target": 10,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.2,
+  "places-rare@16": 0.2,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.2,
+  "uncommon-rare@16": 0.2
  },
  {
   "worker": "w50",
@@ -653,7 +1093,18 @@
   "route@16": 0.2,
   "places@5": 0.0,
   "places@10": 0.2,
-  "places@16": 0.2
+  "places@16": 0.2,
+  "uncommon@5": 0.1,
+  "uncommon@10": 0.1,
+  "uncommon@16": 0.1,
+  "common": 7,
+  "rare_target": 9,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.1111111111111111,
+  "places-rare@16": 0.1111111111111111,
+  "uncommon-rare@5": 0.1111111111111111,
+  "uncommon-rare@10": 0.1111111111111111,
+  "uncommon-rare@16": 0.1111111111111111
  },
  {
   "worker": "w52",
@@ -669,7 +1120,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 4,
+  "rare_target": 10,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w52",
@@ -685,7 +1147,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 17,
+  "rare_target": 10,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w53",
@@ -701,7 +1174,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.6666666666666666,
   "places@10": 0.6666666666666666,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.3333333333333333,
+  "common": 4,
+  "rare_target": 2,
+  "places-rare@5": 0.5,
+  "places-rare@10": 0.5,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.5,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w53",
@@ -717,7 +1201,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.3333333333333333,
   "places@10": 0.6666666666666666,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.6666666666666666,
+  "uncommon@10": 0.6666666666666666,
+  "uncommon@16": 0.6666666666666666,
+  "common": 5,
+  "rare_target": 3,
+  "places-rare@5": 0.3333333333333333,
+  "places-rare@10": 0.6666666666666666,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.6666666666666666,
+  "uncommon-rare@10": 0.6666666666666666,
+  "uncommon-rare@16": 0.6666666666666666
  },
  {
   "worker": "w54",
@@ -733,7 +1228,18 @@
   "route@16": 0.125,
   "places@5": 0.125,
   "places@10": 0.125,
-  "places@16": 0.125
+  "places@16": 0.125,
+  "uncommon@5": 0.125,
+  "uncommon@10": 0.125,
+  "uncommon@16": 0.125,
+  "common": 4,
+  "rare_target": 8,
+  "places-rare@5": 0.125,
+  "places-rare@10": 0.125,
+  "places-rare@16": 0.125,
+  "uncommon-rare@5": 0.125,
+  "uncommon-rare@10": 0.125,
+  "uncommon-rare@16": 0.125
  },
  {
   "worker": "w54",
@@ -749,7 +1255,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 11,
+  "rare_target": 8,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w56",
@@ -765,7 +1282,18 @@
   "route@16": 0.5,
   "places@5": 0.0,
   "places@10": 0.25,
-  "places@16": 0.4166666666666667
+  "places@16": 0.4166666666666667,
+  "uncommon@5": 0.08333333333333333,
+  "uncommon@10": 0.4166666666666667,
+  "uncommon@16": 0.4166666666666667,
+  "common": 2,
+  "rare_target": 12,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.25,
+  "places-rare@16": 0.4166666666666667,
+  "uncommon-rare@5": 0.08333333333333333,
+  "uncommon-rare@10": 0.4166666666666667,
+  "uncommon-rare@16": 0.4166666666666667
  },
  {
   "worker": "w56",
@@ -781,7 +1309,18 @@
   "route@16": 0.4166666666666667,
   "places@5": 0.16666666666666666,
   "places@10": 0.25,
-  "places@16": 0.4166666666666667
+  "places@16": 0.4166666666666667,
+  "uncommon@5": 0.16666666666666666,
+  "uncommon@10": 0.16666666666666666,
+  "uncommon@16": 0.3333333333333333,
+  "common": 2,
+  "rare_target": 11,
+  "places-rare@5": 0.09090909090909091,
+  "places-rare@10": 0.18181818181818182,
+  "places-rare@16": 0.36363636363636365,
+  "uncommon-rare@5": 0.18181818181818182,
+  "uncommon-rare@10": 0.18181818181818182,
+  "uncommon-rare@16": 0.36363636363636365
  },
  {
   "worker": "w60",
@@ -797,7 +1336,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 2,
+  "rare_target": 4,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w60",
@@ -813,7 +1363,18 @@
   "route@16": 1.0,
   "places@5": 0.0,
   "places@10": 0.5,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 19,
+  "rare_target": 0,
+  "places-rare@5": null,
+  "places-rare@10": null,
+  "places-rare@16": null,
+  "uncommon-rare@5": null,
+  "uncommon-rare@10": null,
+  "uncommon-rare@16": null
  },
  {
   "worker": "w61",
@@ -829,7 +1390,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.6666666666666666,
   "places@10": 0.6666666666666666,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.3333333333333333,
+  "common": 1,
+  "rare_target": 2,
+  "places-rare@5": 0.5,
+  "places-rare@10": 0.5,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.5,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w61",
@@ -845,7 +1417,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.3333333333333333,
   "places@10": 0.6666666666666666,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.6666666666666666,
+  "uncommon@16": 0.6666666666666666,
+  "common": 0,
+  "rare_target": 3,
+  "places-rare@5": 0.3333333333333333,
+  "places-rare@10": 0.6666666666666666,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.6666666666666666,
+  "uncommon-rare@16": 0.6666666666666666
  },
  {
   "worker": "w63",
@@ -861,7 +1444,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 1,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w64",
@@ -877,7 +1471,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 1,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w64",
@@ -893,7 +1498,18 @@
   "route@16": 1.0,
   "places@5": 1.0,
   "places@10": 1.0,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 7,
+  "rare_target": 0,
+  "places-rare@5": null,
+  "places-rare@10": null,
+  "places-rare@16": null,
+  "uncommon-rare@5": null,
+  "uncommon-rare@10": null,
+  "uncommon-rare@16": null
  },
  {
   "worker": "w65",
@@ -909,7 +1525,18 @@
   "route@16": 0.75,
   "places@5": 0.75,
   "places@10": 0.75,
-  "places@16": 0.75
+  "places@16": 0.75,
+  "uncommon@5": 0.5,
+  "uncommon@10": 0.5,
+  "uncommon@16": 0.5,
+  "common": 1,
+  "rare_target": 3,
+  "places-rare@5": 0.6666666666666666,
+  "places-rare@10": 0.6666666666666666,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.6666666666666666,
+  "uncommon-rare@10": 0.6666666666666666,
+  "uncommon-rare@16": 0.6666666666666666
  },
  {
   "worker": "w65",
@@ -925,7 +1552,18 @@
   "route@16": 0.25,
   "places@5": 0.25,
   "places@10": 0.25,
-  "places@16": 0.25
+  "places@16": 0.25,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 3,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w66",
@@ -941,7 +1579,18 @@
   "route@16": 0.3333333333333333,
   "places@5": 0.3333333333333333,
   "places@10": 0.3333333333333333,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.3333333333333333,
+  "common": 1,
+  "rare_target": 3,
+  "places-rare@5": 0.3333333333333333,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.3333333333333333,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.3333333333333333
  },
  {
   "worker": "w66",
@@ -957,7 +1606,18 @@
   "route@16": 1.0,
   "places@5": 1.0,
   "places@10": 1.0,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.3333333333333333,
+  "common": 3,
+  "rare_target": 1,
+  "places-rare@5": 1.0,
+  "places-rare@10": 1.0,
+  "places-rare@16": 1.0,
+  "uncommon-rare@5": 1.0,
+  "uncommon-rare@10": 1.0,
+  "uncommon-rare@16": 1.0
  },
  {
   "worker": "w67",
@@ -973,7 +1633,18 @@
   "route@16": 0.45454545454545453,
   "places@5": 0.18181818181818182,
   "places@10": 0.2727272727272727,
-  "places@16": 0.45454545454545453
+  "places@16": 0.45454545454545453,
+  "uncommon@5": 0.18181818181818182,
+  "uncommon@10": 0.36363636363636365,
+  "uncommon@16": 0.45454545454545453,
+  "common": 1,
+  "rare_target": 11,
+  "places-rare@5": 0.18181818181818182,
+  "places-rare@10": 0.2727272727272727,
+  "places-rare@16": 0.45454545454545453,
+  "uncommon-rare@5": 0.18181818181818182,
+  "uncommon-rare@10": 0.36363636363636365,
+  "uncommon-rare@16": 0.45454545454545453
  },
  {
   "worker": "w67",
@@ -989,7 +1660,18 @@
   "route@16": 0.45454545454545453,
   "places@5": 0.18181818181818182,
   "places@10": 0.36363636363636365,
-  "places@16": 0.45454545454545453
+  "places@16": 0.45454545454545453,
+  "uncommon@5": 0.09090909090909091,
+  "uncommon@10": 0.2727272727272727,
+  "uncommon@16": 0.2727272727272727,
+  "common": 5,
+  "rare_target": 9,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.2222222222222222,
+  "places-rare@16": 0.3333333333333333,
+  "uncommon-rare@5": 0.1111111111111111,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.3333333333333333
  },
  {
   "worker": "w68",
@@ -1005,7 +1687,18 @@
   "route@16": 0.5,
   "places@5": 0.5,
   "places@10": 0.5,
-  "places@16": 0.5
+  "places@16": 0.5,
+  "uncommon@5": 0.5,
+  "uncommon@10": 0.5,
+  "uncommon@16": 0.5,
+  "common": 1,
+  "rare_target": 2,
+  "places-rare@5": 0.5,
+  "places-rare@10": 0.5,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.5,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w68",
@@ -1021,7 +1714,18 @@
   "route@16": 1.0,
   "places@5": 1.0,
   "places@10": 1.0,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 4,
+  "rare_target": 0,
+  "places-rare@5": null,
+  "places-rare@10": null,
+  "places-rare@16": null,
+  "uncommon-rare@5": null,
+  "uncommon-rare@10": null,
+  "uncommon-rare@16": null
  },
  {
   "worker": "w69",
@@ -1037,7 +1741,18 @@
   "route@16": 0.2,
   "places@5": 0.2,
   "places@10": 0.2,
-  "places@16": 0.2
+  "places@16": 0.2,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.2,
+  "common": 1,
+  "rare_target": 5,
+  "places-rare@5": 0.2,
+  "places-rare@10": 0.2,
+  "places-rare@16": 0.2,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.2,
+  "uncommon-rare@16": 0.2
  },
  {
   "worker": "w69",
@@ -1053,7 +1768,18 @@
   "route@16": 0.4,
   "places@5": 0.2,
   "places@10": 0.2,
-  "places@16": 0.4
+  "places@16": 0.4,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.6,
+  "common": 4,
+  "rare_target": 5,
+  "places-rare@5": 0.2,
+  "places-rare@10": 0.2,
+  "places-rare@16": 0.4,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.2,
+  "uncommon-rare@16": 0.6
  },
  {
   "worker": "w70",
@@ -1069,7 +1795,18 @@
   "route@16": 0.5,
   "places@5": 0.3333333333333333,
   "places@10": 0.3333333333333333,
-  "places@16": 0.5
+  "places@16": 0.5,
+  "uncommon@5": 0.3333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.5,
+  "common": 0,
+  "rare_target": 6,
+  "places-rare@5": 0.3333333333333333,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w70",
@@ -1085,7 +1822,18 @@
   "route@16": 0.3333333333333333,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.3333333333333333
+  "places@16": 0.3333333333333333,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.5,
+  "common": 5,
+  "rare_target": 6,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.3333333333333333,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w72",
@@ -1101,7 +1849,18 @@
   "route@16": 0.1111111111111111,
   "places@5": 0.1111111111111111,
   "places@10": 0.1111111111111111,
-  "places@16": 0.2222222222222222
+  "places@16": 0.2222222222222222,
+  "uncommon@5": 0.1111111111111111,
+  "uncommon@10": 0.1111111111111111,
+  "uncommon@16": 0.2222222222222222,
+  "common": 0,
+  "rare_target": 9,
+  "places-rare@5": 0.1111111111111111,
+  "places-rare@10": 0.1111111111111111,
+  "places-rare@16": 0.2222222222222222,
+  "uncommon-rare@5": 0.1111111111111111,
+  "uncommon-rare@10": 0.1111111111111111,
+  "uncommon-rare@16": 0.2222222222222222
  },
  {
   "worker": "w72",
@@ -1117,7 +1876,18 @@
   "route@16": 0.4444444444444444,
   "places@5": 0.1111111111111111,
   "places@10": 0.3333333333333333,
-  "places@16": 0.4444444444444444
+  "places@16": 0.4444444444444444,
+  "uncommon@5": 0.2222222222222222,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.4444444444444444,
+  "common": 2,
+  "rare_target": 9,
+  "places-rare@5": 0.1111111111111111,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.4444444444444444,
+  "uncommon-rare@5": 0.2222222222222222,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.4444444444444444
  },
  {
   "worker": "w73",
@@ -1133,7 +1903,18 @@
   "route@16": 0.2,
   "places@5": 0.2,
   "places@10": 0.2,
-  "places@16": 0.2
+  "places@16": 0.2,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.2,
+  "common": 0,
+  "rare_target": 5,
+  "places-rare@5": 0.2,
+  "places-rare@10": 0.2,
+  "places-rare@16": 0.2,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.2,
+  "uncommon-rare@16": 0.2
  },
  {
   "worker": "w73",
@@ -1149,7 +1930,18 @@
   "route@16": 0.8,
   "places@5": 0.4,
   "places@10": 0.6,
-  "places@16": 0.8
+  "places@16": 0.8,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.4,
+  "uncommon@16": 0.4,
+  "common": 9,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.6666666666666666,
+  "uncommon-rare@16": 0.6666666666666666
  },
  {
   "worker": "w75",
@@ -1165,7 +1957,18 @@
   "route@16": 0.375,
   "places@5": 0.25,
   "places@10": 0.375,
-  "places@16": 0.375
+  "places@16": 0.375,
+  "uncommon@5": 0.25,
+  "uncommon@10": 0.375,
+  "uncommon@16": 0.375,
+  "common": 0,
+  "rare_target": 8,
+  "places-rare@5": 0.25,
+  "places-rare@10": 0.375,
+  "places-rare@16": 0.375,
+  "uncommon-rare@5": 0.25,
+  "uncommon-rare@10": 0.375,
+  "uncommon-rare@16": 0.375
  },
  {
   "worker": "w75",
@@ -1181,7 +1984,18 @@
   "route@16": 0.5,
   "places@5": 0.125,
   "places@10": 0.375,
-  "places@16": 0.5
+  "places@16": 0.5,
+  "uncommon@5": 0.125,
+  "uncommon@10": 0.375,
+  "uncommon@16": 0.5,
+  "common": 2,
+  "rare_target": 8,
+  "places-rare@5": 0.125,
+  "places-rare@10": 0.375,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.125,
+  "uncommon-rare@10": 0.375,
+  "uncommon-rare@16": 0.5
  },
  {
   "worker": "w76",
@@ -1197,7 +2011,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 0,
+  "rare_target": 1,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w76",
@@ -1213,7 +2038,18 @@
   "route@16": 1.0,
   "places@5": 1.0,
   "places@10": 1.0,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 1.0,
+  "uncommon@10": 1.0,
+  "uncommon@16": 1.0,
+  "common": 1,
+  "rare_target": 1,
+  "places-rare@5": 1.0,
+  "places-rare@10": 1.0,
+  "places-rare@16": 1.0,
+  "uncommon-rare@5": 1.0,
+  "uncommon-rare@10": 1.0,
+  "uncommon-rare@16": 1.0
  },
  {
   "worker": "w77",
@@ -1229,7 +2065,18 @@
   "route@16": 0.29411764705882354,
   "places@5": 0.11764705882352941,
   "places@10": 0.23529411764705882,
-  "places@16": 0.29411764705882354
+  "places@16": 0.29411764705882354,
+  "uncommon@5": 0.11764705882352941,
+  "uncommon@10": 0.23529411764705882,
+  "uncommon@16": 0.29411764705882354,
+  "common": 0,
+  "rare_target": 17,
+  "places-rare@5": 0.11764705882352941,
+  "places-rare@10": 0.23529411764705882,
+  "places-rare@16": 0.29411764705882354,
+  "uncommon-rare@5": 0.11764705882352941,
+  "uncommon-rare@10": 0.23529411764705882,
+  "uncommon-rare@16": 0.29411764705882354
  },
  {
   "worker": "w78",
@@ -1245,7 +2092,18 @@
   "route@16": 0.2,
   "places@5": 0.2,
   "places@10": 0.2,
-  "places@16": 0.2
+  "places@16": 0.2,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.2,
+  "common": 0,
+  "rare_target": 5,
+  "places-rare@5": 0.2,
+  "places-rare@10": 0.2,
+  "places-rare@16": 0.2,
+  "uncommon-rare@5": 0.2,
+  "uncommon-rare@10": 0.2,
+  "uncommon-rare@16": 0.2
  },
  {
   "worker": "w78",
@@ -1261,7 +2119,18 @@
   "route@16": 1.0,
   "places@5": 0.6,
   "places@10": 0.8,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.2,
+  "uncommon@10": 0.2,
+  "uncommon@16": 0.4,
+  "common": 6,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.5,
+  "places-rare@16": 1.0,
+  "uncommon-rare@5": 0.5,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 1.0
  },
  {
   "worker": "w80",
@@ -1277,7 +2146,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 0,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w80",
@@ -1293,7 +2173,18 @@
   "route@16": 1.0,
   "places@5": 1.0,
   "places@10": 1.0,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 7,
+  "rare_target": 0,
+  "places-rare@5": null,
+  "places-rare@10": null,
+  "places-rare@16": null,
+  "uncommon-rare@5": null,
+  "uncommon-rare@10": null,
+  "uncommon-rare@16": null
  },
  {
   "worker": "w81",
@@ -1309,7 +2200,18 @@
   "route@16": 0.375,
   "places@5": 0.25,
   "places@10": 0.25,
-  "places@16": 0.375
+  "places@16": 0.375,
+  "uncommon@5": 0.25,
+  "uncommon@10": 0.25,
+  "uncommon@16": 0.375,
+  "common": 0,
+  "rare_target": 8,
+  "places-rare@5": 0.25,
+  "places-rare@10": 0.25,
+  "places-rare@16": 0.375,
+  "uncommon-rare@5": 0.25,
+  "uncommon-rare@10": 0.25,
+  "uncommon-rare@16": 0.375
  },
  {
   "worker": "w81",
@@ -1325,7 +2227,18 @@
   "route@16": 0.125,
   "places@5": 0.25,
   "places@10": 0.25,
-  "places@16": 0.375
+  "places@16": 0.375,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.125,
+  "uncommon@16": 0.125,
+  "common": 6,
+  "rare_target": 6,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.16666666666666666,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.16666666666666666,
+  "uncommon-rare@16": 0.16666666666666666
  },
  {
   "worker": "w82",
@@ -1341,7 +2254,18 @@
   "route@16": 0.5333333333333333,
   "places@5": 0.13333333333333333,
   "places@10": 0.3333333333333333,
-  "places@16": 0.5333333333333333
+  "places@16": 0.5333333333333333,
+  "uncommon@5": 0.13333333333333333,
+  "uncommon@10": 0.3333333333333333,
+  "uncommon@16": 0.5333333333333333,
+  "common": 0,
+  "rare_target": 15,
+  "places-rare@5": 0.13333333333333333,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.5333333333333333,
+  "uncommon-rare@5": 0.13333333333333333,
+  "uncommon-rare@10": 0.3333333333333333,
+  "uncommon-rare@16": 0.5333333333333333
  },
  {
   "worker": "w82",
@@ -1357,7 +2281,18 @@
   "route@16": 0.6,
   "places@5": 0.2,
   "places@10": 0.4666666666666667,
-  "places@16": 0.6
+  "places@16": 0.6,
+  "uncommon@5": 0.26666666666666666,
+  "uncommon@10": 0.4,
+  "uncommon@16": 0.4666666666666667,
+  "common": 6,
+  "rare_target": 12,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.3333333333333333,
+  "places-rare@16": 0.5,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 0.5833333333333334
  },
  {
   "worker": "w83",
@@ -1373,7 +2308,18 @@
   "route@16": 0.16666666666666666,
   "places@5": 0.16666666666666666,
   "places@10": 0.16666666666666666,
-  "places@16": 0.16666666666666666
+  "places@16": 0.16666666666666666,
+  "uncommon@5": 0.16666666666666666,
+  "uncommon@10": 0.16666666666666666,
+  "uncommon@16": 0.16666666666666666,
+  "common": 0,
+  "rare_target": 6,
+  "places-rare@5": 0.16666666666666666,
+  "places-rare@10": 0.16666666666666666,
+  "places-rare@16": 0.16666666666666666,
+  "uncommon-rare@5": 0.16666666666666666,
+  "uncommon-rare@10": 0.16666666666666666,
+  "uncommon-rare@16": 0.16666666666666666
  },
  {
   "worker": "w83",
@@ -1389,7 +2335,18 @@
   "route@16": 1.0,
   "places@5": 0.6666666666666666,
   "places@10": 0.8333333333333334,
-  "places@16": 1.0
+  "places@16": 1.0,
+  "uncommon@5": 0.16666666666666666,
+  "uncommon@10": 0.16666666666666666,
+  "uncommon@16": 0.3333333333333333,
+  "common": 6,
+  "rare_target": 2,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.5,
+  "places-rare@16": 1.0,
+  "uncommon-rare@5": 0.5,
+  "uncommon-rare@10": 0.5,
+  "uncommon-rare@16": 1.0
  },
  {
   "worker": "w85",
@@ -1405,7 +2362,18 @@
   "route@16": 0.0,
   "places@5": 0.0,
   "places@10": 0.0,
-  "places@16": 0.0
+  "places@16": 0.0,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 0,
+  "rare_target": 3,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w85",
@@ -1421,7 +2389,18 @@
   "route@16": 0.6666666666666666,
   "places@5": 0.6666666666666666,
   "places@10": 0.6666666666666666,
-  "places@16": 0.6666666666666666
+  "places@16": 0.6666666666666666,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.0,
+  "uncommon@16": 0.0,
+  "common": 6,
+  "rare_target": 1,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.0,
+  "places-rare@16": 0.0,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.0,
+  "uncommon-rare@16": 0.0
  },
  {
   "worker": "w86",
@@ -1437,7 +2416,18 @@
   "route@16": 0.3,
   "places@5": 0.0,
   "places@10": 0.3,
-  "places@16": 0.3
+  "places@16": 0.3,
+  "uncommon@5": 0.0,
+  "uncommon@10": 0.3,
+  "uncommon@16": 0.3,
+  "common": 0,
+  "rare_target": 10,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.3,
+  "places-rare@16": 0.3,
+  "uncommon-rare@5": 0.0,
+  "uncommon-rare@10": 0.3,
+  "uncommon-rare@16": 0.3
  },
  {
   "worker": "w86",
@@ -1453,6 +2443,17 @@
   "route@16": 0.7,
   "places@5": 0.1,
   "places@10": 0.2,
-  "places@16": 0.7
+  "places@16": 0.7,
+  "uncommon@5": 0.3,
+  "uncommon@10": 0.6,
+  "uncommon@16": 0.7,
+  "common": 8,
+  "rare_target": 9,
+  "places-rare@5": 0.0,
+  "places-rare@10": 0.1111111111111111,
+  "places-rare@16": 0.6666666666666666,
+  "uncommon-rare@5": 0.3333333333333333,
+  "uncommon-rare@10": 0.6666666666666666,
+  "uncommon-rare@16": 0.7777777777777778
  }
 ]
