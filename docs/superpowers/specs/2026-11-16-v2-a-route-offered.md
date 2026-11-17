@@ -1,6 +1,6 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 9. A change to the design of stage 2
+Serenity, 2026-11-16, revision 10. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
@@ -101,6 +101,21 @@ the order asked, the route to it from where every turn starts, or the plain answ
 - **A detour can be looked at.** Where a route is cheaper than the way a turn went to the same file, the
   answer names that turn, how far along its walk the file first came, the way it went and the way offered,
   each with its cost and its number of roads. A way that is not cheaper is not called a detour.
+- **At most 16 detours are carried, and the rest are counted** (revision 10; the store's version `"3"`).
+  For each file the answer keeps the 16 cheapest of the dearer ways and says, in `detours_more`, how many
+  it left out. The room reads an answer of store `"3"` and of no other: 16 is a constant of that version,
+  so an answer that names another is refused and is to be made again. Of a route the room refuses more
+  than 16 detours; a `detours_more` that is missing or is not a whole number; one that is more than 0
+  beside fewer than 16 detours; and a sum of the two that is more than the number of turns let teach,
+  since a turn goes one way to a file. The number of turns that went a dearer way, which is all the block
+  says of them, is that sum. Which 16 are the cheapest is the store's to hold, by its own check: the room
+  has not the walks.
+- **A kept detour costs more than the route** (revision 10, named by the code's reader). The room compares
+  the two costs as the exact fractions the answer gives, never as rounded numbers, and refuses a kept
+  detour that costs the same as the route or less. A cost's fraction is the share of turns, so the dearer
+  way is the one with the smaller fraction. A route's cost whose numerator or denominator has more than
+  8,192 digits is refused, which bounds the comparing by the answer's own size: with at most 256 roads a
+  route's fraction has under 5,200 digits, whatever whole number of turns taught.
 - **Three kinds of no route, told apart:** no turn that was let teach reached the file; no turn named it
   at all, as with a file a turn added; the kernel refused.
 - **A refusal is said.** If the kernel refuses a cell, there is no route for that file and the reason is
@@ -590,8 +605,110 @@ each table again from the list and the walks. Its verdict: **do not run as desig
   reason.
 - **C is written next, as a spec of its own, and read.** Until it is, D is the experiment that could be
   run on what exists, and it is written beside C so that the choice between them is made on paper.
+  (Not done as written: see "A second design, read and withdrawn" below.)
 - **The points left open at the end of this spec** are still open. Each is settled, or said to stand,
   before any turn of whichever experiment is offered anything.
+
+### A second design, read and withdrawn
+
+Added 2026-11-17. Before C was written the lead tried a cheaper design on what exists: score the items
+whose tests import none of the source files their own reference changes, as items "where the way has to
+be found". It was written as a spec and read by a fresh reader of the other family, who said: do not
+approve. It is withdrawn and was never pushed. What was measured for it stays here, because the next
+design needs it. All of it is exploratory: none is a pilot, and none is history.
+
+| What was measured | How | What it showed |
+| --- | --- | --- |
+| How many items the rule chooses | Each item's tests' imports against the files its reference changes; no turn | 54 of the 188. For 102 the imports name every such file, for 32 some |
+| Whether those are items whose tests do not say where the work is | The tests' text read for the changed module's name, or for a name the reference defines or changes; no turn | They are not. 39 of the 54 say one or the other, as in a list holding `'ships.Ships.ship_key_is_valid'`. Four more are named by the test file's own name or by the command the test runs. Eleven are left, six of them in one run of like work |
+| Whether such an item's reference passes in the jail | Each of the 54 once, no model | 53 pass. One fails: its tests start a server |
+| When a turn first names a file its reference changes, nothing offered | Three turns at three of the 54 | At 24, 46 and 59 s. Two of the three are items whose tests name the place |
+| What a turn does with a route | Six turns at three more of the 54, all of one run whose tests name the place: at each, one turn offered the route and one offered nothing. Each offer was made by the whole path, from five or six earlier turns | The table below |
+
+| The item's reference changes | Goals offered | Arm | Worker's seconds | Steps | A file the reference changes is first named |
+| --- | --- | --- | --- | --- | --- |
+| `ships.py` | `ships.py` | nothing | 64 | 11 | at step 3, 20 s |
+| | | route | 97 | 12 | at step 1, 11 s |
+| `federation.py` | `ships.py`, which is not it | nothing | 51 | 9 | at step 4, 28 s |
+| | | route | 75 | 13 | at step 7, 36 s; the goal at step 1 |
+| `room_board.py` | `room_board.py` and `ships.py` | nothing | 85 | 13 | at step 4, 18 s |
+| | | route | 68 | 13 | at step 3, 16 s |
+
+A step's number counts from nought, and its second is when the step was first seen, not when its result
+came. All six passed, and each turn's record holds the hash of the block it was given, or none. They are
+single turns, on a machine whose load was between 9 and 16, and nothing here says what a route causes:
+
+- **In these three turns the first source file a route turn named was the first goal of its block.** That
+  does not show a turn following the roads in their order.
+- **The three route turns took 240 s of the worker's time in all, and the three with nothing 200 s.** Two
+  route turns were the slower and the third the faster.
+- **Where the one goal was not the place,** the route turn took thirteen steps against nine, and named the
+  right file three steps later than the turn offered nothing did.
+
+**What the reader found, beside the cohort,** which stands for any later design:
+
+- **A history that grows along the pass makes the scored ratios depend on one another:** an earlier
+  item's turn is in its own ratio and in a later item's offer. Five pairs of items that share a test file
+  would, if each pair moved wholly together, bring twenty items to about thirteen counted as independent
+  ones: the reader's illustration, not a measurement.
+- **The rule for leaving an item out must say what follows:** whether the dividing commit and the pilot's
+  items move, and when the experiment stops for want of items. A reference that fails its check is one
+  thing; a run that could not be used is another.
+- **The room's export takes every arrived turn of an item and does not hold its arm.** A pass that lets
+  only turns offered nothing teach must keep them in rooms and plans of their own, and be tested for it.
+- **The arithmetic:** if ten of twenty items gain and ten do not, 15% overall needs the ten to gain
+  27.75% as a geometric mean, not each alike; 15% so gives 7.8% overall, which the pilot's spread would
+  need about 59 items to tell.
+- **A sentence added to every title changes the nothing arm too.**
+
+### Where a walk's recorded time went, roughly
+
+Counted from the walks already recorded, with no new turn: the share of a walk's time that went to steps
+naming only files the turn neither changed nor was given as its tests or its check. Steps are taken in the
+order of their numbers. A step's time is from the result of the step before it to its own result, and
+nought where that would be less than nought, since steps can overlap. A step that names no file is left
+out. A step counts when none of the files it names was changed by the turn or is under `peer/tests/` or
+`.yak-check/`. The share is of the time up to the last step's result.
+
+| Turns | Share: least, median, most | Source files named, and of them changed (medians) |
+| --- | --- | --- |
+| The pilot's fifteen measured turns | 2%, 6%, 29% | 2, 2 |
+| The first probe's three | 6%, 11%, 18% | 4, 1 |
+| The three above offered nothing | 7%, 14%, 18% | 4, 1 |
+| The three above offered a route | 8%, 10%, 21% | 4, 1 |
+
+**It is a rough allocation of recorded time, and not a bound on what a route could save.** Steps overlap,
+so these times are not a true division of a turn: with no floor at nought one walk's share comes out
+below nought, and with its steps ordered by their results it is 9% where this table's rule gives 6%. A
+file a turn did not change may have been needed. Finding can go on inside a file that was changed. A step
+that names a needed file beside others is counted as needed, and the time after the last step is left
+out. So these shares do not show that a route's effect must be under the 15% this experiment is sized to
+tell. They say only that, as recorded and by this rule, the medians are under it.
+
+**Read since,** by a fresh reader of the other family: the record stands with named changes, all made
+here. The reader worked the six turns' table and the last table again from the walks and got the same
+numbers; what it changed is what they are said to show.
+
+### What follows now
+
+- **What was seen is wider than the choice of items.** At this package's items a turn is told where its
+  work is by its tests, and first names that file within seconds. The project's own plans often say where
+  too: 33 of the 52 list files to create or modify, counted by their lines beginning `- Create:` or
+  `- Modify:`. That shows such cues outside these items; it measures no turn. And first naming a file is
+  not the end of finding: what a turn does after that, inside files, a route of file names does not carry.
+- **A and D are still what their readers said they are.** A would estimate the route's effect for this
+  package with its tests in view, and could show a gain or rule out one of 15%. D would ask whether learned
+  roads add anything once the places are given. Neither answer is known, and neither is run until it is
+  chosen for what it asks.
+- **C is not yet written.** The withdrawn design was not C, and its counts of what visible tests name say
+  nothing of C: tests a worker never sees may name any file. C still needs descriptions that say enough, a
+  boundary for its tests that is read on its own, and a rule for its history.
+- **A rehearsal of the whole path under the three arms,** at the list's three pilot items, is written as
+  its own small spec and read. It is not a pilot: it gives no `n`, and nothing from it enters a later
+  sizing or reading. It shows the path holding together in an experiment's own order, with every turn's
+  arm, block and inputs on record.
+- **A place finer than a file is the next thing to look at.** A walk records a file's name and its blob,
+  not the part that was read.
 
 ## What it costs
 
@@ -705,13 +822,31 @@ turn is offered anything:
   room's own.
 - **The clock's listing of tracked files does not turn git's replacement objects off,** where the export's
   does. No worker can make one in an item's repository.
-- **An answer's size.** The bound is 1 MiB. An answer carries each detour's whole way, so it grows with the
-  history. It is to be measured on the scored history before the scored run.
+- **An answer's size.** The bound is 1 MiB. An answer carried each detour's whole way, so it grew with the
+  history. Settled in part by revision 10: the store's version `"3"` keeps at most 16 detours for a file.
+  What still grows is the blobs named along a route: the store's reader measured answers of 549, 1,368
+  and 4,810 bytes for 1, 20 and 100 blobs seen at one file. And each kept detour's own way and the digits
+  of its cost: the code's reader, in a model of the answer, lengthened one detour's way from 3 paths to
+  2,001 and the answer grew from 1,151 to 18,097 bytes. So the bound stays, an answer over it is refused
+  as now, and the size is still to be measured on the history of whichever experiment is run.
 - **A walk line's limit:** whether the line's end counts toward the 1 MiB is to be made the same on both
   sides.
 
 **Made plain since, by the lead, as the two sides were built:** the list's form and a repository's id, in
 section 3; and that a path is rendered after the block's opening sentence, which is fixed and holds none.
+
+**Changed in revision 10: the store's version `"3"`.** Asked of Tardis by the lead after the second pilot,
+because the block uses only how many turns went a dearer way and an answer's size grew with every one of
+them. The store's spec (its revision 7, decision 11) keeps 16 and counts the rest; a fresh reader of the
+other family approved that with named changes. By the lead's reading of them, not the reader's word, none
+changes an answer's bytes for the fixture; if one does, the room's copy is replaced with it. What the
+room holds of the change is in section 2. The fixture the room's tests read is the store's own at that
+revision: its answer's SHA-256 begins bb7e7d0a2d86a2d7, and its walks, list and question are unchanged.
+The store's owner has since said the same of its named changes. A fresh reader of the other family read
+the room's code and said: push with named changes, four: the cost comparison of section 2; the block's
+own numbers asserted where its tests stopped at the offer file; a version that only begins with the right
+one refused in a test; and the size paragraph above. A second fresh reader of that family found all four
+made as named, worked the comparison's arithmetic again in a model of its own, and named no finding.
 
 **Changed between the two reads, and confirmed in the second:**
 
