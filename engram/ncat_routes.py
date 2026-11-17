@@ -40,10 +40,11 @@ DETOURS_KEPT = 16        # a goal's detours kept, the cheapest; the rest are onl
 MAX_LINE = 1 << 20       # a walk line's bytes before its newline
 MAX_LIST = 4 << 20       # the list's bytes
 MAX_QUESTION = 1 << 20   # a question's bytes
-MAX_FILE = 64 << 20      # a walk file's bytes, refused before it is read
+MAX_FILE = 64 << 20      # a walk file's bytes: one byte past it is read, then refused
 MAX_WALKS = 10_000       # walks in one store
 MAX_NAMED = 1_000_000    # named files over all of a store's steps, counted before any network or cell is made
 MAX_DEPTH = 8            # JSON nesting: a walk needs 5, a list 3, a question 2
+MAX_SEQ = (1 << 63) - 1  # a step's seq: the largest whole number the store's file keeps as an integer
 FAMILIES = ("claude", "codex", "script")                            # the room's (room/src/history.rs)
 TOOLS = ("read", "edit", "write", "search", "shell", "other")       # the room's Tool (room/src/types.rs)
 SHARE = ("share", 1)
@@ -66,8 +67,9 @@ BRACKET = re.compile(r"[\[\]{}]")
 
 
 def _kernel_digest():
-    """The digest of the kernel source the loader builds from: `ncat.SOURCE`, an installed wheel's shared copy included."""
-    return hashlib.sha256(ncat.SOURCE.read_bytes()).hexdigest()[:16]
+    """The digest of the kernel source this process's library was built from (`ncat.source_digest`), bound when the
+    library was loaded, so a source changed since then is not named for cells the old library makes."""
+    return ncat.source_digest()[:16]
 
 
 def _dec(n):
@@ -182,6 +184,8 @@ def _walk(obj, place):
         _keys(step, STEP_KEYS, sp)
         if not _int(step["seq"]) or step["seq"] <= last:
             raise Refused(f"{sp}.seq is not a non-negative integer above the last")
+        if step["seq"] > MAX_SEQ:
+            raise Refused(f"{sp}.seq is past 2^63 - 1, more than the store's file keeps")
         last = step["seq"]
         _word(step["tool"], TOOLS, f"{sp}.tool")
         if not isinstance(step["ok"], bool):
@@ -555,23 +559,31 @@ def _write(path, net, meta, bodies, budget_bytes, list_bytes=None):
             "refused": sorted(g for g, v in goals.items() if v[2] is not None)}
 
 
+def _read_at_most(source, limit, refusal):
+    """At most `limit` bytes of a file or stream, refused past it: one more byte is read to tell, and never the rest,
+    whatever size the file reports or however it grows."""
+    if isinstance(source, (str, Path)):
+        with open(source, "rb") as f:
+            data = f.read(limit + 1)
+    else:
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise Refused(refusal)
+    return data
+
+
 def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
     """Build the store whole and rename it into place. With `list_file`, an experiment's store under `share` 1; without,
     a ship's store under `ship-share` 1. Anything refused, or a kernel refusal of a 0-cell or a road, leaves the old file."""
     out = Path(out).resolve()
     if len(walk_files) > MAX_WALKS:
         raise Refused(f"more than {MAX_WALKS} walk files")
-    for f in walk_files:
-        if Path(f).stat().st_size > MAX_FILE:
-            raise Refused(f"{Path(f).name} is longer than 64 MiB")
-    files = {Path(f).name: Path(f).read_bytes() for f in walk_files}
+    files = {Path(f).name: _read_at_most(f, MAX_FILE, f"{Path(f).name} is longer than 64 MiB") for f in walk_files}
     if len(files) != len(walk_files):
         raise Refused("two walk files have one name")
     list_bytes = None
     if list_file is not None:
-        if Path(list_file).stat().st_size > MAX_LIST:
-            raise Refused("the list is longer than 4 MiB")
-        list_bytes = Path(list_file).read_bytes()
+        list_bytes = _read_at_most(list_file, MAX_LIST, "the list is longer than 4 MiB")
         listed, walks = admit(list_bytes, files)
         measure, repo, list_id = SHARE, listed["repo"], hashlib.sha256(list_bytes).hexdigest()
         bodies = {}
@@ -626,7 +638,10 @@ class RouteStore:
             if meta["store"] != STORE_VERSION:
                 raise IntegrityError(f"the route store at {path} was built by another store version; build it again")
             self.repo, self.list = json.loads(meta["repo"]), json.loads(meta["list"])
-            self.measure = tuple(json.loads(meta["measure"]))
+            measure = json.loads(meta["measure"])
+            if not (isinstance(measure, list) and len(measure) == 2 and isinstance(measure[0], str) and _int(measure[1])):
+                raise ValueError("header")   # ["share", true] and ["share", 1.0] equal ("share", 1) as tuples
+            self.measure = tuple(measure)
             self.for_experiment = json.loads(meta["for_experiment"])
             self.budget, self.kernel = _undec(meta["budget"]), meta["kernel"]
             self.listing = listings[0] if listings else None
@@ -797,7 +812,8 @@ def main(argv=None):
                   f"refused goals: {len(report['refused'])}")
         elif args.command == "ask":
             with open_store(args.store) as store:
-                sys.stdout.buffer.write(store.ask(sys.stdin.buffer.read()))
+                question = _read_at_most(sys.stdin.buffer, MAX_QUESTION, "the question is longer than 1 MiB")
+                sys.stdout.buffer.write(store.ask(question))
         else:
             with open_store(args.store) as store:
                 print(f"{store.check()} cells checked")

@@ -437,6 +437,20 @@ def test_a_goal_keeps_its_sixteen_cheapest_detours_in_attempt_order_and_counts_t
     db.close()
 
 
+def test_the_sixteen_are_chosen_by_exact_cost_where_floats_all_say_zero():
+    """Seventeen dearer ways whose shares all underflow to 0.0 as floats. The one with the latest name is the cheapest
+    by exact comparison, so it is kept; a ranking by float sees seventeen ties and drops it for the earlier names."""
+    route = [walk(f"r{i:04d}", ["b", "g"]) for i in range(1000)]   # N over 1,000: each lone road's share is under 1/1000
+    far = [walk(f"a{i:02d}", [f"a{i:02d}-{j:03d}" for j in range(115)] + ["b", "g"]) for i in range(16)]
+    near = walk("z99", [f"z99-{j:03d}" for j in range(109)] + ["b", "g"])
+    net = R.Network(route + far + [near], R.SHARE)
+    kept, more = net.detours("g", net.route("g"))
+    ways = {w["attempt"]: way for w, way, _, _ in kept}
+    assert all(float(net.share(way)) == 0.0 for way in ways.values())   # floats can't tell any of them apart
+    assert "z99" in ways and more == 1 and "a15" not in ways             # exact: z99 is cheaper than every a
+    assert [w["attempt"] for w, *_ in kept] == [f"a{i:02d}" for i in range(15)] + ["z99"]
+
+
 def test_a_goal_with_no_detour_says_none_left_out(tmp_path):
     out, list_id, _ = experiment(tmp_path, [walk("t1", ["b", "g"]), walk("t2", ["b", "g"])])
     r = route_of(ask(out, ["g"], list_id))
@@ -592,15 +606,26 @@ def test_a_file_seen_at_two_blobs_in_a_row_is_one_visit_with_both_blobs(tmp_path
     assert r["paths"] == ["a"] and r["blobs"] == {"a": ["1" * 40, "2" * 40]}
 
 
-def test_the_kernel_digest_is_of_the_source_the_loader_builds_from(tmp_path, monkeypatch):   # C5
+def test_the_kernel_digest_is_of_the_source_the_loaded_library_was_built_from(tmp_path, monkeypatch):   # C5, R2
+    """Loaded fresh from an installed wheel's copy, the digest is that copy's. Then the source changes on disk in the
+    same long-lived process: the library in use is still the old one, and so is the digest a new store records."""
     import ncat
     import ncat_store
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))   # a fresh build, not the cached library
+    monkeypatch.delenv("NCAT_TEST_SO", raising=False)
+    monkeypatch.setattr(ncat, "_lib", None)
+    monkeypatch.setattr(ncat, "_lib_source", None)
     shared = tmp_path / "share" / "engram" / "ncat_kernel.c"   # an installed wheel's place for it
     shared.parent.mkdir(parents=True)
     shared.write_bytes(ncat.SOURCE.read_bytes() + b"\n/* the installed copy */\n")
     monkeypatch.setattr(ncat, "SOURCE", shared)
     monkeypatch.setattr(ncat_store, "__file__", str(tmp_path / "site-packages" / "ncat_store.py"))   # nothing beside it
-    assert R._kernel_digest() == hashlib.sha256(shared.read_bytes()).hexdigest()[:16]
+    loaded = hashlib.sha256(shared.read_bytes()).hexdigest()[:16]
+    assert R._kernel_digest() == loaded
+    shared.write_bytes(shared.read_bytes() + b"/* changed after the library was loaded */\n")
+    assert R._kernel_digest() == loaded != hashlib.sha256(shared.read_bytes()).hexdigest()[:16]
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    assert ask(out, ["a"], list_id)["kernel"] == loaded
 
 
 def test_a_walk_whose_fraction_outgrows_4300_digits_builds_answers_and_checks(tmp_path):   # C6
@@ -645,7 +670,7 @@ def test_a_lone_surrogate_in_the_list_is_refused():   # C7
 def test_byte_bounds_are_checked_before_reading(tmp_path):   # C7
     big = tmp_path / "big.jsonl"
     with open(big, "wb") as f:
-        f.truncate(R.MAX_FILE + 1)   # sparse: nothing to read, and nothing is read
+        f.truncate(R.MAX_FILE + 1)   # sparse: read to one byte past the bound, then refused
     with pytest.raises(R.Refused, match="longer than 64 MiB"):
         R.build(tmp_path / "x.db", [big])
     with pytest.raises(R.Refused, match="longer than 4 MiB"):
@@ -653,6 +678,49 @@ def test_byte_bounds_are_checked_before_reading(tmp_path):   # C7
     out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
     with pytest.raises(R.Refused, match="longer than 1 MiB"), R.open_store(out) as s:
         s.ask(b" " * (R.MAX_QUESTION + 1))
+
+
+def test_reads_are_bounded_by_what_is_read_not_by_a_size_the_file_reports(tmp_path, monkeypatch, capsys):   # R1
+    """/dev/zero reports a size of 0 and never ends: a walk file or a list read from it is refused one byte past its
+    bound. The CLI reads a question the same way, one byte past 1 MiB and no more."""
+    import sys
+    monkeypatch.setattr(R, "MAX_FILE", 1000)
+    monkeypatch.setattr(R, "MAX_LIST", 1000)
+    endless = Path("/dev/zero")
+    assert endless.stat().st_size == 0
+    with pytest.raises(R.Refused, match="longer than 64 MiB"):
+        R.build(tmp_path / "x.db", [endless])
+    good = tmp_path / "walk-t1.jsonl"
+    good.write_bytes(line(walk("t1", ["a"], source="ship")))
+    with pytest.raises(R.Refused, match="longer than 4 MiB"):
+        R.build(tmp_path / "x.db", [good], endless)
+    out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
+    asked = []
+
+    class Endless:   # a stdin whose bytes never end, and which says how much was asked of it
+        def read(self, n=-1):
+            asked.append(n)
+            return b" " * (n if n >= 0 else 1 << 24)
+
+    class Stdin:
+        buffer = Endless()
+
+    monkeypatch.setattr(sys, "stdin", Stdin())
+    assert R.main(["ask", "--store", str(out)]) == 2
+    assert "longer than 1 MiB" in capsys.readouterr().err and asked == [R.MAX_QUESTION + 1]
+
+
+def test_a_seq_past_2_63_less_1_is_refused_and_the_largest_kept_is_stored_and_checked(tmp_path):   # R3
+    w = walk("t2", ["a", "g"])
+    w["steps"][1]["seq"] = R.MAX_SEQ
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["g"]), walk("t3", ["g"]), w])
+    (d,) = route_of(ask(out, ["g"], list_id))["detours"]
+    assert (d["attempt"], d["seq"]) == ("t2", 2 ** 63 - 1)
+    with R.open_store(out) as s:
+        assert s.check() > 0
+    w["steps"][1]["seq"] = R.MAX_SEQ + 1
+    with pytest.raises(R.Refused, match=r"steps\[1\]\.seq is past 2\^63 - 1"):
+        R.read_walks(line(w), "walk-t2.jsonl")
 
 
 def test_aggregate_bounds_are_checked_before_any_network(tmp_path, monkeypatch):   # C7
@@ -704,7 +772,11 @@ def test_a_damaged_walk_row_or_list_fails_the_check(tmp_path, damage):   # C8
     "UPDATE meta SET value = '0' WHERE key = 'budget'",
     "DELETE FROM listing",
     "INSERT INTO meta VALUES ('extra', '1')",
-], ids=["kernel", "list", "flag", "store version", "measure", "budget", "no listing", "extra key"])
+    "UPDATE meta SET value = '[\"share\",true]' WHERE key = 'measure'",
+    "UPDATE meta SET value = '[\"share\",1.0]' WHERE key = 'measure'",
+    "UPDATE meta SET value = '[\"share\",1,1]' WHERE key = 'measure'",
+], ids=["kernel", "list", "flag", "store version", "measure", "budget", "no listing", "extra key", "version true",
+        "version 1.0", "a third part"])
 def test_a_damaged_header_is_refused_when_the_store_is_opened(tmp_path, damage):   # C8
     out, _, _ = experiment(tmp_path, [walk("t1", ["a"])])
     db = sqlite3.connect(out)

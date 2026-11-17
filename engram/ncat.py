@@ -46,8 +46,10 @@ def _private(path, kind):
         raise RuntimeError(f"ncat won't use {path}: the {kind} must be this user's own, and writable by nobody else")
 
 
-def _built():
-    source = SOURCE.read_bytes()
+def _built(source=None):
+    """The library for `source`, the kernel's bytes as read once (SOURCE's when not given), compiled from those very
+    bytes on stdin, so what was hashed is what was built."""
+    source = SOURCE.read_bytes() if source is None else source
     compiler = next((c for c in COMPILERS if os.access(c, os.X_OK)), None)
     if compiler is None:
         raise RuntimeError('ncat needs a C compiler at /usr/bin/cc, /usr/bin/gcc or /usr/bin/clang')
@@ -61,7 +63,8 @@ def _built():
     if not out.exists():
         partial = cache / f'.{out.name}.{os.getpid()}'
         try:
-            subprocess.run([compiler, *flags, str(SOURCE), '-o', str(partial)], check=True, capture_output=True, env=BUILD_ENV)
+            subprocess.run([compiler, *flags, '-x', 'c', '-', '-o', str(partial)], input=source, check=True,
+                           capture_output=True, env=BUILD_ENV)
             partial.chmod(0o700)
             partial.replace(out)
         finally:
@@ -71,8 +74,11 @@ def _built():
 
 
 def _load():
+    """(library, the SHA-256 of the source it was built from). A test library named by NCAT_TEST_SO is taken to be of
+    SOURCE as read now."""
     chosen = os.environ.get('NCAT_TEST_SO')  # tests only, such as a sanitizer build; never set it for a service
-    path = Path(chosen) if chosen else _built()
+    source = SOURCE.read_bytes()
+    path = Path(chosen) if chosen else _built(source)
     if chosen:
         _private(path, 'library')
     lib = ctypes.CDLL(str(path))  # releases the GIL during each call; each category's lock keeps its calls one at a time
@@ -93,18 +99,25 @@ def _load():
     lib.ncat_set_budget.restype = ctypes.c_int32
     lib.ncat_set_work.argtypes = [ctypes.c_void_p, ctypes.c_int64]
     lib.ncat_set_work.restype = ctypes.c_int32
-    return lib
+    return lib, hashlib.sha256(source).hexdigest()
 
 
-_lib, _lib_lock = None, threading.Lock()
+_lib, _lib_source, _lib_lock = None, None, threading.Lock()
 
 
 def _kernel():
-    global _lib
+    global _lib, _lib_source
     with _lib_lock:
         if _lib is None:
-            _lib = _load()
+            _lib, _lib_source = _load()
         return _lib
+
+
+def source_digest():
+    """The SHA-256 of the source this process's library was built from: bound when it was loaded, so a source changed
+    since then is not named for cells the old library makes."""
+    _kernel()
+    return _lib_source
 
 
 def _dim(k):

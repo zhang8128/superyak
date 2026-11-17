@@ -55,8 +55,8 @@ left out and never 0.
 | `steps` | list | in order of `seq` |
 | `changed` | list of `[path, "added" \| "changed" \| "removed"]` | the paths the turn's commit changed, in the order recorded |
 
-A step is an object: `seq` (a non-negative integer, each greater than the last; the room numbers a turn's steps
-from 0), `tool` (one of `read`, `edit`, `write`, `search`, `shell`, `other`: the room's), `ok` (true or
+A step is an object: `seq` (a non-negative integer, each greater than the last, and at most 2^63 − 1, the largest the
+store's file keeps as an integer; the room numbers a turn's steps from 0), `tool` (one of `read`, `edit`, `write`, `search`, `shell`, `other`: the room's), `ok` (true or
 false), `named` (a list of `[path, blob]` in the order named, possibly empty), `seen_ms`, `result_ms`,
 `tokens_in`, `tokens_out` (each a non-negative integer or `null`). A step of an older store, which had one
 target and no list, is written with that one file as its list.
@@ -68,8 +68,9 @@ exactly 1 MiB is read); bytes that are not UTF-8. The refusal names the file, th
 its place in this schema (a step by its index), and never repeats a value or an unknown key. Nothing is dropped
 silently: a failed step and a failed turn are read and kept as what they are.
 
-**Bounds, each refused by name before the work it bounds:** a walk file over 64 MiB, before it is read; a list over
-4 MiB; a question over 1 MiB; JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
+**Bounds, each refused by name before the work it bounds:** a walk file over 64 MiB, a list over 4 MiB and a question
+over 1 MiB, each read to one byte past its bound and no further, whatever size the file reports or however it grows
+(the command line reads its question the same way); JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
 on a list; more than 1,000,000 named files over all of a store's steps, before any network or cell is made; and a
 string holding a lone surrogate, which no UTF-8 file can hold.
 
@@ -161,8 +162,10 @@ runs an experiment also requires `for_experiment: true`, and the list and measur
 
 **The answer** (section 8 gives its bytes): `v` 1; `store`, this store's version, `"3"` for this revision and raised
 whenever an answer's bytes could change for the same walks, list and question; `kernel`, the digest of the kernel
-source that built the store's cells (the first 16 hex digits of the SHA-256 of the source the kernel's loader builds
-from, an installed wheel's shared copy included), recorded at build time; `repo`;
+source that built the store's cells (the first 16 hex digits of the SHA-256 of the bytes the loaded library was
+compiled from, read once when it was loaded and given to the compiler as read, an installed wheel's shared copy
+included; a source changed later in the same process is not named for the old library's cells), recorded at build
+time; `repo`;
 `list`; `for_experiment`; `measure` (`name`,
 `version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
 `answers`, one for each goal, in the order asked, a goal asked twice answered twice.
@@ -212,8 +215,8 @@ number of taught turns that went a dearer way is their sum. Which 16 are kept ch
 never their order.
 
 **Refused, never dropped.** The inherited store drops a refused session and keeps the rest; this one does not.
-If the kernel refuses a goal's route, a way to it, or a detour, that goal answers `refused` with the kernel's
-code, and the refusal is recorded in the file. If it refuses a 0-generator or a road, the build stops, the old
+If the kernel refuses a goal's route, a kept way to it, or a kept detour (the only ones made: a way left out reaches
+no kernel), that goal answers `refused` with the kernel's code, and the refusal is recorded in the file. If it refuses a 0-generator or a road, the build stops, the old
 file stays, and the build says so: it is never served as the new list's.
 
 **The check.** The store's check rebuilds every cell through the kernel in the fixed order and compares keys,
@@ -228,6 +231,7 @@ is damage.
 it names and admits the stored walks against them again, compares every walk row (its attempt, item, family, base,
 standing and whether it teaches) with the walk it holds, and holds every walk to the store's repository. Opening a
 store refuses a header out of its form: an unknown or missing key, a kernel digest that is not 16 lowercase hex, a
+measure that is not exactly `[name, version]` with a string name and a whole-number version (not `true`, not `1.0`), a
 measure, list and flag that disagree (an experiment's is `share`, a list and `true`; a ship's is `ship-share`,
 `null` and `false`), and a file built by another store version, which is to be built again.
 
@@ -271,6 +275,13 @@ better way to do the work, or that it beats a table that made the same offer.
   is near 5 KB at 6 to 12 files a turn and near 15 KB at 40. The room's own 1 MiB bound on an answer stays the
   limit; the store does not cap how many goals a question asks. Measured on made walks with the real store at
   8ce02f78 (all hands b442f501 and a85c3e66), not on a scored history.
+- **What 16 bounds, and what it doesn't** (the code's reader, w69). It bounds how many detours a goal carries: for
+  V taught paths and E roads, at most `1 + V + E + 16V` generators and `17V` route and way composites. It is not a
+  bound on bytes. An answer still grows with its routes' lengths, the blobs seen at each path (one goal with no
+  detour: 549, 1,368 and 4,810 bytes at 1, 20 and 100 blobs), the digits of its fractions, and the goals asked.
+  The build still searches once per taught path, looks at every taught way to each goal, and sorts all of a goal's
+  dearer ways exactly; walks, visits, road counts and blobs are held in Python, outside the kernel's budget. Only
+  the 10,000-walk, 1,000,000-name and byte bounds of section 2 limit those.
 
 ## 10. How we know it is done
 
@@ -288,10 +299,11 @@ Each row names what a right store does, and what a wrong one would do that its t
 | Zero-cost cycles | Roads every taught turn walked, in a cycle: the route is simple, and first in byte order of the ways of least cost | One that loops, or settles a file by cost alone |
 | Exact, and the same bytes | The same store's answer, byte for byte, on two machines; with the files given in another order; with goals permuted and repeated; with several detours; under a changed ambient `decimal` context. `nats` of 1/2 is `0.693147181`. Two products equal as floats and different as fractions are told apart | One that follows read order, the ambient context, or float equality |
 | A detour is real | One with a shared final road, and one whose way passes a file twice, each kept and checked | One that keeps a way no taught turn went, a road no taught turn walked, a way no dearer, sides that do not meet, or a right key with a tampered turn, goal or visit |
-| Only the cheapest are kept | Twenty dearer turns to one goal, the ten cheaper with the later names and the ten dearer tied: kept are the ten cheaper and the earliest six of the tie, listed and made as cells in `attempt` order, with `detours_more` 4; a goal with none left out says 0 | One that keeps by name, the dearest, the later of a tie, or more or fewer than 16; lists or makes them in cost order; says 0 when some were left out; or passes a check with a tampered count |
+| Only the cheapest are kept | Twenty dearer turns to one goal, the ten cheaper with the later names and the ten dearer tied: kept are the ten cheaper and the earliest six of the tie, listed and made as cells in `attempt` order, with `detours_more` 4; a goal with none left out says 0. Seventeen ways whose shares are all 0.0 as floats: the latest-named, cheapest exactly, is kept | One that keeps by name, the dearest, the later of a tie, or more or fewer than 16; lists or makes them in cost order; says 0 when some were left out; ranks by float; or passes a check with a tampered count |
 | What is not there is said | Each told apart and in precedence: no history, with a goal never named and one only untaught; a file no walk named; a file only an untaught walk named; a kernel refusal for a route and for a way, forced through the budget, with its code | One that conflates two kinds, or answers a route made of what was left |
 | A question is the store's | Answered when its `repo`, `list` and `measure` are the store's | One that answers a question of another list, repository or measure, or answers it as no route |
 | The store is the store | It rebuilds whole and renames into place; a failed build leaves the old file and says so; its check rebuilds every key and every witness; a recall run with this file present reads nothing of it | One that serves a partial or old file as the new list's, or accepts a damaged 2-cell recipe or witness |
+| Bounds are on what is read | A walk file and a list read from `/dev/zero`, which reports a size of 0 and never ends, refused one byte past the bound; the command line asks its stdin for 1 MiB and one byte, once; a `seq` of 2^63 − 1 stored and checked, and 2^63 refused by name; a header whose measure version is `true`, `1.0`, or has a third part, refused; a source changed after the library loaded is not the digest a new store records | One that trusts a reported size, reads a question whole, fails on an integer SQLite can't hold, takes `true` for 1, or names a source the loaded library wasn't built from |
 
 ## Decisions
 
@@ -308,8 +320,9 @@ Each row names what a right store does, and what a wrong one would do that its t
 10. **A detour is a 2-generator,** the rule the store spec left to stage 4: from a taught turn's way to a
     strictly cheaper route between the same 0-cells. It shows that and no more.
 11. **A goal keeps its 16 cheapest detours and counts the rest** (store `"3"`). The room's block uses only how many
-    turns went a dearer way (the lead read `route_offer.rs`), so nothing it says is lost, and an answer's size stops
-    growing with the history. 16 is a constant of this store version, not a field.
+    turns went a dearer way (the lead read `route_offer.rs`), so nothing it says is lost, and the number of detours
+    a goal carries stops growing with the history. An answer's bytes are still bounded only by the room's 1 MiB
+    (section 9). 16 is a constant of this store version, not a field.
 
 ## Left to the builder
 
@@ -358,3 +371,16 @@ kernel's, so that the room can keep them with each offer (the room's spec, secti
 answer's size was left to measure on the scored history; it was measured now on made histories instead (section 9).
 A goal keeps its 16 cheapest detours and says `detours_more`. Sections 6, 7, 9 and 10, decision 11, and the fixture,
 whose walks, list and question are unchanged.
+
+**The code's reader (w69, Sol) on d44f4f03, approve with named changes, all made.** It confirmed the cap's
+selection, counts, order and checks, and the seven planted faults, and found an eighth (a ranking by float) that the
+tests now catch. Of the eight changes after w50, it found C1 to C4 and C6 made as named, and C5, C7 and C8 made
+otherwise; R1, R2 and R4 finish them.
+
+| Named change | Where |
+| --- | --- |
+| R1. Bound the reads themselves: the command line's question, and the walk and list files | Section 2's bounds |
+| R2. Bind the kernel's digest to the library loaded, not the source on disk now | Section 6 |
+| R3. A `seq` the file can't hold: refused past 2^63 − 1 | Section 2 |
+| R4. The header's measure in its exact form | Section 7, "What the check binds" |
+| R5. Say that 16 bounds a goal's detours, not an answer's bytes, and that only kept ways reach the kernel | Sections 7 and 9; decision 11 |
