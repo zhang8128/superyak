@@ -23,10 +23,17 @@ out.mkdir(parents=True, exist_ok=True)
 workers = sorted(data["workers"], key=lambda w: w["order"])
 KS = (5, 10, 16)
 REPO, BASE = "1" * 40, "2" * 40
+# Not files of the repository: the team's own plan files, which the export's path rule folded under team/ (all hands
+# dcb78cd1). The repository's own paths under team/ start team/superyak_team/.
+NOT_THE_REPOSITORY = ("team/teams/",)
+
+
+def ours(p):
+    return R.plain_path(p) and not p.startswith(NOT_THE_REPOSITORY)
 
 
 def walk_of(w):
-    reads = [p for p in w["files_read_in_order_of_first_reading"] if R.plain_path(p)]
+    reads = [p for p in w["files_read_in_order_of_first_reading"] if ours(p)]
     return {"v": 1, "source": "ship", "repo": REPO, "base": BASE, "item": f"item-{w['worker']}",
             "attempt": f"a{w['order']:03d}-{w['worker']}", "family": "codex" if w["program"] == "codex" else "claude",
             "verdict": None, "standing": "unjudged",
@@ -38,13 +45,13 @@ def walk_of(w):
 
 rows, skipped = [], Counter()
 for w in workers:
-    brief = [p for p in w["files_its_brief_named"] if R.plain_path(p)]
-    target = {p for p in w["files_read_in_order_of_first_reading"] if R.plain_path(p)} - set(brief)
+    brief = [p for p in w["files_its_brief_named"] if ours(p)]
+    target = {p for p in w["files_read_in_order_of_first_reading"] if ours(p)} - set(brief)
     if not brief or not target:
         skipped["no brief file or nothing read beyond it"] += 1
         continue
     earlier = [x for x in workers if x["order"] < w["order"] and x["files_read_in_order_of_first_reading"]]
-    area = [x for x in earlier if set(x["files_its_brief_named"]) & set(brief)]
+    area = [x for x in earlier if {p for p in x["files_its_brief_named"] if ours(p)} & set(brief)]
     for history_name, history in (("all earlier", earlier), ("same area", area)):
         if not history:
             skipped[f"{history_name}: no history"] += 1
@@ -61,7 +68,7 @@ for w in workers:
                          "goals": brief})
         with R.open_store(d / "routes.db") as s:
             answer = json.loads(s.ask(q))
-        count = Counter(p for x in history for p in set(x["files_read_in_order_of_first_reading"]) if R.plain_path(p))
+        count = Counter(p for x in history for p in set(x["files_read_in_order_of_first_reading"]) if ours(p))
         places = [p for p in sorted(count, key=lambda p: (-count[p], p.encode())) if p not in brief]
         route_first = []
         for a in answer["answers"]:

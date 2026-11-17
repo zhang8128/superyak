@@ -1,9 +1,9 @@
 # v2: places, not routes (store "4")
 
-Tardis, 2026-11-17, draft 2, for a fresh reader after Thursday's rehearsal. A change to the store's side of
+Tardis, 2026-11-17, draft 3, for a fresh reader once the rehearsal (begun 19:42 UTC on 11-17) has reported. A change to the store's side of
 `2026-11-16-v2-walks-into-routes.md` ("the store's spec", revision 7, store `"3"`, approved at 6c861121). The room's
 half is Serenity's, in a revision of `2026-11-16-v2-a-route-offered.md`. Each side gets its own read, and both land in
-step, as store "3" did. Thursday's rehearsal is unchanged: it runs store "3" at 45be5dd0, frozen by hash.
+step, as store "3" did. The rehearsal runs store "3" at 45be5dd0, frozen by hash, and nothing here touches it.
 
 ## Why
 
@@ -16,15 +16,17 @@ the way between them adds nothing.
 - **Tardis's** (all hands 0901d7dd), with this store at 6c861121, the measure posted before the run (fd38a8b8). On 49
   workers' first readings (Serenity's `workers-ordered-reads.json`, sha256 30f6b0f9…2d07), each worker's history was
   the earlier workers, built as a ship's store. The goals were the brief's files, and the target was what it read
-  beyond its brief (a median of 8 files). Recall:
+  beyond its brief (a median of 8 files). Recall, with every path under `team/teams/` left out (25 entries that are
+  the team's own plan files, not the repository's, which the export had folded under `team/`; all hands dcb78cd1):
 
   | History | n | @5 route / places | @10 | @16 |
   | --- | --- | --- | --- | --- |
-  | every earlier worker | 48 | 0.134 / 0.155 | 0.225 / 0.232 | 0.297 / 0.302 |
-  | the same area (a shared brief file) | 43 | 0.270 / 0.276 | 0.373 / 0.394 | 0.488 / 0.487 |
+  | every earlier worker | 48 | 0.149 / 0.163 | 0.240 / 0.246 | 0.320 / 0.325 |
+  | the same area (a shared brief file) | 43 | 0.280 / 0.284 | 0.391 / 0.413 | 0.513 / 0.511 |
 
-  Route better, worse and same: at @5, 4/8/36 and 5/8/30; at @10, 3/7/38 and 4/10/29. A route adds a median of 1 to 2
-  files beyond the brief; the rest of either list is the same ranked places. On the second pilot's 16 walks the two
+  Route better, worse and same: at @5, 6/8/34 and 6/7/30; at @10, 4/7/37 and 4/10/29. A route adds a median of 2
+  files beyond the brief; the rest of either list is the same ranked places. The first run, with those 25 paths in
+  (0901d7dd), read 1 to 2 points lower on both lists and said the same. On the second pilot's 16 walks the two
   lists could not be told apart (22 files in all).
 
 - **What moves recall is the history, not the order:** the area's history about doubles what either list finds.
@@ -72,8 +74,10 @@ most `PLACES_KEPT` = 16, a constant of store "4". Beside it, `places_more`: how 
 whole number, always present, 0 when none was left out. When `N` is 0, `places` is `[]` and `places_more` is 0.
 
 **The question.** `among` is optional. When present it is a non-empty array of distinct attempts, sorted by bytes, each
-a taught turn of this store; anything else (an attempt not in the store, an untaught one, a repeat, an unsorted list,
-more than the store's taught turns) is refused as a question that is not the store's, never answered as fewer. Its
+a taught turn of this store; anything else (an empty list, an attempt not in the store, an untaught one, a repeat, an
+unsorted list) is refused as a question that is not the store's, never answered as fewer. An empty `among` is refused,
+not read as absent: "all" is asked for only by leaving `among` out, on purpose, and a room whose rule chooses no one
+offers nothing rather than asking (Serenity, all hands feab6e2d). Its
 attempts are echoed in the answer as `among`, or `null` when absent, so the answer says which history it counted.
 
 **Counted when asked.** Each taught turn's set of named paths is read from its stored walk, as routes' visits already
@@ -95,7 +99,7 @@ is. Their inputs are not in the repository.
 | Ranked and cut | Twenty named paths at distinct counts and a tie at the edge: 16 kept by count then bytes, `places_more` 4 | One that keeps by name, the wrong side of a tie, or not 16 |
 | Goals left out | A goal that is also the most named path is not in `places` | One that offers a turn its own goal |
 | Only taught turns | An untaught walk's paths count nothing | One that counts what the measure doesn't teach |
-| Among | Two areas of one store give their own counts; `among` absent counts all; an unknown, untaught, repeated or unsorted attempt is refused; the answer echoes `among` | One that answers an unknown attempt as fewer turns, or hides which turns it counted |
+| Among | Two areas of one store give their own counts; `among` absent counts all; an empty list, an unknown, untaught, repeated or unsorted attempt is refused; the answer echoes `among` | One that answers an unknown attempt as fewer turns, or hides which turns it counted |
 | Checked | A tampered walk fails the check, as in store "3" | One that serves a count its walks don't make |
 | Store "3" unchanged inside | The fixture's `answers` byte for byte, with `store` "4" and the new keys | One that moves a route |
 
