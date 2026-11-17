@@ -34,6 +34,8 @@ if args == ["clock", "run", "--help"]:
     sys.exit(0)
 room = pathlib.Path(args[1]); words = args[2:]
 if words == ["init"]:
+    if config.get("init_fails"):
+        sys.exit(7)
     room.mkdir()
 elif words[:2] == ["item", "add"]:
     (room / "add.json").write_text(json.dumps(words))
@@ -348,6 +350,47 @@ class PilotScripts(unittest.TestCase):
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("REFUSED", done.stdout + done.stderr)
 
+    def test_empty_jail_read_entries_are_skipped(self):
+        out = self.tmp / "empty-jail-entry"
+        done = subprocess.run(["sh", str(HERE / "turn.sh"), str(out), str(self.items), self.commit, WORKER],
+            cwd=self.items, env=dict(self.env, YAK_JAIL_READ=os.pathsep + str(self.bin) + os.pathsep),
+            capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue((out / "manifest.json").is_file())
+
+    def test_jail_reads_refuse_case_aliases_of_protected_directories(self):
+        alias = self.items.with_name(self.items.name.upper())
+        if not alias.exists() or not os.path.samefile(alias, self.items):
+            self.skipTest("filesystem distinguishes case")
+        refs = self.tmp / "references"
+        refs.mkdir()
+        for protected in (self.items, refs):
+            for relation in ("same", "parent", "child"):
+                with self.subTest(protected=protected.name, relation=relation):
+                    out = self.tmp / ("case-" + protected.name + "-" + relation)
+                    target = protected.with_name(protected.name.upper())
+                    if relation == "parent":
+                        target = target.parent.with_name(target.parent.name.upper())
+                    elif relation == "child":
+                        target = target / "not-created"
+                    done = self.run_script("pilot.sh", out, self.items, WORKER, "--references", refs,
+                        env=dict(self.env, YAK_JAIL_READ=str(target)))
+                    self.assertNotEqual(done.returncode, 0)
+                    self.assertIn("YAK_JAIL_READ overlaps", done.stderr)
+                    self.assertFalse(out.exists())
+
+    def test_jail_reads_refuse_items_directory_links_in_both_directions(self):
+        link = self.tmp / "items-link"
+        link.symlink_to(self.items, target_is_directory=True)
+        for n, (items, read) in enumerate(((link, self.items), (self.items, link))):
+            with self.subTest(items=items.name, read=read.name):
+                out = self.tmp / ("linked-items-%d" % n)
+                done = self.run_script("turn.sh", out, items, self.commit, WORKER,
+                    env=dict(self.env, YAK_JAIL_READ=str(read)))
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("YAK_JAIL_READ overlaps", done.stderr)
+                self.assertFalse(out.exists())
+
     def test_identity_environment_is_required_before_output(self):
         for key in ("HOME", "USER", "LOGNAME"):
             for missing in (False, True):
@@ -639,6 +682,48 @@ class PilotScripts(unittest.TestCase):
             env=dict(self.env, YAK_PILOT_ROUNDS="0"))
         self.assertNotEqual(done.returncode, 0)
         self.assertFalse(out.exists())
+
+    def assert_forged_reference_is_refused(self, mode, outcome):
+        refs = self.tmp / "references"
+        refs.mkdir()
+        for n, entry in enumerate(self.entries):
+            self.configure(mode=mode if n == 0 else "passed")
+            directory = refs / entry["commit"]
+            done = self.run_script("reference.sh", directory, self.items, entry["commit"])
+            self.assertEqual(done.returncode, 1 if n == 0 else 0, done.stdout + done.stderr)
+        path = refs / self.commit / "reference.json"
+        receipt = json.loads(path.read_text())
+        self.assertEqual(receipt["outcome"], outcome)
+        receipt.update(outcome="passed", verified=True, handed_in_tree=receipt["reference_tree"])
+        path.write_text(json.dumps(receipt))
+        out = self.tmp / "pilot"
+        done = self.run_script("pilot.sh", out, self.items, WORKER, "--references", refs,
+            env=dict(self.env, YAK_PILOT_ROUNDS="0"))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn(self.commit, done.stderr)
+        self.assertIn("reference turn", done.stderr)
+        self.assertFalse(out.exists())
+
+    def test_pilot_refuses_forged_failed_reference_run(self):
+        self.assert_forged_reference_is_refused("failed", "check failed")
+
+    def test_pilot_refuses_forged_wrong_tree_reference_run(self):
+        self.assert_forged_reference_is_refused("tree_diff", "another tree")
+
+    def test_pilot_logs_turn_failure_before_manifest(self):
+        refs = self.receipts()
+        self.configure(init_fails=True)
+        out = self.tmp / "pilot"
+        done = self.run_script("pilot.sh", out, self.items, WORKER, "--references", refs,
+            env=dict(self.env, YAK_PILOT_ROUNDS="0"))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.stderr, "")
+        log = (out / "pilot.log").read_text()
+        self.assertIn("left no usable observation, or its script failed: the pilot ends here", log)
+        self.assertNotIn("Traceback", log)
+        self.assertEqual(len(list(out.glob("[0-9]*"))), 1)
+        self.assertEqual(list(out.glob("[0-9]*/manifest.json")), [])
+        self.assertFalse((out / "tables.md").exists())
 
     def test_pilot_stops_on_lost_turn_stop_file_or_changed_block(self):
         refs = self.receipts()

@@ -137,10 +137,22 @@ def settings(items, out, references=None):
     if references is not None:
         protected.append(Path(references).resolve())
     for entry in os.environ["YAK_JAIL_READ"].split(os.pathsep):
+        if not entry:
+            continue
         read = Path(entry).resolve()
         for answer in protected:
             if read == answer or read in answer.parents or answer in read.parents:
                 raise Refused("YAK_JAIL_READ overlaps the items, references or output directory")
+            # Compare directory identities too: resolve() need not restore the
+            # on-disk case. Only compare each endpoint with the other's ancestry;
+            # siblings sharing a parent are allowed.
+            for child, parent in ((read, answer), (answer, read)):
+                for ancestor in (child, *child.parents):
+                    try:
+                        if os.path.samefile(ancestor, parent):
+                            raise Refused("YAK_JAIL_READ overlaps the items, references or output directory")
+                    except FileNotFoundError:
+                        pass
     return str(Path(yak).resolve())
 
 
@@ -324,7 +336,7 @@ def pilot(args):
     # Every receipt is checked before creating even the pilot directory.
     receipts = {}
     for entry in entries:
-        _, frozen_hash = source_checks(items, entry)
+        source, frozen_hash = source_checks(items, entry)
         receipt = load(Path(references) / entry["commit"] / "reference.json")
         wanted = {"commit": entry["commit"], "base": entry["base"], "reference": entry["reference"],
             "check_hash": frozen_hash, "machine": machine(), "yak_sha256": digest(Path(yak).read_bytes()), "outcome": "passed"}
@@ -338,6 +350,11 @@ def pilot(args):
                 or manifest.get("slug") != receipt["commit"]
                 or attempts[0].get("commit") != receipt["handed_in"]):
             raise Refused("%s: reference.json names another turn" % entry["commit"])
+        if attempts[0].get("passed") is not True:
+            raise Refused("%s: reference turn did not pass" % entry["commit"])
+        if (git(reference_turn / "repo", "rev-parse", receipt["handed_in"] + "^{tree}")
+                != git(source, "rev-parse", entry["reference"] + "^{tree}")):
+            raise Refused("%s: reference turn handed in another tree" % entry["commit"])
         receipts[entry["commit"]] = receipt
     out = new_output(out)
     (out / "plan.txt").write_text(text, encoding="utf-8")
@@ -378,7 +395,7 @@ def pilot(args):
             code = subprocess.call(["sh", str(HERE / "turn.sh"), str(turn_out), str(items), commit, worker, flag],
                 env=dict(os.environ, YAK=yak, YAK_PILOT_SLOT=slot, YAK_PILOT_KIND=kind), stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT)
-        if load(turn_out / "manifest.json").get("yak", {}).get("sha256") != receipts[commit]["yak_sha256"]:
+        if not code and load(turn_out / "manifest.json").get("yak", {}).get("sha256") != receipts[commit]["yak_sha256"]:
             say("turn %s names another yak: the pilot ends here" % slot)
             return 1
         if code:
