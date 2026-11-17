@@ -50,10 +50,13 @@ reads it, are outside it. It is there for a repository whose files keep git wait
 looked for). A change within the bounds that is dear to compare can run out of time too, and is then not read. A
 line of a million characters is read whole, and its test asks that the program end within 20 seconds.
 
-An interrupt from the keyboard is held back while git is started and while it is ended and waited for, and is let
-through while git's output is read: so one interrupt, whenever it comes, leaves no git behind. git stays in this
-program's own process group, so that whoever ends the group ends git with it. If this program alone is ended
-outright, git is not.
+An interrupt is not held back. On a way out by an error of this program's own, or by the time being up, git is
+ended and waited for. An interrupt can end this program between any two of its steps, the tidying's among them,
+and then git may be left running: nothing written here closes that, since an interrupt that has reached the
+process is raised whenever Python next looks, wherever that is. From a keyboard git is sent the same interrupt
+and ends by itself, because it stays in this program's own process group; whoever ends the group ends git with
+it. If this program alone is interrupted or ended, a git left behind ends when its work is done, which on a
+repository that keeps it waiting is never.
 
 A repository whose objects are named by SHA-256 is not read: the program's own repository names them by SHA-1, the
 commits are not found, and it ends with 1.
@@ -65,7 +68,6 @@ import os
 import re
 import select
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -101,8 +103,6 @@ MAX_DIFF_BYTES = 2097152
 MAX_LIST_BYTES = 524288
 # The most that the places named may come to, each counted as its path's bytes and 64 more: 1 MiB.
 MAX_PLACES_BYTES = 1048576
-# What is held back while git is started and while it is ended and waited for.
-INTERRUPTS = {signal.SIGINT}
 # A file of more bytes than this is not read: git is told to treat it as it treats a binary one. 16 MiB.
 MAX_FILE_BYTES = 16777216
 # How long all of git's runs together may take.
@@ -163,48 +163,37 @@ class Git:
     def __call__(self, args, limit):
         """git's output, or Fail if it is longer than `limit` bytes, if git fails, or if the time for all of git's
         runs is up. One thread does all of it: it reads until the time is up, and it alone ends git, and only
-        before it has waited for git, so no signal goes to a process that is no longer git. On every way out of
-        here, an error of this program's own among them, git is ended if it runs and is waited for. An interrupt
-        is held back from before git is started until its output is being read, and again from the end of the
-        reading until git is ended and waited for: it is raised in the reading or after all is tidied, and git
-        itself is started with interrupts as they were."""
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
+        before it has waited for git, so no signal goes to a process that is no longer git. On a way out of here
+        by an error of this program's own, or by the time being up, git is ended if it runs and is waited for.
+        An interrupt is not held back: see the opening comment."""
+        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        chunks, size, late = [], 0, False
         try:
-            proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, held))
-            chunks, size, late = [], 0, False
-            try:
-                signal.pthread_sigmask(signal.SIG_SETMASK, held)
-                assert proc.stdout is not None
-                pipe = proc.stdout.fileno()
-                while size <= limit:
-                    left = self.until - time.monotonic()
-                    if left <= 0 or not select.select([pipe], [], [], left)[0]:
-                        late = True
-                        break
-                    chunk = os.read(pipe, 65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    size += len(chunk)
-                if size <= limit and not late:
-                    # git has closed its output. It has what is left of the time to end.
-                    try:
-                        proc.wait(timeout=max(0.0, self.until - time.monotonic()))
-                    except subprocess.TimeoutExpired:
-                        late = True
-                # Held back again before the way out, so that the tidying below is entered with it held.
-                signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
-            finally:
-                signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
-                if proc.poll() is None:
-                    proc.kill()
-                proc.wait()
-                if proc.stdout is not None:
-                    proc.stdout.close()
+            assert proc.stdout is not None
+            pipe = proc.stdout.fileno()
+            while size <= limit:
+                left = self.until - time.monotonic()
+                if left <= 0 or not select.select([pipe], [], [], left)[0]:
+                    late = True
+                    break
+                chunk = os.read(pipe, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            if size <= limit and not late:
+                # git has closed its output. It has what is left of the time to end.
+                try:
+                    proc.wait(timeout=max(0.0, self.until - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    late = True
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            if proc.stdout is not None:
+                proc.stdout.close()
         if size > limit:
             raise Fail("git's output is longer than %d bytes, so it is not read" % limit)
         if late:
