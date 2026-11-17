@@ -523,6 +523,10 @@ except OSError as e:
 "#;
 
 /// The run with no jail is the control: there all of it is reached.
+///
+/// Of the seven calls the filter refuses outright, one is tried here from inside a jail: one of the keyring's
+/// three. The other six are held by the filter's own tests, which run its program as the kernel would, and
+/// not by a try inside a jail.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs the room: a list of processes and a jail"]
@@ -546,6 +550,267 @@ fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let
         "keyring:refused\nkey-list:hidden\nnetlink-routes:made\nnetlink-device-events:refused\n\
          cipher-socket:refused\nown-loopback:works\n",
         "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// What a run can try with one end of a Unix pair of the seqpacket kind, to reach a socket that listens by
+/// name. `argv[1]` is that socket's path, and `argv[2]` a name the run may give an end of its own. Each try
+/// says one line, and every wait in it has a limit. An error that is not the operating system refusing a try
+/// ends it there, with the lines that follow missing.
+#[cfg(target_os = "linux")]
+const AN_END_OF_A_SEQPACKET_PAIR: &str = r#"import ctypes, os, socket, stat, sys
+target, mine = sys.argv[1], sys.argv[2]
+def say(name, word):
+    print(name + ":" + word, flush=True)
+say("name", "socket" if stat.S_ISSOCK(os.stat(target).st_mode) else "not-a-socket")
+try:
+    socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET).close()
+    say("socket-of-that-kind", "made")
+except OSError:
+    say("socket-of-that-kind", "refused")
+try:
+    a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+except OSError:
+    say("pair", "refused")
+    sys.exit(0)
+say("pair", "made")
+a.settimeout(2)
+b.settimeout(2)
+a.send(b"hello")
+say("own-pair", "works" if b.recv(16) == b"hello" else "broken")
+def named_send(name, payload):
+    try:
+        a.sendto(payload, target)
+    except OSError:
+        say(name, "refused")
+        return
+    try:
+        say(name, "to-the-other-end" if b.recv(16) == payload else "lost")
+    except OSError:
+        say(name, "lost")
+def join(sock, name):
+    try:
+        sock.connect(target)
+        say(name, "made")
+    except OSError:
+        say(name, "refused")
+named_send("named-send", b"NAMED")
+join(a, "join")
+libc = ctypes.CDLL(None, use_errno=True)
+no_family = (ctypes.c_ubyte * 16)()
+say("unjoin", "made" if libc.connect(a.fileno(), no_family, 16) == 0 else "refused")
+named_send("named-send-after-unjoin", b"UNJOINED")
+join(a, "join-after-unjoin")
+b.close()
+try:
+    a.sendto(b"AFTER", target)
+    say("named-send-after-close", "sent")
+except OSError:
+    say("named-send-after-close", "refused")
+join(a, "join-after-close")
+c, d = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+c.settimeout(2)
+try:
+    c.bind(mine)
+    say("bind", "made")
+except OSError:
+    say("bind", "refused")
+try:
+    c.listen(1)
+    say("listen", "made")
+except OSError:
+    say("listen", "refused")
+try:
+    c.accept()
+    say("accept", "made")
+except OSError:
+    say("accept", "refused")
+"#;
+
+/// Listens by name with a socket of the seqpacket kind, and says each thing that arrives, until its input
+/// ends. It gives up by itself after a minute, so that whoever reads what it says never waits for ever.
+#[cfg(target_os = "linux")]
+const LISTEN_AS_SEQPACKET: &str = r#"import select, socket, sys, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+s.bind(sys.argv[1])
+s.listen(8)
+print("listening", flush=True)
+end = time.time() + 60
+while time.time() < end:
+    ready, _, _ = select.select([s, sys.stdin], [], [], 0.2)
+    if sys.stdin in ready:
+        break
+    if s in ready:
+        conn, _ = s.accept()
+        conn.settimeout(1)
+        try:
+            data = conn.recv(64)
+        except OSError:
+            data = b""
+        print("arrived:" + data.decode(errors="replace"), flush=True)
+print("stopped" if time.time() < end else "gave-up", flush=True)
+"#;
+
+/// A socket made for that listener, which is what a run inside the jail cannot make.
+#[cfg(target_os = "linux")]
+const CALL_AS_SEQPACKET: &str = r#"import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+s.settimeout(5)
+s.connect(sys.argv[1])
+s.send(b"CONTROL")
+"#;
+
+/// The filter lets a run make a Unix pair of the seqpacket kind, because a program built with this toolchain
+/// makes one before it starts a child. This holds an end of such a pair to its other end. A socket of that
+/// kind listens by name inside the checkout, which the jail shows. From inside, the name is seen; a pair is
+/// made and works; and nothing a run tries with an end of it reaches the listener: a send that names the
+/// listener goes to the other end, joining the listener is refused, unjoining is refused, the same again
+/// once the other end is closed, and an end given a name cannot listen or accept.
+///
+/// Two controls. A socket made for the listener, outside the jail, reaches it: so the listener was there to
+/// be reached. And the same tries with no jail give the same lines but one: there a socket of that kind can
+/// be made. So it is the kernel that keeps an end to its other end, and the filter that keeps a run from the
+/// socket that would reach the listener.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs the room: a list of processes and a jail"]
+fn on_linux_an_end_of_a_seqpacket_pair_reaches_only_its_other_end() {
+    use std::io::{BufRead, BufReader};
+    let g = ground();
+    let target = g.checkout.join("t.sock");
+    let mut listener = Command::new("/usr/bin/python3")
+        .args(["-c", LISTEN_AS_SEQPACKET, target.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut heard = BufReader::new(listener.stdout.take().unwrap());
+    let mut line = String::new();
+    heard.read_line(&mut line).unwrap();
+    assert_eq!(line, "listening\n", "the listener did not start");
+
+    let called = Command::new("/usr/bin/python3")
+        .args(["-c", CALL_AS_SEQPACKET, target.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        called.status.success(),
+        "control failed: {}",
+        String::from_utf8_lossy(&called.stderr)
+    );
+    line.clear();
+    heard.read_line(&mut line).unwrap();
+    assert_eq!(
+        line, "arrived:CONTROL\n",
+        "control failed: a socket made for the listener did not reach it"
+    );
+
+    let tries = |own_name: &str| {
+        [
+            "-c".to_string(),
+            AN_END_OF_A_SEQPACKET_PAIR.to_string(),
+            target.to_str().unwrap().to_string(),
+            g.checkout.join(own_name).to_str().unwrap().to_string(),
+        ]
+    };
+    let lines = |a_socket_of_that_kind: &str| {
+        format!(
+            "name:socket\nsocket-of-that-kind:{a_socket_of_that_kind}\npair:made\nown-pair:works\n\
+             named-send:to-the-other-end\njoin:refused\nunjoin:refused\n\
+             named-send-after-unjoin:to-the-other-end\njoin-after-unjoin:refused\n\
+             named-send-after-close:refused\njoin-after-close:refused\n\
+             bind:made\nlisten:refused\naccept:refused\n"
+        )
+    };
+    let free = Command::new("/usr/bin/python3")
+        .args(tries("free.sock"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&free.stdout),
+        lines("made"),
+        "control failed: {}",
+        String::from_utf8_lossy(&free.stderr)
+    );
+    let out = run_in(&jail(&g), "/usr/bin/python3", &tries("jailed.sock"));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        lines("refused"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Its input ends, and it says what else it heard: nothing.
+    drop(listener.stdin.take());
+    let mut rest = String::new();
+    heard.read_to_string(&mut rest).unwrap();
+    assert_eq!(rest, "stopped\n", "something arrived at the listener");
+    assert!(listener.wait().unwrap().success());
+}
+
+/// Not a test of the jail by itself. When a file named `start-a-child` is in the directory this is run in, it
+/// starts a child by a bare name, found on a path it gives, and says what came of it. The test below runs
+/// this same test program inside the jail to do that. A bare name with a path of its own is what makes the
+/// standard library start the child the way that first makes a Unix pair of the seqpacket kind.
+#[test]
+fn started_with_a_file_beside_it_this_starts_a_child_by_a_bare_name() {
+    let here = std::env::current_dir().unwrap();
+    if !here.join("start-a-child").exists() {
+        return;
+    }
+    match Command::new("yak-jail-child").env("PATH", &here).output() {
+        Ok(out) => println!("\nchild:{}", String::from_utf8_lossy(&out.stdout).trim()),
+        Err(e) => println!("\nno-child:{}", e.raw_os_error().unwrap_or(0)),
+    }
+}
+
+/// A program built with this toolchain starts another inside the jail, and reads what it wrote. On Linux this
+/// failed until the filter let a Unix pair of the seqpacket kind through: the program was refused the pair it
+/// makes first, with "operation not permitted", and so `cargo` could not build inside the jail. The run with
+/// no jail is the control.
+#[test]
+#[ignore = "needs the room: a list of processes and a jail"]
+fn a_program_of_ours_starts_a_child_inside_the_jail() {
+    use std::os::unix::fs::PermissionsExt;
+    let g = ground();
+    let helper = g.checkout.join("helper");
+    fs::copy(std::env::current_exe().unwrap(), &helper).unwrap();
+    let child = g.checkout.join("yak-jail-child");
+    fs::write(&child, "#!/bin/sh\necho CHILD-MARKER\n").unwrap();
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(g.checkout.join("start-a-child"), "").unwrap();
+    let args = [
+        "--exact",
+        "started_with_a_file_beside_it_this_starts_a_child_by_a_bare_name",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+    .map(String::from);
+    let said = |out: &Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|line| line.starts_with("child:") || line.starts_with("no-child:"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let free = Command::new(&helper)
+        .args(&args)
+        .current_dir(&g.checkout)
+        .output()
+        .unwrap();
+    assert_eq!(
+        said(&free),
+        "child:CHILD-MARKER",
+        "control failed: {}",
+        String::from_utf8_lossy(&free.stderr)
+    );
+    let out = run_in(&jail(&g), helper.to_str().unwrap(), &args);
+    assert_eq!(
+        said(&out),
+        "child:CHILD-MARKER",
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
 }
