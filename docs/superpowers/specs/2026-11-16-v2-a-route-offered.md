@@ -845,7 +845,8 @@ revision: its answer's SHA-256 begins bb7e7d0a2d86a2d7, and its walks, list and 
 The store's owner has since said the same of its named changes. A fresh reader of the other family read
 the room's code and said: push with named changes, four: the cost comparison of section 2; the block's
 own numbers asserted where its tests stopped at the offer file; a version that only begins with the right
-one refused in a test; and the size paragraph above.
+one refused in a test; and the size paragraph above. A second fresh reader of that family found all four
+made as named, worked the comparison's arithmetic again in a model of its own, and named no finding.
 
 **Changed between the two reads, and confirmed in the second:**
 
