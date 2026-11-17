@@ -11,8 +11,8 @@ revision 6's change to the reach of one rule with one more. All fourteen are mad
 says where. Two things came from the ship
 Tardis, which owns the store this rests on, and one from a measurement; that section names them too.
 
-Revision 9 adds section 9, after the pilot: what the pilot fixed, two measurements made before any scored
-turn, and what they ask of the scored design's reader. It changes nothing in sections 1 to 8.
+Revision 9 adds section 9, after the pilot: what the pilot fixed, what was measured before any scored
+turn, what the scored design's reader then said, and what follows. It changes nothing in sections 1 to 8.
 
 ## Why the design changes
 
@@ -448,7 +448,9 @@ sections 5 and 6 have them, could show anything.
 The ranker of section 5 counts the words a scored item's title shares with a history item's, leaving out
 any word that more than half the history titles hold. Every title here is made by one sentence around the
 names of an item's test files, so the only words left to count are the parts of those names: 34 of the 49
-words in the history's titles. Worked on the real list, with every history item's turn taken to arrive:
+words in the history's titles. Worked on the real list, with one turn of every history item taken to pass
+and so to teach, and equal scores settled by the list's order where the room settles them by which
+verdict came later:
 
 | Scored item | Its tests | History turns chosen | Files asked for | Of them, files its own reference changes |
 | --- | --- | --- | --- | --- |
@@ -473,9 +475,15 @@ words in the history's titles. Worked on the real list, with every history item'
 | fde213d5 | `test_lessons_repeats.py` | 0 | 0 | 0 |
 | df8b4b99 | `test_transport.py` | 0 | 0 | 0 |
 
-- **Nine of the twenty would be offered nothing.** For those the three arms are one arm.
+- **Nine of the twenty would be offered nothing.** For those the route arm and the shuffled arm are given
+  one block: the opening sentence and a line saying that earlier turns left nothing for this item. The
+  nothing arm is given no block. So two arms coincide there, and not three.
 - **Eleven would be offered a route to one or two files.** For six of them, one of those files is a file
-  the item's own reference changes.
+  the item's own reference changes. What a reference changes is a stand-in, said beforehand, for what a
+  turn would go on to change: a turn may mend it another way.
+- **It leans on which turns teach, and in what order they arrive.** With history run nearest first, one
+  item's goals are four files and not two; the counts of eleven and six do not change. Without the one
+  history item of the first scored items' own feature, eleven falls to five.
 - **The history is of other work.** Its commonest counted words are federation, ship, agent, alerts and
   room; the scored items begin with the feature the pilot's three belong to, whose earlier commits are
   the pilot's and not history.
@@ -486,59 +494,104 @@ From the pilot's sixteen walks, by each step's own times.
 
 | Of a turn's worker seconds | Least | Median | Most |
 | --- | --- | --- | --- |
-| Until the last read before the first change to the source | 33% | 47% | 61% |
-| From there until that first change is seen | 0% | 20% | 32% |
+| Until the result of the last step that names a file, before the first step that edits the source | 33% | 47% | 61% |
+| From there until that first edit is seen | 0% | 20% | 32% |
 
-- **Before the first change a turn takes about seven steps:** two that read the repository's own notes,
-  one to five that read the item's tests or its check, and one to four that read the source.
-- **The finding is over in seconds.** The title names the test file, and the test file names the source
-  it imports. In the walk looked at step by step, the worker had read the test, the check and the source
-  file it would change within 18 seconds of a 97-second turn. What fills the rest of the reading is
-  reading: the source file all three items change is some fifteen hundred lines.
-- Three of the sixteen walks have no step that shows a source file changing, since their edits were made
-  inside shell steps; they are left out of the table.
+- **Before its first edit a turn takes about seven steps.** By the paths they name, two are on the
+  repository's own notes, one to five on the item's tests or its check, and one to four on the source. A
+  walk holds the paths a step names and its times, not what the step did: a step that names a file may
+  have read it, run it or searched it.
+- **Every walk reaches the file where the work is within seconds.** All sixteen first name the source
+  file that all three items change between 8 and 15 seconds in. The title names the test file, and the
+  test file names the source it imports. That is quick entry to the file. It does not show that the place
+  within it, or what the change needs, was found then: that file is some fifteen hundred lines.
+- **What costly finding would look like in a walk:** a late first naming of the files that matter, steps
+  on files that do not, the same searches again, turning back. None of the sixteen shows it at the level
+  of files. Within one file a walk cannot show it.
+- Three of the sixteen walks have no step that edits the source, since their edits were made inside
+  shell steps; they are left out of the table.
 
-### What this asks of the scored design
+### What an item's tests name
+
+For each of the twenty scored items, the source files its test files import, set against the source files
+its own reference changes.
+
+- **For 15 of 20 the imports name at least one file the reference changes; for 11, every one.**
+- **For 5 of 20 they name none.** At those a turn has to find where the work is.
+- **A history item's reference changed an imported file for 15 of 20.** So a ranker that took an item's
+  goals from what its tests import would have history to draw on for 15, against 11 by title words.
+- Imports are read from `import` lines. A module reached through a fixture, a command line or a web
+  route is not seen. No overlap is not proof that finding is hard, nor overlap that it is over.
+
+### What the measurements show, and what they do not
 
 Section 6 said beforehand that "the tests are in the sandbox, and they point at the code", and that there
-is less to find than when work begins from a report of a fault. The two measurements say how much less.
+is less to find than when work begins from a report of a fault. The measurements say how much less: the
+ranker matches little, and a turn is in the right file within seconds.
 
-- **A route can shorten finding, and here there is almost none to shorten.** What a route says is where
-  earlier turns went on the way to a file. A turn at these items is told where to go by its tests.
-- **For nearly half the scored items nothing would be offered,** and the sizing rule took every item to
-  be offered something. For a mean gain of 15% over twenty items, the eleven that are offered a route
-  would each need to gain about 27%.
-- **So the scored turns, run as designed, would most likely be read as "nothing shown either way",** and
-  for a reason known before they are run. That reading would not bear on whether ways worn by use
-  shorten work that has to find its way.
+- **They do not measure what a route does.** Neither estimates a route's effect, nor how much the ratio
+  of two arms differs from item to item.
+- **The scored turns as designed would give an answer, about this kind of item.** With twenty items and
+  the planning spread, a measured ratio of 1 would have an interval of about 0.90 to 1.11. By the first
+  design's four readings that is "a gain of 15% is ruled out", which closes the question for this
+  package. The lead had written that the likeliest reading was "nothing shown either way"; that would
+  need a modest benefit or more noise than planned, and the reader was right to say it did not follow.
+- **That answer would not bear on work that has to find its way,** which is the question the design was
+  made for.
+- **What nine un-offered items do to the size.** The measure is a ratio, so the arithmetic is by
+  geometric means. If the nine are taken to have a ratio of exactly 1, which takes the line they are
+  given to do nothing, the eleven need a mean ratio of `0.85^(20/11)`, or 0.744: a gain of 25.6% on
+  average over the eleven, and not from each. A gain of 15% on the eleven alone is 8.55% over the twenty,
+  and to show that the rule would ask for about 49 items, above its ceiling of 40.
+- **The twenty are not twenty unrelated things.** Six are of the feature the pilot's items belong to and
+  four of another. Rule 5 keeps their test files apart; it does not make them independent.
 
-**The choices, for the reader of the scored design to weigh.** None is taken here.
+### The choices
 
 | Choice | What it costs | What it could show |
 | --- | --- | --- |
-| A. Run as designed: 51 history turns with nothing offered, then 60 scored turns | About 111 turns of two to five minutes; no new code | That the whole path runs on real turns at this size. Most likely nothing either way about a route, for the reasons above |
-| B. A ranker that reads what an item's tests name, in place of title words | A new ranker and its version; the history turns as in A | More items offered a route, to files nearer their work. Still files a turn reaches by itself in seconds |
-| C. Items whose work begins from a description, with the tests kept from the sandbox until the check | The room must lay an item's tests over a turn's commit when it judges; a new form of item; a new list | Whether a route shortens work that has to find where to go, which is the question the design was made for |
+| A. Run as designed: history turns with nothing offered, then twenty items under three arms | 111 turns if none is tried again; a scored run is up to three turns, so the sixty can come to 180. No new code | This package's effect on items whose tests are in the sandbox, a 15% gain ruled out among its readings. Nothing about work that has to find its way |
+| B. A ranker that takes an item's goals from what its tests import | A rule for imports, with a version, and what it does with a module reached another way | More items offered a route. Not, by itself, whether a route saves anything |
+| C. Items whose work begins from a description, with the tests kept from the sandbox until the check | Descriptions that say enough of what is wanted, by a rule fixed beforehand and read by another; the room judging a turn's commit with the item's tests laid over it in a checkout of its own; a new list; a new pilot | Whether ways worn by earlier work shorten work that has to find where to go. Only if the descriptions say enough and the earlier walks went somewhere useful: keeping tests back gives neither |
+| D. The tests in the sandbox and the goals known from what they import; three arms: nothing, those goals as a plain list, the learned route to them | A ranker as in B; a new arm in place of the shuffled one; the history turns | Whether the roads add anything once the destination is known: the places between, and their order |
 
-**The lead's recommendation.** Not A as the experiment that decides. Run the history turns in any case:
-A and B both need them, they give the spread across the whole component in place of three neighbours, and
-they give the store real walks at its real size. Have C written as a spec and read. And say in the
-report, whichever is run, that on items whose tests point at the code a route has little to add, with
-these two measurements as the reason.
+Choice D is the reader's.
 
-**Also for that reader, from the pilot's report:**
+### What the scored design's reader said
 
-- **A check is judged once.** One commit's tests passed in one run and failed in another; run six times
-  they failed twice, on one timing test. No item in the list uses that test. Before a scored or a history
-  item is used, its reference should be shown to pass through the jail several times, not once.
-- **A turn can fail by its housekeeping.** One pilot turn committed the test runner's temporary files and
-  was refused by the check's first rule. That is a failure by the item's rule, it can happen under any
-  arm, and the guard of section 5 counts it.
-- **The pilot's own turns are not history,** by section 6. They are the nearest earlier work to the first
-  scored items. Whether its passing turns may teach is for the reader: no turn would be offered a way
-  learned from a change made after its own.
-- **The points left open at the end of this spec** are still open, and each is still to be settled, or
-  said to stand, before any scored turn is offered anything.
+A fresh reader of the other family read this section, the pilot's report and the evidence, and worked
+each table again from the list and the walks. Its verdict: **do not run as designed.**
+
+- **It got the same tables,** and named what they lean on and what their labels over-said. Those
+  corrections are made above: which arms coincide; 25.6% and not 27%; that the likeliest reading was
+  mis-said; what a walk's step shows; the order turns arrive in.
+- **It found the pilot's report wrong in one sentence,** on a second run of every passing check. The
+  report is corrected.
+- **Do not start A's scored turns, nor the history turns, now.** Choose the kind of work first: history
+  made with the tests in the sandbox would be a different kind of history from C's.
+- **Write C and have it read, for the question the design was made for.** Keep B or D as a narrower
+  experiment, each with its question, its history and its cost fixed before it is begun. A stands as an
+  experiment about this package, if that answer is wanted and what follows is settled.
+- **Before any of them is begun:**
+  - each item used has its reference shown through the jail six times, afresh, on the machine and with
+    the room and the environment of the run. A failure is settled by a rule said beforehand, and not by
+    running again until it passes, nor by quietly taking another item;
+  - the pilot's failed turn stays a failure, with its cost;
+  - the pilot's passing turns may teach the scored items only after this spec is changed to say so, and
+    then one turn of each pilot item, chosen beforehand, so that fifteen turns at three items do not
+    outweigh the rest;
+  - the related items are written down as groups, and how the result is read with a group left out is
+    said beforehand.
+
+### What follows
+
+- **No scored turn and no history turn is run on this design as it stands.**
+- **The lead had recommended running the history turns in any case. That is withdrawn,** for the reader's
+  reason.
+- **C is written next, as a spec of its own, and read.** Until it is, D is the experiment that could be
+  run on what exists, and it is written beside C so that the choice between them is made on paper.
+- **The points left open at the end of this spec** are still open. Each is settled, or said to stand,
+  before any turn of whichever experiment is offered anything.
 
 ## What it costs
 

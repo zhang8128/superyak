@@ -57,8 +57,11 @@ held.
 | 15 | 5 | B | passed | 216.3 | 208.5 | 6.3 | 16 | 6.91, 6.78 | 159 | `SystemExit` 2 times in `__main__.py` |
 | 16 | 5 | C | passed | 124.5 | 112.7 | 10.2 | 15 | 6.78, 9.09 | 64 | `exit` 4 times in `imprints.py` |
 
-- **Fourteen of the fifteen measured turns passed, and were verified.** The room ran each passing check a
-  second time, as it always does, and it agreed.
+- **Fourteen of the fifteen measured turns passed, and stand as passed and verified.** That standing says
+  the check that passed was the item's frozen one, with the evidence the room holds for it. It does not
+  say the check was run twice. The room runs a passed check a second time for about one pass in five, by
+  a draw: here for three of the fourteen (turns 2, 6 and 10) and for the turn thrown away, and each time
+  the second run agreed.
 - **Active seconds** are the clock's, from the worker's start to its end with the room's own work between.
   **Worker seconds** are the worker program's alone.
 - **The load** is the machine's one-minute load average as the turn began and as it ended. Other programs
@@ -73,8 +76,10 @@ check's first rule is that nothing outside the source directory changes, and it 
 in 1.3 seconds, without running the tests. Run by hand outside the jail on that commit, the check says the
 same: a path outside the source directory changed.
 
-So the check did what it is for, and the turn failed by the item's rule and not by the feature. It is
-counted as failed. It could happen under any arm.
+So the check did what it is for, and the turn is counted as failed, by the item's rule. It could happen
+under any arm. The room's verdict says nothing of the feature, since the check stopped before the tests.
+Looked at afterwards by hand, outside the jail: with the six stray files left out, the turn's change to
+the two source files passes the check.
 
 ## The spread, and how many items
 
@@ -144,6 +149,14 @@ README, its notes for agents, the one source file all three items change, and th
   times and failed twice, on one timing test both times. No item in the list uses that test file.
 - **So a check is judged once, and a test that sometimes fails can put a commit in or out by chance.** For
   the scored design's reader: show each scored item's reference to pass several times before it is used.
+
+## Corrected after it was first written
+
+The scored design's reader read this report, and one sentence of it was wrong. It said the room ran each
+passing check a second time, "as it always does". The room does that for about one pass in five. The
+sentence under the table now says what "verified" means and how many second runs there were, from the
+run's own records. The account of turn 12 said the turn failed "not by the feature", which the room's
+verdict could not show; it now says what was looked at by hand.
 
 ## What is not shown
 
