@@ -14,12 +14,15 @@
 //!   machine's host, not one added to the kernel later;
 //! - `socketpair`: a Unix pair of the stream kind or of the seqpacket kind, and nothing else. Either is two
 //!   ends joined to each other when it is made, and neither end can be made to reach anything else: a send
-//!   that names another socket goes to the joined end, and a joined end cannot be joined to a named socket,
-//!   unjoined, or made to listen. Programs use a stream pair to talk to their own children, and the
-//!   standard library of the toolchain this is built with makes a seqpacket pair before it starts a child
-//!   one of its two ways: without it `cargo` cannot build inside the jail. A datagram end could be sent
-//!   from to a named socket. Why the seqpacket kind is held to be as closed as the stream kind is argued
-//!   in `docs/superpowers/specs/2026-11-16-v2-a-child-inside-the-linux-jail.md`.
+//!   that names another socket goes to the joined end, and a joined end cannot be joined to a named socket
+//!   or unjoined. Nor is one reached: given a name and told to listen, it takes no caller in. That last is
+//!   the kernel's doing and not this filter's, which sees a call's number and not the kind of socket it is
+//!   made on; what the kernel answers to the telling differs from kernel to kernel, and the jail's tests
+//!   try what it leaves on every machine they run on. Programs use a stream pair to talk to their own
+//!   children, and the standard library of the toolchain this is built with makes a seqpacket pair before
+//!   it starts a child one of its two ways: without it `cargo` cannot build inside the jail. A datagram end
+//!   could be sent from to a named socket. Why the seqpacket kind is held to be as closed as the stream
+//!   kind is argued in `docs/superpowers/specs/2026-11-16-v2-a-child-inside-the-linux-jail.md`.
 //!
 //! And it refuses seven calls outright: the three that reach the keyring (`add_key`, `request_key`, `keyctl`);
 //! `io_uring_setup`, whose interface can make sockets where a filter of system calls does not see; and

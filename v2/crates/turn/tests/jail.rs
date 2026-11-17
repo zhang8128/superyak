@@ -561,7 +561,7 @@ fn a_jailed_run_on_linux_reaches_no_keyring_and_makes_only_the_sockets_it_is_let
 /// kernel refusing, and it ends the helper there with an error, which fails the test.
 #[cfg(target_os = "linux")]
 const AN_END_OF_A_SEQPACKET_PAIR: &str = r#"import ctypes, errno, os, socket, stat, sys
-target, mine = sys.argv[1], sys.argv[2]
+target = sys.argv[1]
 def say(name, word):
     print(name + ":" + word, flush=True)
 def refused(name, attempt, expected):
@@ -606,16 +606,82 @@ refused("join-after-unjoin", lambda: a.connect(target), errno.EISCONN)
 b.close()
 refused("named-send-after-close", lambda: a.sendto(b"AFTER", target), errno.EPIPE)
 refused("join-after-close", lambda: a.connect(target), errno.EISCONN)
-c, d = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-c.bind(mine)
+"#;
+
+/// An end of a Unix pair of the kind named, given a name and told to listen: what that leaves. Each line is
+/// one try. As in the script above, an error that is not the refusal expected ends the helper with an error.
+/// Asked for "a-socket-joined-to-nothing" it is the control: such a socket, treated the same way, listens
+/// and takes a caller in, so the lines can tell an end that does from one that does not.
+#[cfg(target_os = "linux")]
+const A_NAMED_END_OF_A_PAIR: &str = r#"import errno, socket, sys
+kind = {"stream": socket.SOCK_STREAM, "seqpacket": socket.SOCK_SEQPACKET}[sys.argv[1]]
+mine = sys.argv[2]
+joined = {"an-end-of-a-pair": True, "a-socket-joined-to-nothing": False}[sys.argv[3]]
+def say(name, word):
+    print(name + ":" + word, flush=True)
+def refused(name, attempt, expected):
+    try:
+        attempt()
+    except OSError as e:
+        if isinstance(e, TimeoutError) or e.errno != expected:
+            raise
+        say(name, "refused")
+        return
+    say(name, "made")
+if joined:
+    end, other = socket.socketpair(socket.AF_UNIX, kind)
+    other.settimeout(2)
+else:
+    end = socket.socket(socket.AF_UNIX, kind)
+end.bind(mine)
 say("bind", "made")
 # Not blocking, so that accepting is asked of the kernel at once and never waited for.
-c.setblocking(False)
-refused("listen", lambda: c.listen(1), errno.EINVAL)
-refused("accept", lambda: c.accept(), errno.EINVAL)
-d.close()
-refused("listen-after-close", lambda: c.listen(1), errno.EINVAL)
-refused("accept-after-close", lambda: c.accept(), errno.EINVAL)
+end.setblocking(False)
+def told_to_listen(name):
+    # What the kernel answers is not held: it is not the same on every kernel. What is held is what the answer
+    # leaves, in the lines after: an end that does not listen, that takes no caller in, and that a socket made
+    # for its name cannot join.
+    try:
+        end.listen(1)
+    except OSError as e:
+        if e.errno != errno.EINVAL:
+            raise
+    say(name, "listens" if end.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) else "does-not-listen")
+def a_caller(name):
+    # A socket made for the end's name. With no jail one is made, and the kernel refuses its joining. In the
+    # jail none can be made: the filter's own refusal, "operation not permitted".
+    try:
+        caller = socket.socket(socket.AF_UNIX, kind)
+    except PermissionError:
+        say(name, "none-can-be-made")
+        return
+    caller.settimeout(2)
+    refused(name, lambda: caller.connect(mine), errno.ECONNREFUSED)
+    caller.close()
+def heard(name):
+    # What has arrived at the end. Its other end sends it nothing here, so anything is from somewhere else.
+    # Once the other end is closed, the end reads that closing, which is no bytes.
+    try:
+        arrived = end.recv(16)
+    except BlockingIOError:
+        arrived = b""
+    say(name, "nothing" if arrived == b"" else "something")
+told_to_listen("listen")
+if not joined:
+    a_caller("a-caller")
+    refused("accept", lambda: end.accept()[0].close(), errno.EINVAL)
+    sys.exit(0)
+refused("accept", lambda: end.accept(), errno.EINVAL)
+a_caller("a-caller")
+heard("heard")
+# And the end is still joined to its other end.
+end.send(b"still")
+say("own-pair", "works" if other.recv(16) == b"still" else "broken")
+other.close()
+told_to_listen("listen-after-close")
+refused("accept-after-close", lambda: end.accept(), errno.EINVAL)
+a_caller("a-caller-after-close")
+heard("heard-after-close")
 "#;
 
 /// Listens by name with a socket of the seqpacket kind, and says each thing that arrives, until its input
@@ -863,26 +929,21 @@ fn on_linux_an_end_of_a_seqpacket_pair_reaches_only_its_other_end() {
         "control failed: a socket made for the listener did not reach it"
     );
 
-    let tries = |own_name: &str| {
-        [
-            "-c".to_string(),
-            AN_END_OF_A_SEQPACKET_PAIR.to_string(),
-            target.to_str().unwrap().to_string(),
-            g.checkout.join(own_name).to_str().unwrap().to_string(),
-        ]
-    };
+    let tries = [
+        "-c".to_string(),
+        AN_END_OF_A_SEQPACKET_PAIR.to_string(),
+        target.to_str().unwrap().to_string(),
+    ];
     let lines = |a_socket_of_that_kind: &str| {
         format!(
             "name:socket\nsocket-of-that-kind:{a_socket_of_that_kind}\npair:made\nown-pair:works\n\
              named-send:to-the-other-end\njoin:refused\nunjoin:refused\n\
              named-send-after-unjoin:to-the-other-end\njoin-after-unjoin:refused\n\
-             named-send-after-close:refused\njoin-after-close:refused\n\
-             bind:made\nlisten:refused\naccept:refused\n\
-             listen-after-close:refused\naccept-after-close:refused\n"
+             named-send-after-close:refused\njoin-after-close:refused\n"
         )
     };
     let mut free = Command::new("/usr/bin/python3");
-    free.args(tries("free.sock"));
+    free.args(&tries);
     let free = within(free, A_COMMAND_MAY_TAKE, "the tries with no jail");
     assert_eq!(
         String::from_utf8_lossy(&free.stdout),
@@ -895,12 +956,7 @@ fn on_linux_an_end_of_a_seqpacket_pair_reaches_only_its_other_end() {
         "control failed: {}",
         String::from_utf8_lossy(&free.stderr)
     );
-    let out = run_in_within(
-        &jail(&g),
-        "/usr/bin/python3",
-        &tries("jailed.sock"),
-        A_COMMAND_MAY_TAKE,
-    );
+    let out = run_in_within(&jail(&g), "/usr/bin/python3", &tries, A_COMMAND_MAY_TAKE);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         lines("refused"),
@@ -919,6 +975,80 @@ fn on_linux_an_end_of_a_seqpacket_pair_reaches_only_its_other_end() {
         ["stopped"],
         "something arrived at the listener"
     );
+}
+
+/// The filter sees a call's number and not the kind of socket it is made on, and a run may listen on its own
+/// empty network: so it cannot refuse an end of a pair being told to listen. That such an end, given a name,
+/// takes no caller in rests on the kernel, for both kinds of pair the filter lets through, and this tries it
+/// on every machine it runs on. What the kernel answers to the telling is not held: it differs from kernel to
+/// kernel (6.12 refuses a joined end; 7.0 says yes, and the end is as it was). With no jail, where a socket
+/// for the name can be made, the kernel refuses its joining; in the jail no such socket can be made at all.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs the room: a list of processes and a jail"]
+fn on_linux_a_named_end_of_a_pair_takes_no_caller_in() {
+    let g = ground();
+    let lines = |a_caller: &str| {
+        format!(
+            "bind:made\nlisten:does-not-listen\naccept:refused\na-caller:{a_caller}\n\
+             heard:nothing\nown-pair:works\nlisten-after-close:does-not-listen\n\
+             accept-after-close:refused\na-caller-after-close:{a_caller}\nheard-after-close:nothing\n"
+        )
+    };
+    for kind in ["stream", "seqpacket"] {
+        let tries = |own_name: String, which: &str| {
+            [
+                "-c".to_string(),
+                A_NAMED_END_OF_A_PAIR.to_string(),
+                kind.to_string(),
+                g.checkout.join(own_name).to_str().unwrap().to_string(),
+                which.to_string(),
+            ]
+        };
+        let mut alone = Command::new("/usr/bin/python3");
+        alone.args(tries(
+            format!("alone-{kind}.sock"),
+            "a-socket-joined-to-nothing",
+        ));
+        let alone = within(alone, A_COMMAND_MAY_TAKE, "the control with no jail");
+        assert_eq!(
+            String::from_utf8_lossy(&alone.stdout),
+            "bind:made\nlisten:listens\na-caller:made\naccept:made\n",
+            "control failed: a {kind} socket joined to nothing did not listen and take a caller in: {}",
+            String::from_utf8_lossy(&alone.stderr)
+        );
+        let mut free = Command::new("/usr/bin/python3");
+        free.args(tries(format!("free-{kind}.sock"), "an-end-of-a-pair"));
+        let free = within(free, A_COMMAND_MAY_TAKE, "the tries with no jail");
+        assert_eq!(
+            String::from_utf8_lossy(&free.stdout),
+            lines("refused"),
+            "control failed, a {kind} pair: {}",
+            String::from_utf8_lossy(&free.stderr)
+        );
+        assert!(
+            free.status.success(),
+            "control failed, a {kind} pair: {}",
+            String::from_utf8_lossy(&free.stderr)
+        );
+        let out = run_in_within(
+            &jail(&g),
+            "/usr/bin/python3",
+            &tries(format!("jailed-{kind}.sock"), "an-end-of-a-pair"),
+            A_COMMAND_MAY_TAKE,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            lines("none-can-be-made"),
+            "a {kind} pair: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success(),
+            "a {kind} pair: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 /// The listener's own word that nothing else came is only as good as its letting-in. Here two callers are
