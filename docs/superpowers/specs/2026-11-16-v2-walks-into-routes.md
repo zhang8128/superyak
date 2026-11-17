@@ -244,8 +244,8 @@ measure, list and flag that disagree (an experiment's is `share`, a list and `tr
 whole past a walk file's bound. Whatever a damaged file raises while it is opened, answered from or checked, a bad
 cost, a stored route nested 10,000 deep or a walk stored as text, is damage: an IntegrityError, exit 3 on the command
 line, never a traceback and never "the kernel stopped" (exit 5). Answering checks each goal row it reads before it
-answers: a route of paths ending at the goal, `roads_n` its length, a share above 0 and at most 1, a whole
-`detours_more`, a refusal's code and words of their types, and each detour's way ending at the goal, its place whole
+answers: a route of plain paths (section 1) ending at the goal, `roads_n` its length, a share above 0 and at most 1, a whole
+`detours_more`, a refusal's code and words of their types, and each detour's way of plain paths ending at the goal, its place whole
 numbers and its share above 0 and below the route's. Which of them is wrong is the check's to say.
 
 **What a detour shows, and no more.** The kernel checks that its two sides start and end at the same 0-cells,
@@ -261,7 +261,9 @@ better way to do the work, or that it beats a table that made the same offer.
 - **A cost** is an object: `num` and `den`, the product of shares in lowest terms, each the whole number's decimal
   digits, with no sign and no leading zeros (they can outgrow any fixed-width integer, and are written and read
   exactly, with no ceiling: Python's `str(int)` stops at 4,300 digits); and `nats`, for reading.
-- **`nats`** is worked in a fresh `decimal.Context(prec=34, rounding=ROUND_HALF_EVEN)`: `x = Decimal(num) /
+- **`nats`** is worked in a fresh `decimal.Context(prec=34, rounding=ROUND_HALF_EVEN)` with every other setting given,
+  Python's own defaults (`Emax` 999999, `Emin` −999999, `capitals` 1, `clamp` 0, no flags, traps on `InvalidOperation`,
+  `DivisionByZero` and `Overflow` only), since a bare `Context` takes the rest from the process's `DefaultContext`: `x = Decimal(num) /
   Decimal(den)`, then `−x.ln()`, then quantized to 9 places with `ROUND_HALF_EVEN`, and written in fixed point
   with exactly 9 decimals (`format(q, 'f')`, so nothing is `0E-9`), with no sign when it is zero. It is a
   reproducible approximation for reading, not a certified rounding of the real logarithm.
@@ -424,3 +426,9 @@ equivalent. Its four edges for the board (`fix:route-store-answer-damage-edges`)
 `ask` though the check refused it (a share of 0, a refusal's words stored as bytes, a share of 2/1, `roads_n` as text),
 are closed after it: answering checks each row it reads (section 7), and the answer is written inside the damage
 handler.
+
+**A fifth reader (w83, Sol), scoped to 45be5dd0..9238570a: approve.** Its two edges for the board, and its note on
+`decimal` (`fix:route-store-way-paths-and-decimal-traps`), are closed after it: a detour's way and a route must be plain
+paths; a refusal with no words, or with a code of text, is damage (tests that the refusal guard is not redundant); and
+`nats` gives every setting of its context, so a caller's `DefaultContext` (a trapped `Inexact`, a small `Emax`) changes
+no answer (section 8).

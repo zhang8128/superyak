@@ -451,6 +451,19 @@ def test_the_sixteen_are_chosen_by_exact_cost_where_floats_all_say_zero():
     assert [w["attempt"] for w, *_ in kept] == [f"a{i:02d}" for i in range(15)] + ["z99"]
 
 
+def test_nats_takes_nothing_from_the_process_default_context(tmp_path, monkeypatch):   # w83
+    """A caller that traps Inexact, or shrinks the exponent's range, in decimal.DefaultContext changes no answer: the
+    store's context gives every setting itself."""
+    import decimal
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "b", "g"]), walk("t2", ["b", "g"]), walk("t3", ["b", "g"])])
+    before = ask(out, ["g", "b"], list_id)
+    monkeypatch.setitem(decimal.DefaultContext.traps, decimal.Inexact, True)
+    monkeypatch.setattr(decimal.DefaultContext, "Emax", 2)
+    monkeypatch.setattr(decimal.DefaultContext, "Emin", -2)
+    assert ask(out, ["g", "b"], list_id) == before
+    assert R.nats(Fraction(1, 3)) == "1.098612289" and R.nats(Fraction(1, 10 ** 9)) == "20.723265837"
+
+
 def test_a_goal_with_no_detour_says_none_left_out(tmp_path):
     out, list_id, _ = experiment(tmp_path, [walk("t1", ["b", "g"]), walk("t2", ["b", "g"])])
     r = route_of(ask(out, ["g"], list_id))
@@ -648,7 +661,8 @@ def test_a_library_the_old_loader_named_for_this_source_is_not_reused(tmp_path, 
                                     "a garbled walk", "a walk stored as text", "a zero denominator", "a deep route",
                                     "a list stored as text", "a NUL in a text list", "a deep list", "a key stored as blob",
                                     "a right list stored as text", "a zero share", "a share above one",
-                                    "roads_n as text", "a refusal's words as blob"])
+                                    "roads_n as text", "a refusal's words as blob", "a refusal with no words",
+                                    "a refusal's code as text"])
 def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, damage):   # w73 2
     """Opening or answering from a damaged store refuses it as damage, having fetched nothing past a bound: the
     listing and header are measured inside SQLite first, and no stored value comes out whole past a walk's bound."""
@@ -683,6 +697,10 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
         db.execute("UPDATE goal SET roads_n = 'wrong' WHERE path = 'g'")
     elif damage == "a refusal's words as blob":   # escaped as a TypeError while the answer was written
         db.execute("UPDATE goal SET code = -10, reason = CAST('over budget' AS BLOB) WHERE path = 'g'")
+    elif damage == "a refusal with no words":     # w83: answered, exit 0, without the refusal-type guard
+        db.execute("UPDATE goal SET code = -10, reason = NULL WHERE path = 'g'")
+    elif damage == "a refusal's code as text":
+        db.execute("UPDATE goal SET code = 'over', reason = 'over budget' WHERE path = 'g'")
     elif damage == "a right list stored as text":
         db.execute("UPDATE listing SET body = CAST(body AS TEXT)")
     elif damage == "a key stored as blob":
@@ -714,8 +732,9 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
 
 
 @pytest.mark.parametrize("damage", ["UPDATE detour SET num = den", "UPDATE detour SET num = '0'",
-                                    "UPDATE detour SET seq = 'late'", "UPDATE detour SET way = '[]'"],
-                         ids=["no dearer", "a zero share", "seq as text", "no way"])
+                                    "UPDATE detour SET seq = 'late'", "UPDATE detour SET way = '[]'",
+                                    "UPDATE detour SET way = '[7,\"g\"]'"],
+                         ids=["no dearer", "a zero share", "seq as text", "no way", "a way with a number in it"])
 def test_a_damaged_detour_row_is_damage_when_answering_too(tmp_path, damage):   # the board's edges, for detours
     out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"]), walk("t2", ["g"]), walk("t3", ["g"])])
     assert route_of(ask(out, ["g"], list_id))["detours"]

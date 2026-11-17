@@ -22,7 +22,7 @@ import re
 import sqlite3
 import sys
 from collections import defaultdict
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOperation, Overflow, localcontext
 from fractions import Fraction
 from pathlib import Path
 
@@ -456,9 +456,15 @@ def canonical(obj):
     return (json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
 
 
+# Every setting given, Python's own defaults bar the precision: a bare Context() takes the process's DefaultContext for
+# what it isn't told, so a caller that set a trap or a smaller exponent there would change, or stop, the answer.
+NATS_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN, Emax=999999, Emin=-999999, capitals=1, clamp=0, flags=[],
+                       traps=[InvalidOperation, DivisionByZero, Overflow])
+
+
 def nats(fraction):
     """Spec section 8: a fresh context, ROUND_HALF_EVEN, nine places in fixed point, no sign on zero."""
-    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+    with localcontext(NATS_CONTEXT.copy()):
         x = Decimal(fraction.numerator) / Decimal(fraction.denominator)
         q = (-x.ln()).quantize(Decimal("0.000000001"), rounding=ROUND_HALF_EVEN)
         return format(q.copy_abs() if q == 0 else q, "f")
@@ -743,7 +749,8 @@ class RouteStore:
             return {"goal": goal, "none": "refused", "code": code, "reason": reason}
         route = _json(route)
         share = Fraction(_undec(num), _undec(den))
-        if not (isinstance(route, list) and route and all(isinstance(p, str) for p in route) and route[-1] == goal
+        if not (isinstance(route, list) and route and all(isinstance(p, str) and plain_path(p) for p in route)
+                and route[-1] == goal
                 and _int(roads_n) and roads_n == len(route) and 0 < share <= 1 and _int(more) and more >= 0):
             raise ValueError("a goal's route, cost, roads or count is out of its form")   # the check finds which
         net = self._network()
@@ -755,7 +762,8 @@ class RouteStore:
                 "SELECT attempt, visit, seq, way, num, den FROM detour WHERE path = ?", (goal,)):
             way = _json(way)
             d_share = Fraction(_undec(d_num), _undec(d_den))
-            if not (isinstance(way, list) and way and way[-1] == goal and _int(visit) and _int(seq)
+            if not (isinstance(way, list) and way and all(isinstance(p, str) and plain_path(p) for p in way)
+                    and way[-1] == goal and _int(visit) and _int(seq)
                     and 0 < d_share < share):
                 raise ValueError("a detour's way, place or cost is out of its form")
             detours.append({"attempt": attempt, "item": families[attempt]["item"], "family": families[attempt]["family"],
