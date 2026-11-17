@@ -243,7 +243,10 @@ measure, list and flag that disagree (an experiment's is `share`, a list and `tr
 `null` and `false`), and a file built by another store version, which is to be built again. No stored value comes out
 whole past a walk file's bound. Whatever a damaged file raises while it is opened, answered from or checked, a bad
 cost, a stored route nested 10,000 deep or a walk stored as text, is damage: an IntegrityError, exit 3 on the command
-line, never a traceback and never "the kernel stopped" (exit 5).
+line, never a traceback and never "the kernel stopped" (exit 5). Answering checks each goal row it reads before it
+answers: a route of paths ending at the goal, `roads_n` its length, a share above 0 and at most 1, a whole
+`detours_more`, a refusal's code and words of their types, and each detour's way ending at the goal, its place whole
+numbers and its share above 0 and below the route's. Which of them is wrong is the check's to say.
 
 **What a detour shows, and no more.** The kernel checks that its two sides start and end at the same 0-cells,
 and keeps it in the category's structure. That the way was walked, that the route is cheaper and that it is
@@ -415,3 +418,9 @@ float fault made as named, R2 made otherwise, and four more changes:
 | 3. A literal `ncat-2-` in the cache's names, a namespace the old loader never wrote in | Section 6 |
 | 4. `bytes` and bytes-returning path-like names; a stream is no name | Section 2's bounds |
 | 5. Tests that a too-long header or list is never fetched, that header JSON is parsed only after its depth is measured, and that stored bounds take their last byte | Section 10 |
+
+**A fourth reader (w80, Sol), scoped to 9777476a..45be5dd0: approve.** All five made; the four surviving faults are
+equivalent. Its four edges for the board (`fix:route-store-answer-damage-edges`), where a damaged goal row escaped
+`ask` though the check refused it (a share of 0, a refusal's words stored as bytes, a share of 2/1, `roads_n` as text),
+are closed after it: answering checks each row it reads (section 7), and the answer is written inside the damage
+handler.

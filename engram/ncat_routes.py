@@ -629,8 +629,8 @@ def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
 
 # What a damaged file can raise while it is read: each becomes an IntegrityError (exit 3), never a traceback, and never
 # "the kernel stopped the build" (exit 5), which RecursionError, a RuntimeError, would otherwise reach.
-STORED_DAMAGE = (sqlite3.Error, Refused, ValueError, KeyError, TypeError, AttributeError, ZeroDivisionError,
-                 OverflowError, RecursionError)
+STORED_DAMAGE = (sqlite3.Error, Refused, ValueError, KeyError, TypeError, AttributeError, ArithmeticError,
+                 RecursionError)   # ArithmeticError: a zero denominator, an overflow, decimal's InvalidOperation
 
 
 class RouteStore:
@@ -719,13 +719,13 @@ class RouteStore:
             net = self._network()   # N and what was named, from the stored walks themselves, which the check binds
             N, named = net.N, {p for vs in net.visits.values() for p, _, _ in vs}
             answers = [self._goal(goal, N, named) for goal in q["goals"]]
+            return canonical({"v": 1, "store": STORE_VERSION, "kernel": self.kernel, "repo": self.repo,
+                              "list": self.list, "for_experiment": self.for_experiment,
+                              "measure": {"name": self.measure[0], "version": self.measure[1],
+                                          "teaches": sorted(TEACHES[self.measure])},
+                              "path_rule": PATH_RULE, "taught": N, "answers": answers})
         except STORED_DAMAGE as error:
             raise IntegrityError(f"the route store can't be read ({type(error).__name__}); build it") from None
-        return canonical({"v": 1, "store": STORE_VERSION, "kernel": self.kernel, "repo": self.repo, "list": self.list,
-                          "for_experiment": self.for_experiment,
-                          "measure": {"name": self.measure[0], "version": self.measure[1],
-                                      "teaches": sorted(TEACHES[self.measure])},
-                          "path_rule": PATH_RULE, "taught": N, "answers": answers})
 
     def _goal(self, goal, N, named):
         if N == 0:
@@ -738,8 +738,14 @@ class RouteStore:
             return {"goal": goal, "none": "not_taught"}
         route, num, den, roads_n, _, code, reason, more = row
         if code is not None:
+            if not (_int(code) and isinstance(reason, str)):
+                raise ValueError("a goal's refusal is not a code and words")
             return {"goal": goal, "none": "refused", "code": code, "reason": reason}
         route = _json(route)
+        share = Fraction(_undec(num), _undec(den))
+        if not (isinstance(route, list) and route and all(isinstance(p, str) for p in route) and route[-1] == goal
+                and _int(roads_n) and roads_n == len(route) and 0 < share <= 1 and _int(more) and more >= 0):
+            raise ValueError("a goal's route, cost, roads or count is out of its form")   # the check finds which
         net = self._network()
         roads = [{"from": a, "to": b, "turns": net.k[a, b], "witness": net.witness[a, b]}
                  for a, b in zip([None] + route, route)]
@@ -748,11 +754,15 @@ class RouteStore:
         for attempt, visit, seq, way, d_num, d_den in self._db.execute(
                 "SELECT attempt, visit, seq, way, num, den FROM detour WHERE path = ?", (goal,)):
             way = _json(way)
+            d_share = Fraction(_undec(d_num), _undec(d_den))
+            if not (isinstance(way, list) and way and way[-1] == goal and _int(visit) and _int(seq)
+                    and 0 < d_share < share):
+                raise ValueError("a detour's way, place or cost is out of its form")
             detours.append({"attempt": attempt, "item": families[attempt]["item"], "family": families[attempt]["family"],
                             "visit": visit, "seq": seq, "paths": way,
-                            "cost": cost(Fraction(_undec(d_num), _undec(d_den))), "roads_n": len(way)})
+                            "cost": cost(d_share), "roads_n": len(way)})
         detours.sort(key=lambda d: d["attempt"].encode())
-        return {"goal": goal, "route": {"paths": route, "roads": roads, "cost": cost(Fraction(_undec(num), _undec(den))),
+        return {"goal": goal, "route": {"paths": route, "roads": roads, "cost": cost(share),
                                         "roads_n": roads_n, "blobs": {p: sorted(net.blobs[p]) for p in route},
                                         "detours": detours, "detours_more": more}}
 

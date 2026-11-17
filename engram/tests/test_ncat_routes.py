@@ -647,7 +647,8 @@ def test_a_library_the_old_loader_named_for_this_source_is_not_reused(tmp_path, 
 @pytest.mark.parametrize("damage", ["a long listing", "a long header", "a deep header", "a long walk", "many walks",
                                     "a garbled walk", "a walk stored as text", "a zero denominator", "a deep route",
                                     "a list stored as text", "a NUL in a text list", "a deep list", "a key stored as blob",
-                                    "a right list stored as text"])
+                                    "a right list stored as text", "a zero share", "a share above one",
+                                    "roads_n as text", "a refusal's words as blob"])
 def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, damage):   # w73 2
     """Opening or answering from a damaged store refuses it as damage, having fetched nothing past a bound: the
     listing and header are measured inside SQLite first, and no stored value comes out whole past a walk's bound."""
@@ -674,6 +675,14 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
         db.execute("UPDATE listing SET body = ?", ("\x00" + "x" * (R.MAX_LIST + 1),))
     elif damage == "a deep list":             # 4,000 bytes, nested 2,000 deep
         db.execute("UPDATE listing SET body = ?", (b"[" * 2000 + b"]" * 2000,))
+    elif damage == "a zero share":            # nats of 0 raised decimal's InvalidOperation from ask
+        db.execute("UPDATE goal SET num = '0' WHERE path = 'g'")
+    elif damage == "a share above one":       # answered with a negative nats
+        db.execute("UPDATE goal SET num = '2', den = '1' WHERE path = 'g'")
+    elif damage == "roads_n as text":         # answered as a string
+        db.execute("UPDATE goal SET roads_n = 'wrong' WHERE path = 'g'")
+    elif damage == "a refusal's words as blob":   # escaped as a TypeError while the answer was written
+        db.execute("UPDATE goal SET code = -10, reason = CAST('over budget' AS BLOB) WHERE path = 'g'")
     elif damage == "a right list stored as text":
         db.execute("UPDATE listing SET body = CAST(body AS TEXT)")
     elif damage == "a key stored as blob":
@@ -694,6 +703,30 @@ def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, dama
     with pytest.raises(R.IntegrityError), R.open_store(out) as s:
         s.check()
     assert R.main(["check", "--store", str(out)]) == 3      # damage, never a traceback or "the kernel stopped" (5)
+    import io
+    import sys
+
+    class Stdin:
+        buffer = io.BytesIO(R.canonical({"v": 1, "repo": REPO, "list": list_id,
+                                         "measure": {"name": "share", "version": 1}, "goals": ["g"]}))
+    monkeypatch.setattr(sys, "stdin", Stdin())
+    assert R.main(["ask", "--store", str(out)]) == 3
+
+
+@pytest.mark.parametrize("damage", ["UPDATE detour SET num = den", "UPDATE detour SET num = '0'",
+                                    "UPDATE detour SET seq = 'late'", "UPDATE detour SET way = '[]'"],
+                         ids=["no dearer", "a zero share", "seq as text", "no way"])
+def test_a_damaged_detour_row_is_damage_when_answering_too(tmp_path, damage):   # the board's edges, for detours
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["a", "g"]), walk("t2", ["g"]), walk("t3", ["g"])])
+    assert route_of(ask(out, ["g"], list_id))["detours"]
+    db = sqlite3.connect(out)
+    db.execute(damage)
+    db.commit()
+    db.close()
+    with pytest.raises(R.IntegrityError):
+        ask(out, ["g"], list_id)
+    with pytest.raises(R.IntegrityError), R.open_store(out) as s:
+        s.check()
 
 
 def test_a_header_or_list_too_long_is_never_fetched(tmp_path, monkeypatch):   # w78 5
