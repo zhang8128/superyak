@@ -9,19 +9,22 @@ It reads .yak-check/item.json and passes, printing ok and ending with 0, only wh
 1. The item's parent is in the clone and is an ancestor of the commit judged. Between the two, every path that
    differs is under the item's source directory or is one of the check's own files. Each test file's blob at the
    commit judged is the one item.json names, and check.py and item.json there are the copies running now.
-2. The item's test files, run as run_tests says, end with 0, with no failure and no error.
-3. At least as many tests passed as on the reference, and no more were skipped.
+2. The test runner, started on the item's test files as run_tests says, ends with 0, and the report it leaves
+   says no failure and no error.
+3. That report says at least as many tests passed as on the reference, and no more were skipped.
 
 Otherwise it ends with 1 and one line on stderr that begins FAIL and names which. FAIL 0 is item.json out of its
 form, or a check that could not run. Everything it reads from the checkout is hostile, since a worker wrote it:
 item.json is held to its form, nothing read from it reaches a shell, and git runs with no hooks, no filesystem
 monitor and no settings file but the clone's own. Of the checkout it runs nothing but the tests.
 
-What a pass shows: the path rule held, the frozen files are the item's blobs, and a run of the tests with the
-turn's code ended well and left a report of at least as many passes and no more skips than the reference's. What
-it does not show: the turn's code runs inside the test runner's own process, so code written to deceive the runner
-(to write the report itself and end the run, say) could make such a run without the tests having passed, and no
-check written here can tell.
+What a pass shows is what the check observed: the path rule held, the frozen files are the item's blobs, the test
+runner ended with 0, and the report it left says no failure, no error, at least as many passed as on the reference
+and no more skipped. That is a showing that the tests pass when the runner and its report did what they are for.
+The check does not show that they did, nor what the worker meant: the turn's code runs inside the runner's own
+process, and by accident or on purpose it can bear on what is gathered, on what a test asserts, on the test files
+as they lie in the checkout during the run, on the report, or on how the process ends. No check written here can
+rule that out.
 
 items.py loads this file for run_tests and plain, so that the item-maker runs the tests as the check does. It runs
 this file with YAK_CHECK_SHARE_GROUP=1 in its environment, so that the tests stay in the check's own process group
