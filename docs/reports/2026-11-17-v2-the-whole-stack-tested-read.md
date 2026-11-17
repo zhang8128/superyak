@@ -87,3 +87,45 @@ The remaining table arithmetic reproduces:
 I could not independently check the original logs and their extraction; original pinned binaries/item repository; candidate counts of twenty-eight and eight; the 38–54-file range; the previous night’s 59-second observation; the two outside-jail checks; searching’s one-sixth command share; the store’s route calculation or the lead’s short-road calculation. The 297-cell check is supported by the store’s recorded receipt, not a fresh independent replay.
 
 I found no private words or absolute machine paths in the report.
+
+---
+
+# The fresh reader's verdict on the third probe's section
+
+Kept whole, as the reader gave it on 2026-11-17. A second fresh reader of the other model family (the team's
+worker w90), reading the added section at dc3dfc0f against the probe's records. Its line numbers are of the
+report at dc3dfc0f. Nothing in its words is changed.
+
+---
+
+push with named changes
+
+Line numbers refer to the report at dc3dfc0f.
+
+1. **Lines 256–258: failed replays do not establish task/test gaps.** The five replay records show four failures, whose causes remain undiagnosed. A task/test mismatch, an implementation mistake and missed discovery remain possible. At 6f57b4cb, incomplete propagation of an understood repair is also consistent with the missing changes; the earlier turn’s replay failed too.
+
+   **Smallest change:** replace the causal conclusion with: “These failures are undiagnosed. Held-back tests may require unstated details, but these records do not distinguish that from implementation or discovery failures.”
+
+2. **Lines 205–206 and 262–263: preserve the earlier reader’s uncertainty and scope the naming claim.** Finding 2 of the earlier verdict presents tests and familiar descriptions as an “equally consistent reading,” not established causes of quick entry. The rewritten tasks remove identifiers, while source names and documentation remain; every walk names `README.md`.
+
+   **Smallest change:** say the reader “suggested two possible aids,” and replace “the project’s own naming taken away” with “the task rewritten without project identifiers.” The closing suggestion about earlier work is appropriately labelled as judgement; these observations do not test it.
+
+3. **Lines 225–226 and 252–255: describe the changed check.** In `describe-probe.py`, the earlier check requires a change under `peer/superyak_peer`. The new check accepts any tracked change outside `TASK.md` and `.yak-check`, including tests or documentation. That is another difference between paired turns. All five actually changed source, so it does not alter the table.
+
+   **Smallest change:** add that difference to the conditions described. Say “component folder” rather than “a folder”: the check still names `.yak-check`.
+
+4. **Lines 338–347: the addition leaves Limits contradictory.** They still say ten probe turns, user-word tasks untried, and parent tests present in the probes’ sandboxes.
+
+   **Smallest change:** count fifteen probe turns and restrict the commit-message and parent-test statements to probes 1–2. Name the five rewritten, test-withheld turns separately.
+
+5. **Lines 248–250: distinguish file occurrences and source changes.** The references contain ten file occurrences across nine distinct paths: `chats.py` occurs twice. Eight occurrences were named and changed. At 6f57b4cb, `chats.py` was the only source file changed; the turn also added `peer/tests/test_message_lookup.py`.
+
+   **Smallest change:** say “ten reference-file occurrences, covering nine distinct files,” and “changed `chats.py` alone among source files.”
+
+All table cells otherwise reproduce from the walks and replay records, including the fourth-to-seventh-step range. I confirm three verified passing controls per item, one replay per new turn, 31–130 task words, and parent test inventories of 45, 83, 54, 45 and 90 blobs. No withheld test blob or parent test path appears in the walks, and I found no sign of earlier Git history. The script constructs parentless bases and checks withheld objects before each turn.
+
+Both final task-reader changes were made: the lessons task separates task actions from reservation actions and covers any holder; the connector task says “explaining why.” All five task hashes match the `TASK.md` blobs named in the walks. I also regenerated the fifteen replacement candidates from the supplied ordered list and original commit messages/source diffs, matching the selection record.
+
+I found no private words or absolute machine paths in the added section or verdict file.
+
+I could not freshly inspect the synthetic item/turn Git object stores or worker patches, or determine why the four replays failed. Withholding verification rests on the supplied records and script, corroborated by the walks and original parent trees. No model, replay or heavy check was run; no file was changed.
