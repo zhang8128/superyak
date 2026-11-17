@@ -38,16 +38,25 @@ holds what it reads in memory. Such a store can give this program other lines th
 files outside the repository, or have git use memory without limit before its time is up. Nothing here bounds
 git's memory.
 
-The bounds there are. git's diff of the source directory is read up to MAX_DIFF_BYTES, 2 MiB: a change whose diff
-there is longer is not read, and the program ends with 1 and says so. This program holds about fifty bytes for each
-byte of that diff at the worst, so about 100 MiB. A file of more than MAX_FILE_BYTES, 16 MiB, on either side is
-listed with the binary files and not read. All of git's runs together have MAX_SECONDS, 120: when that is up, git
-is ended and waited for, and the program ends with 1 and says so. That is a limit on git's runs and not on the
-whole program: starting git, and writing the answer to whoever reads it, are outside it. It is there for a
-repository whose files keep git waiting (a pipe where an object is looked for). A change within the bounds that is
-dear to compare can run out of time too, and is then not read. git stays in this program's own process group, so
-that whoever ends the group ends git with it. A line of a million characters is read whole, and its test asks that
-the program end within 20 seconds.
+The bounds there are. git's diff of the source directory is read up to MAX_DIFF_BYTES, 2 MiB, and its list of the
+files that changed up to MAX_LIST_BYTES, 512 KiB: a change with more of either is not read, and the program ends
+with 1 and says so. The places named are listed while their paths come to no more than MAX_PLACES_BYTES, 1 MiB: a
+change that names more is not listed, and the program ends with 1 and says so. So what is printed is bounded. No
+figure is given for the memory this program uses: it grows with the diff it reads, up to that bound. A file of more
+than MAX_FILE_BYTES, 16 MiB, on either side is listed with the binary files and not read. All of git's runs
+together have MAX_SECONDS, 120: when that is up, git is ended and waited for, and the program ends with 1 and says
+so. That is a limit on git's runs and not on the whole program: starting git, and writing the answer to whoever
+reads it, are outside it. It is there for a repository whose files keep git waiting (a pipe where an object is
+looked for). A change within the bounds that is dear to compare can run out of time too, and is then not read. A
+line of a million characters is read whole, and its test asks that the program end within 20 seconds.
+
+An interrupt from the keyboard is held back while git is started and while it is ended and waited for, and is let
+through while git's output is read: so one interrupt, whenever it comes, leaves no git behind. git stays in this
+program's own process group, so that whoever ends the group ends git with it. If this program alone is ended
+outright, git is not.
+
+A repository whose objects are named by SHA-256 is not read: the program's own repository names them by SHA-1, the
+commits are not found, and it ends with 1.
 """
 import argparse
 import importlib.util
@@ -56,6 +65,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -87,8 +97,12 @@ WORDS = (
 ANY_CASE = {"junit"}
 # The most bytes of git's diff of the source directory that are read: 2 MiB.
 MAX_DIFF_BYTES = 2097152
-# The most bytes of the list of changed files that are read: 2 MiB.
-MAX_LIST_BYTES = 2097152
+# The most bytes of the list of changed files that are read: 512 KiB.
+MAX_LIST_BYTES = 524288
+# The most that the places named may come to, each counted as its path's bytes and 64 more: 1 MiB.
+MAX_PLACES_BYTES = 1048576
+# What is held back while git is started and while it is ended and waited for.
+INTERRUPTS = {signal.SIGINT}
 # A file of more bytes than this is not read: git is told to treat it as it treats a binary one. 16 MiB.
 MAX_FILE_BYTES = 16777216
 # How long all of git's runs together may take.
@@ -150,35 +164,47 @@ class Git:
         """git's output, or Fail if it is longer than `limit` bytes, if git fails, or if the time for all of git's
         runs is up. One thread does all of it: it reads until the time is up, and it alone ends git, and only
         before it has waited for git, so no signal goes to a process that is no longer git. On every way out of
-        here, an error of this program's own among them, git is ended if it runs and is waited for."""
-        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        chunks, size, late = [], 0, False
+        here, an error of this program's own among them, git is ended if it runs and is waited for. An interrupt
+        is held back from before git is started until its output is being read, and again from the end of the
+        reading until git is ended and waited for: it is raised in the reading or after all is tidied, and git
+        itself is started with interrupts as they were."""
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
         try:
-            assert proc.stdout is not None
-            pipe = proc.stdout.fileno()
-            while size <= limit:
-                left = self.until - time.monotonic()
-                if left <= 0 or not select.select([pipe], [], [], left)[0]:
-                    late = True
-                    break
-                chunk = os.read(pipe, 65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                size += len(chunk)
-            if size <= limit and not late:
-                # git has closed its output. It has what is left of the time to end.
-                try:
-                    proc.wait(timeout=max(0.0, self.until - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    late = True
+            proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, held))
+            chunks, size, late = [], 0, False
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
+                assert proc.stdout is not None
+                pipe = proc.stdout.fileno()
+                while size <= limit:
+                    left = self.until - time.monotonic()
+                    if left <= 0 or not select.select([pipe], [], [], left)[0]:
+                        late = True
+                        break
+                    chunk = os.read(pipe, 65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                if size <= limit and not late:
+                    # git has closed its output. It has what is left of the time to end.
+                    try:
+                        proc.wait(timeout=max(0.0, self.until - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        late = True
+                # Held back again before the way out, so that the tidying below is entered with it held.
+                signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
+            finally:
+                signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
-            if proc.stdout is not None:
-                proc.stdout.close()
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
         if size > limit:
             raise Fail("git's output is longer than %d bytes, so it is not read" % limit)
         if late:
@@ -270,7 +296,7 @@ def report(repo, base, commit, source):
     try:
         git = Git(repo, scratch)
         base, commit = git.commit("base", base), git.commit("commit", commit)
-        files = lines = 0
+        files = lines = listed = 0
         outside, binary = [], []
         named = {group: [] for group, _ in WORDS}
         for raw, is_binary in changed(git, base, commit):
@@ -293,6 +319,10 @@ def report(repo, base, commit, source):
                 continue
             lines += len(added)
             for group, found in places(path, added).items():
+                listed += len(found) * (len(raw) + 64)
+                if listed > MAX_PLACES_BYTES:
+                    raise Fail("the change names more places than %d bytes list, so they are not listed"
+                               % MAX_PLACES_BYTES)
                 named[group] += found
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

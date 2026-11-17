@@ -6,10 +6,12 @@ two as a separate process. Its source directory is toy/src.
 """
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -336,6 +338,7 @@ class Named(unittest.TestCase):
         # repository can leave either.
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
         self.addCleanup(setattr, named, "MAX_SECONDS", named.MAX_SECONDS)
+        started = self.gits_started()
         objects = os.path.join(self.repo.root, ".git", "objects")
         for name, path in (("its list of other repositories", os.path.join(objects, "info", "alternates")),
                            ("the commit's own file", os.path.join(objects, commit[:2], commit[2:]))):
@@ -351,9 +354,8 @@ class Named(unittest.TestCase):
                 named.report(self.repo.root, self.base, commit, SOURCE)
             self.assertEqual(str(caught.exception), "git did not end within 2 seconds, so it was ended", name)
             self.assertLess(time.monotonic() - began, 20, name)
-            # git is ended and reaped: this process has no child left.
-            with self.assertRaises(ChildProcessError):
-                os.waitpid(-1, os.WNOHANG)
+            self.all_tidied(started, name)
+            del started[:]
             # And through the program's own front door: one line, and 1.
             errors = io.StringIO()
             with contextlib.redirect_stderr(errors):
@@ -367,6 +369,7 @@ class Named(unittest.TestCase):
         # for. The error is this program's own, in the middle of reading git's output.
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
         scratch = os.path.join(self.work, "scratch")
+        started = self.gits_started()
 
         class Broken:
             @staticmethod
@@ -381,6 +384,7 @@ class Named(unittest.TestCase):
             shutil.rmtree(scratch, True)
             os.mkdir(scratch)
             git = named.Git(self.repo.root, scratch)
+            del started[:]
             kept = named.select
             named.select = Broken
             try:
@@ -388,9 +392,7 @@ class Named(unittest.TestCase):
                     git.commit("commit", commit)
             finally:
                 named.select = kept
-            # git is ended and waited for: this process has no child left, running or ended.
-            with self.assertRaises(ChildProcessError, msg=name):
-                os.waitpid(-1, os.WNOHANG)
+            self.all_tidied(started, name)
 
     def test_a_git_that_closes_its_output_and_runs_on_and_one_whose_child_keeps_the_output_open(self):
         # Programs standing in for git, found first on the path. Neither is waited on past the time.
@@ -469,6 +471,161 @@ class Named(unittest.TestCase):
         out = self.named(commit)
         self.assertEqual(self.places(out)["runner"], [("toy/src/a.py", 3, "pytest")])
         self.assertEqual(out["source"]["lines"], 1)
+
+    def at_lines_of_the_run(self, *wanted):
+        """Each of `wanted` is (text, which, then): `then(frame)` is called once, when the line of Git.__call__
+        that is the `which`th to hold `text` is about to run, or, for a text given with "+" before it, the line
+        after that one. Returns the list of those called, in order."""
+        source, first = inspect.getsourcelines(named.Git.__call__)
+        targets = {first + [n for n, line in enumerate(source) if text.lstrip("+") in line][which]
+                   + text.startswith("+"): (text, then) for text, which, then in wanted}
+        code = named.Git.__call__.__code__
+        called = []
+
+        def inside(frame, event, _):
+            if event == "line" and frame.f_lineno in targets:
+                text, then = targets.pop(frame.f_lineno)
+                called.append(text)
+                then(frame)
+            return inside
+
+        sys.settrace(lambda frame, event, _: inside if frame.f_code is code else None)
+        self.addCleanup(sys.settrace, None)
+        return called
+
+    def gits_started(self):
+        """A list that every git the program starts from here on is added to, as the program's own object for it.
+        Held here, so that none is tidied away merely by being forgotten: Python waits for an ended child of an
+        object it lets go of, which would hide a program that did not."""
+        started = []
+        real = named.subprocess.Popen
+
+        class Held(real):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                started.append(self)
+
+        named.subprocess.Popen = Held
+        self.addCleanup(setattr, named.subprocess, "Popen", real)
+        return started
+
+    def all_tidied(self, started, name):
+        """Fails unless the program started a git, waited for each it started, and closed each one's output.
+        Ends and waits for any it left, so that a broken program leaves nothing behind a test."""
+        left = [proc for proc in started if proc.returncode is None]
+        for proc in left:
+            proc.kill()
+            proc.wait()
+        unclosed = [proc for proc in started if proc.stdout is not None and not proc.stdout.closed]
+        for proc in unclosed:
+            proc.stdout.close()
+        self.assertEqual((len(started) > 0, len(left), len(unclosed)), (True, 0, 0), name)
+
+    def test_one_interrupt_whenever_it_comes_leaves_no_git_behind(self):
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        started = self.gits_started()
+
+        def interrupt(_):
+            os.kill(os.getpid(), signal.SIGINT)
+
+        # A second interrupt, sent as git is about to be ended. (A line watched cannot send it: the first
+        # interrupt, raised where the line was watched, ends the watching.)
+        ending = named.subprocess.Popen.kill
+
+        def interrupted_ending(proc):
+            os.kill(os.getpid(), signal.SIGINT)
+            ending(proc)
+
+        # Where an interrupt is sent: as git has just been started; at the first line of the tidying, and at two
+        # lines within it; in the reading, with git kept waiting by a pipe where the commit is looked for; and
+        # last a second one in the tidying that the first one, in the reading, has begun.
+        for name, waiting, second, wanted in (
+                ("git just started", False, False, [("chunks, size, late = [], 0, False", 0, interrupt)]),
+                ("the tidying begins", False, False, [("+            finally:", 0, interrupt)]),
+                ("git is looked at", False, False, [("if proc.poll() is None:", 0, interrupt)]),
+                ("git is waited for", False, False, [("                proc.wait()", 0, interrupt)]),
+                ("the reading, git kept waiting", True, False, [("left = self.until", 0, interrupt)]),
+                ("the reading and then the tidying", True, True, [("left = self.until", 0, interrupt)])):
+            loose = os.path.join(self.repo.root, ".git", "objects", commit[:2], commit[2:])
+            if waiting and os.path.isfile(loose):
+                os.remove(loose)
+                os.mkfifo(loose)
+            scratch = os.path.join(self.work, "scratch-" + name.replace(" ", "-").replace(",", ""))
+            os.mkdir(scratch)
+            git = named.Git(self.repo.root, scratch)
+            del started[:]
+            called = self.at_lines_of_the_run(*wanted)
+            if second:
+                named.subprocess.Popen.kill = interrupted_ending
+            began = time.monotonic()
+            try:
+                with self.assertRaises(KeyboardInterrupt, msg=name):
+                    git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], 1024)
+            finally:
+                sys.settrace(None)
+                named.subprocess.Popen.kill = ending
+                # Whatever the run did, interrupts are let through again before the next case.
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+            self.assertEqual(called, [text for text, _, _ in wanted], name)
+            self.all_tidied(started, name)
+            # The interrupt is raised where it came or as soon as all is tidied, and is not kept for the time's end.
+            self.assertLess(time.monotonic() - began, 30, name)
+
+    def test_interrupts_are_as_they_were_after_a_run(self):
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        scratch = os.path.join(self.work, "scratch")
+        os.mkdir(scratch)
+        git = named.Git(self.repo.root, scratch)
+        self.addCleanup(signal.pthread_sigmask, signal.SIG_UNBLOCK, {signal.SIGINT})
+        self.assertEqual(git.commit("commit", commit), commit)
+        self.assertNotIn(signal.SIGINT, signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+        # And held back, if they were held back before it.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        self.assertEqual(git.commit("commit", commit), commit)
+        self.assertIn(signal.SIGINT, signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+
+    def test_git_is_started_with_interrupts_as_they_were(self):
+        # git is kept waiting by a pipe where the commit is looked for, and is itself sent an interrupt. It ends
+        # at once, as a program does that holds no interrupt back: the run fails long before its time is up.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        self.addCleanup(setattr, named, "MAX_SECONDS", named.MAX_SECONDS)
+        loose = os.path.join(self.repo.root, ".git", "objects", commit[:2], commit[2:])
+        os.remove(loose)
+        os.mkfifo(loose)
+        scratch = os.path.join(self.work, "scratch")
+        os.mkdir(scratch)
+        named.MAX_SECONDS = 15
+        git = named.Git(self.repo.root, scratch)
+
+        def interrupt_git(frame):
+            time.sleep(0.5)
+            os.kill(frame.f_locals["proc"].pid, signal.SIGINT)
+
+        started = self.gits_started()
+        called = self.at_lines_of_the_run(("left = self.until", 0, interrupt_git))
+        began = time.monotonic()
+        try:
+            with self.assertRaises(named.Fail) as caught:
+                git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], 1024)
+        finally:
+            sys.settrace(None)
+        self.assertEqual(len(called), 1)
+        self.all_tidied(started, "git sent an interrupt")
+        self.assertEqual(str(caught.exception), "git failed (rev-parse)")
+        self.assertLess(time.monotonic() - began, 10)
+
+    def test_more_places_than_are_listed(self):
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\n" + "pytest\n" * 5})
+        self.addCleanup(setattr, named, "MAX_PLACES_BYTES", named.MAX_PLACES_BYTES)
+        # The control: with the bound as it is, the five places are listed.
+        self.assertEqual(len(named.report(self.repo.root, self.base, commit, SOURCE)["named"]["runner"]), 5)
+        # Each place counts as its path's bytes and 64 more: five of them come to 380.
+        named.MAX_PLACES_BYTES = 379
+        with self.assertRaises(named.Fail) as caught:
+            named.report(self.repo.root, self.base, commit, SOURCE)
+        self.assertEqual(str(caught.exception), "the change names more places than 379 bytes list, so they are not listed")
+        named.MAX_PLACES_BYTES = 380
+        self.assertEqual(len(named.report(self.repo.root, self.base, commit, SOURCE)["named"]["runner"]), 5)
 
     def test_the_time_is_for_all_of_gits_runs_together(self):
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
