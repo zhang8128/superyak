@@ -1279,19 +1279,25 @@ fn a_jailed_run_cannot_open_a_terminal_device() {
     let g = ground();
     // Given to the interpreter as an argument. A here-document would need a temporary file, and the jail
     // lets a run write only in its own two directories.
+    // A terminal can be closed by whoever owns it between the listing of the names and the try: that one is
+    // gone, and nothing of it was opened. So the test asks that at least three were refused, and not only
+    // that three names were listed.
     let script = r#"import glob, os, sys
 opened = []
+refused = 0
 paths = ['/dev/tty', '/dev/ptmx'] + sorted(glob.glob('/dev/ttys*'))[:4] + sorted(glob.glob('/dev/pty*'))[:2]
 for path in paths:
     try:
         os.close(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY))
         opened.append(path)
     except PermissionError:
+        refused += 1
+    except FileNotFoundError:
         pass
     except OSError as e:
         opened.append(f'{path}:errno{e.errno}')
-print(len(paths), ' '.join(opened))
-sys.exit(1 if opened or len(paths) < 3 else 0)
+print(len(paths), refused, ' '.join(opened))
+sys.exit(1 if opened or refused < 3 else 0)
 "#;
     let out = run_in(
         &jail(&g),
@@ -1300,7 +1306,7 @@ sys.exit(1 if opened or len(paths) < 3 else 0)
     );
     assert!(
         out.status.success(),
-        "paths tried, then any that opened or failed for another reason: {} {}",
+        "paths tried, those refused, then any that opened or failed for another reason: {} {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
