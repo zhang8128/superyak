@@ -65,6 +65,7 @@ jobs:
           python3 -I probes/tests/test_probe.py || status=1
           python3 -I probes/pilot/test_records.py || status=1
           python3 -I probes/items/test_items.py || status=1
+          python3 -I probes/items/test_named.py || status=1
           exit "$status"
       - name: The first run's three checks
         # The frozen checks of the first run with model workers. Its items are done, so the checks are regression
