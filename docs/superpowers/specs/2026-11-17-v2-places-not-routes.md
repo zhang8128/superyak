@@ -1,0 +1,87 @@
+# v2: places, not routes (store "4")
+
+Tardis, 2026-11-17, draft 1, for a fresh reader after Thursday's rehearsal. A change to the store's side of
+`2026-11-16-v2-walks-into-routes.md` ("the store's spec", revision 7, store `"3"`, approved at 6c861121). The room's
+half is Serenity's, in a revision of `2026-11-16-v2-a-route-offered.md`. Each side gets its own read, and both land in
+step, as store "3" did. Thursday's rehearsal is unchanged: it runs store "3" at 45be5dd0, frozen by hash.
+
+## Why
+
+The store's premise was that an earlier agent's way helps a later one. Two counts say it doesn't: the places do, and
+the way between them adds nothing.
+
+- **Serenity's** (all hands 66d18493): on 43 of the team's own workers' walks, a reading list ordered by the roads
+  earlier workers took held no more of what a later worker found than one ordered by how many went to each file: 28,
+  40 and 50% in the first 5, 10 and 16, either way. Its road model was one and two steps.
+- **Tardis's** (all hands 0901d7dd), with this store at 6c861121, the measure posted before the run (fd38a8b8). On 49
+  workers' first readings (Serenity's `workers-ordered-reads.json`, sha256 30f6b0f9…2d07), each worker's history was
+  the earlier workers, built as a ship's store. The goals were the brief's files, and the target was what it read
+  beyond its brief (a median of 8 files). Recall:
+
+  | History | n | @5 route / places | @10 | @16 |
+  | --- | --- | --- | --- | --- |
+  | every earlier worker | 48 | 0.134 / 0.155 | 0.225 / 0.232 | 0.297 / 0.302 |
+  | the same area (a shared brief file) | 43 | 0.270 / 0.276 | 0.373 / 0.394 | 0.488 / 0.487 |
+
+  Route better, worse and same: at @5, 4/8/36 and 5/8/30; at @10, 3/7/38 and 4/10/29. A route adds a median of 1 to 2
+  files beyond the brief; the rest of either list is the same ranked places. On the second pilot's 16 walks the two
+  lists could not be told apart (22 files in all).
+
+- **What moves recall is the history, not the order:** the area's history about doubles what either list finds.
+  Choosing the history is the room's job (today `title-words-1`), not the store's.
+
+**What this does not show.** "No better", not "worse": 4 against 10 is no test at this n. The 49 are the team's own
+logs, not in the repository, so a reader can check the arithmetic and not the source. A walk there is first readings
+only, so a road is "read next for the first time". One repository; readers and builders, not item turns. Nothing here
+says a list of places saves a reader time: it says which files a later reader went on to open.
+
+## What is asked
+
+1. **Ranked places in the answer.** For a question, after the goals' routes, `places`: the files the store's taught
+   turns named, ranked by how many distinct taught turns named each, the question's goals left out.
+2. **Counts with them,** so the room can say how many earlier turns went to each place.
+3. **The measure kept with the spec:** the comparison's two scripts, so a reader can run them, and so can anyone with
+   walks of their own.
+
+## Not asked
+
+- Choosing the history. The store ranks within the walks it is given; which earlier work counts as the same area is
+  the room's, in its own revision.
+- Dropping routes. They stay in the answer, as store "3" has them, for the experiment's arms and for a reader. The
+  offer is the room's to make from `places`.
+- Conditioning places on a goal (files named by turns that also named it). Not measured, so not built.
+
+## 1. The answer, store "4"
+
+Everything in store "3"'s answer stays, byte for byte, but `store` is `"4"`. Beside `answers`, a top-level `places`:
+an array of `{path, turns}`, where `turns` is the number of distinct taught turns whose walk named `path` at any step.
+It is sorted by `turns` falling, then `path` in byte order. It leaves out every goal the question asks, and holds at
+most `PLACES_KEPT` = 16, a constant of store "4". Beside it, `places_more`: how many other named paths there are, a
+whole number, always present, 0 when none was left out. When `N` is 0, `places` is `[]` and `places_more` is 0.
+
+**Built at build time.** Each path's `turns` is stored with the path, and the check recomputes it from the walks and
+compares. A query sorts and cuts, and makes no cell: places are counts, not cells.
+
+## 2. The measure, kept
+
+`2026-11-17-v2-places-not-routes-measure/` holds `compare.py` (room walks: the other items' taught turns as history)
+and `compare_workers.py` (first readings: earlier workers as a ship's store; every earlier one, and the same area),
+each with the measure in its docstring as posted before the run. They call the store, so they measure the store as it
+is. Their inputs are not in the repository.
+
+## 3. How we know it is done
+
+| What | Shown by | A wrong store caught |
+| --- | --- | --- |
+| Places are counted by turns | Three taught turns, one naming `a` twice in different steps: `a` has `turns` 1 from it | One that counts steps or visits |
+| Ranked and cut | Twenty named paths at distinct counts and a tie at the edge: 16 kept by count then bytes, `places_more` 4 | One that keeps by name, the wrong side of a tie, or not 16 |
+| Goals left out | A goal that is also the most named path is not in `places` | One that offers a turn its own goal |
+| Only taught turns | An untaught walk's paths count nothing | One that counts what the measure doesn't teach |
+| Checked | A tampered stored count fails the check | One that serves a count its walks don't make |
+| Store "3" unchanged inside | The fixture's `answers` byte for byte, with `store` "4" and the new keys | One that moves a route |
+
+## Decisions
+
+1. **Places beside routes, not in place of them,** until the room's experiment drops the route arm.
+2. **Counted by distinct taught turns,** the measure the comparison used.
+3. **16 kept and the rest counted,** as detours are, so the answer's size doesn't grow with the history.
