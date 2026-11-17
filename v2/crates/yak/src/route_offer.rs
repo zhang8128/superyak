@@ -10,6 +10,10 @@ pub const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 pub const MAX_GOALS: usize = 64;
 pub const MAX_ROADS: usize = 256;
 pub const MAX_VERSION_BYTES: usize = 64;
+/// The one version of the store's answer the room reads. Its limit on detours is a constant of it.
+pub const STORE_VERSION: &str = "3";
+/// The most detours a route of `STORE_VERSION` carries; the dearer ways past them are counted.
+pub const MAX_DETOURS: usize = 16;
 
 /// Read only a bounded number of bytes before parsing. Parser diagnostics may contain input data and
 /// therefore become a fixed field name here. Schema validation belongs to the single answer adapter.
@@ -118,7 +122,7 @@ struct ParsedRoute {
     roads: Vec<ParsedRoad>,
     blobs: BTreeMap<String, BTreeSet<String>>,
     cost_millis: u64,
-    dearer_ways: usize,
+    dearer_ways: u64,
 }
 
 #[derive(Debug)]
@@ -158,7 +162,15 @@ fn read_paths(value: &Value, at: &str, simple: bool, goal: &str) -> Result<Vec<S
 fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute> {
     let fields = object(
         value,
-        &["paths", "roads", "cost", "roads_n", "blobs", "detours"],
+        &[
+            "paths",
+            "roads",
+            "cost",
+            "roads_n",
+            "blobs",
+            "detours",
+            "detours_more",
+        ],
         at,
     )?;
     let paths = read_paths(&fields["paths"], &format!("{at}.paths"), true, goal)?;
@@ -219,6 +231,22 @@ fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute
         blobs.insert(name.clone(), set);
     }
     let detours = array(&fields["detours"], &format!("{at}.detours"))?;
+    if detours.len() > MAX_DETOURS {
+        return Err(refuse(&format!("{at}.detours.limit")));
+    }
+    let more = whole(&fields["detours_more"], &format!("{at}.detours_more"))?;
+    // The store leaves dearer ways out only once it has kept as many as it carries.
+    if more > 0 && detours.len() < MAX_DETOURS {
+        return Err(refuse(&format!("{at}.detours_more.kept")));
+    }
+    // A turn goes one way to a file, so the dearer ways, kept and counted, are at most the turns let teach.
+    // A sum past the largest whole number is past any count of turns, and refused as that.
+    let dearer_ways = (detours.len() as u64)
+        .checked_add(more)
+        .ok_or_else(|| refuse(&format!("{at}.detours_more.taught")))?;
+    if dearer_ways > taught {
+        return Err(refuse(&format!("{at}.detours_more.taught")));
+    }
     let mut previous = String::new();
     for (n, detour) in detours.iter().enumerate() {
         let at = format!("{at}.detours[{n}]");
@@ -260,7 +288,7 @@ fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute
         roads: parsed,
         blobs,
         cost_millis: cost(&fields["cost"], &format!("{at}.cost"))?,
-        dearer_ways: detours.len(),
+        dearer_ways,
     })
 }
 
@@ -305,6 +333,13 @@ pub fn read_answer(answer_path: &Path, goals: &Goals, repo: &str) -> Result<Answ
     )?;
     if whole(&fields["v"], "answer.v")? != 1 {
         return Err(refuse("answer.v"));
+    }
+    // Before anything the store's version shapes: an answer of another version is to be made again, and is
+    // refused as that, not by the first field its shape lacks.
+    let store = string(&fields["store"], "answer.store")?;
+    version(store, "answer.store")?;
+    if store != STORE_VERSION {
+        return Err(refuse("answer.store.version"));
     }
     if string(&fields["repo"], "answer.repo")? != repo {
         return Err(refuse("answer.repo"));
@@ -397,9 +432,7 @@ pub fn read_answer(answer_path: &Path, goals: &Goals, repo: &str) -> Result<Answ
     if answer_canonical(&value)? != bytes {
         return Err(refuse("answer.canonical"));
     }
-    let store = string(&fields["store"], "answer.store")?;
     let kernel = string(&fields["kernel"], "answer.kernel")?;
-    version(store, "answer.store")?;
     version(kernel, "answer.kernel")?;
     Ok(Answer {
         store: store.into(),
@@ -579,7 +612,7 @@ mod tests {
     }
 
     fn answer() -> Value {
-        json!({"v":1,"store":"store-1","kernel":"kernel-1","repo":"b".repeat(40),"list":"a".repeat(64),"for_experiment":true,
+        json!({"v":1,"store":"3","kernel":"kernel-1","repo":"b".repeat(40),"list":"a".repeat(64),"for_experiment":true,
         "measure":{"name":"share","version":1,"teaches":["passed_verified"]},"path_rule":1,"taught":5,
         "answers":[{"goal":"gone.txt","route":{
             "paths":["same.txt","changed.txt","gone.txt"],
@@ -590,7 +623,8 @@ mod tests {
             "blobs":{"same.txt":["a".repeat(40),"c".repeat(40)],"changed.txt":["a".repeat(40)],"gone.txt":["a".repeat(40)]},
             "detours":[{"attempt":"a000000000001","item":"i000000000001","family":"codex","visit":4,"seq":7,
                 "paths":["same.txt","changed.txt","same.txt","gone.txt"],
-                "cost":{"num":"1","den":"8","nats":"2.079441542"},"roads_n":4}]
+                "cost":{"num":"1","den":"8","nats":"2.079441542"},"roads_n":4}],
+            "detours_more":0
         }}]})
     }
 
@@ -621,7 +655,7 @@ mod tests {
         let offer = offer_value(&goals, &answer, &tree).unwrap();
         assert_eq!(
             offer,
-            json!({"offer":1,"history":"a".repeat(64),"ranker":"title-words-1","store":"store-1","kernel":"kernel-1",
+            json!({"offer":1,"history":"a".repeat(64),"ranker":"title-words-1","store":"3","kernel":"kernel-1",
             "measure":{"name":"share","version":"1"},"chosen":[{"attempt":"a000000000001","score":2}],
             "goals":[{"path":"gone.txt","state":"gone","route":{"roads":[
                 {"to":"same.txt","walked_by":3,"state":"same"},{"to":"changed.txt","walked_by":2,"state":"changed"},
@@ -643,14 +677,14 @@ mod tests {
 
     #[test]
     fn the_owners_normative_answer_converts_as_it_is() {
-        // The store's owner's own file, revision 6 of its spec, byte for byte: nothing is added to it here.
-        let bytes = include_bytes!("../tests/fixtures/store-route-r6/answer.json");
+        // The store's owner's own file, revision 7 of its spec, byte for byte: nothing is added to it here.
+        let bytes = include_bytes!("../tests/fixtures/store-route-r7/answer.json");
         assert_eq!(
             history::sha256(bytes),
-            "b671b05d75699aadde94328cc5c77af1c2e08cb57c5df9665f6ad147ffa77541"
+            "bb7e7d0a2d86a2d798ab378bb79d54d372e70bf600ea6422fe3dd1aa3b44dde8"
         );
         let question: history::Question = serde_json::from_slice(include_bytes!(
-            "../tests/fixtures/store-route-r6/question.json"
+            "../tests/fixtures/store-route-r7/question.json"
         ))
         .unwrap();
         let mut goals = goals(&["target.txt", "added.txt"]);
@@ -665,7 +699,7 @@ mod tests {
             ("target.txt".into(), "7".repeat(40)),
         ]);
         let offer = offer_value(&goals, &answer, &tree).unwrap();
-        assert_eq!(offer["store"], "2");
+        assert_eq!(offer["store"], "3");
         assert_eq!(offer["kernel"], "511bacd017146586");
         assert_eq!(offer["measure"], json!({"name":"share","version":"1"}));
         assert_eq!(
@@ -857,6 +891,7 @@ mod tests {
         let cases = vec![
             ("/store".into(), json!("")),
             ("/store".into(), json!("x".repeat(65))),
+            ("/store".into(), json!("2")),
             ("/kernel".into(), json!("not a word")),
             ("/v".into(), json!(2)),
             ("/repo".into(), json!("c".repeat(40))),
@@ -907,6 +942,9 @@ mod tests {
             (format!("{prefix}/detours/0/seq"), json!(-1)),
             (format!("{prefix}/detours/0/seq"), json!("0")),
             (format!("{prefix}/detours/0/roads_n"), json!(1)),
+            (format!("{prefix}/detours_more"), json!(1)),
+            (format!("{prefix}/detours_more"), json!(-1)),
+            (format!("{prefix}/detours_more"), json!("MARKER")),
             (format!("{prefix}/cost/num"), json!("0")),
             (format!("{prefix}/cost/num"), json!("")),
             (format!("{prefix}/cost/num"), json!("01")),
@@ -1179,6 +1217,210 @@ mod tests {
                 assert_eq!(result.unwrap_err().0, "answer.answers[0].route.roads.limit");
             }
         }
+    }
+
+    const ROUTE: &str = "answer.answers[0].route";
+
+    /// The test answer with `kept` detours in rising order of attempt, `more` counted beside them, and
+    /// `taught` turns let teach. Every road's count stays within a `taught` of 3 or more.
+    fn with_detours(kept: usize, more: Value, taught: u64) -> Value {
+        let mut value = answer();
+        value["taught"] = json!(taught);
+        let route = &mut value["answers"][0]["route"];
+        let detour = route["detours"][0].clone();
+        route["detours"] = (1..=kept)
+            .map(|n| {
+                let mut detour = detour.clone();
+                detour["attempt"] = json!(format!("a{n:012x}"));
+                detour
+            })
+            .collect();
+        route["detours_more"] = more;
+        value
+    }
+
+    /// What the offer file's `dearer_ways` carries for the answer's one route, read as a plain whole number.
+    fn dearer_ways(value: &Value) -> Result<u64> {
+        let answer = parse_fixture(value, &["gone.txt"])?;
+        let offer = offer_value(&goals(&["gone.txt"]), &answer, &BTreeMap::new())?;
+        Ok(offer["goals"][0]["route"]["dearer_ways"].as_u64().unwrap())
+    }
+
+    /// Read the answer's canonical bytes with `detours_more` written as `literal`, which may be a number
+    /// serde's own writer never makes (`1.0`, `1e3`, 2^64), so the reader meets the literal itself.
+    fn parse_with_more(value: &Value, literal: &str) -> Result<Answer> {
+        let mut value = value.clone();
+        value["answers"][0]["route"]["detours_more"] = json!(424_242);
+        let text = String::from_utf8(fixture_bytes(&value)).unwrap();
+        let field = "\"detours_more\":424242";
+        assert_eq!(text.matches(field).count(), 1);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("answer.json");
+        std::fs::write(
+            &path,
+            text.replace(field, &format!("\"detours_more\":{literal}")),
+        )
+        .unwrap();
+        read_answer(&path, &goals(&["gone.txt"]), &"b".repeat(40))
+    }
+
+    #[test]
+    fn only_the_stores_version_3_is_read_and_another_is_refused_by_its_version() {
+        parse_fixture(&answer(), &["gone.txt"]).unwrap();
+        for (store, refusal) in [
+            ("2", "answer.store.version"),
+            ("4", "answer.store.version"),
+            ("03", "answer.store.version"),
+            ("3 ", "answer.store"),
+            ("", "answer.store"),
+        ] {
+            let mut bad = answer();
+            bad["store"] = json!(store);
+            assert_eq!(
+                parse_fixture(&bad, &["gone.txt"]).unwrap_err().0,
+                refusal,
+                "{store:?}"
+            );
+        }
+        // An answer of the version before, without the counted field, is refused by its version and not by
+        // the first field its shape lacks.
+        let mut old = answer();
+        old["store"] = json!("2");
+        old["answers"][0]["route"]
+            .as_object_mut()
+            .unwrap()
+            .remove("detours_more");
+        assert_eq!(
+            parse_fixture(&old, &["gone.txt"]).unwrap_err().0,
+            "answer.store.version"
+        );
+    }
+
+    #[test]
+    fn sixteen_detours_convert_and_the_block_says_the_kept_and_the_counted_together() {
+        assert_eq!(dearer_ways(&with_detours(16, json!(0), 19)).unwrap(), 16);
+        assert_eq!(dearer_ways(&with_detours(16, json!(3), 19)).unwrap(), 19);
+    }
+
+    #[test]
+    fn seventeen_detours_are_refused_whatever_detours_more_is() {
+        assert_eq!(dearer_ways(&with_detours(16, json!(0), 30)).unwrap(), 16);
+        for more in [json!(0), json!(1), json!(3), json!("MARKER")] {
+            assert_eq!(
+                parse_fixture(&with_detours(17, more, 30), &["gone.txt"])
+                    .unwrap_err()
+                    .0,
+                format!("{ROUTE}.detours.limit")
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_above_nought_is_refused_beside_fewer_than_16_detours() {
+        for kept in [0, 1, 15] {
+            assert_eq!(
+                dearer_ways(&with_detours(kept, json!(0), 19)).unwrap(),
+                kept as u64
+            );
+            assert_eq!(
+                parse_fixture(&with_detours(kept, json!(1), 19), &["gone.txt"])
+                    .unwrap_err()
+                    .0,
+                format!("{ROUTE}.detours_more.kept"),
+                "{kept}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_kept_and_the_counted_together_are_at_most_the_turns_let_teach() {
+        let taught = format!("{ROUTE}.detours_more.taught");
+        // By way of the count: 16 kept and 3 counted are the 19 turns let teach, and 4 counted are one more.
+        assert_eq!(dearer_ways(&with_detours(16, json!(3), 19)).unwrap(), 19);
+        assert_eq!(
+            parse_fixture(&with_detours(16, json!(4), 19), &["gone.txt"])
+                .unwrap_err()
+                .0,
+            taught
+        );
+        // By way of the kept ones alone: none counted, and one kept more than the 5 turns let teach.
+        assert_eq!(dearer_ways(&with_detours(5, json!(0), 5)).unwrap(), 5);
+        assert_eq!(
+            parse_fixture(&with_detours(6, json!(0), 5), &["gone.txt"])
+                .unwrap_err()
+                .0,
+            taught
+        );
+        // At the top of the number's range: a sum of exactly 2^64 - 1 converts, and a count of 2^64 - 1
+        // beside 16 is refused by the sum, without a panic or a wrap.
+        assert_eq!(
+            dearer_ways(&with_detours(16, json!(u64::MAX - 16), u64::MAX)).unwrap(),
+            u64::MAX
+        );
+        for taught_n in [19, u64::MAX] {
+            assert_eq!(
+                parse_fixture(&with_detours(16, json!(u64::MAX), taught_n), &["gone.txt"])
+                    .unwrap_err()
+                    .0,
+                taught
+            );
+        }
+    }
+
+    #[test]
+    fn detours_more_must_be_a_whole_number_and_is_never_echoed() {
+        let sixteen = with_detours(16, json!(0), 19);
+        // The written literal reaches the reader: a plain 1 converts, and 2^64 - 1 is read as a number.
+        let read = parse_with_more(&sixteen, "1").unwrap();
+        assert_eq!(read.goals[0].route.as_ref().unwrap().dearer_ways, 17);
+        assert_eq!(
+            parse_with_more(&sixteen, "18446744073709551615")
+                .unwrap_err()
+                .0,
+            format!("{ROUTE}.detours_more.taught")
+        );
+        let mut missing = sixteen.clone();
+        missing["answers"][0]["route"]
+            .as_object_mut()
+            .unwrap()
+            .remove("detours_more");
+        assert_eq!(
+            parse_fixture(&missing, &["gone.txt"])
+                .unwrap_err()
+                .to_string(),
+            format!("refused: {ROUTE}.detours_more.missing")
+        );
+        for literal in [
+            "true",
+            "1.0",
+            "-1",
+            "\"1\"",
+            "null",
+            "[]",
+            "18446744073709551616",
+            "1e3",
+        ] {
+            assert_eq!(
+                parse_with_more(&sixteen, literal).unwrap_err().to_string(),
+                format!("refused: {ROUTE}.detours_more"),
+                "{literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn sixteen_detours_are_still_in_strictly_rising_order_of_attempt() {
+        let value = with_detours(16, json!(0), 19);
+        assert_eq!(dearer_ways(&value).unwrap(), 16);
+        let mut swapped = value.clone();
+        swapped["answers"][0]["route"]["detours"]
+            .as_array_mut()
+            .unwrap()
+            .swap(7, 8);
+        assert_eq!(
+            parse_fixture(&swapped, &["gone.txt"]).unwrap_err().0,
+            format!("{ROUTE}.detours[8].attempt.order")
+        );
     }
 
     #[test]

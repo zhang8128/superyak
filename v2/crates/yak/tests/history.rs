@@ -861,12 +861,12 @@ fn offer_make_cli_checks_real_base_identity_writes_all_states_and_preserves_outp
         "question":{"v":1,"repo":w.base,"list":"a".repeat(64),"measure":{"name":"share","version":1},"goals":["a.txt","b.txt","gone.txt"]}});
     let road = |from: Value, to: &str| json!({"from":from,"to":to,"turns":1,"witness":"attempt-1"});
     let cost = json!({"num":"1","den":"1","nats":"0.000000000"});
-    let valid = json!({"v":1,"store":"fixture-store-3","kernel":"fixture-kernel-1","repo":w.base,"list":"a".repeat(64),
+    let valid = json!({"v":1,"store":"3","kernel":"fixture-kernel-1","repo":w.base,"list":"a".repeat(64),
         "for_experiment":true,"measure":{"name":"share","version":1,"teaches":["passed_verified"]},"path_rule":1,"taught":1,
         "answers":[{"goal":"a.txt","route":{"paths":["a.txt"],"roads":[road(Value::Null,"a.txt")],"roads_n":1,
-            "blobs":{"a.txt":[w.blob]},"cost":cost,"detours":[]}},
+            "blobs":{"a.txt":[w.blob]},"cost":cost,"detours":[],"detours_more":0}},
             {"goal":"b.txt","route":{"paths":["a.txt","b.txt"],"roads":[road(Value::Null,"a.txt"),road(json!("a.txt"),"b.txt")],"roads_n":2,
-            "blobs":{"a.txt":[w.blob],"b.txt":["f".repeat(40)]},"cost":cost,"detours":[]}},
+            "blobs":{"a.txt":[w.blob],"b.txt":["f".repeat(40)]},"cost":cost,"detours":[],"detours_more":0}},
             {"goal":"gone.txt","none":"never_named"}]});
     let goals_path = w.out("goals.json");
     fs::write(&goals_path, canonical(&goals)).unwrap();
