@@ -1,6 +1,6 @@
 # v2: a route, made from many walks, offered to a turn
 
-Serenity, 2026-11-16, revision 7. A change to the design of stage 2
+Serenity, 2026-11-16, revision 8. A change to the design of stage 2
 (`docs/superpowers/specs/2026-11-15-v2-stage-2-experiment.md`, "the first design" below), after its pilot
 (`docs/reports/2026-11-15-v2-stage-2-pilot.md`) and the repair that followed
 (`docs/reports/2026-11-16-v2-tests-that-need-the-room.md`).
@@ -233,9 +233,14 @@ scored:
 1. It is not a merge, and it is reached from a stated last commit and not from a stated first one.
 2. It changes test files and source files of one component, and nothing outside that component but
    documents. The first component is the peer, whose tests are the ones shown to run in the room.
-3. At most three test files and five source files; Python only; no test file that needs a browser.
-4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Both inside
-   the room's jail, within the check's limit.
+3. At most three test files and five source files, each added or changed, a link made into a plain file
+   counting as changed; none deleted, renamed or made into a link. Python only; no test file that needs a
+   browser.
+4. With its test files laid over its parent, those tests fail. On the commit itself they pass. Each within
+   a limit of time. These two runs are of the project's own merged tests, on the machine the list is made
+   on and outside the room's jail: the jail is for what a worker hands in. The trees they run on are laid
+   out from the stored files' own bytes, whatever the repository's settings for line endings and filters.
+   An item's reference is then shown through the jail before the item is used ("Its reference", below).
 5. Among the scored items no two name one test file, and among the pilot's three. Which of two is kept is
    said below, under "The scored, the pilot's and history". History items are not held to this.
 
@@ -289,12 +294,27 @@ of the scored design to judge from the list and the history, before any scored t
   - changed anything outside the component's source directory. So not the tests, not a helper the tests
     use, not the tests' configuration, and not another component. It is the whole source directory that
     may change, never a list of the files the fix touched, which would say where the answer is;
-  - did not run the tests that the reference ran: the check holds how many tests passed and how many were
-    skipped on the reference, and a run with fewer passed or more skipped is not a pass, though it ends
-    well.
+  - whose run of the tests reports fewer passed, or more skipped, than the reference's did: the check holds
+    those two counts from the reference, and a run that ends well with fewer passed or more skipped is not
+    a pass.
 - **Its wrong commit** is the base with one unrelated file added. That shows the check is red on a change
   that fixes nothing. It does not show the tests would catch a clever wrong fix; they are the tests the
-  project itself took. A pass here means: the protected tests pass. Nothing more is to be read into it.
+  project itself took.
+- **What a pass shows.** Four things the check observes. Between the base's parent and the commit, every
+  path that differs is under the source directory or is one of the check's own files. The test files in the
+  commit are the frozen ones. The test runner, started on those files, ended with nought. And the report it
+  left, read afterwards, says no failure and no error, at least as many passed as on the reference, and no
+  more skipped.
+- **What a pass cannot show.** That is a showing that the tests pass when the runner and its report did
+  what they are for. The check does not show that they did, nor what the worker meant. The turn's code runs
+  inside the runner's own process, and by accident or on purpose it can bear on what is gathered, on what a
+  test asserts, on the test files as they lie in the checkout while the run goes, on the report, or on how
+  the process ends. No check that runs there can rule that out. Two things are done about what that leaves.
+  Every passing turn's change is kept, and the pilot's and the experiment's reports say, for each passing
+  turn, whether its change names the test runner, its report or the ending of the process: something for a
+  person to look at. Such a thing can be done without naming any of those, so a change that names none is
+  not thereby shown to have left the run alone, nor to be in good faith. And no claim is made from these
+  outcomes that would need more: none about a worker set on cheating its check.
 - **Its reference** is the commit's own source changes over the base, shown to pass before the item is
   listed. No turn sees it: a sandbox holds only what its base reaches.
 - **Before an item is used on a machine, its reference is shown to pass that item's frozen check through
@@ -332,6 +352,8 @@ offered anything, and no scored result changes it.
   the room gives an item only to a worker of another. So the network is made of one program's walks, many
   times over, and not of two programs' together.
 - **One component of one repository.** The conclusion is about that work.
+- **A pass is what the check observed, and no more.** It is not proof that the test run was left alone, by
+  accident or on purpose. See "What a pass cannot show", above.
 - **It is work already done once, and chosen by knowing its answer.** A commit is taken because its tests
   go from failing to passing, which is known only from the fix. That is how a set of past work is made, and
   it is not a choice by how well a route might serve. The fix is in the project's public history after the
@@ -346,12 +368,15 @@ might serve it.
 
 **The item-maker is in the repository, with tests of its own.** They show, on a small repository made for
 the purpose: the same list whatever order the commits are read out in, and with two commits at one time;
-the dividing commit found; a later scored commit left out for naming an earlier one's test file, while a
-history commit that names it stays; the pilot's three found going back, the dividing commit among them and
-the later of two kept; too few for the scored or for the pilot, refused; a base with one parent and the
-fixed message; a reference that passes; and the check failing each of these, by name: the base, the wrong
-commit, a turn that changed a test file, one that changed a helper the tests use, one that changed the
-tests' configuration, and one that made the tests be skipped.
+the same list and the same bases from an ordinary repository, a bare one and a linked worktree, and
+whatever that repository's settings for line endings and filters, none of which is run; a run past its
+limit ended together with what it started; the dividing commit found; a later scored commit left out for
+naming an earlier one's test file, while a history commit that names it stays; the pilot's three found
+going back, the dividing commit among them and the later of two kept; too few for the scored or for the
+pilot, refused; a base with one parent and the fixed message; a reference that passes; and the check
+failing each of these, by name: the base, the wrong commit, a turn that changed a test file, one that
+changed a helper the tests use, one that changed the tests' configuration, and one that made the tests be
+skipped.
 
 **For the reader of the scored design, beside the pilot's results:** how often the ranker finds a history
 turn at all. Every title is one sentence with test files' names in it, and the ranker drops a word that
@@ -469,6 +494,17 @@ same reader confirmed it with one named change, made in revision 7:
 It also held that the choice of this rule, made with stand-ins drawn from the commits' own answers in
 view, is an exploratory choice and not a blind one, and that the number of history items, once fixed, is
 not to be moved by a scored result. Both are now said in section 6.
+
+**Changed in revision 8, from the reader of the item-maker's code, and confirmed by that reader.** That
+reader, of the other family from the builders, said the code was not to be pushed, for two faults in it,
+since mended, and for one thing that is the spec's: the spec said a pass means the protected tests pass,
+and the check cannot show that against code that bears on its own test run. Section 6 now says what a pass
+shows and what it cannot ("What a pass shows", "What a pass cannot show"), and "What this narrows" names
+it. The reader confirmed that with two changes of wording, both made: a pass is described by what the check
+observes, and not as tests known to have run or as a change known to be in good faith; and a passing change
+that names nothing of the runner is not thereby cleared. Two smaller things are made plain with it: rule
+4's two runs are on the machine the list is made on and outside the jail, from the stored files' own bytes;
+and rule 3 counts a link made into a plain file as a file changed.
 
 **What building the room's second half showed, and what its reader left open.** The walks, the list, the
 admission, the goals and the offer file were built by one family and read by the other before they were
