@@ -6,6 +6,7 @@ two as a separate process. Its source directory is toy/src.
 """
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -391,6 +392,42 @@ class Named(unittest.TestCase):
             finally:
                 named.select = kept
             self.all_tidied(started, name)
+
+    def test_an_error_before_the_reading_begins_starts_no_git(self):
+        # What the reading fills is made before git is started. Here making it fails: the error is raised as that
+        # line is about to run, and no git has been started, so none can be left.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        scratch = os.path.join(self.work, "scratch")
+        os.mkdir(scratch)
+        git = named.Git(self.repo.root, scratch)
+        started = self.gits_started()
+        source, first = inspect.getsourcelines(named.Git.__call__)
+        target = first + [n for n, line in enumerate(source) if "chunks, size, late = [], 0, False" in line][0]
+        code = named.Git.__call__.__code__
+
+        def inside(frame, event, _):
+            if event == "line" and frame.f_lineno == target:
+                raise MemoryError("no room for what the reading fills")
+            return inside
+
+        sys.settrace(lambda frame, event, _: inside if frame.f_code is code else None)
+        try:
+            with self.assertRaises(MemoryError):
+                git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], 1024)
+        finally:
+            sys.settrace(None)
+            count = len(started)
+            for proc in started:
+                if proc.returncode is None:
+                    proc.kill()
+                    proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
+        self.assertEqual(count, 0)
+        # The control: with nothing in the way, the same call starts one git and reads it.
+        self.assertEqual(git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], 1024).strip().decode("ascii"),
+                         commit)
+        self.assertEqual(len(started), 1)
 
     def test_a_git_that_closes_its_output_and_runs_on_and_one_whose_child_keeps_the_output_open(self):
         # Programs standing in for git, found first on the path. Neither is waited on past the time.

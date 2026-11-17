@@ -166,9 +166,10 @@ class Git:
         before it has waited for git, so no signal goes to a process that is no longer git. On a way out of here
         by an error of this program's own, or by the time being up, git is ended if it runs and is waited for.
         An interrupt is not held back: see the opening comment."""
+        # Made before git is started, so that a failure to make them leaves no git behind.
+        chunks, size, late = [], 0, False
         proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        chunks, size, late = [], 0, False
         try:
             assert proc.stdout is not None
             pipe = proc.stdout.fileno()
