@@ -71,8 +71,11 @@ at the other two. The room and the worker are as in the first pilot; the block i
 2. **A program of ours cannot start a child inside the Linux jail.** Before it starts another program, a
    program built with this toolchain makes a Unix socket pair of the seqpacket kind, and the Linux filter
    lets through only the stream kind. So `cargo` cannot build there, and the three old items cannot be
-   judged there. Found with checks whose exit code says which step failed, and a stand-in worker. The mend
-   is written as `docs/superpowers/specs/2026-11-16-v2-a-child-inside-the-linux-jail.md` and is not made.
+   judged there. Found with checks whose exit code says which step failed, and a stand-in worker; and
+   shown by one controlled run, in which the same build passed through a jail that differed only in
+   letting that pair through. The mend is written as
+   `docs/superpowers/specs/2026-11-16-v2-a-child-inside-the-linux-jail.md`, read and approved with named
+   changes by a reader of the other family, and is not made.
 3. **Freezing takes a check that cannot run for one that says no.** It asks that a check fail on the base
    and on the wrong commit, and a check that cannot run does both. Written down in that spec, not mended.
 4. **A check of the kind the new items use does run inside the Linux jail:** Python that starts git and

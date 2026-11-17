@@ -31,11 +31,12 @@ seqpacket kind. The trace shows `cargo` on that second way.
 
 - **It is not every program built with this toolchain.** One that starts a child the first way is not
   stopped. A shell is not stopped either: it starts its children without a socket.
-- **It is the leading cause and not yet a shown one.** "Operation not permitted" beside "could not execute
-  process" does not name the call that was refused. One controlled run settles it: ladder 3's build, word
-  for word, in a fresh clone, through the same jail with only this pair let through, is to end with 0 where
-  it ended with 112. The lead makes that run before any code is written for the mend, and its result is
-  kept beside the first.
+- **It was the leading cause until one controlled run, and that run is made.** "Operation not permitted"
+  beside "could not execute process" does not name the call that was refused. So ladder 3's build, word for
+  word, in a fresh clone, was put through a jail that differs in one thing: a `yak` built from a scratch
+  copy of the tree in which the filter also lets through a Unix pair of the seqpacket kind (one step added,
+  and committed nowhere). It ended with 0 where it had ended with 112, and the room judged the stand-in
+  turn passed and verified. The pair is what stopped the child.
 
 **Why it was not seen.** No test runs, inside the Linux jail, a program of ours that starts a child that
 way: checks in the tests are shell scripts. The first run and the pilot were on macOS, whose jail has no
@@ -84,11 +85,12 @@ source at version 6.12, the second machine's (`net/unix/af_unix.c`):
 
 ## How we know
 
-Each row has a case that must pass and a case that must be refused. None of these tests exists yet.
+Each row has a case that must pass and a case that must be refused. The first row is a run already made.
+None of the tests in the rows after it exists yet.
 
 | What | Shown by |
 | --- | --- |
-| The controlled run | Before the mend is built: ladder 3's build through the jail with only this pair let through ends with 0, where it ended with 112 |
+| The controlled run | Made, before the mend is built: ladder 3's build through the jail with only this pair let through ended with 0, where it had ended with 112 |
 | The filter's program | Run as the kernel would, for both kinds of machine. A Unix seqpacket pair is let through, alone and with each of the two flags the kernel takes; the two cases that today hold it refused become cases that hold it let through. A Unix datagram pair, and a seqpacket pair of another family, are refused. Every other case the tests hold now (stream pairs, sockets, the seven calls, another kind of machine, the other numbering) holds unchanged |
 | A program of ours starts a child inside the jail | On Linux, inside the jail, a helper built with this toolchain starts a child by a bare name found on a path it is given, which is what makes the standard library take the way that asks for the pair. Without the mend it fails at starting the child, with "operation not permitted", and the test says so; with it, the helper reads a marker the child wrote |
 | A seqpacket end reaches only its other end | On Linux. The test itself listens, outside the jail, on a socket of the seqpacket kind with a name inside a directory the jail shows. Control: from outside the jail a socket of that kind joins it and a marker arrives, which is read and set aside. Then inside the jail: the name is seen and is a socket; a pair is made and one end's message reaches the other; a send that names the listener arrives at the other end and nothing arrives at the listener; joining the listener is refused; the same two again after the other end is closed; unjoining is refused; and naming an end, then listening and accepting, is refused. Every wait has a limit, and an error of the helper that is not one of those refusals fails the test |
