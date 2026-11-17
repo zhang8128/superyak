@@ -297,6 +297,13 @@ of the scored design to judge from the list and the history, before any scored t
   project itself took. A pass here means: the protected tests pass. Nothing more is to be read into it.
 - **Its reference** is the commit's own source changes over the base, shown to pass before the item is
   listed. No turn sees it: a sandbox holds only what its base reaches.
+- **Before an item is used on a machine, its reference is shown to pass that item's frozen check through
+  the room's jail on that machine,** for instance by a stand-in worker that hands in the reference's
+  changes. Freezing an item asks only that its check fail on the base and on the wrong commit, and a check
+  that cannot run in a machine's jail does both, so without this a right turn can be failed
+  (`2026-11-16-v2-a-child-inside-the-linux-jail.md` is how that was found). The run's report says, for each
+  item: the machine, the room's revision, the frozen check's hash, the reference commit, and that pass. It
+  is shown again after a change of the toolchain, of what the jail shows, or of the jail.
 
 **The scored, the pilot's and history, by that order.** One commit that can be an item divides them: the
 last that is not scored.
@@ -367,7 +374,8 @@ routes.
 section 6; each one's base; each check, with the commit it fails on and the one it passes on; the room
 program, built from a commit that holds the repair; the worker program, its model and version; the
 environment the tests run in, by the hash of its lock file; the limits; the seeds; the order of the
-fifteen turns; and whether a turn has a first line of its own.
+fifteen turns; whether a turn has a first line of its own; and, for each of the three items, its reference
+shown to pass through the room's jail on the pilot's machine, as section 6 asks.
 
 - Five rounds with nothing offered. All fifteen turns are reported, and the first pilot's rules for a turn
   that is lost or an instrument that fails still stop it.
