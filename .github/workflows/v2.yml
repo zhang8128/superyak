@@ -55,14 +55,16 @@ jobs:
         run: bash scripts/whole-suite.sh "$RUNNER_TEMP/suite.log"
       - name: The scripts' own tests
         # The guard over the whole suite, and the probe of a plain cargo test with its checks, each tried with a
-        # script standing in for cargo; and the scripts that run the pilot's turns and read what they leave,
-        # tried on records made by hand: no model, no clock, no room.
+        # script standing in for cargo; the scripts that run the pilot's turns and read what they leave, tried on
+        # records made by hand; and the program that makes items from merged commits, with its check, tried on
+        # small repositories it makes, with a module standing in for pytest: no model, no clock, no room.
         if: success() || failure()
         run: |
           status=0
           python3 -I scripts/test_suite_guard.py || status=1
           python3 -I probes/tests/test_probe.py || status=1
           python3 -I probes/pilot/test_records.py || status=1
+          python3 -I probes/items/test_items.py || status=1
           exit "$status"
       - name: The first run's three checks
         # The frozen checks of the first run with model workers. Its items are done, so the checks are regression
