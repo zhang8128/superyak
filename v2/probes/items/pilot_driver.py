@@ -6,6 +6,9 @@ validated before making any output. No shell evaluates any of the list's words.
 YAK names the executable; YAK_PROBE_PATH names the clock's PATH; YAK_JAIL_READ
 names the directories shown to its workers. SDKROOT and TMPDIR pass through when
 set. A pilot supplies YAK_PILOT_SLOT/KIND for the manifest. There is no vendor.
+References distinguish a failed hand-in or check, another tree or frozen hash,
+a differing recheck, and an unusable observation. Only a verified check on the
+reference's exact tree can pass.
 """
 import datetime
 import hashlib
@@ -61,7 +64,10 @@ def git(repo, *words):
 
 def listed(items):
     raw = (Path(items) / "list" / "items.json").read_bytes()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except RecursionError:
+        raise Refused("items.json is nested too deeply") from None
     if not isinstance(data, dict) or not isinstance(data.get("commits"), list):
         raise Refused("items.json has no commits list")
     return data, raw
@@ -120,13 +126,21 @@ def source_checks(items, entry):
     return repo, check_hash(repo, entry)
 
 
-def settings():
+def settings(items, out, references=None):
     yak = os.environ.get("YAK", "")
     if not yak or not os.path.isfile(yak) or not os.access(yak, os.X_OK):
         raise Refused("YAK is not a program")
-    for key in ("YAK_PROBE_PATH", "YAK_JAIL_READ"):
+    for key in ("YAK_PROBE_PATH", "YAK_JAIL_READ", "HOME", "USER", "LOGNAME"):
         if not os.environ.get(key):
             raise Refused("%s is not set" % key)
+    protected = [Path(items).resolve(), Path(out).resolve()]
+    if references is not None:
+        protected.append(Path(references).resolve())
+    for entry in os.environ["YAK_JAIL_READ"].split(os.pathsep):
+        read = Path(entry).resolve()
+        for answer in protected:
+            if read == answer or read in answer.parents or answer in read.parents:
+                raise Refused("YAK_JAIL_READ overlaps the items, references or output directory")
     return str(Path(yak).resolve())
 
 
@@ -143,9 +157,11 @@ def now():
 
 
 def turn(out, items, commit, worker, extra):
+    if not worker or any(word.isspace() for word in worker):
+        raise Refused("worker must be one word")
     entry = item_from(listed(items)[0], commit)
     source, frozen_hash = source_checks(items, entry)
-    yak = settings()
+    yak = settings(items, out)
     out = new_output(out)
     repo = out / "repo"
     # Init plus explicit fetch uses git transport even for a local path; never a local
@@ -154,7 +170,7 @@ def turn(out, items, commit, worker, extra):
     git(repo, "init", "-q", "--template=")
     for kind in ("base", "wrong"):
         ref = "refs/yak-items/%s/%s" % (commit, kind)
-        git(repo, "fetch", "-q", "--no-tags", str(source), ref + ":" + ref)
+        git(repo, "fetch", "-q", "--no-tags", "--no-write-fetch-head", str(source), ref + ":refs/item-input/" + kind)
     git(repo, "checkout", "-q", "-b", "item-base", entry["base"])
     for kind in ("base", "wrong"):
         git(repo, "cat-file", "-e", entry[kind] + "^{commit}")
@@ -210,21 +226,27 @@ def machine():
 def reference(out, items, commit):
     entry = item_from(listed(items)[0], commit)
     source, expected_hash = source_checks(items, entry)
-    yak = settings()
+    yak = settings(items, out)
     yak_hash = digest(Path(yak).read_bytes())
     out = new_output(out)
     stand_in = out / "stand-in"
     stand_in.mkdir()
     (stand_in / "reference.patch").write_bytes(git(source, "diff", "--binary", "--no-ext-diff", "--no-textconv",
+        "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
         entry["base"], entry["reference"], "--"))
     shutil.copyfile(HERE / "stand-in.sh", stand_in / "worker.sh")
     (stand_in / "worker.sh").chmod(0o755)
     environment = dict(os.environ)
+    environment["YAK"] = yak
+    # Only this reference's turn sees this directory, holding just its worker and
+    # patch. Pilot turns never receive it, so it gives them no reference answer.
     environment["YAK_JAIL_READ"] += os.pathsep + str(stand_in)
     done = subprocess.run(["sh", str(HERE / "turn.sh"), str(out / "turn"), str(items), commit,
         "script:" + str(stand_in / "worker.sh")], env=environment)
     receipt = {"machine": machine(), "yak_sha256": yak_hash, "commit": commit,
         "base": entry["base"], "reference": entry["reference"], "check_hash": None,
+        "reference_tree": git(source, "rev-parse", entry["reference"] + "^{tree}").decode().strip(),
+        "handed_in_tree": None, "state": None,
         "handed_in": None, "verified": False, "outcome": "no usable observation", "note": None}
     try:
         attempts = load(out / "turn" / "turns.json")
@@ -232,6 +254,7 @@ def reference(out, items, commit):
         handed = observed.get("commit")
         receipt["handed_in"] = handed
         if handed:
+            receipt["handed_in_tree"] = git(out / "turn" / "repo", "rev-parse", handed + "^{tree}").decode().strip()
             # Read the submitted tree, never a file a worker could have left in our directory.
             names = git(out / "turn" / "repo", "ls-tree", "--name-only", handed, "--", "hand-in-note.txt")
             if names.strip():
@@ -241,16 +264,26 @@ def reference(out, items, commit):
         # item show exposes the verified state; the frozen hash is read from the
         # room's store in read-only mode because that CLI view omits it.
         view = json.loads(command([yak, "--room", out / "turn" / "room", "item", "show", identity, "--json"]))
+        receipt["state"] = view.get("state")
         db_path = out / "turn" / "room" / "room.sqlite3"
-        with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as db:
+        db = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
+        try:
             row = db.execute("SELECT frozen FROM checks WHERE item=?", (identity,)).fetchone()
+        finally:
+            db.close()
         receipt["check_hash"] = json.loads(row[0])["check_hash"] if row and row[0] else None
         if receipt["note"]:
             receipt["outcome"] = "hand-in failed"
         elif done.returncode == 0 and not handed:
             receipt["outcome"] = "hand-in failed"
+        elif done.returncode == 0 and receipt["check_hash"] != expected_hash:
+            receipt["outcome"] = "another frozen hash"
+        elif done.returncode == 0 and receipt["handed_in_tree"] != receipt["reference_tree"]:
+            receipt["outcome"] = "another tree"
         elif done.returncode == 0 and observed.get("passed") is False:
             receipt["outcome"] = "check failed"
+        elif done.returncode == 0 and observed.get("passed") is True and view.get("state") != "passed_verified":
+            receipt["outcome"] = "recheck differs"
         elif (done.returncode == 0 and observed.get("passed") is True and view.get("state") == "passed_verified"
                 and receipt["check_hash"] == expected_hash):
             receipt.update(outcome="passed", verified=True)
@@ -287,7 +320,7 @@ def pilot(args):
     out, items, worker, _, references = args
     data, list_bytes = listed(items)
     entries, text = plan(data, worker)
-    yak = settings()
+    yak = settings(items, out, references)
     # Every receipt is checked before creating even the pilot directory.
     receipts = {}
     for entry in entries:
@@ -297,6 +330,14 @@ def pilot(args):
             "check_hash": frozen_hash, "machine": machine(), "yak_sha256": digest(Path(yak).read_bytes()), "outcome": "passed"}
         if receipt.get("verified") is not True or not receipt.get("handed_in") or any(receipt.get(key) != value for key, value in wanted.items()):
             raise Refused("%s: reference.json is not a verified pass for this item, machine, check and yak" % entry["commit"])
+        reference_turn = Path(references) / entry["commit"] / "turn"
+        command([sys.executable, "-I", RECORDS, "check", reference_turn])
+        manifest = load(reference_turn / "manifest.json")
+        attempts = load(reference_turn / "turns.json")
+        if (manifest.get("yak", {}).get("sha256") != receipt["yak_sha256"]
+                or manifest.get("slug") != receipt["commit"]
+                or attempts[0].get("commit") != receipt["handed_in"]):
+            raise Refused("%s: reference.json names another turn" % entry["commit"])
         receipts[entry["commit"]] = receipt
     out = new_output(out)
     (out / "plan.txt").write_text(text, encoding="utf-8")
@@ -335,8 +376,11 @@ def pilot(args):
         turn_out = out / ("%s-%s-%s" % (slot, kind, commit))
         with (out / "pilot.log").open("a", encoding="utf-8") as log:
             code = subprocess.call(["sh", str(HERE / "turn.sh"), str(turn_out), str(items), commit, worker, flag],
-                env=dict(os.environ, YAK_PILOT_SLOT=slot, YAK_PILOT_KIND=kind), stdin=subprocess.DEVNULL,
+                env=dict(os.environ, YAK=yak, YAK_PILOT_SLOT=slot, YAK_PILOT_KIND=kind), stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT)
+        if load(turn_out / "manifest.json").get("yak", {}).get("sha256") != receipts[commit]["yak_sha256"]:
+            say("turn %s names another yak: the pilot ends here" % slot)
+            return 1
         if code:
             say("turn %s left no usable observation, or its script failed: the pilot ends here" % slot)
             return 1
