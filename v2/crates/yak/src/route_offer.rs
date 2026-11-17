@@ -643,14 +643,14 @@ mod tests {
 
     #[test]
     fn the_owners_normative_answer_converts_as_it_is() {
-        // The store's owner's own file, revision 4 of its spec, byte for byte: nothing is added to it here.
-        let bytes = include_bytes!("../tests/fixtures/store-route-r4/answer.json");
+        // The store's owner's own file, revision 6 of its spec, byte for byte: nothing is added to it here.
+        let bytes = include_bytes!("../tests/fixtures/store-route-r6/answer.json");
         assert_eq!(
             history::sha256(bytes),
-            "0acb4f88e9b4f814ed86af6b03e6f55436a7f691c26063269b18e95eda7b0b33"
+            "b671b05d75699aadde94328cc5c77af1c2e08cb57c5df9665f6ad147ffa77541"
         );
         let question: history::Question = serde_json::from_slice(include_bytes!(
-            "../tests/fixtures/store-route-r4/question.json"
+            "../tests/fixtures/store-route-r6/question.json"
         ))
         .unwrap();
         let mut goals = goals(&["target.txt", "added.txt"]);
@@ -665,7 +665,7 @@ mod tests {
             ("target.txt".into(), "7".repeat(40)),
         ]);
         let offer = offer_value(&goals, &answer, &tree).unwrap();
-        assert_eq!(offer["store"], "1");
+        assert_eq!(offer["store"], "2");
         assert_eq!(offer["kernel"], "511bacd017146586");
         assert_eq!(offer["measure"], json!({"name":"share","version":"1"}));
         assert_eq!(

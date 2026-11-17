@@ -652,9 +652,9 @@ mod tests {
     #[test]
     fn walk_list_and_question_bytes_match_the_owners_normative_fixture() {
         let walks = [
-            include_bytes!("../tests/fixtures/store-route-r4/walk-attempt-1.jsonl").as_slice(),
-            include_bytes!("../tests/fixtures/store-route-r4/walk-attempt-2.jsonl").as_slice(),
-            include_bytes!("../tests/fixtures/store-route-r4/walk-attempt-3.jsonl").as_slice(),
+            include_bytes!("../tests/fixtures/store-route-r6/walk-attempt-1.jsonl").as_slice(),
+            include_bytes!("../tests/fixtures/store-route-r6/walk-attempt-2.jsonl").as_slice(),
+            include_bytes!("../tests/fixtures/store-route-r6/walk-attempt-3.jsonl").as_slice(),
         ];
         for bytes in walks {
             let v: Value = serde_json::from_slice(bytes).unwrap();
@@ -710,7 +710,7 @@ mod tests {
                 bytes
             );
         }
-        let bytes = include_bytes!("../tests/fixtures/store-route-r4/list.json");
+        let bytes = include_bytes!("../tests/fixtures/store-route-r6/list.json");
         let list: HistoryList = serde_json::from_slice(bytes).unwrap();
         assert_eq!(canonical(&list).unwrap(), bytes);
         assert_eq!(
@@ -720,7 +720,7 @@ mod tests {
         for (turn, bytes) in list.turns.iter().zip(walks) {
             assert_eq!(turn.sha256, sha256(bytes));
         }
-        let bytes = include_bytes!("../tests/fixtures/store-route-r4/question.json");
+        let bytes = include_bytes!("../tests/fixtures/store-route-r6/question.json");
         let question: Question = serde_json::from_slice(bytes).unwrap();
         let mut written = canonical(&question).unwrap();
         written.push(b'\n');
