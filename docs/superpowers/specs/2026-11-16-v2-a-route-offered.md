@@ -110,6 +110,12 @@ the order asked, the route to it from where every turn starts, or the plain answ
   since a turn goes one way to a file. The number of turns that went a dearer way, which is all the block
   says of them, is that sum. Which 16 are the cheapest is the store's to hold, by its own check: the room
   has not the walks.
+- **A kept detour costs more than the route** (revision 10, named by the code's reader). The room compares
+  the two costs as the exact fractions the answer gives, never as rounded numbers, and refuses a kept
+  detour that costs the same as the route or less. A cost's fraction is the share of turns, so the dearer
+  way is the one with the smaller fraction. A route's cost whose numerator or denominator has more than
+  8,192 digits is refused, which bounds the comparing by the answer's own size: with at most 256 roads a
+  route's fraction has under 5,200 digits, whatever whole number of turns taught.
 - **Three kinds of no route, told apart:** no turn that was let teach reached the file; no turn named it
   at all, as with a file a turn added; the kernel refused.
 - **A refusal is said.** If the kernel refuses a cell, there is no route for that file and the reason is
@@ -799,8 +805,10 @@ turn is offered anything:
 - **An answer's size.** The bound is 1 MiB. An answer carried each detour's whole way, so it grew with the
   history. Settled in part by revision 10: the store's version `"3"` keeps at most 16 detours for a file.
   What still grows is the blobs named along a route: the store's reader measured answers of 549, 1,368
-  and 4,810 bytes for 1, 20 and 100 blobs seen at one file. So the bound stays, an answer over it is
-  refused as now, and the size is still to be measured on the history of whichever experiment is run.
+  and 4,810 bytes for 1, 20 and 100 blobs seen at one file. And each kept detour's own way and the digits
+  of its cost: the code's reader, in a model of the answer, lengthened one detour's way from 3 paths to
+  2,001 and the answer grew from 1,151 to 18,097 bytes. So the bound stays, an answer over it is refused
+  as now, and the size is still to be measured on the history of whichever experiment is run.
 - **A walk line's limit:** whether the line's end counts toward the 1 MiB is to be made the same on both
   sides.
 
@@ -814,6 +822,10 @@ other family approved that with named changes. By the lead's reading of them, no
 changes an answer's bytes for the fixture; if one does, the room's copy is replaced with it. What the
 room holds of the change is in section 2. The fixture the room's tests read is the store's own at that
 revision: its answer's SHA-256 begins bb7e7d0a2d86a2d7, and its walks, list and question are unchanged.
+The store's owner has since said the same of its named changes. A fresh reader of the other family read
+the room's code and said: push with named changes, four: the cost comparison of section 2; the block's
+own numbers asserted where its tests stopped at the offer file; a version that only begins with the right
+one refused in a test; and the size paragraph above.
 
 **Changed between the two reads, and confirmed in the second:**
 
