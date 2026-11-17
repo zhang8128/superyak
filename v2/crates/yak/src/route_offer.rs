@@ -14,6 +14,9 @@ pub const MAX_VERSION_BYTES: usize = 64;
 pub const STORE_VERSION: &str = "3";
 /// The most detours a route of `STORE_VERSION` carries; the dearer ways past them are counted.
 pub const MAX_DETOURS: usize = 16;
+/// The most digits in a route's own cost. The comparing of each kept detour's cost with the route's takes
+/// time of the route's digits times the detour's, and the answer's size bounds the detour's.
+pub const MAX_COST_DIGITS: usize = 8192;
 
 /// Read only a bounded number of bytes before parsing. Parser diagnostics may contain input data and
 /// therefore become a fixed field name here. Schema validation belongs to the single answer adapter.
@@ -100,15 +103,78 @@ fn fraction_integer(value: &Value, at: &str) -> Result<String> {
     Ok(digits.into())
 }
 
-fn cost(value: &Value, at: &str) -> Result<u64> {
+/// A cost as the answer gives it: the share of turns `num/den`, whole numbers of any length with `num` at
+/// most `den`, so the dearer way has the smaller fraction; and its negative logarithm in thousandths,
+/// which is shown and decides nothing.
+#[derive(Debug)]
+struct Cost {
+    num: String,
+    den: String,
+    millis: u64,
+}
+
+fn cost(value: &Value, at: &str) -> Result<Cost> {
     let fields = object(value, &["num", "den", "nats"], at)?;
     let num = fraction_integer(&fields["num"], &format!("{at}.num"))?;
     let den = fraction_integer(&fields["den"], &format!("{at}.den"))?;
     if (num.len(), &num) > (den.len(), &den) {
         return Err(refuse(at));
     }
-    cost_millis(string(&fields["nats"], &format!("{at}.nats"))?)
-        .map_err(|_| refuse(&format!("{at}.nats")))
+    let millis = cost_millis(string(&fields["nats"], &format!("{at}.nats"))?)
+        .map_err(|_| refuse(&format!("{at}.nats")))?;
+    Ok(Cost { num, den, millis })
+}
+
+/// Whole numbers are worked in limbs of nine decimal digits, least significant first: a product of two
+/// limbs, a limb and a carry together stay below 2^64.
+const LIMB: u64 = 1_000_000_000;
+const LIMB_DIGITS: usize = 9;
+
+/// The limbs of a whole number written in decimal digits.
+fn limbs(digits: &str) -> Vec<u64> {
+    digits
+        .as_bytes()
+        .rchunks(LIMB_DIGITS)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .fold(0, |limb, digit| limb * 10 + u64::from(digit - b'0'))
+        })
+        .collect()
+}
+
+/// The exact product of two whole numbers in limbs, by the schoolbook method.
+fn product(a: &[u64], b: &[u64]) -> Vec<u64> {
+    let mut out = vec![0; a.len() + b.len()];
+    for (i, &x) in a.iter().enumerate() {
+        let mut carry = 0;
+        for (j, &y) in b.iter().enumerate() {
+            let sum = out[i + j] + x * y + carry;
+            out[i + j] = sum % LIMB;
+            carry = sum / LIMB;
+        }
+        out[i + b.len()] = carry;
+    }
+    out
+}
+
+/// Two whole numbers in limbs, compared: below any nought limbs at the top, the one with more limbs is the
+/// greater, and of two as long, the first limb from the top that differs decides.
+fn compare_whole(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    let trim = |n: &[u64]| n.len() - n.iter().rev().take_while(|&&limb| limb == 0).count();
+    let (a, b) = (&a[..trim(a)], &b[..trim(b)]);
+    a.len()
+        .cmp(&b.len())
+        .then_with(|| a.iter().rev().cmp(b.iter().rev()))
+}
+
+/// Two costs' fractions, compared exactly: `a.num/a.den` against `b.num/b.den` is `a.num * b.den` against
+/// `b.num * a.den`, the products worked as whole numbers of any length.
+fn compare_shares(a: &Cost, b: &Cost) -> std::cmp::Ordering {
+    compare_whole(
+        &product(&limbs(&a.num), &limbs(&b.den)),
+        &product(&limbs(&b.num), &limbs(&a.den)),
+    )
 }
 
 #[derive(Debug)]
@@ -230,6 +296,11 @@ fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute
         }
         blobs.insert(name.clone(), set);
     }
+    let route_cost = cost(&fields["cost"], &format!("{at}.cost"))?;
+    // Its `num` is at most its `den`, and neither has a leading zero, so the den's digits bound both.
+    if route_cost.den.len() > MAX_COST_DIGITS {
+        return Err(refuse(&format!("{at}.cost.limit")));
+    }
     let detours = array(&fields["detours"], &format!("{at}.detours"))?;
     if detours.len() > MAX_DETOURS {
         return Err(refuse(&format!("{at}.detours.limit")));
@@ -282,12 +353,17 @@ fn route(value: &Value, goal: &str, taught: u64, at: &str) -> Result<ParsedRoute
         if whole(&detour["roads_n"], &format!("{at}.roads_n"))? != detour_paths.len() as u64 {
             return Err(refuse(&format!("{at}.roads_n")));
         }
-        cost(&detour["cost"], &format!("{at}.cost"))?;
+        let detour_cost = cost(&detour["cost"], &format!("{at}.cost"))?;
+        // A kept detour costs more than the route: its share is the smaller. The same share, or a greater
+        // one, is not a dearer way, however the two are written.
+        if compare_shares(&detour_cost, &route_cost).is_ge() {
+            return Err(refuse(&format!("{at}.cost.order")));
+        }
     }
     Ok(ParsedRoute {
         roads: parsed,
         blobs,
-        cost_millis: cost(&fields["cost"], &format!("{at}.cost"))?,
+        cost_millis: route_cost.millis,
         dearer_ways,
     })
 }
@@ -727,6 +803,18 @@ mod tests {
             assert!(!block.is_empty_offer());
         }
         assert!(room::offer::render(&read, room::offer::Arm::Nothing, 17).is_none());
+        // The route arm's block says each road's count and the dearer ways' count, in its own sentences.
+        let text = room::offer::render(&read, room::offer::Arm::Route, 17)
+            .unwrap()
+            .text()
+            .to_owned();
+        for line in [
+            "   from where every turn starts to b.txt: walked by 1 earlier turn\n",
+            "   then to target.txt (changed since): walked by 2 earlier turns\n",
+            "   2 earlier turns went a dearer way to it\n",
+        ] {
+            assert!(text.contains(line), "{line:?} in {text:?}");
+        }
     }
 
     #[test]
@@ -1239,11 +1327,26 @@ mod tests {
         value
     }
 
+    /// The offer made of the test answer with its one goal, `gone.txt`, at a base that holds no file.
+    fn offer_of(value: &Value) -> Result<Value> {
+        let answer = parse_fixture(value, &["gone.txt"])?;
+        offer_value(&goals(&["gone.txt"]), &answer, &BTreeMap::new())
+    }
+
     /// What the offer file's `dearer_ways` carries for the answer's one route, read as a plain whole number.
     fn dearer_ways(value: &Value) -> Result<u64> {
-        let answer = parse_fixture(value, &["gone.txt"])?;
-        let offer = offer_value(&goals(&["gone.txt"]), &answer, &BTreeMap::new())?;
-        Ok(offer["goals"][0]["route"]["dearer_ways"].as_u64().unwrap())
+        Ok(offer_of(value)?["goals"][0]["route"]["dearer_ways"]
+            .as_u64()
+            .unwrap())
+    }
+
+    /// The block the room's own reader and renderer make of an offer's canonical bytes, under the route arm.
+    fn route_block(offer: &Value) -> String {
+        let read = room::offer::read(&history::canonical(offer).unwrap()).unwrap();
+        room::offer::render(&read, room::offer::Arm::Route, 17)
+            .unwrap()
+            .text()
+            .to_owned()
     }
 
     /// Read the answer's canonical bytes with `detours_more` written as `literal`, which may be a number
@@ -1271,6 +1374,10 @@ mod tests {
             ("2", "answer.store.version"),
             ("4", "answer.store.version"),
             ("03", "answer.store.version"),
+            // Words that begin with the version are not it: the version is the whole word.
+            ("30", "answer.store.version"),
+            ("33", "answer.store.version"),
+            ("3.0", "answer.store.version"),
             ("3 ", "answer.store"),
             ("", "answer.store"),
         ] {
@@ -1298,8 +1405,15 @@ mod tests {
 
     #[test]
     fn sixteen_detours_convert_and_the_block_says_the_kept_and_the_counted_together() {
-        assert_eq!(dearer_ways(&with_detours(16, json!(0), 19)).unwrap(), 16);
-        assert_eq!(dearer_ways(&with_detours(16, json!(3), 19)).unwrap(), 19);
+        for (more, ways) in [(0, 16), (3, 19)] {
+            let value = with_detours(16, json!(more), 19);
+            assert_eq!(dearer_ways(&value).unwrap(), ways);
+            // The block says the one number, kept and counted together, in its own sentence, once.
+            let text = route_block(&offer_of(&value).unwrap());
+            let line = format!("   {ways} earlier turns went a dearer way to it\n");
+            assert!(text.contains(&line), "{line:?} in {text:?}");
+            assert_eq!(text.matches("went a dearer way").count(), 1, "{text:?}");
+        }
     }
 
     #[test]
@@ -1421,6 +1535,374 @@ mod tests {
             parse_fixture(&swapped, &["gone.txt"]).unwrap_err().0,
             format!("{ROUTE}.detours[8].attempt.order")
         );
+    }
+
+    /// A cost of the share `num/den`, with no thousandths: the comparing reads the fraction only.
+    fn share(num: &str, den: &str) -> Cost {
+        Cost {
+            num: num.into(),
+            den: den.into(),
+            millis: 0,
+        }
+    }
+
+    /// A whole number in limbs, written back in decimal digits: the tests' own reading of a product.
+    fn decimal(n: &[u64]) -> String {
+        let mut limbs = n.iter().rev().skip_while(|&&limb| limb == 0);
+        match limbs.next() {
+            None => "0".into(),
+            Some(top) => limbs.fold(top.to_string(), |out, limb| out + &format!("{limb:09}")),
+        }
+    }
+
+    /// `n` noughts.
+    fn zeros(n: usize) -> String {
+        "0".repeat(n)
+    }
+
+    #[test]
+    fn whole_number_products_are_exact_past_any_machine_word() {
+        // Worked by hand: (10^k - 1)^2 = 10^2k - 2 * 10^k + 1, which is k - 1 nines, an 8, k - 1 noughts
+        // and a 1; every limb of it is made by carrying.
+        for k in [1, 2, 8, 9, 10, 17, 18, 19, 20, 50, 300] {
+            let nines = "9".repeat(k);
+            let square = format!("{}8{}1", "9".repeat(k - 1), zeros(k - 1));
+            assert_eq!(
+                decimal(&product(&limbs(&nines), &limbs(&nines))),
+                square,
+                "{k}"
+            );
+        }
+        // Worked by hand: 10^a * 10^b = 10^(a + b), on and across the limbs' edges.
+        for (a, b) in [(0, 0), (1, 8), (8, 1), (9, 9), (40, 45), (8191, 299)] {
+            assert_eq!(
+                decimal(&product(
+                    &limbs(&format!("1{}", zeros(a))),
+                    &limbs(&format!("1{}", zeros(b)))
+                )),
+                format!("1{}", zeros(a + b)),
+                "{a} {b}"
+            );
+        }
+        // Against u128 arithmetic, on numbers whose product it holds.
+        let small = [
+            1u64,
+            2,
+            9,
+            10,
+            999_999_999,
+            1_000_000_000,
+            1_000_000_001,
+            123_456_789,
+            987_654_321,
+            123_456_789_012_345_678,
+            999_999_999_999_999_999,
+            1_000_000_000_000_000_000,
+            u64::MAX,
+        ];
+        for a in small {
+            for b in small {
+                assert_eq!(
+                    decimal(&product(&limbs(&a.to_string()), &limbs(&b.to_string()))),
+                    (u128::from(a) * u128::from(b)).to_string(),
+                    "{a} {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn whole_numbers_compare_by_their_limbs_below_any_noughts_from_the_top() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        for (a, b, order) in [
+            // A product's top limb may be nought, and is then no length.
+            (&[5, 0][..], &[7][..], Less),
+            (&[0, 1][..], &[999_999_999][..], Greater),
+            (&[3, 4][..], &[3, 4, 0][..], Equal),
+            (&[][..], &[0, 0][..], Equal),
+            // Of two as long, the top limb decides before the bottom one.
+            (&[1, 2][..], &[2, 1][..], Greater),
+            (&[9, 1, 5][..], &[1, 2, 5][..], Less),
+        ] {
+            assert_eq!(compare_whole(a, b), order, "{a:?} {b:?}");
+            assert_eq!(compare_whole(b, a), order.reverse(), "{b:?} {a:?}");
+        }
+    }
+
+    #[test]
+    fn shares_compare_exactly_as_their_cross_products() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        // Against u128 arithmetic: shares whose parts lie on and across the limbs' edges, each against
+        // every other, so that products of one, two and three limbs meet.
+        let parts = [
+            1u64,
+            2,
+            3,
+            999_999_999,
+            1_000_000_000,
+            1_000_000_001,
+            999_999_999_999_999_999,
+            1_000_000_000_000_000_000,
+            u64::MAX,
+        ];
+        let edges: Vec<(u128, u128)> = parts
+            .iter()
+            .flat_map(|&d| {
+                parts
+                    .iter()
+                    .filter(move |&&n| n <= d)
+                    .map(move |&n| (u128::from(n), u128::from(d)))
+            })
+            .collect();
+        for &(an, ad) in &edges {
+            for &(bn, bd) in &edges {
+                assert_eq!(
+                    compare_shares(
+                        &share(&an.to_string(), &ad.to_string()),
+                        &share(&bn.to_string(), &bd.to_string())
+                    ),
+                    (an * bd).cmp(&(bn * ad)),
+                    "{an}/{ad} {bn}/{bd}"
+                );
+            }
+        }
+        // Against u128 arithmetic: every share n/d with 1 <= n <= d <= 24, against every other.
+        let fractions: Vec<(u128, u128)> = (1..=24u128)
+            .flat_map(|d| (1..=d).map(move |n| (n, d)))
+            .collect();
+        for &(an, ad) in &fractions {
+            for &(bn, bd) in &fractions {
+                assert_eq!(
+                    compare_shares(
+                        &share(&an.to_string(), &ad.to_string()),
+                        &share(&bn.to_string(), &bd.to_string())
+                    ),
+                    (an * bd).cmp(&(bn * ad)),
+                    "{an}/{ad} {bn}/{bd}"
+                );
+            }
+        }
+        // Worked by hand, past u128: with N = 10^50, (N - 1)^2 = N(N - 2) + 1, so (N - 1)/N is the greater
+        // share than (N - 2)/(N - 1) by 1/(N(N - 1)). The two products are as long and differ in the last
+        // limb alone.
+        let n = format!("1{}", zeros(50));
+        let n_1 = "9".repeat(50);
+        let n_2 = format!("{}8", "9".repeat(49));
+        assert_eq!(
+            compare_shares(&share(&n_1, &n), &share(&n_2, &n_1)),
+            Greater
+        );
+        assert_eq!(compare_shares(&share(&n_2, &n_1), &share(&n_1, &n)), Less);
+        // 1/10^200 is the smaller share than 1/4, though 10^200 is nought modulo 2^128.
+        let tiny = share("1", &format!("1{}", zeros(200)));
+        assert_eq!(compare_shares(&tiny, &share("1", "4")), Less);
+        assert_eq!(compare_shares(&share("1", "4"), &tiny), Greater);
+        // One share written in two ways is equal to itself, at any length.
+        assert_eq!(compare_shares(&share("1", "2"), &share("2", "4")), Equal);
+        assert_eq!(
+            compare_shares(
+                &share(&format!("1{}", zeros(8191)), &format!("4{}", zeros(8191))),
+                &share("1", "4")
+            ),
+            Equal
+        );
+    }
+
+    /// The owner's normative answer as a value, and the goals its question names. Its bytes are what
+    /// `fixture_bytes` writes of it, so a changed copy is read as the owner's own would be.
+    fn normative() -> (Value, Goals) {
+        let bytes = include_bytes!("../tests/fixtures/store-route-r7/answer.json");
+        let value: Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(fixture_bytes(&value), bytes);
+        let question: history::Question = serde_json::from_slice(include_bytes!(
+            "../tests/fixtures/store-route-r7/question.json"
+        ))
+        .unwrap();
+        let mut goals = goals(&["target.txt", "added.txt"]);
+        goals.history = question.list.clone();
+        goals.question = question;
+        (value, goals)
+    }
+
+    fn parse_normative(value: &Value, goals: &Goals) -> Result<Answer> {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("answer.json");
+        std::fs::write(&path, fixture_bytes(value)).unwrap();
+        read_answer(&path, goals, &goals.question.repo)
+    }
+
+    #[test]
+    fn a_kept_detour_that_costs_the_route_or_nought_is_refused_in_the_owners_answer() {
+        let (value, goals) = normative();
+        // As the owner wrote it: each detour's share, 2/27, is the smaller than the route's 2/9.
+        let answer = parse_normative(&value, &goals).unwrap();
+        assert_eq!(answer.goals[0].route.as_ref().unwrap().dearer_ways, 2);
+        let route_cost = value["answers"][0]["route"]["cost"].clone();
+        let nought = json!({"num":"1","den":"1","nats":"0.000000000"});
+        for n in [0, 1] {
+            for cost in [&route_cost, &nought] {
+                let mut bad = value.clone();
+                bad["answers"][0]["route"]["detours"][n]["cost"] = cost.clone();
+                assert_eq!(
+                    parse_normative(&bad, &goals).unwrap_err().0,
+                    format!("{ROUTE}.detours[{n}].cost.order"),
+                    "{n} {cost}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_detour_one_least_step_either_side_of_the_routes_share_is_told_apart_exactly() {
+        // The route's share is 1/4. Over a denominator of 4 * 10^12 the least steps either side of it are
+        // (10^12 + 1)/(4 * 10^12), a greater share, and (10^12 - 1)/(4 * 10^12), a smaller one. Their
+        // negative logarithms are 1.38629436111889..., 1.38629436112089... and the route's
+        // 1.38629436111989...: to nine places all three are 1.386294361, and so are their thousandths.
+        let nats = "1.386294361";
+        let mut value = answer();
+        assert_eq!(
+            value["answers"][0]["route"]["cost"],
+            json!({"num":"1","den":"4","nats":nats})
+        );
+        for (num, refused) in [("1000000000001", true), ("999999999999", false)] {
+            value["answers"][0]["route"]["detours"][0]["cost"] =
+                json!({"num":num,"den":"4000000000000","nats":nats});
+            let result = parse_fixture(&value, &["gone.txt"]);
+            if refused {
+                assert_eq!(
+                    result.unwrap_err().0,
+                    format!("{ROUTE}.detours[0].cost.order")
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap().goals[0].route.as_ref().unwrap().cost_millis,
+                    1386
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equal_shares_written_differently_are_one_share_and_refused() {
+        // The file asks no fraction in its lowest terms, so 1/2 and 2/4 are both readable, as one share.
+        let half = |num: &str, den: &str| json!({"num":num,"den":den,"nats":"0.693147181"});
+        let quarter = json!({"num":"2","den":"8","nats":"1.386294361"});
+        for (route, detour) in [
+            (half("1", "2"), half("2", "4")),
+            (half("2", "4"), half("1", "2")),
+        ] {
+            let mut value = answer();
+            value["answers"][0]["route"]["cost"] = route;
+            value["answers"][0]["route"]["detours"][0]["cost"] = detour;
+            assert_eq!(
+                parse_fixture(&value, &["gone.txt"]).unwrap_err().0,
+                format!("{ROUTE}.detours[0].cost.order")
+            );
+            // Beside it, a quarter is the smaller share than the route's half, however the half is written.
+            value["answers"][0]["route"]["detours"][0]["cost"] = quarter.clone();
+            parse_fixture(&value, &["gone.txt"]).unwrap();
+        }
+    }
+
+    #[test]
+    fn of_sixteen_kept_detours_the_last_alone_costing_the_route_is_refused_by_its_index() {
+        let value = with_detours(16, json!(0), 19);
+        assert_eq!(dearer_ways(&value).unwrap(), 16);
+        let mut bad = value.clone();
+        let route = &mut bad["answers"][0]["route"];
+        route["detours"][15]["cost"] = route["cost"].clone();
+        assert_eq!(
+            parse_fixture(&bad, &["gone.txt"]).unwrap_err().0,
+            format!("{ROUTE}.detours[15].cost.order")
+        );
+    }
+
+    #[test]
+    fn a_route_cost_of_8192_digits_converts_and_of_8193_is_refused_before_any_comparing() {
+        let limit = format!("{ROUTE}.cost.limit");
+        // The spec's numbers, written here and not read from the constant, so that a changed constant fails.
+        for digits in [8192, 8193] {
+            // A quarter written over 10^(digits - 1): the one detour's 1/8 is still the smaller share.
+            let mut quarter = answer();
+            quarter["answers"][0]["route"]["cost"] = json!({"num":format!("1{}", zeros(digits - 1)),
+                "den":format!("4{}", zeros(digits - 1)),"nats":"1.386294361"});
+            // A share of 1/10^(digits - 1), with no detour: only the den is long.
+            let mut tiny = answer();
+            let nats = if digits == 8192 {
+                "18860.474496714"
+            } else {
+                "18862.777081807"
+            };
+            tiny["answers"][0]["route"]["cost"] =
+                json!({"num":"1","den":format!("1{}", zeros(digits - 1)),"nats":nats});
+            tiny["answers"][0]["route"]["detours"] = json!([]);
+            for value in [quarter, tiny] {
+                let result = parse_fixture(&value, &["gone.txt"]);
+                if digits == 8192 {
+                    result.unwrap();
+                } else {
+                    assert_eq!(result.unwrap_err().0, limit);
+                }
+            }
+        }
+        // A detour's cost has no such limit: the answer's size bounds it.
+        let mut long_detour = answer();
+        long_detour["answers"][0]["route"]["detours"][0]["cost"] = json!({"num":"1",
+            "den":format!("1{}", zeros(8192)),"nats":"18862.777081807"});
+        parse_fixture(&long_detour, &["gone.txt"]).unwrap();
+    }
+
+    #[test]
+    fn a_detour_cost_of_300000_digits_is_compared_with_a_route_cost_of_8192_without_a_panic() {
+        // The route's share is a quarter written over 10^8191, as long as its cost may be. The detours' are
+        // written over 10^299999: 1/10^299999, a den of 300,000 digits; an eighth, with num and den as long,
+        // the most work of the three; and a quarter, the route's share again, refused only once both
+        // products are worked to their last limb.
+        let route = json!({"num":format!("1{}", zeros(8191)),"den":format!("4{}", zeros(8191)),
+            "nats":"1.386294361"});
+        for (num, den, nats, refused) in [
+            ("1".to_owned(), "1", "690773.225313121", false),
+            (format!("1{}", zeros(299_999)), "8", "2.079441542", false),
+            (format!("1{}", zeros(299_999)), "4", "1.386294361", true),
+        ] {
+            let mut value = answer();
+            value["answers"][0]["route"]["cost"] = route.clone();
+            value["answers"][0]["route"]["detours"][0]["cost"] =
+                json!({"num":num,"den":format!("{den}{}", zeros(299_999)),"nats":nats});
+            let result = parse_fixture(&value, &["gone.txt"]);
+            if refused {
+                assert_eq!(
+                    result.unwrap_err().0,
+                    format!("{ROUTE}.detours[0].cost.order")
+                );
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_cost_of_no_whole_number_is_refused_by_its_shape_and_not_by_the_comparing() {
+        parse_fixture(&answer(), &["gone.txt"]).unwrap();
+        for field in ["num", "den"] {
+            for bad in ["0", "", "-1", "+1", " 1", "1 ", "01", "1.0"] {
+                for (pointer, at) in [
+                    (
+                        "/answers/0/route/detours/0/cost",
+                        format!("{ROUTE}.detours[0].cost"),
+                    ),
+                    ("/answers/0/route/cost", format!("{ROUTE}.cost")),
+                ] {
+                    let mut value = answer();
+                    value.pointer_mut(pointer).unwrap()[field] = json!(bad);
+                    assert_eq!(
+                        parse_fixture(&value, &["gone.txt"]).unwrap_err().0,
+                        format!("{at}.{field}"),
+                        "{pointer} {field} {bad:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
