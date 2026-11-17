@@ -99,7 +99,7 @@ def test_every_answer_names_the_store_and_the_kernel_in_the_rooms_version_words(
     import re
     out, list_id, _ = experiment(tmp_path, [walk("t1", ["a"])])
     answer = ask(out, ["a", "nowhere"], list_id)
-    assert answer["store"] == R.STORE_VERSION == "2" and answer["kernel"] == R._kernel_digest()
+    assert answer["store"] == R.STORE_VERSION == "3" and answer["kernel"] == R._kernel_digest()
     for value in (answer["store"], answer["kernel"]):
         assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value)
 
@@ -357,7 +357,7 @@ def test_cheaper_by_the_measure_not_by_roads_and_empty_turns_move_the_prices():
     base = [walk("t1", ["a", "b", "target"]), walk("t2", ["a", "b", "target"]), walk("t3", ["b", "x"])]
     net = R.Network(base, R.SHARE)
     assert net.route("target") == ["a", "b", "target"] and net.share(["a", "b", "target"]) == Fraction(8, 27)
-    assert net.share(["b", "target"]) == Fraction(2, 9) and not net.detours("target", ["a", "b", "target"])
+    assert net.share(["b", "target"]) == Fraction(2, 9) and net.detours("target", ["a", "b", "target"]) == ([], 0)
     tie = R.Network(base + [walk("e1", [])], R.SHARE)
     assert tie.share(["a", "b", "target"]) == tie.share(["b", "target"]) == Fraction(1, 8)
     assert tie.route("target") == ["a", "b", "target"]                   # a tie goes to the first in byte order
@@ -412,7 +412,39 @@ def test_detours_with_a_shared_road_and_a_repeated_file_are_kept_and_checked(tmp
         assert s.check() > 0
 
 
+def test_a_goal_keeps_its_sixteen_cheapest_detours_in_attempt_order_and_counts_the_rest(tmp_path):
+    """Store "3": twenty dearer turns. The ten cheaper ones have the later names, so keeping by name, not by cost, keeps
+    the wrong ten; the ten dearer ones tie, so the edge goes to the earliest six by bytes; the kept are listed by name."""
+    route = [walk(f"r{i:02d}", ["b", "g"]) for i in range(30)]
+    cheaper = [walk(f"z{i:02d}", ["a", "b", "g"]) for i in range(10)]           # share (10/N)(10/N)(50/N)
+    dearer = [walk(f"e{i:02d}", [f"u{i:02d}", "b", "g"]) for i in range(10)]    # share (1/N)(1/N)(50/N): all tie
+    out, list_id, _ = experiment(tmp_path, route + cheaper + dearer)
+    r = route_of(ask(out, ["g"], list_id))
+    assert r["paths"] == ["b", "g"] and R.DETOURS_KEPT == 16
+    assert [d["attempt"] for d in r["detours"]] == [f"e{i:02d}" for i in range(6)] + [f"z{i:02d}" for i in range(10)]
+    assert r["detours_more"] == 4 and len(r["detours"]) + r["detours_more"] == 20
+    with R.open_store(out) as s:
+        assert s.check() > 0
+    db = sqlite3.connect(out)
+    for goal in ("g", "b"):   # b has the same twenty dearer ways, one road shorter: only the kept are cells
+        assert db.execute("SELECT count(*) FROM detour WHERE path = ?", (goal,)).fetchone() == (16,)
+        assert db.execute("SELECT count(*) FROM generator WHERE kind = 'detour' AND ref LIKE ?",
+                          (f'["{goal}",%',)).fetchone() == (16,)
+    assert db.execute("SELECT more FROM goal WHERE path = 'b'").fetchone() == (4,)
+    made = [json.loads(ref)[1] for (ref,) in db.execute(
+        "SELECT ref FROM generator WHERE kind = 'detour' AND ref LIKE '[\"g\",%' ORDER BY id")]
+    assert made == [d["attempt"] for d in r["detours"]]   # the cells too are made in attempt order (section 7)
+    db.close()
+
+
+def test_a_goal_with_no_detour_says_none_left_out(tmp_path):
+    out, list_id, _ = experiment(tmp_path, [walk("t1", ["b", "g"]), walk("t2", ["b", "g"])])
+    r = route_of(ask(out, ["g"], list_id))
+    assert r["detours"] == [] and r["detours_more"] == 0
+
+
 @pytest.mark.parametrize("tamper", [
+    "UPDATE goal SET more = 1 WHERE path = 'target'",
     "UPDATE detour SET visit = visit + 1",
     "UPDATE detour SET attempt = 't3'",
     "UPDATE detour SET way = '[\"b\",\"target\"]'",
@@ -422,7 +454,8 @@ def test_detours_with_a_shared_road_and_a_repeated_file_are_kept_and_checked(tmp
     "UPDATE composite SET recipe = '[\"then\",0,[]]' WHERE dim = 1 AND rowid = 1",
     "DELETE FROM detour WHERE attempt = 't1'",
     "UPDATE walk SET body = CAST(replace(CAST(body AS TEXT), '\"a\"', '\"c\"') AS BLOB) WHERE attempt = 't1'",
-], ids=["visit", "turn", "way", "saving", "generator", "route", "recipe", "a lost detour", "a walk"])
+], ids=["a count left out", "visit", "turn", "way", "saving", "generator", "route", "recipe", "a lost detour",
+        "a walk"])
 def test_a_tampered_store_fails_its_check(tmp_path, tamper):
     out, _, _ = experiment(tmp_path, [walk("t1", ["a", "b", "target"]), walk("t2", ["b", "target"]),
                                       walk("t3", ["b", "target"])])

@@ -1,6 +1,6 @@
 """Walks into roads, and a route back: the store's side of the route offered to a turn.
 
-Spec: docs/superpowers/specs/2026-11-16-v2-walks-into-routes.md (revision 6), against the room's
+Spec: docs/superpowers/specs/2026-11-16-v2-walks-into-routes.md (revision 7, store "3"), against the room's
 docs/superpowers/specs/2026-11-16-v2-a-route-offered.md. The room writes walk files and a list of the turns that may
 teach; this reads them, keeps their roads, routes and detours as cells on the n-category kernel, in a file rebuilt whole
 and renamed into place, and answers a route for each file the room asks for, with the same bytes on any machine.
@@ -35,7 +35,8 @@ PATH_RULE = 1
 # The store's version in every answer: raised whenever an answer's bytes could change for the same walks, list and
 # question. The kernel's is the digest of the kernel source that built the store's cells. Version 2: blobs are every
 # taught step's, not only each visit's first (w50's C4). A file built by another version is refused, to be built again.
-STORE_VERSION = "2"
+STORE_VERSION = "3"
+DETOURS_KEPT = 16        # a goal's detours kept, the cheapest; the rest are only counted (spec section 6, store "3")
 MAX_LINE = 1 << 20       # a walk line's bytes before its newline
 MAX_LIST = 4 << 20       # the list's bytes
 MAX_QUESTION = 1 << 20   # a question's bytes
@@ -433,8 +434,14 @@ class Network:
         return out
 
     def detours(self, goal, route):
+        """(kept, more): the taught turns whose way to `goal` is dearer than `route`. The DETOURS_KEPT cheapest are kept,
+        compared exactly, a tie at the edge going to the earlier attempt by bytes, and listed in attempt order; `more`
+        counts the rest."""
         price = self.share(route)
-        return [(w, way, visit, seq) for w, way, visit, seq in self.ways(goal) if self.share(way) < price]
+        dearer = [(w, way, visit, seq) for w, way, visit, seq in self.ways(goal) if self.share(way) < price]
+        cheapest = sorted(dearer, key=lambda d: (-self.share(d[1]), d[0]["attempt"].encode()))[:DETOURS_KEPT]
+        kept = sorted(cheapest, key=lambda d: d[0]["attempt"].encode())
+        return kept, len(dearer) - len(kept)
 
 
 # ------------------------------------------------------------------ the answer's bytes
@@ -467,7 +474,7 @@ CREATE TABLE generator (id INTEGER PRIMARY KEY, dim INTEGER NOT NULL, kind TEXT 
                         key TEXT NOT NULL);
 CREATE TABLE composite (key TEXT PRIMARY KEY, dim INTEGER NOT NULL, recipe TEXT NOT NULL);
 CREATE TABLE goal (path TEXT PRIMARY KEY, route TEXT, num TEXT, den TEXT, roads_n INTEGER, cell TEXT,
-                   code INTEGER, reason TEXT);
+                   code INTEGER, reason TEXT, more INTEGER);
 CREATE TABLE detour (path TEXT NOT NULL, attempt TEXT NOT NULL, visit INTEGER NOT NULL, seq INTEGER NOT NULL,
                      way TEXT NOT NULL, num TEXT NOT NULL, den TEXT NOT NULL, way_cell TEXT NOT NULL, gen INTEGER NOT NULL,
                      PRIMARY KEY (path, attempt));
@@ -502,15 +509,16 @@ def _cells(net, budget_bytes):
         try:
             route_cell = composite(route)
             rows = []
-            for w, way, visit, seq in net.detours(goal, route):
+            kept, more = net.detours(goal, route)   # only the kept become cells
+            for w, way, visit, seq in kept:
                 way_cell = composite(way)
                 gen = made("detour", json.dumps([goal, w["attempt"]]), cat.generator(way_cell, route_cell))
                 rows.append((goal, w["attempt"], visit, seq, json.dumps(way), net.share(way), way_cell.key(),
                              generators[-1][0], gen))
         except NCatError as error:
-            goals[goal] = (route, None, error.code, ERRORS.get(error.code, f"error {error.code}"))
+            goals[goal] = (route, None, error.code, ERRORS.get(error.code, f"error {error.code}"), None)
             continue
-        goals[goal] = (route, route_cell.key(), None, None)
+        goals[goal] = (route, route_cell.key(), None, None, more)
         detour_rows.extend(rows)
     return generators, composites, goals, detour_rows
 
@@ -532,18 +540,19 @@ def _write(path, net, meta, bodies, budget_bytes, list_bytes=None):
                             int(w["standing"] in TEACHES[net.measure]), hashlib.sha256(body).hexdigest(), body))
             db.executemany("INSERT INTO generator VALUES (?, ?, ?, ?, ?)", generators)
             db.executemany("INSERT INTO composite VALUES (?, ?, ?)", [(k, d, r) for k, (d, r) in sorted(composites.items())])
-            for goal, (route, cell, code, reason) in goals.items():
+            for goal, (route, cell, code, reason, more) in goals.items():
                 share = net.share(route)
-                db.execute("INSERT INTO goal VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                db.execute("INSERT INTO goal VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (goal, json.dumps(route), _dec(share.numerator), _dec(share.denominator), len(route), cell,
-                            code, reason))
+                            code, reason, more))
             for goal, attempt, visit, seq, way, share, way_cell, gen_id, _ in detours:
                 db.execute("INSERT INTO detour VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (goal, attempt, visit, seq, way, _dec(share.numerator), _dec(share.denominator), way_cell, gen_id))
     finally:
         db.close()
     return {"turns": len(net.walks), "taught": net.N, "paths": len(net.paths), "roads": len(net.k),
-            "detours": len(detours), "refused": sorted(g for g, v in goals.items() if v[2] is not None)}
+            "detours": len(detours), "detours_more": sum(v[4] or 0 for v in goals.values()),
+            "refused": sorted(g for g, v in goals.items() if v[2] is not None)}
 
 
 def build(out, walk_files, list_file=None, budget_bytes=BUDGET_BYTES):
@@ -674,11 +683,11 @@ class RouteStore:
             return {"goal": goal, "none": "no_history"}
         if goal not in named:
             return {"goal": goal, "none": "never_named"}
-        row = self._db.execute("SELECT route, num, den, roads_n, cell, code, reason FROM goal WHERE path = ?",
+        row = self._db.execute("SELECT route, num, den, roads_n, cell, code, reason, more FROM goal WHERE path = ?",
                                (goal,)).fetchone()
         if row is None:
             return {"goal": goal, "none": "not_taught"}
-        route, num, den, roads_n, _, code, reason = row
+        route, num, den, roads_n, _, code, reason, more = row
         if code is not None:
             return {"goal": goal, "none": "refused", "code": code, "reason": reason}
         route = json.loads(route)
@@ -696,7 +705,7 @@ class RouteStore:
         detours.sort(key=lambda d: d["attempt"].encode())
         return {"goal": goal, "route": {"paths": route, "roads": roads, "cost": cost(Fraction(_undec(num), _undec(den))),
                                         "roads_n": roads_n, "blobs": {p: sorted(net.blobs[p]) for p in route},
-                                        "detours": detours}}
+                                        "detours": detours, "detours_more": more}}
 
     def _network(self):
         if not hasattr(self, "_net"):
@@ -730,8 +739,8 @@ class RouteStore:
             expected = _cells(net, self.budget)
             stored_gens = list(self._db.execute("SELECT id, dim, kind, ref, key FROM generator ORDER BY id"))
             stored_comp = {k: (d, r) for k, d, r in self._db.execute("SELECT key, dim, recipe FROM composite")}
-            stored_goals = {p: (json.loads(r), c, code, reason) for p, r, c, code, reason in
-                            self._db.execute("SELECT path, route, cell, code, reason FROM goal")}
+            stored_goals = {p: (json.loads(r), c, code, reason, more) for p, r, c, code, reason, more in
+                            self._db.execute("SELECT path, route, cell, code, reason, more FROM goal")}
             stored_detours = sorted(self._db.execute(
                 "SELECT path, attempt, visit, seq, way, num, den, way_cell, gen FROM detour"))
             stored_goal_costs = {p: (n, d, rn) for p, n, d, rn in self._db.execute("SELECT path, num, den, roads_n FROM goal")}
@@ -743,8 +752,9 @@ class RouteStore:
         if stored_comp != composites:
             raise IntegrityError("the composites don't rebuild to their keys or recipes; build the store")
         if stored_goals != goals:
-            raise IntegrityError("a goal's route, cell or refusal isn't what its walks make; build the store")
-        for goal, (route, _, _, _) in goals.items():
+            raise IntegrityError("a goal's route, cell, refusal or count of detours left out isn't what its walks make; "
+                                 "build the store")
+        for goal, (route, _, _, _, _) in goals.items():
             share = net.share(route)
             if stored_goal_costs[goal] != (_dec(share.numerator), _dec(share.denominator), len(route)):
                 raise IntegrityError(f"a goal's cost isn't what its walks make; build the store")
@@ -783,7 +793,8 @@ def main(argv=None):
         if args.command == "build":
             report = build(args.out, args.walks, args.list)
             print(f"{report['turns']} turns, {report['taught']} taught, {report['paths']} paths, {report['roads']} roads, "
-                  f"{report['detours']} detours; refused goals: {len(report['refused'])}")
+                  f"{report['detours']} detours kept and {report['detours_more']} more counted; "
+                  f"refused goals: {len(report['refused'])}")
         elif args.command == "ask":
             with open_store(args.store) as store:
                 sys.stdout.buffer.write(store.ask(sys.stdin.buffer.read()))
