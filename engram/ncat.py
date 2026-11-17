@@ -46,6 +46,9 @@ def _private(path, kind):
         raise RuntimeError(f"ncat won't use {path}: the {kind} must be this user's own, and writable by nobody else")
 
 
+CACHE_FORMAT = b'ncat-cache 2: compiled from stdin, from the bytes hashed\0'
+
+
 def _built(source=None):
     """The library for `source`, the kernel's bytes as read once (SOURCE's when not given), compiled from those very
     bytes on stdin, so what was hashed is what was built."""
@@ -55,7 +58,10 @@ def _built(source=None):
         raise RuntimeError('ncat needs a C compiler at /usr/bin/cc, /usr/bin/gcc or /usr/bin/clang')
     flags = FLAGS + (LINUX_FLAGS if sys.platform.startswith('linux') else ())
     machine = f'{sys.platform} {platform.machine()}'  # a home shared across architectures keeps one library each
-    tag = hashlib.blake2b(source + compiler.encode() + ' '.join(flags).encode() + machine.encode(), digest_size=12).hexdigest()
+    # CACHE_FORMAT salts the name: a library the old loader compiled by rereading the file may hold other bytes than
+    # the source it was named for, so none of those is taken as this source's.
+    tag = hashlib.blake2b(CACHE_FORMAT + source + compiler.encode() + ' '.join(flags).encode() + machine.encode(),
+                          digest_size=12).hexdigest()
     cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'superyak' / 'ncat'
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     _private(cache, 'cache folder')

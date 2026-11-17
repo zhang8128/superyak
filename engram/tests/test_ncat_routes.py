@@ -606,6 +606,123 @@ def test_a_file_seen_at_two_blobs_in_a_row_is_one_visit_with_both_blobs(tmp_path
     assert r["paths"] == ["a"] and r["blobs"] == {"a": ["1" * 40, "2" * 40]}
 
 
+def test_a_library_the_old_loader_named_for_this_source_is_not_reused(tmp_path, monkeypatch):   # w73 1
+    """The old loader hashed the source, then compiled the file by rereading it, so a library in its cache may hold
+    other bytes than the ones it is named for. The new loader's names carry a cache format, so none is taken."""
+    import os
+    import platform
+    import sys
+    import ncat
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((argv, kwargs.get("input")))
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(ncat.subprocess, "run", fake_run)
+    source = ncat.SOURCE.read_bytes()
+    compiler = next(c for c in ncat.COMPILERS if os.access(c, os.X_OK))
+    flags = ncat.FLAGS + (ncat.LINUX_FLAGS if sys.platform.startswith("linux") else ())
+    machine = f"{sys.platform} {platform.machine()}"
+    old_tag = hashlib.blake2b(source + compiler.encode() + " ".join(flags).encode() + machine.encode(),
+                              digest_size=12).hexdigest()   # the old loader's name for this source
+    cache = tmp_path / "superyak" / "ncat"
+    cache.mkdir(parents=True, mode=0o700)
+    old = cache / f"ncat-{old_tag}.so"
+    old.write_bytes(b"compiled by the old loader, from bytes the file held a moment later")
+    old.chmod(0o700)
+    built = ncat._built(source)
+    assert built != old and len(seen) == 1                       # compiled again, not taken from the old name
+    argv, given = seen[0]
+    assert argv[argv.index("-x") + 1:argv.index("-x") + 3] == ["c", "-"] and given == source   # from the bytes hashed
+    assert ncat._built(source) == built and len(seen) == 1     # and its own name is then reused
+
+
+@pytest.mark.parametrize("damage", ["a long listing", "a long header", "a deep header", "a long walk", "many walks",
+                                    "a garbled walk"])
+def test_a_stored_file_is_measured_before_it_is_read(tmp_path, monkeypatch, damage):   # w73 2
+    """Opening or answering from a damaged store refuses it as damage, having fetched nothing past a bound: the
+    listing and header are measured inside SQLite first, and no stored value comes out whole past a walk's bound."""
+    out, list_id, _ = experiment(tmp_path, [walk("t1", [f"p{i}" for i in range(10)] + ["g"]),
+                                            walk("t2", [f"q{i}" for i in range(10)] + ["g"])])
+    db = sqlite3.connect(out)
+    if damage == "a long listing":
+        db.execute("UPDATE listing SET body = zeroblob(?)", (R.MAX_LIST + 1,))
+    elif damage == "a long header":
+        db.execute("UPDATE meta SET value = ? WHERE key = 'budget'", ("9" * 5000,))   # well formed, only too long
+    elif damage == "a deep header":
+        db.execute("UPDATE meta SET value = ? WHERE key = 'measure'", ("[" * 2000 + "]" * 2000,))   # 4,000 bytes
+    elif damage == "a garbled walk":
+        db.execute("UPDATE walk SET body = CAST('not a walk' AS BLOB) WHERE attempt = 't1'")
+    (listing_bytes,) = db.execute("SELECT length(body) FROM listing").fetchone()
+    (shortest_walk,) = db.execute("SELECT min(length(body)) FROM walk").fetchone()
+    db.commit()
+    db.close()
+    if damage == "a long walk":   # the store opens, its listing within the bound, and its walks past it
+        assert listing_bytes < shortest_walk
+        monkeypatch.setattr(R, "MAX_FILE", listing_bytes)
+    if damage == "many walks":
+        monkeypatch.setattr(R, "MAX_WALKS", 1)
+    with pytest.raises(R.IntegrityError):
+        ask(out, ["g"], list_id)
+
+
+def test_a_file_named_by_any_path_like_object_is_read(tmp_path):   # w73 3
+    from pathlib import PurePosixPath
+
+    class Named:
+        def __init__(self, path):
+            self.path = str(path)
+
+        def __fspath__(self):
+            return self.path
+    walks = sorted(FIXTURE.glob("walk-*.jsonl"))
+    for kind in (PurePosixPath, Named):
+        out = tmp_path / f"{kind.__name__}.db"
+        R.build(out, [kind(w) for w in walks], kind(FIXTURE / "list.json"))
+        with R.open_store(out) as s:
+            assert s.ask((FIXTURE / "question.json").read_bytes()) == fixture_answer()
+
+
+def test_each_bound_takes_its_last_byte_and_refuses_the_next(tmp_path, monkeypatch, capsys):   # w73 4
+    import sys
+    one = walk("t1", ["a", "g"])
+    f = tmp_path / "walk-t1.jsonl"
+    f.write_bytes(line(one))
+    lst = listing([one], [f])
+    lf = tmp_path / "list.json"
+    lf.write_bytes(lst)
+    monkeypatch.setattr(R, "MAX_FILE", len(line(one)))
+    monkeypatch.setattr(R, "MAX_LIST", len(lst))
+    R.build(tmp_path / "at.db", [f], lf)                        # exactly at both bounds: built
+    monkeypatch.setattr(R, "MAX_FILE", len(line(one)) - 1)
+    with pytest.raises(R.Refused, match="longer than 64 MiB"):
+        R.build(tmp_path / "past.db", [f], lf)
+    monkeypatch.setattr(R, "MAX_FILE", len(line(one)))
+    monkeypatch.setattr(R, "MAX_LIST", len(lst) - 1)
+    with pytest.raises(R.Refused, match="longer than 4 MiB"):
+        R.build(tmp_path / "past.db", [f], lf)
+    empty = tmp_path / "walk-empty.jsonl"
+    empty.write_bytes(b"")
+    with pytest.raises(R.Refused) as caught:
+        R.build(tmp_path / "empty.db", [empty])
+    assert "longer than" not in str(caught.value)              # empty is refused as no walk, not as too long
+    monkeypatch.setattr(R, "MAX_FILE", 64 << 20)   # the store opens under its real bounds again
+    monkeypatch.setattr(R, "MAX_LIST", 4 << 20)
+    question = R.canonical({"v": 1, "repo": REPO, "list": hashlib.sha256(lst).hexdigest(),
+                            "measure": {"name": "share", "version": 1}, "goals": ["g"]})
+
+    class Stdin:
+        def __init__(self, data):
+            self.buffer = __import__("io").BytesIO(data)
+    for bound, data, code in ((len(question), question, 0), (len(question) - 1, question, 2), (len(question), b"", 2)):
+        monkeypatch.setattr(R, "MAX_QUESTION", bound)
+        monkeypatch.setattr(sys, "stdin", Stdin(data))
+        assert R.main(["ask", "--store", str(tmp_path / "at.db")]) == code, (bound, len(data))
+    out = capsys.readouterr()
+    assert out.err.count("longer than 1 MiB") == 1 and '"taught":1' in out.out
+
+
 def test_the_kernel_digest_is_of_the_source_the_loaded_library_was_built_from(tmp_path, monkeypatch):   # C5, R2
     """Loaded fresh from an installed wheel's copy, the digest is that copy's. Then the source changes on disk in the
     same long-lived process: the library in use is still the old one, and so is the digest a new store records."""

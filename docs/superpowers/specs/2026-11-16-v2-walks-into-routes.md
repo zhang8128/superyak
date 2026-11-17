@@ -70,7 +70,8 @@ silently: a failed step and a failed turn are read and kept as what they are.
 
 **Bounds, each refused by name before the work it bounds:** a walk file over 64 MiB, a list over 4 MiB and a question
 over 1 MiB, each read to one byte past its bound and no further, whatever size the file reports or however it grows
-(the command line reads its question the same way); JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
+(the command line reads its question the same way; a file may be named by any path-like object, and a file of exactly
+its bound is read); JSON nested deeper than 8 (a walk needs 5); more than 10,000 walks in a store or turns
 on a list; more than 1,000,000 named files over all of a store's steps, before any network or cell is made; and a
 string holding a lone surrogate, which no UTF-8 file can hold.
 
@@ -164,7 +165,8 @@ runs an experiment also requires `for_experiment: true`, and the list and measur
 whenever an answer's bytes could change for the same walks, list and question; `kernel`, the digest of the kernel
 source that built the store's cells (the first 16 hex digits of the SHA-256 of the bytes the loaded library was
 compiled from, read once when it was loaded and given to the compiler as read, an installed wheel's shared copy
-included; a source changed later in the same process is not named for the old library's cells), recorded at build
+included; a source changed later in the same process is not named for the old library's cells, and no library the
+loader's earlier form compiled, by rereading the file, is taken, since its cache names carry a format), recorded at build
 time; `repo`;
 `list`; `for_experiment`; `measure` (`name`,
 `version`, `teaches`, the standings it lets teach, sorted); `path_rule` 1; `taught`, which is `N`; and
@@ -231,7 +233,9 @@ is damage.
 it names and admits the stored walks against them again, compares every walk row (its attempt, item, family, base,
 standing and whether it teaches) with the walk it holds, and holds every walk to the store's repository. Opening a
 store refuses a header out of its form: an unknown or missing key, a kernel digest that is not 16 lowercase hex, a
-measure that is not exactly `[name, version]` with a string name and a whole-number version (not `true`, not `1.0`), a
+measure that is not exactly `[name, version]` with a string name and a whole-number version (not `true`, not `1.0`),
+header values over 4 KiB or a stored list over 4 MiB, measured inside SQLite before they are fetched, JSON in them
+nested deeper than 8, a
 measure, list and flag that disagree (an experiment's is `share`, a list and `true`; a ship's is `ship-share`,
 `null` and `false`), and a file built by another store version, which is to be built again.
 
@@ -303,7 +307,7 @@ Each row names what a right store does, and what a wrong one would do that its t
 | What is not there is said | Each told apart and in precedence: no history, with a goal never named and one only untaught; a file no walk named; a file only an untaught walk named; a kernel refusal for a route and for a way, forced through the budget, with its code | One that conflates two kinds, or answers a route made of what was left |
 | A question is the store's | Answered when its `repo`, `list` and `measure` are the store's | One that answers a question of another list, repository or measure, or answers it as no route |
 | The store is the store | It rebuilds whole and renames into place; a failed build leaves the old file and says so; its check rebuilds every key and every witness; a recall run with this file present reads nothing of it | One that serves a partial or old file as the new list's, or accepts a damaged 2-cell recipe or witness |
-| Bounds are on what is read | A walk file and a list read from `/dev/zero`, which reports a size of 0 and never ends, refused one byte past the bound; the command line asks its stdin for 1 MiB and one byte, once; a `seq` of 2^63 − 1 stored and checked, and 2^63 refused by name; a header whose measure version is `true`, `1.0`, or has a third part, refused; a source changed after the library loaded is not the digest a new store records | One that trusts a reported size, reads a question whole, fails on an integer SQLite can't hold, takes `true` for 1, or names a source the loaded library wasn't built from |
+| Bounds are on what is read | A walk file and a list read from `/dev/zero`, which reports a size of 0 and never ends, refused one byte past the bound; the command line asks its stdin for 1 MiB and one byte, once; a `seq` of 2^63 − 1 stored and checked, and 2^63 refused by name; a header whose measure version is `true`, `1.0`, or has a third part, refused; a source changed after the library loaded is not the digest a new store records; a library the old loader named for this source is compiled again; each bound takes its last byte and refuses the next; a stored list over 4 MiB, a 5,000-digit budget, a header nested 2,000 deep, walks past the bound or over the count, and a garbled walk are each damage, never a refusal of the question | One that trusts a reported size, reads a question whole, fails on an integer SQLite can't hold, takes `true` for 1, names a source the loaded library wasn't built from, refuses a file at its exact bound, or fetches a stored value whole before measuring it |
 
 ## Decisions
 
@@ -384,3 +388,13 @@ otherwise; R1, R2 and R4 finish them.
 | R3. A `seq` the file can't hold: refused past 2^63 − 1 | Section 2 |
 | R4. The header's measure in its exact form | Section 7, "What the check binds" |
 | R5. Say that 16 bounds a goal's detours, not an answer's bytes, and that only kept ways reach the kernel | Sections 7 and 9; decision 11 |
+
+**A confirming reader (w73, Sol) on 211d3a6a, approve with named changes, all made.** It found R1 and R3 to R5 and the
+float fault made as named, R2 made otherwise, and four more changes:
+
+| Named change | Where |
+| --- | --- |
+| 1. Old cache entries: the loader's cache names carry a format, so a library the old loader compiled is not taken | Section 6 |
+| 2. A stored file's header, list and walks measured before they are fetched, and their JSON read with the depth bound | Section 7, "What the check binds" |
+| 3. A file named by any path-like object | Section 2's bounds |
+| 4. Each bound's exact length read, and the next refused | Section 2's bounds; section 10 |

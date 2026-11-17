@@ -45,6 +45,7 @@ MAX_WALKS = 10_000       # walks in one store
 MAX_NAMED = 1_000_000    # named files over all of a store's steps, counted before any network or cell is made
 MAX_DEPTH = 8            # JSON nesting: a walk needs 5, a list 3, a question 2
 MAX_SEQ = (1 << 63) - 1  # a step's seq: the largest whole number the store's file keeps as an integer
+MAX_HEADER = 4096        # a stored header value's bytes: a right one holds far fewer
 FAMILIES = ("claude", "codex", "script")                            # the room's (room/src/history.rs)
 TOOLS = ("read", "edit", "write", "search", "shell", "other")       # the room's Tool (room/src/types.rs)
 SHARE = ("share", 1)
@@ -562,7 +563,7 @@ def _write(path, net, meta, bodies, budget_bytes, list_bytes=None):
 def _read_at_most(source, limit, refusal):
     """At most `limit` bytes of a file or stream, refused past it: one more byte is read to tell, and never the rest,
     whatever size the file reports or however it grows."""
-    if isinstance(source, (str, Path)):
+    if isinstance(source, (str, os.PathLike)):
         with open(source, "rb") as f:
             data = f.read(limit + 1)
     else:
@@ -631,18 +632,27 @@ class RouteStore:
             raise IntegrityError(f"no route store at {path}; build it")
         self._db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
         try:
+            # Nothing stored comes out whole past a walk file's bound, and the header and listing are measured inside
+            # SQLite before a byte of them is fetched.
+            self._db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_FILE)
+            rows, longest_key, longest = self._db.execute(
+                "SELECT count(*), max(length(CAST(key AS BLOB))), max(length(CAST(value AS BLOB))) FROM meta").fetchone()
+            listed, longest_list = self._db.execute("SELECT count(*), max(length(body)) FROM listing").fetchone()
+            if rows != len(META_KEYS) or (longest_key or 0) > MAX_HEADER or (longest or 0) > MAX_HEADER \
+                    or listed > 1 or (longest_list or 0) > MAX_LIST:
+                raise ValueError("header")
             meta = dict(self._db.execute("SELECT key, value FROM meta"))
             listings = [body for (body,) in self._db.execute("SELECT body FROM listing")]
             if sorted(meta) != sorted(META_KEYS) or meta["v"] != str(FORMAT):
                 raise ValueError("header")
             if meta["store"] != STORE_VERSION:
                 raise IntegrityError(f"the route store at {path} was built by another store version; build it again")
-            self.repo, self.list = json.loads(meta["repo"]), json.loads(meta["list"])
-            measure = json.loads(meta["measure"])
+            self.repo, self.list = _json(meta["repo"]), _json(meta["list"])
+            measure = _json(meta["measure"])
             if not (isinstance(measure, list) and len(measure) == 2 and isinstance(measure[0], str) and _int(measure[1])):
                 raise ValueError("header")   # ["share", true] and ["share", 1.0] equal ("share", 1) as tuples
             self.measure = tuple(measure)
-            self.for_experiment = json.loads(meta["for_experiment"])
+            self.for_experiment = _json(meta["for_experiment"])
             self.budget, self.kernel = _undec(meta["budget"]), meta["kernel"]
             self.listing = listings[0] if listings else None
             if not _hex(self.kernel, (16,)) or self.budget <= 0 or self.measure not in TEACHES \
@@ -664,6 +674,9 @@ class RouteStore:
         self._db.close()
 
     def _walks(self):
+        (rows,) = self._db.execute("SELECT count(*) FROM walk").fetchone()
+        if rows > MAX_WALKS:
+            raise IntegrityError(f"the route store holds more than {MAX_WALKS} walks; build it")
         return [_walk(_json(body.decode().rstrip("\n")), f"stored walk {attempt}")
                 for attempt, body in self._db.execute("SELECT attempt, body FROM walk ORDER BY attempt")]
 
@@ -684,9 +697,12 @@ class RouteStore:
             raise Refused("the question's v or goals are not the form's")
         if q["repo"] != self.repo or q["list"] != self.list or (q["measure"]["name"], q["measure"]["version"]) != self.measure:
             raise Refused("the question's repo, list or measure is not this store's")
-        net = self._network()   # N and what was named, from the stored walks themselves, which the check binds
-        N, named = net.N, {p for vs in net.visits.values() for p, _, _ in vs}
-        answers = [self._goal(goal, N, named) for goal in q["goals"]]
+        try:   # the question is the store's: what fails from here is the file, which is damage, not a refusal
+            net = self._network()   # N and what was named, from the stored walks themselves, which the check binds
+            N, named = net.N, {p for vs in net.visits.values() for p, _, _ in vs}
+            answers = [self._goal(goal, N, named) for goal in q["goals"]]
+        except (sqlite3.Error, Refused, ValueError, KeyError, TypeError) as error:
+            raise IntegrityError(f"the route store can't be read ({type(error).__name__}); build it") from None
         return canonical({"v": 1, "store": STORE_VERSION, "kernel": self.kernel, "repo": self.repo, "list": self.list,
                           "for_experiment": self.for_experiment,
                           "measure": {"name": self.measure[0], "version": self.measure[1],
