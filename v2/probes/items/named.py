@@ -9,8 +9,9 @@ fixed here, with a version. A word is found wherever its bytes occur in an added
 a longer word, with its case kept as written, but for junit, found in any case.
 
 What is matched is bytes, and nothing is read as Python would read it. A word spelt another way is not found: built
-when the program runs; written with an escape; or in a file that declares another encoding for its source (in a
-file declared as UTF-7, "+AHAAeQB0AGUAcwB0-" is the name pytest, and is not found).
+when the program runs; written with an escape; written in other letters that Python takes for the same name (the
+full-width ones, say); or in a file that declares another encoding for its source (in a file declared as UTF-7,
+"+AHAAeQB0AGUAcwB0-" is the name pytest, and is not found).
 
 A change that names none of these is not thereby shown to have left the test run alone.
 
@@ -20,31 +21,44 @@ that are not the check's own files; the binary files, listed and not read; and f
 named, by path, line number in the commit's file and word. Never a line's text. It ends with 0 whether or not
 anything is named: naming is not failing. It ends with 1 and one line on stderr only when it could not do its work.
 
-It runs nothing from the repository and changes nothing in it. Of the repository it reads the objects and nothing
-else: git runs in an empty repository of the program's own that borrows them, from an empty directory, with no
-settings file of the machine's and no home. A worker that could write in the repository may have left a setting, an
-attributes file or a replaced object there, and none of them is read (an attributes file saying -diff, or a low
-core.bigFileThreshold, would make every file binary, and so unread). No attributes file of a work tree applies
-either. No renames are followed, and there is no external diff, text conversion or context.
+Where to run it. On a repository whose objects a worker did not write: the one a room fetches a turn's commit into.
+A fetch works out each object's name from what the object holds, so there the two commits are what their names say.
+What the program says is only as good as that store. Of a repository it reads the objects and nothing else, and it
+runs nothing from it and changes nothing in it: git runs in an empty repository of the program's own that borrows
+the objects, from an empty directory, with no settings file of the machine's and no home. So a setting, an
+attributes file or a replaced object that a worker left in the repository is not read (an attributes file saying
+-diff, or a low core.bigFileThreshold, would make every file binary, and so unread); nor is a commit-graph, which
+can give a commit another tree than the commit names, or a multi-pack-index, which says where each object lies. No
+attributes file of a work tree applies either. No renames are followed, and there is no external diff, text
+conversion or context.
 
-The bounds. git's diff of the source directory is read up to MAX_DIFF_BYTES, 64 MiB: a change whose diff there is
-longer is not read, and the program ends with 1 and says so. A file of more than MAX_FILE_BYTES, 16 MiB, on either
-side is listed with the binary files and not read. All of git's runs together have MAX_SECONDS, 120: past that, git
-is ended, and the program ends with 1 and says so. That is for a repository whose files keep git waiting, which a
-worker that writes in it can arrange (a pipe where an object is looked for). git stays in this program's own process
-group, so that whoever ends the group ends git with it. A line of a million characters is read whole, and its test
-asks that the program end within 20 seconds.
+What that does not cover: an object store that a worker wrote. git does not check what it reads from a store
+against the name it asked for, follows the store's own list of other stores and its links wherever they lead, and
+holds what it reads in memory. Such a store can give this program other lines than the commit's, have git read
+files outside the repository, or have git use memory without limit before its time is up. Nothing here bounds
+git's memory.
+
+The bounds there are. git's diff of the source directory is read up to MAX_DIFF_BYTES, 2 MiB: a change whose diff
+there is longer is not read, and the program ends with 1 and says so. This program holds about fifty bytes for each
+byte of that diff at the worst, so about 100 MiB. A file of more than MAX_FILE_BYTES, 16 MiB, on either side is
+listed with the binary files and not read. All of git's runs together have MAX_SECONDS, 120: when that is up, git
+is ended and waited for, and the program ends with 1 and says so. That is a limit on git's runs and not on the
+whole program: starting git, and writing the answer to whoever reads it, are outside it. It is there for a
+repository whose files keep git waiting (a pipe where an object is looked for). A change within the bounds that is
+dear to compare can run out of time too, and is then not read. git stays in this program's own process group, so
+that whoever ends the group ends git with it. A line of a million characters is read whole, and its test asks that
+the program end within 20 seconds.
 """
 import argparse
 import importlib.util
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 _spec = importlib.util.spec_from_file_location("yak_named_check", os.path.join(
@@ -54,18 +68,27 @@ check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check)
 
 VERSION = "named-1"
-# The three groups of words, in the order they are printed. sys.argv, how the run was started, goes with the runner.
+# The three groups of words, in the order they are printed. How the run was started (sys.argv, orig_argv) goes
+# with the runner. A word is here for what naming it could do to a test run from inside the runner's own process:
+# reach the runner or learn that it is running; write the report; or end or replace the process before the runner
+# has said what it found. Where one word holds another, only the shorter is here: exit for sys.exit, _exit and
+# atexit; kill for os.kill and killpg; signal, abort.
+#
+# The list was chosen with a count, so that a flag tells a person something: of 193 merged changes to one
+# project's source that each made failing tests pass, 13 name a word of it and 180 name none. Ten of the 13 name
+# exit: in a program's entry point, or in a comment about the code it ends with.
 WORDS = (
-    ("runner", ("pytest", "unittest", "conftest", "PYTEST_", "sys.argv")),
-    ("report", ("junit", "testsuite", "testcase")),
-    ("ending", ("_exit", "sys.exit", "SystemExit", "atexit", "os.kill", "os.abort", "signal.")),
+    ("runner", ("pytest", "unittest", "conftest", "PYTEST_", "sys.argv", "orig_argv", "sys.modules", "pluggy",
+                "settrace", "setprofile", "_getframe")),
+    ("report", ("junit", "testsuite", "testcase", "report.xml", "etree", "minidom")),
+    ("ending", ("exit", "quit", "SystemExit", "kill", "abort", "signal", "execv", "execl", "os.fork")),
 )
 # The words found in any case. bytes.lower() lowers ASCII only.
 ANY_CASE = {"junit"}
-# The most bytes of git's diff of the source directory that are read: 64 MiB.
-MAX_DIFF_BYTES = 67108864
-# The most bytes of the list of changed files that are read.
-MAX_LIST_BYTES = 16777216
+# The most bytes of git's diff of the source directory that are read: 2 MiB.
+MAX_DIFF_BYTES = 2097152
+# The most bytes of the list of changed files that are read: 2 MiB.
+MAX_LIST_BYTES = 2097152
 # A file of more bytes than this is not read: git is told to treat it as it treats a binary one. 16 MiB.
 MAX_FILE_BYTES = 16777216
 # How long all of git's runs together may take.
@@ -76,6 +99,18 @@ DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"]
 PATCH = ["--unified=0"]
 HUNK = re.compile(rb"@@ -[0-9]{1,10}(?:,([0-9]{1,10}))? \+([0-9]{1,10})(?:,([0-9]{1,10}))? @@")
 NOTE = "A change that names none of these is not thereby shown to have left the test run alone."
+# What the matching cannot see, said wherever the program describes itself.
+LIMIT = ("What is matched is bytes. A word built when the program runs, written with an escape, written in other "
+         "letters that Python takes for the same name, or spelt in a file that declares another encoding for its "
+         "source, is not found.")
+
+
+def settings():
+    """git's own settings for every run, beside no filesystem monitor (check.GIT_FLAGS): a file over the bound is
+    treated as a binary one; and neither a commit-graph nor a multi-pack-index is read, since either can stand
+    between a commit's name and what the commit holds. Made at each run, so that a bound changed is the bound used."""
+    return ["-c", "core.bigFileThreshold=%d" % MAX_FILE_BYTES, "-c", "core.commitGraph=false",
+            "-c", "core.multiPackIndex=false"]
 
 
 class Fail(Exception):
@@ -113,35 +148,44 @@ class Git:
 
     def __call__(self, args, limit):
         """git's output, or Fail if it is longer than `limit` bytes, if git fails, or if the time for all of git's
-        runs is up. As it is run here git starts no program of its own, so ending git ends all of it."""
-        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + ["-c", "core.bigFileThreshold=%d" % MAX_FILE_BYTES] + args,
-                                cwd=self.cwd, env=self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL)
-        late = []
-
-        def end():
-            late.append(True)
-            proc.kill()
-
-        clock = threading.Timer(max(0.0, self.until - time.monotonic()), end)
-        clock.start()
+        runs is up. One thread does all of it: it reads until the time is up, and it alone ends git, and only
+        before it has waited for git, so no signal goes to a process that is no longer git. On every way out of
+        here, an error of this program's own among them, git is ended if it runs and is waited for."""
+        proc = subprocess.Popen(["git"] + check.GIT_FLAGS + settings() + args, cwd=self.cwd, env=self.env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        chunks, size, late = [], 0, False
         try:
             assert proc.stdout is not None
-            with proc.stdout:
-                data = proc.stdout.read(limit + 1)
-            if len(data) > limit:
-                end()
-            code = proc.wait()
+            pipe = proc.stdout.fileno()
+            while size <= limit:
+                left = self.until - time.monotonic()
+                if left <= 0 or not select.select([pipe], [], [], left)[0]:
+                    late = True
+                    break
+                chunk = os.read(pipe, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            if size <= limit and not late:
+                # git has closed its output. It has what is left of the time to end.
+                try:
+                    proc.wait(timeout=max(0.0, self.until - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    late = True
         finally:
-            clock.cancel()
-            clock.join()
-        if len(data) > limit:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            if proc.stdout is not None:
+                proc.stdout.close()
+        if size > limit:
             raise Fail("git's output is longer than %d bytes, so it is not read" % limit)
         if late:
             raise Late("git did not end within %d seconds, so it was ended" % MAX_SECONDS)
-        if code != 0:
+        if proc.returncode != 0:
             raise Fail("git failed (%s)" % args[0])
-        return data
+        return b"".join(chunks)
 
     def commit(self, name, given):
         """The full id of the commit `given` names. git's rev-parse --verify reads no word beginning with '-' as a
@@ -271,7 +315,9 @@ class Parser(argparse.ArgumentParser):
 def main(argv):
     parser = Parser(prog="named.py", formatter_class=argparse.RawDescriptionHelpFormatter,
                     description="Says which of a fixed list of words (%s) the lines a commit adds name: the test "
-                                "runner, its report and the ending of the process.\n\n%s" % (VERSION, NOTE))
+                                "runner, its report and the ending of the process.\n\n%s\n\n%s\n\nRun it on a "
+                                "repository whose objects a worker did not write: what it says is only as good as "
+                                "that store." % (VERSION, LIMIT, NOTE))
     parser.add_argument("--repo", required=True, help="the repository holding both commits; nothing is run from it")
     parser.add_argument("--base", required=True, help="the commit the change is read against")
     parser.add_argument("--commit", required=True, help="the commit handed in")

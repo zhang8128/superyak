@@ -34,9 +34,10 @@ GIT_ENV = {"PATH": os.environ.get("PATH") or "/usr/bin:/bin", "GIT_CONFIG_NOSYST
 MARKER = "MARKER_q7v3k"
 # The list named-1, written out here and not taken from the program, so that a word changed there fails here.
 INVENTORY = {
-    "runner": ("pytest", "unittest", "conftest", "PYTEST_", "sys.argv"),
-    "report": ("junit", "testsuite", "testcase"),
-    "ending": ("_exit", "sys.exit", "SystemExit", "atexit", "os.kill", "os.abort", "signal."),
+    "runner": ("pytest", "unittest", "conftest", "PYTEST_", "sys.argv", "orig_argv", "sys.modules", "pluggy",
+               "settrace", "setprofile", "_getframe"),
+    "report": ("junit", "testsuite", "testcase", "report.xml", "etree", "minidom"),
+    "ending": ("exit", "quit", "SystemExit", "kill", "abort", "signal", "execv", "execl", "os.fork"),
 }
 # The words of it found in any case.
 IN_ANY_CASE = ("junit",)
@@ -110,8 +111,8 @@ class Named(unittest.TestCase):
                 for word in words:
                     if word in (line.lower() if word in IN_ANY_CASE else line):
                         expected[group].append(("toy/src/a.py", number, word))
-        self.assertEqual({group: sorted(found) for group, found in self.places(out).items()},
-                         {group: sorted(found) for group, found in expected.items()})
+        # In the program's own order: line by line, and in a line the list's order.
+        self.assertEqual(self.places(out), expected)
         self.assertEqual({place["word"] for found in out["named"].values() for place in found}, set(planted))
         self.assertEqual(out["source"], {"path": SOURCE, "files": 1, "lines": len(planted)})
         self.assertEqual((out["version"], out["base"], out["commit"]), ("named-1", self.base, commit))
@@ -133,7 +134,7 @@ class Named(unittest.TestCase):
         out = self.named(commit)
         self.assertEqual(self.places(out), {"runner": [("toy/src/a.py", 2, "pytest")],
                                             "report": [("toy/src/a.py", 3, "junit"), ("toy/src/a.py", 4, "junit")],
-                                            "ending": [("toy/src/a.py", 8, "atexit")]})
+                                            "ending": [("toy/src/a.py", 8, "exit")]})
 
     def test_a_word_outside_the_source_directory_not_a_place_and_its_path_changed_outside(self):
         commit = self.repo.commit({"docs/readme.md": "pytest\n", "toy/srcx/b.py": "atexit\n", "toy/src": None,
@@ -185,7 +186,7 @@ class Named(unittest.TestCase):
         base = self.repo.commit({"toy/src/x": "plain\n"})
         commit = self.repo.commit({"toy/src/x": None, "toy/src/x/y.py": "a\nsignal.alarm(1)\n"})
         out = self.named(commit, base=base)
-        self.assertEqual(self.places(out)["ending"], [("toy/src/x/y.py", 2, "signal.")])
+        self.assertEqual(self.places(out)["ending"], [("toy/src/x/y.py", 2, "signal")])
         out = self.named(base, base=commit)
         self.assertEqual(self.places(out), {group: [] for group in GROUPS})
         self.assertEqual(out["source"], {"path": SOURCE, "files": 2, "lines": 1})
@@ -198,14 +199,14 @@ class Named(unittest.TestCase):
         self.assertEqual(done.stdout.count(b"\n"), 1)
         self.assertIn(json.dumps(path).encode("ascii"), done.stdout)
         out = json.loads(done.stdout)
-        self.assertEqual(self.places(out)["ending"], [(path, 2, "os.kill")])
+        self.assertEqual(self.places(out)["ending"], [(path, 2, "kill")])
 
     def test_a_line_of_a_million_characters(self):
         commit = self.repo.commit({"toy/src/long.py": "a\n" + "x" * 1000000 + "atexit" + "y" * 10 + "\n"})
         started = time.monotonic()
         out = self.named(commit)
         self.assertLess(time.monotonic() - started, 20)
-        self.assertEqual(self.places(out)["ending"], [("toy/src/long.py", 2, "atexit")])
+        self.assertEqual(self.places(out)["ending"], [("toy/src/long.py", 2, "exit")])
         self.assertEqual(out["source"]["lines"], 2)
 
     def test_what_it_cannot_do_one_line_and_1(self):
@@ -361,6 +362,114 @@ class Named(unittest.TestCase):
             self.assertEqual((code, errors.getvalue()), (1, "named: git did not end within 2 seconds, so it was ended\n"))
             os.remove(path)
 
+    def test_an_error_of_the_programs_own_while_git_runs_leaves_no_git_behind(self):
+        # Once with a git that ends by itself, and once with one kept waiting by a pipe where the commit is looked
+        # for. The error is this program's own, in the middle of reading git's output.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        scratch = os.path.join(self.work, "scratch")
+
+        class Broken:
+            @staticmethod
+            def select(*_):
+                raise RuntimeError("the reading itself failed")
+
+        for name in ("git ends by itself", "git is kept waiting"):
+            if name == "git is kept waiting":
+                loose = os.path.join(self.repo.root, ".git", "objects", commit[:2], commit[2:])
+                os.remove(loose)
+                os.mkfifo(loose)
+            shutil.rmtree(scratch, True)
+            os.mkdir(scratch)
+            git = named.Git(self.repo.root, scratch)
+            kept = named.select
+            named.select = Broken
+            try:
+                with self.assertRaises(RuntimeError):
+                    git.commit("commit", commit)
+            finally:
+                named.select = kept
+            # git is ended and waited for: this process has no child left, running or ended.
+            with self.assertRaises(ChildProcessError, msg=name):
+                os.waitpid(-1, os.WNOHANG)
+
+    def test_a_git_that_closes_its_output_and_runs_on_and_one_whose_child_keeps_the_output_open(self):
+        # Programs standing in for git, found first on the path. Neither is waited on past the time.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        self.addCleanup(setattr, named, "MAX_SECONDS", named.MAX_SECONDS)
+        kept = os.environ.get("PATH", "")
+        self.addCleanup(os.environ.__setitem__, "PATH", kept)
+        # Each stand-in sleeps for six seconds, three times the two the program is given here.
+        for name, script in (("closes its output and runs on", "exec 1>&-\nsleep 6\n"),
+                             ("leaves a child holding its output", "sleep 6 &\nexit 0\n")):
+            fake = os.path.join(self.work, "fake-" + name.split()[0])
+            os.mkdir(fake)
+            with open(os.path.join(fake, "git"), "w") as out:
+                out.write("#!/bin/sh\n" + script)
+            os.chmod(os.path.join(fake, "git"), 0o755)
+            scratch = os.path.join(fake, "scratch")
+            os.mkdir(scratch)
+            os.environ["PATH"] = fake + os.pathsep + kept
+            named.MAX_SECONDS = 2
+            git = named.Git(self.repo.root, scratch)
+            os.environ["PATH"] = kept
+            began = time.monotonic()
+            with self.assertRaises(named.Late, msg=name):
+                git(["rev-parse", "--verify", commit], 1024)
+            self.assertLess(time.monotonic() - began, 5, name)
+
+    def test_a_commit_graph_in_the_repository_is_not_read(self):
+        # A commit-graph says which tree a commit has, and git believes it before the commit. Here the graph is
+        # made to give the commit its base's tree, so that the commit seems to change nothing.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        self.repo.git("commit-graph", "write", "--reachable")
+        path = os.path.join(self.repo.root, ".git", "objects", "info", "commit-graph")
+        with open(path, "rb") as held:
+            graph = bytearray(held.read())
+        self.assertEqual(bytes(graph[:4]), b"CGPH")
+        chunks = {bytes(graph[8 + 12 * n:12 + 12 * n]): int.from_bytes(graph[12 + 12 * n:20 + 12 * n], "big")
+                  for n in range(graph[6])}
+        count = int.from_bytes(graph[chunks[b"OIDF"] + 1020:chunks[b"OIDF"] + 1024], "big")
+        names = [bytes(graph[chunks[b"OIDL"] + 20 * n:chunks[b"OIDL"] + 20 * n + 20]) for n in range(count)]
+        at = chunks[b"CDAT"] + 36 * names.index(bytes.fromhex(commit))
+        graph[at:at + 20] = bytes.fromhex(self.repo.git("rev-parse", self.base + "^{tree}").decode("ascii").strip())
+        os.chmod(path, 0o644)
+        with open(path, "wb") as out:
+            out.write(graph)
+        # The control: git in the repository itself is misled, and sees no change.
+        self.assertEqual(self.repo.git("diff", "--numstat", self.base, commit, "--", SOURCE), b"")
+        out = self.named(commit)
+        self.assertEqual(self.places(out)["runner"], [("toy/src/a.py", 3, "pytest")])
+        self.assertEqual(out["source"]["lines"], 1)
+
+    def test_a_multi_pack_index_in_the_repository_is_not_read(self):
+        # A multi-pack-index says where in a pack each object lies. Here each object is said to lie where the next
+        # one does.
+        commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
+        self.repo.git("repack", "-q", "-a", "-d")
+        self.repo.git("multi-pack-index", "write")
+        path = os.path.join(self.repo.root, ".git", "objects", "pack", "multi-pack-index")
+        with open(path, "rb") as held:
+            index = bytearray(held.read())
+        self.assertEqual(bytes(index[:4]), b"MIDX")
+        chunks = {bytes(index[12 + 12 * n:16 + 12 * n]): int.from_bytes(index[16 + 12 * n:24 + 12 * n], "big")
+                  for n in range(index[6] + 1)}
+        start = chunks[b"OOFF"]
+        count = (min(at for at in chunks.values() if at > start) - start) // 8
+        self.assertGreater(count, 2)
+        places = [bytes(index[start + 8 * n + 4:start + 8 * n + 8]) for n in range(count)]
+        for n in range(count):
+            index[start + 8 * n + 4:start + 8 * n + 8] = places[(n + 1) % count]
+        os.chmod(path, 0o644)
+        with open(path, "wb") as out:
+            out.write(index)
+        # The control: git in the repository itself no longer reads the change.
+        plain = subprocess.run(["git", "-C", self.repo.root, "diff", "--numstat", self.base, commit, "--", SOURCE],
+                               env=GIT_ENV, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual((plain.returncode, plain.stdout), (0, b"1\t0\ttoy/src/a.py\n"))
+        out = self.named(commit)
+        self.assertEqual(self.places(out)["runner"], [("toy/src/a.py", 3, "pytest")])
+        self.assertEqual(out["source"]["lines"], 1)
+
     def test_the_time_is_for_all_of_gits_runs_together(self):
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
         self.addCleanup(setattr, named, "MAX_SECONDS", named.MAX_SECONDS)
@@ -387,14 +496,24 @@ class Named(unittest.TestCase):
         self.assertEqual(out["binary"], ["toy/src/big.py"])
         self.assertEqual(self.places(out), {"runner": [], "report": [("toy/src/a.py", 3, "junit")], "ending": []})
 
-    def test_a_word_spelt_in_another_encoding_is_not_found_and_the_program_says_so(self):
-        body = b"# coding: utf-7\nimport +AHAAeQB0AGUAcwB0-\n"
-        # The control: Python reads these bytes as a file that names pytest.
-        self.assertEqual(compile(body, "b.py", "exec").co_names, ("pytest",))
-        out = self.named(self.repo.commit({"toy/src/b.py": body}))
-        self.assertEqual(self.places(out), {group: [] for group in GROUPS})
-        self.assertEqual(out["source"]["lines"], 2)
-        self.assertIn('in a\nfile declared as UTF-7, "+AHAAeQB0AGUAcwB0-" is the name pytest, and is not found', named.__doc__)
+    def test_a_word_python_reads_and_the_bytes_do_not_hold_is_not_found_and_the_program_says_so(self):
+        wide = "".join(chr(ord(letter) + 0xFEE0) for letter in "pytest")
+        for name, body in (("another encoding", b"# coding: utf-7\nimport +AHAAeQB0AGUAcwB0-\n"),
+                           ("other letters", ("import " + wide + "\nx = 1\n").encode("utf-8"))):
+            # The control: Python reads these bytes as a file that names pytest.
+            self.assertEqual(compile(body, "b.py", "exec").co_names[0], "pytest", name)
+            out = self.named(self.repo.commit({"toy/src/b.py": body}))
+            self.assertEqual(self.places(out), {group: [] for group in GROUPS}, name)
+            self.assertEqual(out["source"]["lines"], 2, name)
+        said = " ".join((named.__doc__ or "").split())
+        self.assertIn('in a file declared as UTF-7, "+AHAAeQB0AGUAcwB0-" is the name pytest, and is not found', said)
+        self.assertIn("written in other letters that Python takes for the same name", said)
+        # And where the program describes itself to whoever runs it.
+        done = self.run_named("--help")
+        self.assertEqual(done.returncode, 0)
+        self.assertIn(" ".join(named.LIMIT.split()), " ".join(done.stdout.decode("ascii").split()))
+        self.assertIn("written in other letters that Python takes for the same name", named.LIMIT)
+        self.assertIn("declares another encoding", named.LIMIT)
 
     def test_a_patch_and_its_list_that_disagree_and_an_unexpected_error(self):
         commit = self.repo.commit({"toy/src/a.py": "one = 1\ntwo = 2\npytest\n"})
