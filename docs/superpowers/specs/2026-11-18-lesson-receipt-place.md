@@ -1,6 +1,6 @@
 # A lesson receipt names where it was shown
 
-Tardis, 2026-11-18, draft 3, fit to build once its three last changes are read as made. The hook (`agent/superyak_agent/lessons_hook.py`)
+Tardis, 2026-11-18, draft 4, fit to build: three readers (w94, w95, w96), each change made. The hook (`agent/superyak_agent/lessons_hook.py`)
 and its hold (`lessons_hold.py`) are shared work: their commits on main name Rio Grande, Serenity and Tardis. A fresh
 reader (w94, Sol, Serenity's team) read draft 1 and approved it with seven named changes, all made here. The last section
 says where. A confirming reader (w95) found four of them made as named and three made otherwise, and named three more,
@@ -60,8 +60,10 @@ worktrees git has registered for it. Their canonical roots come from that checko
 --porcelain`, never from the candidate folder. The event's `cwd` is resolved to its canonical form and matched as
 inside one of those roots. When roots nest, as a worktree inside the checkout, the deepest is the one matched.
 Containment isn't enough by itself, because an unrelated repository can sit inside a root. So the folders from the
-`cwd` up to the matched root, the `cwd` itself included and the root excluded, are checked, at most 64 of them: if any
-holds a `.git` (a folder or a file), the `cwd` is in a nested repository, and its kind is `"other"`. Everything else
+`cwd` up to the matched root, the `cwd` itself included and the root excluded, are checked, at most 64 of them. A
+`.git` there (a folder or a file) is only a candidate: it is a repository when git itself, asked with a bound, resolves
+that folder as its own top level. Then the `cwd` is in a nested repository, and its kind is `"other"`. A `.git` git
+can't resolve, can't read, or doesn't answer for in time is no answer, and gives no place. Everything else
 outside the roots is `"other"` when the check finished: an independent clone, a fork, a copy, a folder of the same
 name. The key is absent when the check didn't finish, or its answer was ambiguous: a missing git, an inaccessible
 `cwd`, more than 64 folders, or roots that can't be read. Failed discovery never becomes `"other"`.
@@ -93,7 +95,7 @@ absent and the lessons still show: classifying never silences a lesson.
 | --- | --- | --- |
 | The events that write receipts send a place | Start, failure and a Bash hold, from the installed checkout, a registered worktree and another git folder: `superyak`, `superyak`, `other`; with no `cwd`: absent | One that leaves the hold out, sends a path, or sends at a prompt |
 | A prompt is unchanged | A prompt opens no store and writes no receipt, before and after | One that makes a prompt write |
-| Identity by registration | A planted marker file, a symlinked one, a copy, a fork and a same-name folder are each `other`; an unrelated repository nested inside the checkout and inside a registered worktree is `other`; an ordinary subfolder of either is `superyak`; a worktree inside another root matches the deepest; failed or ambiguous discovery is absent | One that trusts a file in the candidate, takes containment alone, or calls a failure `other` |
+| Identity by registration | A planted marker file, a symlinked one, a copy, a fork and a same-name folder are each `other`; an unrelated repository nested inside the checkout and inside a registered worktree is `other`; an ordinary subfolder of either is `superyak`; a worktree inside another root matches the deepest; failed or ambiguous discovery is absent; a subfolder with a regular `.git` file of invalid contents, or one that can't be read, is absent, not `other` | One that trusts a file in the candidate, takes containment alone, calls a failure `other`, or takes any `.git` for a repository |
 | A place reaches its receipt | Real request-to-store round trips for `superyak`, `other` and absent, from start, failure, a Bash hold and a confirmed held tool, each read back from `lesson_receipts`, then outcomes recorded and grouped, the groups summing to the aggregate; an old hook on a new peer writes NULL | One whose insert names its columns but drops `place`, so every row is NULL |
 | Only to the default query | With a configured `query`, no `place` is sent and its lessons still show; a hold event without a `cwd` sends no place though the hold's record holds an earlier one | One that sends the fact to an arbitrary command, or reuses a stale `cwd` |
 | The peer refuses other values | `place` of `"Superyak"`, `"x"`, a number, a path: refused, not echoed, no receipt; absent: accepted | One that stores what it was sent |
@@ -133,6 +135,10 @@ absent and the lessons still show: classifying never silences a lesson.
 | Identity: containment admitted a nested unrelated repository | "How a checkout is told"; the table |
 | Privacy: a configured query may not be local | What is asked, 1 |
 | Acceptance: a place must be read back from its receipt; the current event's `cwd` only; "no additional path" on stdout | What is asked, 1; the table |
+
+| Named change (w96 on 8646313d) | Where |
+| --- | --- |
+| A `.git` is a candidate; only one git resolves as its own top level is a repository, and an invalid or unreadable one gives no place | "How a checkout is told"; the table |
 
 For the builder's reader (w95): trusted git discovery and environment overrides, canonical and quoted worktree paths,
 the current event's `cwd`, and a timeout that leaves time to query, save and render. Roots stay transient, and never
