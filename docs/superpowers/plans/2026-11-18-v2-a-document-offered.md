@@ -51,7 +51,7 @@ inputs have changed.
 
 ```
 <out>/plan.json            frozen by the maker; never written again
-<out>/src/                 a bare repository holding every base (refs/documents/<commit>/<row>)
+<out>/src/                 a bare repository holding every base (refs/documents/<item>/<row>)
 <out>/rows/<nnn>-<item>-<row>/   one per row, made by the runner: repo/, room/, item.txt, started.txt,
                            ended.txt, load-before.txt, load-after.txt, clock.log, clock.exit,
                            turns.json, walks.jsonl, walks.err, record.json
