@@ -1,0 +1,12 @@
+walks 74 (pilot 16, probes 9, workers 49); places 222
+any document: absent 43, within 5 0, 6-16 0, beyond 16 9
+leaving out README/CLAUDE/HANDOFF/AGENTS: absent 44, within 5 0, 6-16 0, beyond 16 8
+hits, excluding the four:
+   3d8775bc pilot best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
+   01c46a2d pilot best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
+   d9860589 left out by rule 5 best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
+   a0c94043 pilot best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
+   65fc994f scored best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
+   df8b4b99 scored best 135 [(135, 'docs/superpowers/specs/2026-10-27-federation-pull-design.md', 1)]
+   1113f1db left out by rule 5 best 135 [(135, 'docs/superpowers/specs/2026-10-27-federation-pull-design.md', 1)]
+   db547f22 left out by rule 5 best 59 [(59, 'engram/docs/superpowers/plans/2026-10-25-store-imprint.md', 4)]
