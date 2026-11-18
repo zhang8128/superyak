@@ -207,12 +207,13 @@ passing item was run the same way first and passed.
   three. Only 7c6cda37 was also run at three depths under another name, the deepest the first
   directory's own, and passed each. Run again as at first, 79aaa586 and 7c6cda37 failed again. So at
   these it is the name, and not the depth, the hour or the load.
-- **The naming was the lead's, and it is the pass's too.** The lead's controls were named by whole
+- **The naming was the lead's, and it was the pass's too.** The lead's controls were named by whole
   commit ids and the replays by ten characters of them, so at 7c6cda37 a turn's change passed where its
-  reference seemed to fail. The pass and the pilot's driver name every turn's directory, and every
+  reference seemed to fail. The pass and the pilot's driver named every turn's directory, and every
   screened reference's, by the whole commit id as well. The rehearsal's items hold no such test, and
-  passed. An item that holds one would fail its screen and its turns under the pass as it stands. That
-  naming is being changed.
+  passed. With the pass as it then stood, its own screen at these three items stopped: their references
+  failed six runs of six. The pass now names its directories by ten characters of the id, and the same
+  screen passes all three. The pilot's driver keeps the old names and says so.
 - The rehearsal's screen ran its eleven references where the rehearsal itself ran, and all passed.
 
 **What earlier work holds of the place,** counted with no turn over the list's 40 scored items and 51
@@ -403,9 +404,9 @@ are means of that share over workers.
   grows too long under the room's nested temporary directories; a short temporary directory for a check
   would be a change to the room, and is neither made nor designed here. Three items' tests fail under a
   directory whose name holds a commit id; a shorter path does not cure that, and another name does. The
-  pass and the pilot's driver give every turn such a name themselves, so this goes beyond the lead's own
-  directories, and that naming is being changed. A screen shows such things only when it is run where
-  and as the experiment runs, as the rehearsal's was.
+  pass and the pilot's driver gave every turn such a name themselves, so this went beyond the lead's own
+  directories; the pass's naming is changed, the pilot's is not. A screen shows such things only when it
+  is run where and as the experiment runs, as the rehearsal's was.
 - **The room keeps no words from a failed check, and by the design's rule 9 its store should not.** A
   script in the worker's place can hand in what a reference's tests printed, outside the store. That is
   how the causes above were found.
