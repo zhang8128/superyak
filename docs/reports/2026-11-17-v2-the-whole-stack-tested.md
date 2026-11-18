@@ -17,6 +17,11 @@ at this repository. The rehearsal looks for no gain and nothing here is tested f
   changes by 81 seconds, in ten turns.
 - **On the team's own reading work, lists made from earlier walks held about as much of where a later
   worker went whether they were ordered by roads or by counts of places.**
+- **Added 2026-11-18: the first place found where a turn lacked something an offer could carry is a
+  document.** At two items the plan for the work, already in the repository, gives the calls and returns
+  the held-back tests want, and the turns had not opened it. With the plan named in the task, 11 of 11
+  and 61 of 64 held-back tests pass where 0 of 11 and 55 of 64 had; at the first of the two, a turn that
+  opened the plan with nothing pointing to it reached 10 of 11. Two items, one run each.
 - **None of this measures a saving, or an upper bound on one.** That a scored experiment of routes at
   this repository's item work is not worth its turns now is the lead's judgement, not a result.
 
@@ -372,6 +377,86 @@ them under two tasks. The replays were judged by the room as built on 2026-11-17
 room at 048df32b; the room's own verdict on these hand-ins is not used, since a hand-in here carries the
 output files as well.
 
+## The plan for the work: two counts and a fourth probe
+
+Added on 2026-11-18, after the reader of the section above gave its counterexample: at one item the plan
+document for that work, already in the repository, gives the returns the failing tests want. Three
+things followed, two with no model and one of four turns.
+
+**Where the strings the failing tests need are, before the work.** For each of the seven items, the
+whole tree at the item's parent was searched. `SINCE_SQL`, `page_rows_sql`, `replies_sql`,
+`push-failing-`, `pull-quiet-` and "has open board items", which are of four items, are in no file
+there. At 79aaa586 the failing test gives no string of the reference's to search for. At the other two
+the strings are in documents: `station_imprint_use_begin` in one plan (d9860589); `settle_owner_trust`
+and `revoke_owner_trust` in another plan, and "granted after" in a spec and in one test file already
+there (027834bf). Those documents were in the two turns' sandboxes. By the turns' own walks neither
+named them: among Markdown files each named `TASK.md` and `README.md` only.
+
+**How often such a document exists, over the list.** For each of the list's 188 items with a reference,
+the names its original commit adds under the source directory were taken (a function, a method, a class,
+or a module's constant in capitals, of six letters or more, that the parent's source does not hold as a
+whole word). 107 items add one. **At 52 of those 107 a Markdown file tracked at the parent already holds
+one of the new names as a whole word:** history 20 of 32, pilot 3 of 3, scored 13 of 28, left out 16 of
+44. At 27 of the 52 a document holds every new name, at 9 half or more, at 16 fewer. Of the name and
+document pairs 218 are in plans, 26 in specs and 41 in other Markdown files. Nine of the 52 were read:
+mostly a plan naming the work's own things (`ship_brief`, `settle_owner_trust`,
+`sign_imprint_receipts`), and some common words in capitals (`RETIRED`, `WRITER`) that say less.
+
+**Whether an ordinary search would find it.** At those 52 items every Markdown file at the parent was a
+candidate, a median of 299 files. The query was the commit's message, which is what the first two probes
+gave their turns as the task. A document that holds a new name was placed:
+
+| Order of the documents | First | In the first three | In the first ten |
+| --- | --- | --- | --- |
+| By how many of the message's words a document holds (words of four letters or more; a word in over half the documents counts nothing) | 39 of 52 | 45 | 49 |
+| By a standard weighting of the same words (BM25) | 32 | 47 | 50 |
+| The newest plan first, by the date in its file's name | 24 | 49 | 49 |
+| By the message's words in the file's name | 21 | 34 | 41 |
+| Drawn by lot (expected) | 0.4 | 1.3 | 3.9 |
+
+Ties are broken by the path. A commit's message is written after the work by those who did it and may
+use the plan's own words; a task in a user's words was not tried. That a document is placed first says
+nothing of what a turn would do with it.
+
+**A fourth probe, said before its turns.** Exploratory, four turns, the same worker program and model as
+before. At the two items where a plan held what the failing tests want, one turn with the earlier
+probe's task unchanged, byte for byte, and one with the same task and one added line: "The plan for this
+work is in the repository at" and the plan's path. The two bases differ by that line alone. Known
+beforehand: the plan for d9860589 is 5,016 lines and holds the held-back test's own name and calls among
+its 247 test functions, so naming it shows the turn its tests; the plan for 027834bf is 272 lines with
+no test function in it. Each turn's change was judged by replay and run through the diagnostic above,
+once.
+
+| Item | Turn | The plan in its walk | Held-back tests that pass | The room's verdict by replay |
+| --- | --- | --- | --- | --- |
+| d9860589 | The second probe's | Not named | 0 of 11 | Fails |
+| d9860589 | Unchanged task, again | Named at step 9, 34 s, with no line pointing to it | 10 of 11 | Fails |
+| d9860589 | The plan named in the task | Named at step 3, 12 s | 11 of 11 | Passes |
+| 027834bf | The second probe's | Not named | 55 of 64 | Fails |
+| 027834bf | Unchanged task, again | Not named | 54 of 64 | Fails |
+| 027834bf | The plan named in the task | Named at step 2, 9 s | 61 of 64 | Fails |
+
+- **By whether the plan was named in the walk, over the six turns:** named at three, with 10 of 11, 11
+  of 11 and 61 of 64 held-back tests passing; not named at three, with 0 of 11, 55 of 64 and 54 of 64.
+- **What still fails where the plan was named.** At 027834bf three tests, each on a refusal's words
+  ('granted after' is wanted and 'That ship is already a contact here' is given; 'revoked' is wanted and
+  'That ship needs a later owner trust' is given). The failures on a return (`None == []`, `{'ok':
+  True}`, `KeyError: 'held'`) are in the unchanged turn's output and not in this one's. At d9860589's
+  unchanged turn one test: the exit code is the 3 that is wanted and the words are not.
+- **A turn found the plan with no line pointing to it once:** the unchanged turn at d9860589, at its
+  ninth step. That is one of the two unchanged turns there and neither of the two at 027834bf.
+
+**The lead's reading, which is a judgement.** Where a plan for the work exists, whether the turn opens
+it moved what was handed in more than anything else seen in these probes. It moved calls and returns. It
+did not move refusals' wordings. A first source file was named within 22 seconds at every turn of the
+first three probes; the plan for the work was named at one of the four turns that were not told of it.
+
+**What this does not show.** Two items and one run of each new condition: an observation and no rate. A
+turn that opens a plan may differ in other ways, and the added line also tells the turn that a plan
+exists. At d9860589 the plan shows the tests themselves. Nothing here was offered by the room, by a
+search or by a route: the path was written into the task by hand. No time is compared. And the store of
+walks holds no way to a plan that no earlier turn opened, as its owner said of it when this was found.
+
 ## Reading work: the team's own workers
 
 The team's readers and builders are not in a room, but their logs record what each read. For each worker
@@ -443,8 +528,8 @@ are means of that share over workers.
 
 ## Limits
 
-- One worker program and one model for every item turn; fifteen probe turns; three rehearsal items of
-  one feature.
+- One worker program and one model for every item turn; nineteen probe turns, the last four added on
+  2026-11-18; three rehearsal items of one feature.
 - **What the first two probes' rules chose,** and the third's items come from the same pool. Small
   merged changes to one Python component that change tests, meet the item-maker's rule (the tests fail
   before and pass after), were left out of the experiment's parts by its fifth rule, and have a message
@@ -488,6 +573,13 @@ are means of that share over workers.
 - **The room keeps no words from a failed check, and by the design's rule 9 its store should not.** A
   script in the worker's place can hand in what a reference's tests printed, outside the store. That is
   how the causes above were found.
+- **The design's second arm has a shape here that needs no new store (added 2026-11-18).** The design
+  names notes found by ordinary search as the arm to try before walks. At this repository the plans and
+  specs are such notes: for 52 of the 107 list items that add a name, a document at the parent already
+  holds one, and a count of the commit message's words places such a document first at 39 of the 52. An
+  experiment of it is not designed. It would need tasks not written after the work, a judge of
+  behaviour, and a way to see what a wrong document offered costs; and the other 136 items have no such
+  document by this count.
 - **Open, and not decided here:** a larger repository; a grain finer than a file; help after a turn's
   first entry, which nothing here tries; whether a short list of places saves a reader anything, which
   only a trial with readers can say.
