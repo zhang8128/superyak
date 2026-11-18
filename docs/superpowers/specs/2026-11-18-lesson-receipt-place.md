@@ -1,10 +1,10 @@
 # A lesson receipt names where it was shown
 
-Tardis, 2026-11-18, draft 2, for the hook's authors and a confirming read. The hook (`agent/superyak_agent/lessons_hook.py`)
+Tardis, 2026-11-18, draft 3, fit to build once its three last changes are read as made. The hook (`agent/superyak_agent/lessons_hook.py`)
 and its hold (`lessons_hold.py`) are shared work: their commits on main name Rio Grande, Serenity and Tardis. A fresh
 reader (w94, Sol, Serenity's team) read draft 1 and approved it with seven named changes, all made here. The last section
-says where. It changes what the rail measures and what the hook keeps, so it takes the safety-code review path, with
-a confirming read before any code.
+says where. A confirming reader (w95) found four of them made as named and three made otherwise, and named three more,
+made in draft 3. It changes what the rail measures and what the hook keeps, so it takes the safety-code review path.
 
 ## Why
 
@@ -25,7 +25,11 @@ session can find one beside the point.
 1. **The events that write receipts send a place.** Those are session start, a failed command
    (`lessons_hook.py:703–726`), and the pre-command hold, for Bash and for confirmed held tools (`lessons_hold.py:165–167`;
    its entry already receives `cwd`, `hold.py:107–125`). Each sends `place`: `"superyak"`, `"other"`, or the key absent
-   (below). A prompt sends nothing new. Its path opens no store and writes no receipt (`lessons.py:632–686, 842–843`),
+   (below). The place comes from the current event's own `cwd` only, never from a `cwd` an earlier event left in the
+   hold's record (`holds.py:125–129`): an event without one sends no place. And it goes only to the default query,
+   this checkout's own peer (`default_query()`, `lessons_hook.py:134–138`). A configured `query` (`lessons_hook.py:
+   379–395, 409–420`, which the hold uses too, `lessons_hold.py:122–130`) may run anything, so its locality isn't
+   established, and it is sent no place. Its lessons go on as before. A prompt sends nothing new. Its path opens no store and writes no receipt (`lessons.py:632–686, 842–843`),
    and that stays so: a prompt's showings are not part of outcome coverage, before or after.
 2. **The peer accepts only those values.** `read_request` (`lessons.py:524–571`) checks `place` before any early return.
    It must be exactly `"superyak"`, `"other"`, or absent; anything else is refused as a malformed request, without
@@ -54,9 +58,13 @@ A marker file is not identity: any folder can plant `agent/superyak_agent/lesson
 or copy carries it. So the kind is `"superyak"` only for the installed checkout the hook runs from (`CHECKOUT`) and the
 worktrees git has registered for it. Their canonical roots come from that checkout's own `git worktree list
 --porcelain`, never from the candidate folder. The event's `cwd` is resolved to its canonical form and matched as
-inside one of those roots. Everything else is `"other"` when the check finished, and the key absent when it didn't:
-an independent clone, a fork, a copy, a nested repository, a folder of the same name, a missing git or an
-inaccessible `cwd`.
+inside one of those roots. When roots nest, as a worktree inside the checkout, the deepest is the one matched.
+Containment isn't enough by itself, because an unrelated repository can sit inside a root. So the folders from the
+`cwd` up to the matched root, the `cwd` itself included and the root excluded, are checked, at most 64 of them: if any
+holds a `.git` (a folder or a file), the `cwd` is in a nested repository, and its kind is `"other"`. Everything else
+outside the roots is `"other"` when the check finished: an independent clone, a fork, a copy, a folder of the same
+name. The key is absent when the check didn't finish, or its answer was ambiguous: a missing git, an inaccessible
+`cwd`, more than 64 folders, or roots that can't be read. Failed discovery never becomes `"other"`.
 
 The roots are read with a bound. They may be cached in memory for one hook run, and are never written to disk. A
 wrong `superyak` hides what this is for, so the check leans to absent. The kind confers nothing: no authority, no
@@ -85,9 +93,11 @@ absent and the lessons still show: classifying never silences a lesson.
 | --- | --- | --- |
 | The events that write receipts send a place | Start, failure and a Bash hold, from the installed checkout, a registered worktree and another git folder: `superyak`, `superyak`, `other`; with no `cwd`: absent | One that leaves the hold out, sends a path, or sends at a prompt |
 | A prompt is unchanged | A prompt opens no store and writes no receipt, before and after | One that makes a prompt write |
-| Identity by registration | A planted marker file, a symlinked one, a copy, a fork, a nested unrelated repository and a same-name folder are each `other` | One that trusts a file in the candidate |
+| Identity by registration | A planted marker file, a symlinked one, a copy, a fork and a same-name folder are each `other`; an unrelated repository nested inside the checkout and inside a registered worktree is `other`; an ordinary subfolder of either is `superyak`; a worktree inside another root matches the deepest; failed or ambiguous discovery is absent | One that trusts a file in the candidate, takes containment alone, or calls a failure `other` |
+| A place reaches its receipt | Real request-to-store round trips for `superyak`, `other` and absent, from start, failure, a Bash hold and a confirmed held tool, each read back from `lesson_receipts`, then outcomes recorded and grouped, the groups summing to the aggregate; an old hook on a new peer writes NULL | One whose insert names its columns but drops `place`, so every row is NULL |
+| Only to the default query | With a configured `query`, no `place` is sent and its lessons still show; a hold event without a `cwd` sends no place though the hold's record holds an earlier one | One that sends the fact to an arbitrary command, or reuses a stale `cwd` |
 | The peer refuses other values | `place` of `"Superyak"`, `"x"`, a number, a path: refused, not echoed, no receipt; absent: accepted | One that stores what it was sent |
-| No new path kept | The no-write checks (`agent/tests/test_lessons_hook_nowrite.py`) extended: no path or roots cached to disk, nothing on stdout or stderr, child processes included | One that caches the worktree list on disk |
+| No new path kept | The no-write checks (`agent/tests/test_lessons_hook_nowrite.py`) extended: no path or roots cached to disk, and no additional path disclosed on stdout or stderr, child processes included. A lesson's output, its receipt line among it, is intended (`lessons_hook.py:260–279, 522–524`) | One that caches the worktree list on disk, or prints a root |
 | The budget | A control lesson still shows when classifying times out, with the place absent, inside the event's deadline; missing git, an inaccessible `cwd` and a finished non-repository answer told apart | One whose classifying uses the budget and silences the lesson |
 | The migration | A populated store opened twice: the column added once, old rows NULL, receipt and outcome links kept; a fresh store has it; every insert names columns | One that loses rows, breaks the six-value insert, or adds the column twice |
 | The split | Receipts, outcomes and coverage per place, apart from the row limit, summing to the aggregate; repeats per 100 queries said global; NULL called "unknown place, including receipts from before this change" | One that splits query rates, calls NULL "before places", or counts only the shown rows |
@@ -117,3 +127,13 @@ absent and the lessons still show: classifying never silences a lesson.
 | 5. The hold covered; prompts stay receipt-free | What is asked, 1 |
 | 6. NULL is unknown, and place is not applicability | Why; What is asked, 4 |
 | 7. A budget check that catches a lost lesson | "The budget"; the table |
+
+| Named change (w95 on 7364849c) | Where |
+| --- | --- |
+| Identity: containment admitted a nested unrelated repository | "How a checkout is told"; the table |
+| Privacy: a configured query may not be local | What is asked, 1 |
+| Acceptance: a place must be read back from its receipt; the current event's `cwd` only; "no additional path" on stdout | What is asked, 1; the table |
+
+For the builder's reader (w95): trusted git discovery and environment overrides, canonical and quoted worktree paths,
+the current event's `cwd`, and a timeout that leaves time to query, save and render. Roots stay transient, and never
+enter a request, a stored state or a diagnostic.
