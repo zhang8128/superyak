@@ -181,8 +181,9 @@ reference. Nothing new was built for it. The control is the item's own reference
 
 - **Eight of the ten could be judged. A commit message got two turns' changes through their item's
   tests, and six failed.** The two are 72889183, whose task is 252 words and spells out each point, and
-  7c6cda37. At 37a887d3 the tests use names the reference adds (`SINCE_SQL`, `events_kind_room_id`)
-  that the message never gives. The other five failures were not looked into and are undiagnosed.
+  7c6cda37. At 37a887d3 the tests use names the reference adds (`SINCE_SQL`, `events_kind_room_id`) that
+  the message never gives. The other five failures were not looked into then. What all six print is
+  under "Why the changes failed their held-back tests" below.
 - **This table is a correction,** made the same day after both reads recorded below. It first said that
   five references failed in the jail for a cause not known, and that only five items could be judged.
 
@@ -294,9 +295,9 @@ probe's turns ran once.
   task's words, the tests and the history all differ, and the task here speaks of looking up messages.
   One pair cannot say which of those made the difference, or whether the turn took the other two
   lookups to be outside what it was asked.
-- **One change of the five passes the held-back tests:** the same item as before, whose task spells
-  out five points. The four failures are undiagnosed. Held-back tests may require unstated details, but
-  these records do not distinguish that from implementation or discovery failures.
+- **One change of the five passes the held-back tests:** the same item as before, whose task spells out
+  five points. The four failures were undiagnosed when this section was read. What they print is in the
+  next section.
 - **No turn named a file of another component's code.** Beyond the root and the check's folder, four
   turns named files under `peer` only, and one also named a file under `docs`.
 
@@ -305,6 +306,66 @@ rewritten without project identifiers, a first file of the work was still named 
 seconds at all five items. Source files' names and the documents stayed, and every walk names
 `README.md`. And it is the first of the three probes in which a turn did not change a file its
 reference changes: at one item, in one pair.
+
+## Why the changes failed their held-back tests
+
+Added on 2026-11-18. Ten changes made by probe turns failed their items' held-back tests by replay: six
+in the first two probes and four in the third. One had been looked into. All ten were run again with no
+model, as the failing references above were: a script in the worker's place applied the turn's change on
+the item's base inside the jail, ran the held-back tests there with the runner's own words kept, and
+handed in what they printed as a file. A turn's code ran only inside the jail. Two changes that had
+passed their replays (72889183, in the second and the third probe) went the same way as the control, and
+each prints "35 passed". Each ran once.
+
+| Probe, item | Held-back tests that pass | What the failing tests print first |
+| --- | --- | --- |
+| 1, 37a887d3 | 15 of 16 | `ImportError: cannot import name 'SINCE_SQL'` |
+| 3, 37a887d3 | 15 of 16 | The same |
+| 2, 6f57b4cb | 16 of 18 | `ImportError`, twice: `page_rows_sql`, `replies_sql` |
+| 3, 6f57b4cb | 16 of 18 | The same |
+| 1, 9490f597 | 33 of 35 | A notice is looked up by the beginning of its id (`'push-failing-'`, `'pull-quiet-'`) and none is found |
+| 3, 9490f597 | 33 of 35 | The same |
+| 3, 317a6e0b | 23 of 25 | A pattern on a refusal's words does not match: 'has open board items' is wanted, 'The lessons room cannot have an open board task' is given |
+| 2, d9860589 | 0 of 11 | Nine: `TypeError`, one method called with arguments it does not take. Two: a command's exit code |
+| 2, 027834bf | 55 of 64 | Six: `None == []` from one function's return. Two: a return's keys (`{'ok': True}` where `grant_id` and `held` are wanted). One: a refusal's words |
+| 1, 79aaa586 | 22 of 23 | `Failed: DID NOT RAISE Problem` |
+
+- **Over the ten, 228 of 261 held-back tests pass and 33 fail.** Leaving out d9860589, where none
+  passes, it is 228 of 250.
+- **The 33 that fail, by what each prints first:** 6 cannot import a name; 4 look a notice up by the
+  beginning of its id and find none; 2 want a refusal in other words; 9 call one method with arguments
+  it does not take; 2 expect a command's exit code; 9 at one item compare a function's return or a
+  refusal's words; 1 expects a refusal that is not made.
+- **The names, the beginnings of ids and one of the wordings are the reference's own.** `SINCE_SQL`,
+  `page_rows_sql`, `replies_sql`, `push-failing-`, `pull-quiet-` and "has open board items" are each in
+  the reference's source change, and none is in the task the turn was given or in the turn's change.
+  That is seven of the ten changes.
+- **At 9490f597 both turns post the notices,** under ids that begin otherwise (`peer-pull-` in one;
+  `peer-quiet-` and `peer-unreachable-` in the other). The tests stop at the lookup, so they do not say
+  whether those notices are otherwise right.
+- **At 6f57b4cb the two turns fail the same two tests for the same two names, and sixteen pass at
+  each.** One turn had changed all three files the reference changes and the other `chats.py` alone. By
+  their counts these tests do not tell those two changes apart.
+- **At d9860589 the turn gave its method the reference's name,** which is in neither the task nor the
+  parent's source, and other arguments. Nine of the eleven tests stop at that call.
+- **At 79aaa586 the one failing test expects a refusal when a trust is renewed.** The task was the
+  commit's subject line, sixteen words, which names "shared owner checks" and says no more of them.
+
+**The lead's reading, which is a judgement and not a count.** Nine of the ten failed changes, at six of
+the seven items, trip on how the reference spelled the work: a name, an id, a message, the shape of a
+call or of a return. One trips on something the change does not do. Putting a call's and a return's
+shape with names and wordings is the lead's grouping.
+
+**What it bears on, by the same judgement.** Nothing made before a piece of work, a note or a route, can
+hold a name the work invents. So with the reference's own tests as the judge, "two of eight" and "one of
+five" say little about whether these changes do what was asked, and no offer could have moved them far.
+An experiment on work begun from a description needs a judge of behaviour: tasks that give the
+interface, or tests that do not reach for the reference's names.
+
+**Limits of this section.** One run for each change. The sorting is one reader's. The ten changes are of
+seven items, three of them under two tasks. The replays were judged by the room as built on 2026-11-17
+and these runs used the room at 048df32b; the room's own verdict on these hand-ins is not used, since a
+hand-in here carries the output files as well.
 
 ## Reading work: the team's own workers
 
@@ -366,7 +427,9 @@ are means of that share over workers.
   what came after a file was named. These observations establish no time saving and no upper bound on
   one.
 - **A commit message got a turn's change through its item's tests at two of the eight items that could
-  be judged.** At the one failure looked into, what the message lacked was names the tests use.
+  be judged.** Looked into afterwards, the changes that failed mostly trip on what the reference named
+  and how it shaped its calls: 228 of 261 held-back tests pass over the ten failed changes of the three
+  probes.
 - **On the reading-work lists, counts of places scored as the store's routes did.** The store's owner
   has drafted places as a next store version.
 - **Another reading holds as well as this one.** Messages in the project's own words and the parent's
@@ -400,10 +463,12 @@ are means of that share over workers.
 - **No scored experiment of routes is proposed for this repository's item work.** This is the lead's
   judgement from what was seen, and not a result: nothing here measures what a route could save. The
   rehearsal's design stands ready.
-- **The description-first experiment is not written now,** by the same judgement. The third probe is
-  the nearest thing to it that was run: it needed no new room code. What was learnt for it
-  is kept here: a task must travel in a file; the parent's tests would have to be withheld too; a turn
-  can be judged against held-back tests by replay with no new room code; every item needs its screen.
+- **The description-first experiment is not written now,** by the same judgement. The third probe is the
+  nearest thing to it that was run: it needed no new room code. What was learnt for it is kept here: a
+  task must travel in a file; the parent's tests would have to be withheld too; a turn can be judged
+  against held-back tests by replay with no new room code; every item needs its screen; and the
+  reference's own tests, held back, judge how the work is spelled as well as what it does, so the judge
+  has to be designed before the turns.
 - **Whether a test passes in the room can depend on what its directory is called, and on what the jail
   forbids. These are two different failures.** One item's tests bind a Unix socket. Under the room's
   nested temporary directories they print that its path is too long; with a path that fits, the jail
@@ -411,10 +476,10 @@ are means of that share over workers.
   would be a change to the room", as if that were what the item needs. That was never tried in the jail,
   and it is wrong: by the runs above the item cannot be judged in this jail on macOS whatever the path's
   length. Three items' tests fail under a directory whose name holds a commit id; a shorter path does
-  not cure that, and another name does. The
-  pass and the pilot's driver gave every turn such a name themselves, so this went beyond the lead's own
-  directories; the pass's naming is changed, the pilot's is not. A screen shows such things only when it
-  is run where and as the experiment runs, as the rehearsal's was.
+  not cure that, and another name does. The pass and the pilot's driver gave every turn such a name
+  themselves, so this went beyond the lead's own directories; the pass's naming is changed, the pilot's
+  is not. A screen shows such things only when it is run where and as the experiment runs, as the
+  rehearsal's was.
 - **The room keeps no words from a failed check, and by the design's rule 9 its store should not.** A
   script in the worker's place can hand in what a reference's tests printed, outside the store. That is
   how the causes above were found.
