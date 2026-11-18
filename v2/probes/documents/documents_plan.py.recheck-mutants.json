@@ -1,0 +1,116 @@
+{
+ "file": "documents_plan.py",
+ "source_sha256": "bc1840759186d6068f63e84f5d710b3bc2dd2df103ec76cd560a948174cd3c75",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_plan.py",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 17 tests in 41.084s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 373,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 373,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "The covering fixture tests passed; this mutation was not detected."
+  },
+  {
+   "line": 168,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "number",
+   "before": "3",
+   "after": "4",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 169,
+   "kind": "number",
+   "before": "3",
+   "after": "4",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 146,
+   "kind": "number",
+   "before": "10",
+   "after": "11",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "filter",
+   "before": "p in newest",
+   "after": "not (p in newest)",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "comparison",
+   "before": "p in newest",
+   "after": "not (p in newest)",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  }
+ ]
+}
