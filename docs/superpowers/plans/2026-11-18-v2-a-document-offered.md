@@ -143,6 +143,10 @@ directory holds no `record.json`, one at a time, up to `N`.
   row: it is moved aside to `rows/interrupted/<its name>-<k>` and the row is run again from nothing,
   and the report later says how many there were. A row with a `record.json` is never run again.
 - A lock file in `<out>` refuses a second runner.
+- **Controls before turns.** Before a row, the runner requires `controls/<item>/cases.json` (its
+  `commit` the item's whole id, its `cases` not empty) and `controls/<item>/parent.json` (its `commit`
+  the item's whole id). Without them it refuses, names the item and what is missing, and runs no later
+  row. No flag turns this off.
 - `outcome`: `handed-in` when the room recorded a commit for the turn; `limit` when the room ended the
   turn at its limit; `no-hand-in` when it finished with no commit; `clock-failed` otherwise.
 
