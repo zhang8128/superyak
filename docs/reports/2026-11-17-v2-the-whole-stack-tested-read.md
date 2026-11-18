@@ -182,3 +182,49 @@ The central correction is supported. The added original diagnostic records TMPDI
 The intent is consistent with the complete macOS profile: `jail.rs:854` denies by default, the generator adds no network allowance, and `:1433–1434` explicitly tests that absence. “Whatever the path’s length” is therefore a policy inference supported by these observations, not an exhaustive measurement. No table or outcome-count change is needed. No private words or machine paths appear in the changed lines.
 
 I did not independently verify the spec’s withdrawal history. These records do not test the other twenty census items, Linux, or a connection to an existing bound socket. I ran no model or runtime test. The evidence README’s provenance correction was verified during this read.
+
+---
+
+# The fresh reader's verdict on the section "Why the changes failed their held-back tests"
+
+Kept whole, as the reader gave it on 2026-11-18. A fifth fresh reader of the other model family (the
+team's worker w99), reading the section at 01f032c5. It was asked to sort the ten failures itself from
+the outputs before opening the section, and its sorting comes first. Its line numbers are of the report
+at 01f032c5. The files it names under `outputs/`, `tasks/` and `changes/` are in the evidence kept with
+the read, not in the repository.
+
+---
+
+push with named changes
+
+Blind sorting, recorded before opening the report:
+
+1. SQL inspection/export surface (four changes): probe1-37a887d3d7 and probe3-37a887d3d7 each pass 15 tests and fail one at importing SINCE_SQL. probe2-6f57b4cb36 and probe3-6f57b4cb36 each pass 16 and fail two at importing page_rows_sql and replies_sql. The failed tests do not get as far as checking their SQL/index behaviour.
+
+2. Notice selection/identity (two changes): probe1-9490f59750 and probe3-9490f59750 each pass 33 and fail two because selecting notices with push-failing- or pull-quiet- yields none. Both patches add day-old episode notices with other prefixes. This explains a selection mismatch; it does not establish all timing, pairing, recovery, or sanitising behaviour.
+
+3. Call and return contracts (two changes): probe2-d98605894d fails nine tests before entering station_imprint_use_begin because its positional interface differs, and two command tests return 1 with No such imprint instead of success/refusal exits. The method name exists in the turn. probe2-027834bf0e passes 55 and fails nine: six expect an empty list where settlement returns None; two expect revocation result keys/counts absent from its success result; one gets status 409 with a different reason. These are interface/observable-result mismatches, and can mask later behaviour.
+
+4. Refusal wording (one change): probe3-317a6e0bd2 passes 23 and fails two because Problem is raised with other text than the regex expects. Those two refusals happened; later assertions remain untested.
+
+5. Refusal behaviour (one change): probe1-79aaa58602 passes 22 and fails one because renewal does not raise the expected Problem for a trust-made contact. The task calls for shared owner checks; its patch adds checks, but the tested refusal is missing.
+
+Totals across these ten outputs: 33 failed and 228 passed, 261 tests. The two controls each give exit 0 and 35 passed. These groups describe the first observed obstacle, not a complete correctness verdict.
+
+Findings, most serious first. Report line numbers refer to 01f032c5; evidence paths are relative to the supplied evidence directory.
+
+1. **Withdraw the bound on what an offer could change — report 359–363.** Neither a static name check nor these unoffered turns establishes that “no offer could have moved them far.” There is a concrete counterexample to the premise: at 027834bf^, docs/superpowers/plans/2026-11-02-owner-trust.md:156–157 already specifies settle_owner_trust returning list[str] and revoke_owner_trust returning grant_id/held. Eight of that change’s nine first failures concern those pre-existing contracts. At d9860589^, engram/docs/superpowers/plans/2026-10-25-store-imprint.md:3630–3635 already specifies the exact positional call shape and the command’s success/refusal outputs; its examples at 3642 and 3653 match the failing calls. A prior note or route could carry these contracts. Evidence: outputs/probe2-027834bf0e.txt, tasks/probe2-027834bf0e.TASK.md, changes/probe2-027834bf0e.turn.patch, and those parent-version plans. Smallest change: replace the paragraph’s inference with “These pass rates mix interface incompatibilities with behavioural failures; they do not separate those causes or measure what an offer could change.” Keep the recommendation to specify interfaces or use implementation-independent behavioural tests. This does not establish that an offer would help.
+
+2. **Keep first obstacles distinct from complete diagnoses — report 329, 354–357, 365–368 and 429–432.** My blind groups separate call/return contracts from wording. Grouping them together is permissible as an explicit description of first obstacles; “nine spelling failures, one behavioural omission” is too strong as an explanation of the implementations. At d9860589, both command tests return 1 with “No such imprint”: its own command calls its own method successfully, but that method requires the full id and omits prefix resolution. At probe3-6f57b4cb, the patch leaves reply/source lookups unchanged while tests stop before inspecting their query plans. At 027834bf, six tests stop at the preliminary empty-result assertion before setting up the owner failure. Evidence: outputs/probe2-d98605894d.txt, changes/probe2-d98605894d.turn.patch, changes/probe3-6f57b4cb36.turn.patch, outputs/probe3-6f57b4cb36.txt, and outputs/probe2-027834bf0e.txt. I also checked the corresponding tests’ committed source after recording the blind sorting. Smallest change: say “first observed failures” in the judgement and summary; add the CLI’s actual message to its row; add to the limits that later behaviour was not established and these diagnostic runs were macOS only. The same caution applies beneath the imports at 37a887d3, the notice filters at 9490f597, and the early wording checks at 317a6e0b.
+
+3. **Correct which name the reference adds — report 184.** events_kind_room_id already exists at 37a887d3^:peer/superyak_peer/inbox.py:31. The supplied changes/probe1-37a887d3d7.reference.patch itself calls it the existing index; SINCE_SQL is the newly exported name. Smallest change: “The tests import the reference’s new SINCE_SQL to inspect use of the existing events_kind_room_id index.” This changes no count.
+
+4. **Put the historical review note in the past tense — report 523–524.** It still says the four failures “are called undiagnosed,” under “all five are made here,” although report 298–300 now describes that as the earlier state. Evidence: outputs/probe3-{37a887d3d7,9490f59750,317a6e0bd2,6f57b4cb36}.txt. Smallest change: “The four failed replays were initially called undiagnosed; the later section now records their first failures.”
+
+No numerical correction is needed. Every table row agrees with outputs/ and tally.txt: 228/261, 228/250 without d9860589, and the 33 split 6, 4, 2, 9, 2, 9, 1. The corrected 027834bf split is six/two/one. Seven changes at four items account for the six checked strings.
+
+I independently checked all six strings in tasks/ and both patches: task/turn/reference counts are 0/0/2 for SINCE_SQL, page_rows_sql and replies_sql, and 0/0/1 for push-failing-, pull-quiet- and “has open board items,” at every relevant change. Absence of those literals does not imply absence of the operation: the turns use inline SQL, other episode-id prefixes, or another refusal wording. Whether the SQL and notices meet all requirements remains open.
+
+The patch claims about the alternate notice ids, the shared method name, three source files versus one, and the sixteen-word subject line check out. Both controls give pytest exit 0 and 35 passed; run.txt also shows apply exit 0 for every patch. They validate the diagnostic’s pass output, not the room’s hand-in verdict, which is false for both controls as disclosed. The other changed retrospective sentences and the judge-design addition are consistent with this evidence once the qualifications above are made. I found no private names or machine paths in the changed report lines.
+
+Not checked: another run of any change, execution after adapting names/interfaces, complete behavioural correctness, whether reading either plan would improve a turn’s result, or Linux. No files changed and no evidence program or test executed.
