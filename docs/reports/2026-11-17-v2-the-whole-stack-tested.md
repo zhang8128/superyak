@@ -192,10 +192,15 @@ runs them, and hands in what they printed as a file, which is read from the turn
 repository's own merged code runs, and the room's store takes in no text, as the design's rule 9 asks. A
 passing item was run the same way first and passed.
 
-- **5b0c8376: twelve errors, "AF_UNIX path too long".** The room gives a check its temporary directory
-  inside the room's own directory; the item's check and the test runner nest theirs inside that; and
-  macOS holds a Unix socket's path to 104 bytes. In the worker's place the temporary directory's own
-  path was 118 characters. This item fails from the shorter directory too.
+- **5b0c8376: twelve errors, "AF_UNIX path too long". That is what the tests printed, and it is not the
+  whole cause.** The field for a Unix socket's path on macOS is 104 bytes, and in the worker's place the
+  temporary directory's own path was 118 characters. The item fails from the shorter directory too. Run
+  again on 2026-11-18 with the tests' home 82 characters long, where no test printed that a path was too
+  long: twelve errors again, each "Operation not permitted". A probe in the worker's place takes length
+  out of it by binding a socket by a relative name: the bind is refused in the temporary directory and
+  in the clone, while a socket pair and an ordinary file are allowed in the same run. So, on macOS, the
+  jail refuses a Unix socket's bind in both writable directories. The words about the path are Python's
+  own: its error for a long name carries no error number from the system.
 - **113d188e: "Operation not permitted"** in a test over real HTTPS. The jail forbids the network. That
   is the jail doing its work.
 - **79aaa586, 027834bf, 7c6cda37: the directory's name.** One test of these items asserts that what it
@@ -399,11 +404,14 @@ are means of that share over workers.
   the nearest thing to it that was run: it needed no new room code. What was learnt for it
   is kept here: a task must travel in a file; the parent's tests would have to be withheld too; a turn
   can be judged against held-back tests by replay with no new room code; every item needs its screen.
-- **Whether a test passes in the room can depend on where the room is and on what its directory is
-  called. These are two different failures.** On macOS one item's tests bind a Unix socket whose path
-  grows too long under the room's nested temporary directories; a short temporary directory for a check
-  would be a change to the room, and is neither made nor designed here. Three items' tests fail under a
-  directory whose name holds a commit id; a shorter path does not cure that, and another name does. The
+- **Whether a test passes in the room can depend on what its directory is called, and on what the jail
+  forbids. These are two different failures.** One item's tests bind a Unix socket. Under the room's
+  nested temporary directories they print that its path is too long; with a path that fits, the jail
+  refuses the bind. Until 2026-11-18 this report said here that "a short temporary directory for a check
+  would be a change to the room", as if that were what the item needs. That was never tried in the jail,
+  and it is wrong: by the runs above the item cannot be judged in this jail on macOS whatever the path's
+  length. Three items' tests fail under a directory whose name holds a commit id; a shorter path does
+  not cure that, and another name does. The
   pass and the pilot's driver gave every turn such a name themselves, so this went beyond the lead's own
   directories; the pass's naming is changed, the pilot's is not. A screen shows such things only when it
   is run where and as the experiment runs, as the rehearsal's was.
@@ -469,5 +477,24 @@ that wrong, and the reader named the change:
 
 1. The depth is withdrawn as the cause. It is the directory's name, seen directly at one item and
    inferred at the other two, with each run said for the item it was made at.
-2. What follows now tells the two failures apart, the socket's path and the name, and says that the
-   pass and the pilot's driver make such names themselves.
+2. What follows then told the two failures apart, the then-apparent socket-path failure and the name,
+   and said that the pass and the pilot's driver make such names themselves.
+
+**A correction on the socket's path** was made on 2026-11-18. The lead had written a spec for a short
+temporary directory, on the strength of what the tests printed and of a count made outside the jail. Its
+reader, a fresh one of the other family, asked first whether a Unix socket had ever been bound at a
+short path inside the jail. None had. The lead's runs then showed the jail refuses the bind, as said
+above, and the spec was withdrawn with nothing built from it. Two places in this report put that item's
+failure down to the path's length alone, and both are corrected. The item was already counted among
+those that cannot be judged, so no table and no count changes. Nothing was run on Linux.
+
+That correction was read at bd894772 by a fourth fresh reader of the other family: **push with named
+changes,** three, all made here. The jail's refusal is said for macOS and for the two writable
+directories that were tried, since the profile also lets a run write to `/dev/null` and `/dev/zero`, and
+on Linux a jailed run has other writable places. The 104 bytes are called the field's size, not the
+longest name: one run outside the jail bound a name of 103 bytes and was refused at 104. And the earlier
+read's second item above is put in the past tense. The reader held that the central correction is
+supported, that no table or count changes, and that "whatever the path's length" is an inference from
+these runs and from a profile that allows no network, which the jail's own test asserts, not a
+measurement at every length. Not tested: the other twenty items that failed the census with the same
+words, Linux, and a connection to a socket already bound.
