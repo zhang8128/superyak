@@ -1031,7 +1031,10 @@ def _read_key(conn: sqlite3.Connection, path: Path) -> tuple[_Key, bool]:
     head = conn.execute("SELECT value FROM meta NOT INDEXED WHERE key = 'head'").fetchone()
     opened = conn._key
     header = os.pread(_held_fd(opened), 28, 0)
-    st = _stat(path)
+    try:
+        st = _stat(path)
+    except FileNotFoundError:   # moved aside or removed since this connection opened it: changed, as a replaced file is
+        raise LedgerUnreadable(f"{path}: {_CHANGED}") from None
     if (st.st_dev, st.st_ino) != opened:
         raise LedgerUnreadable(f"{path}: {_CHANGED}")
     return (_Key(st.st_dev, st.st_ino, st.st_size, st.st_ctime_ns, int.from_bytes(header[24:28], "big"),
@@ -1532,7 +1535,11 @@ class Ledger:
         `_append_busy_ms` for the lock, since a reader's rare full check holds SHARED for its whole length (S1)."""
         text = canonical_json(dict(body))
         busy = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
-        self.conn.execute(f"PRAGMA busy_timeout={_append_busy_ms(_stat(self.path).st_size)}")
+        try:
+            size = _stat(self.path).st_size
+        except FileNotFoundError:   # moved aside: the floor, and the key read below reads it as changed (board
+            size = 0                # fix:ledger-moved-aside-reads-changed)
+        self.conn.execute(f"PRAGMA busy_timeout={_append_busy_ms(size)}")
         try:
             for _ in range(WRITER_TRIES):
                 done = self._append_on(self._base_key(), kind, ref, actor, channel, body, text, under_grant,
