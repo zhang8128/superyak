@@ -244,3 +244,151 @@ marker.
 
 The `review-r8/` scripts are in
 `/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-219f737116a6/scratchpad/review-r8/`.
+
+## Re-check of the second draft (16f07941)
+
+
+Reviewer: the same fresh reviewer, on Tardis, 2026-11-18. I only read files and ran probes: I edited, committed and
+posted nothing, left the main checkout alone, and did not read `~/.engram/imprints/`.
+
+## Verdict: APPROVE WITH CHANGES
+
+The draft resolves the Must-fix and nine of the other ten findings fully. Restamping the cap fixture works: a
+restamped raw-SQL ledger is served by `state()` in a fresh process.
+
+Two of its new texts still say more than they hold:
+
+- **The closing key read**, as specified, can pass the very case it is there to catch (R1 below).
+- **The torn-page test** claims revision 7 ships each case's memory. On the shared fixture that is false: main refuses
+  too, by its own checked State (R2 below).
+
+Both are one or two sentences to fix. Nothing in the draft widens a permission or lets more leave.
+
+## The eleven findings
+
+| # | Finding | Second draft |
+|---|---|---|
+| 1 | Must-fix: the cap fixture fails the check | **Resolved.** `_fixture_ledger` restamps, the fixture's version and `STAGE_VERSION` move, and the deny variant appends on a copy of `eh` (plan Files, Step 4; spec 16). Run on my raw-SQL ledger, `restamp_projection` makes `state()` serve it in a fresh process. Nit R4 below: where the deny and the retired place go. |
+| 2 | Should-fix: the check holds only when the State is built | **Partly resolved.** `.close()` is the right shape, but it needs a key to compare against and a whole-key rule (R1). |
+| 3 | Should-fix: unstamped ledgers | **Resolved on its merits** (see below), apart from one piece: `.close()` on such a ledger is undefined (R1c). The history row states the table-page gap. The Status line only says "on a stamped ledger by the projection digest" and points to the paragraph, which states the gap. That is enough. |
+| 4 | Should-fix: `_cache={}` and the wrapper's `prefetch` | **Resolved.** `dataclasses.replace(..., seq_at=SeqZero(...), _cache={})`, a `SeqZero` that forwards `prefetch`, and a test that the `_cache` is the State's own and that holds jenn's `place:la-county/parks` deny. |
+| 5 | Should-fix: the error mapping | **Resolved.** Every read, `.close()` included, maps `LedgerUnreadable` and `sqlite3.Error`. The `_CHANGED` race gets "Run it again". `read` and `build` get their own verbs. The late-failure test covers all three processes and leaves nothing behind. |
+| 6 | Should-fix: the torn-page test | **Partly resolved.** The page splice, the ctime pause, one memory per case and the asserted sentence are all in. But the claim about revision 7 is false on the shared fixture, and two cases need copies made without `record_copy` (R2). |
+| 7 | Should-fix: `read`, `cosubject_rows`, `check_owner` | **Resolved.** One State per process, `_working_copy` takes the `LedgerFacts`, and the count test covers plan, read and build. |
+| 8 | Nit: the speed comparison | **Resolved.** 6.7 s against 6.7 s in the plan's order, and no copies in the reference, both said. My shuffled run gave 6.72 s against 6.65 s. |
+| 9 | Nit: the probe's peak | **Resolved.** "About 71 over its base" is in the paragraph and in 14.1. |
+| 10 | Nit: stale and missing text | **Resolved.** Line 459, `REFUSALS_SQL` kept as an oracle, and `base()` reading in chunks of 512. |
+| 11 | Nit: the `MAX_RECORDS` refusal | **Resolved,** though "two refusals are new" now undercounts (R3). |
+
+### The coordinator's two choices, on their merits
+
+**Finding 3, an integrity check instead of refusing: sound, and I accept it.**
+
+- It closes the torn-index half of the class on a schema-1 ledger, and that half is the M1 class.
+- It costs one `PRAGMA integrity_check` per process. Only schema-1 ledgers pay it, since they never hold a mark.
+- The reason given is fair: refusing would ask the owner for a rebuild that no other reader needs.
+- What remains is a table page and its index pages torn consistently, or a column no index holds (a `retired_seq`).
+  The history row says this plainly.
+- It needs one more sentence on how `.close()` works on such a ledger (R1c).
+
+**Finding 2, the closing key read: the right choice, not yet the right rule.** Details in R1.
+
+## New findings
+
+### R1. Should-fix: the closing key read needs its key, the whole key, and a rule for schema 1
+
+The plan's interface (plan Interfaces, `.close()`) says the key is "read once more on the State's row connection, as
+`_check_late` reads it; a key moved to a state neither the memo nor the marker holds refuses". The history row says
+"a closing key read holds the run".
+
+- **(a) Which key?** `Ledger.state()` keeps the key it checked in a local variable (`checked`,
+  `permission_ledger.py:1336-1358`). It hands it to `_late` and stores it nowhere, so `LedgerFacts` has no key to
+  compare against. Task 8a's Files list no change to `permission_ledger.py`.
+  - Option one: expose the checked key from `state()`, which is a permissions-code change with that code's own review
+    path.
+  - Option two: right after `state()` returns, read K0 on the row connection, inside a BEGIN/COMMIT, with
+    `permission_ledger._read_key`, and compare against K0 at the close.
+- **(b) The whole key, not the counter.** `_check_late` treats only a changed change counter as a move:
+  `if now.counter != key.counter and not _verified(...)` (`permission_ledger.py:1262`). A ledger overwritten in place
+  by a copy with the same size and counter is the very construction of `test_4_the_key_holds_ctime`, and it passes.
+  - I ran this in `review-r8/close_check.py`. After `state()`, I overwrote the ledger in place with a copy that had
+    lee's row changed and its counter poked back. `_check_late` at the close: passes. Fields that moved: `{'ctime_ns'}`.
+    A whole-key rule refuses.
+  - SQLite also trusts that counter for its own page cache, so such a file is read half from cache and half from disk.
+  - So the close must refuse when any field of the key differs from K0 and neither the memo nor the marker holds the
+    new key.
+  - `test_the_ledger_moved_mid_run_refuses` should replace the file with that same-counter, same-size copy. A plain
+    replacement moves the counter and passes under either rule.
+  - The close runs before the plan, the page or the package is written, and the test asserts that none is left.
+- **(c) Schema 1.** On an unstamped ledger, `checked` is None, writers leave no mark (`permission_ledger.py:1538-1543`),
+  and the integrity check runs in a transaction of its own before `state()`. A write between the two is never seen
+  by the check.
+  - Say that K0 is read in the integrity check's own transaction, and that at the close any change from K0 refuses
+    with "Run it again". With no marks on schema 1, a share or a re-lane during the run then means one retry. That is
+    the price of the choice, and it should be stated with it.
+
+### R2. Should-fix: the torn-page test's claim about revision 7 is false on the shared fixture
+
+Spec 16 says "under revision 7 the same plan shipped that case's memory". The plan's Step 1 says "on main each case's
+memory ships".
+
+- **The fixture holds lee's deny,** which the `records` case needs. Lee's layer is outside andy's home, so on main
+  `REFUSALS_SQL` finds it. Then any memory whose co-subject survives the tear reaches `_refusals`, and main builds
+  `ledger.state()`, whose full check catches the torn index and raises.
+- **Demonstrated** in `review-r8/main_tear.py`, on main, with `subjects_object` torn so that it misses lee on m3 and
+  jenn left on m4:
+
+  | Case | Result |
+  |---|---|
+  | home, lee's deny in the ledger | `LedgerUnreadable`: SQLite's integrity check, "wrong # of entries in index s…" (raised, not `PlanRefused`) |
+  | home, no deny | ships m3, m4 and plain, with `others_memories` 1 (m3 left without lee) |
+  | away, no deny | ships m3 and plain, with `needs_yes` 1 |
+
+- **So the test is still red on main, but because main crashes, not because it leaks,** and the stated reason is wrong.
+- **The fix, for the four index cases:**
+  - Use copies of the fixture made before any deny or retirement outside the home.
+  - Plan away from home, where a hidden co-subject turns "needs yes" into "ships". Or keep home and assert on main that
+    the memory ships without lee's `imprint_subjects` row.
+- **The `records` case** needs a copy whose only deny outside the home is lee's.
+- **m4 and m5 need their copies made without `record_copy`.** It writes the source's subjects, the source store's owner
+  included, into the copy's own rows (`permission_ledger.py:1999-2012`). Then lee would sit on m4 or m5 itself, and
+  neither the copies tear nor the stores tear would hide lee.
+  - Make those `copies` rows with `link_copies` (`tests/imprint_support.py:792-795`), or add lee to m4's source after
+    the copy.
+
+### R3. Nit: "two refusals are new" undercounts
+
+The revision paragraph names the failed check and `MAX_RECORDS`. Three more refusals are new, each refusing a plan that
+revision 7 made: the closing key read, the integrity check on a schema-1 ledger, and the `_CHANGED` race. All of them
+narrow, so the closing sentence still holds. Name all five.
+
+### R4. Nit: put the cap's deny where it is tested
+
+Step 4 appends "one deny outside the owner's home and one retired place".
+
+- If the deny sits in a layer that no cap co-subject has, `refuses` returns at once for every memory, and
+  `record_matches` never runs at the cap.
+- Put it in one co-subject's home, say `place:home/p0000000`, so that it matches the imprint's use and keeps that
+  memory home.
+- Register the retired place as a new place, not `place:home/andy`.
+
+### R5. Nit: co-subjects are read by plan, read and build
+
+The added sentence in 5.2 says "`imprint.py read` and `build` read them the same way, the build for the
+`imprint_subjects` rows it writes". The plan reads them the same way too, through `cosubject_rows`, for `others` and for
+the digest's `imprint_subjects` table (`imprint_filter.py:1154-1187`). A small fix: say that all three read them.
+
+## What I ran
+
+All runs were in `/home/doctor/.cache/claude-scratch/wt-imprint-state/engram`, with `.venv/bin/python -I`. The scripts
+are in `/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-219f737116a6/scratchpad/review-r8/`.
+
+- `git show 16f07941`, read whole, against the code at main cdc639c1.
+- **`restamp_projection`** on the raw-SQL fixture from my first review (a copy at `review-r8/restamped`): served, at seq
+  2 with 50 subject keys, in a fresh process.
+- **`close_check.py`:** an in-place, same-counter, same-size copy after `state()`. `_check_late` passes; only `ctime_ns`
+  moved; a whole-key rule refuses.
+- **`main_tear.py`:** main's `base()` on a torn `subjects_object` page, three ways (the table in R2).
+- **Code read:** `permission_ledger.py:1254-1268` (`_check_late`), `:1332-1371` (`state()`), `:1521-1545` (writers mark
+  only with a base key), `:1965-2013` (`record_copy` carries subjects); `server.py:2450-2472` (lane notes written on
+  share); `imprint_filter.py:1154-1187` (`_others` and the digest use `cosubject_rows`).
