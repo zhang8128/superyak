@@ -87,7 +87,9 @@ to `<out>/plan.sha256` and checked by `load_plan`):
 
 **`record.json`** (the runner, one per row): `{"n", "commit", "row", "began", "ended", "load_before",
 "load_after", "clock_exit": int, "outcome": "handed-in" | "no-hand-in" | "limit" | "clock-failed",
-"turn_commit": str or null}`.
+"at_limit": bool, "turn_commit": str or null}`. A recorded commit makes the row `handed-in` even when the
+room ended the turn at its limit; `limit` is a turn ended at its limit with no commit; `at_limit` is true
+whenever the room ended the turn at its limit, and the report counts those rows by condition.
 
 **`cases.json`** (the judge, one per item): `{"commit", "cases": [str], "counts": {"passed", "failed",
 "error", "skipped"}}`, where `cases` are the identifiers of the item's tests that pass on the reference
