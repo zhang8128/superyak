@@ -1,9 +1,9 @@
 # v2: a document offered. A pilot of the design's second arm
 
-Serenity, 2026-11-18 (UTC). Revision 2, after a fresh reader's verdict on revision 1 (approve with named
-changes, seven, all made here; they are listed at the end). Not built. It changes no code of the room:
-the pilot is run by scripts over the room as it is. Before any model turn it has two more reads to pass:
-the twelve tasks, and the build.
+Serenity, 2026-11-18 (UTC). Revision 3. A fresh reader read revision 1 (approve with named changes,
+seven) and a second fresh reader read revision 2 (approve with named changes, four); all are made here
+and listed at the end. Not built. It changes no code of the room: the pilot is run by scripts over the
+room as it is. Before any model turn it has two more reads to pass: the twelve tasks, and the build.
 
 ## 1. What it is, and what it is not
 
@@ -42,7 +42,8 @@ turns. Here the notes are documents kept in the repository: plans and specs.
 ## 2. The items
 
 Twelve items of the item list the earlier probes used (its sha256 begins 4b25d330), chosen by rule before
-any turn:
+any turn of this pilot. The rule and so the twelve were chosen after six probe turns at two items had
+been seen, one of them among the twelve:
 
 1. The item's reference passed the room's jail in the census of 2026-11-18.
 2. A file under a `plans` or `specs` folder, tracked at the commit's first parent, holds as a whole word
@@ -148,7 +149,8 @@ seven task files are byte for byte the same up to that paragraph.
   Every Markdown file tracked at the parent is a candidate.
 - **The lot is fixed here.** Seed 20261118. For an item, the candidate files are sorted by the path's
   bytes; each gets the SHA-256, in hexadecimal, of the ASCII text `<seed>:lot:<commit>:<path>`; the three
-  smallest are taken, which draws without replacement.
+  smallest are taken, which draws without replacement. Here and in the order of section 5, `<commit>` is
+  the item's whole commit id as the list gives it: forty hexadecimal characters in lower case.
 - **Counted with no model before any turn, and reported whatever it is:** for each item, the place of
   the best-placed matching file under the search and under the newest plans. The newest plans' order
   does not depend on the task, and is counted already: they hold a matching file within three at all
@@ -165,8 +167,10 @@ Twelve items by seven rows: 84 turns.
   `nothing-1`, `nothing-2`, `exists`, `path`, `search`, `newest`, `lot`; rows run in ascending order of
   that hash. The order is written into the plan before the first turn.
 - **Pinned in the plan with their hashes:** the worker program, its version and the model's name, as the
-  earlier probes used; the room's program; the worker's wall-clock limit as the room is given it; every
-  task file; every base; the check; every offered and every matching document's blob.
+  earlier probes used; the room's program; every script of the pilot; every task file; every base; the
+  check; every offered and every matching document's blob.
+- **Pinned in the plan as numbers:** every limit in force: the worker's wall-clock limit as the room is
+  given it, the check's, the replay's and the diagnostic's.
 - **The small check's rule,** exactly: it passes when anything under the source directory differs from
   the parent. Its verdict says nothing of the work.
 - Turns run one at a time, with nothing else heavy on the machine. For each turn the plan's record keeps
@@ -193,10 +197,16 @@ its cases from the candidate's own constants, so the number of cases can change 
   for every item, so that tests which pass with no work at all are seen. One item's test file holds 23
   test functions before the item adds two.
 - **Outcomes that are not a judged change,** each kept as its own outcome and scored as the parent with
-  no change: no hand-in; a hand-in that changes nothing under the source directory. A turn's change that
-  does not apply on its own base, or a diagnostic that reaches its limit, is an instrument's fault: the
-  row is reported as that with what was counted before the fault, and summaries are given with and
-  without it.
+  no change: no hand-in; a hand-in that changes nothing under the source directory.
+- **Rows with no score.** A turn's change that does not apply on its own base, or a diagnostic that
+  reaches its limit, has no score: the row is kept, with its outcome named and whatever was counted
+  before it stopped given beside it, and it enters no sum. A diagnostic that reaches its limit is not
+  thereby the instrument's fault; why it did is not decided here.
+- **What a row with no score does to the reading of section 7.** If either Nothing row of an item has
+  no score, that item has no baseline and no gap, and no condition is read at it. If an offering row has
+  no score, that condition is not read at that item. Every table says how many items it stands on. If
+  any row the spending rule needs has no score, the rule is not applied: the pilot reports what it has
+  and says the rule is suspended.
 - **By replay,** as the report describes it: only what the turn changed under the source directory is
   applied on the item's base by a script in the worker's place, and the room judges it in its jail with
   the item's frozen check. The room's verdict stands beside the score.
@@ -221,19 +231,24 @@ For each item, with `n1` and `n2` the two Nothing scores as shares of the frozen
 Two Nothing turns give one observed gap. It is not a margin of equivalence and not an estimate of how
 much repeated turns vary.
 
-For each offering condition: how many of the twelve items are higher, lower and within the gap. Then the
-same three ways more: by plan, with each plan's items listed; with every plan weighing the same, as the
-mean of its items' `d`; and without 027834bf.
+For each offering condition: how many of the twelve items are higher, lower and within the gap, and the
+same without 027834bf.
 
-**No test of a difference is made. The following is a rule for where to spend next, chosen by the lead
-after seeing six probe turns at two items, one of which is among the twelve. It is not a protection
-against chance:** four items of one plan, three of another and two of a third could give nine higher rows
-from three plans.
+**By plan.** For each of the six plans and each offering condition, over that plan's items: `D` is the
+mean of the items' `d` and `R` the mean of the items' `r`. The condition is **higher at the plan** when
+`D > R`, **lower at the plan** when `D < -R`, and otherwise within the plan's mean baseline gap. Each
+plan's items are listed with it. With every plan weighing the same, a condition's figure is the sum of
+the six plans' `D`, divided by six.
 
-- **Worth designing an experiment:** Three by search or Three newest plans is higher at eight or more of
-  twelve items and lower at two or fewer, the same holds in at least four of the six plans' means, and
-  Three nonmatching by lot is lower at three or fewer.
-- **Not worth one:** neither is higher at more than five.
+**No test of a difference is made. The following is a rule for where to spend next. It and the twelve
+items were both chosen by the lead after seeing six probe turns at two items, one of which is among the
+twelve, and before any turn of this pilot. It is not a protection against chance:** four items of one
+plan, three of another and two of a third could give nine higher rows from three plans.
+
+- **Worth designing an experiment:** one condition of the two, Three by search or Three newest plans, is
+  higher at eight or more of the twelve items, lower at two or fewer, and higher at four or more of the
+  six plans; and Three nonmatching by lot is lower at three or fewer of the twelve items.
+- **Not worth one:** neither of the two is higher at more than five items.
 - **Between:** reported as that.
 
 The plan's path and A plan exists are read beside these as what they are, a positive control and an
@@ -272,7 +287,7 @@ judging is about 220 script turns in the jail with no model, over an hour.
 ## 10. What this narrows, said before any turn
 
 - One repository, one component, one worker program and model, macOS. Twelve items of six plans, each
-  condition once.
+  offering condition once and Nothing twice.
 - The outcome is conformance to the reference's tests: names, calls and wordings as well as behaviour.
   Where a plan gives those, that is a fair thing to ask of a turn that was shown the plan; it is not a
   judgement of behaviour.
@@ -303,3 +318,14 @@ changes, seven. It rebuilt the 47, 40 and 12, and confirmed all twelve plans by 
 | 5. "Nonmatching", not "wrong"; low recall of matching files; the suggestion's own sentence; the newest plans' advantage in time | Section 4 |
 | 6. Close what a builder could choose: the direct path, the matching set, seed, lot, order, pins, the check's rule, replay of source only, what the tests must cover, load | Sections 2, 4, 5, 6 and 8 |
 | 7. Narrow two claims: the scored items are pilot-used; the twelve plans are rich in test information; say what the selection is | Sections 2 and 10 |
+
+A second fresh reader of the other family (the team's w102) read revision 2 at 18e72194 against that
+verdict: approve with named changes. It found three of the seven made as named, three made otherwise
+and not yet enough, and one made otherwise and mostly enough. What it named is made in revision 3:
+
+| Its change | Where |
+| --- | --- |
+| A row with no score, and what it does to the reading: no baseline without both Nothing rows; the rule suspended when a row it needs is missing | Section 6 |
+| The by-plan rule written out (`D`, `R`), the equally weighted figure, the lot's threshold in items, and when the rule and the twelve were chosen | Sections 2 and 7 |
+| The commit in both hashes is the whole id in lower case; every limit and every script pinned | Sections 4 and 5 |
+| "Each offering condition once and Nothing twice" | Section 10 |
