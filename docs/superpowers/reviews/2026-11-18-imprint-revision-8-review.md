@@ -1,0 +1,246 @@
+# Fresh review: imprint spec revision 8 (601d7102, branch tardis/imprint-filter-one-state)
+
+Reviewer: a fresh agent on Tardis, 2026-11-18. I took no part in writing it. I only read files and ran probes: I edited,
+committed and posted nothing, and I did not read `~/.engram/imprints/`.
+
+## Verdict: APPROVE WITH CHANGES
+
+The core change is right. On a stamped ledger, one `Ledger.state()` closes the class revision 7 left open, as of the
+moment the State is built. Every fact the plan uses is either loaded whole by a table scan that the projection digest
+covers, or read through an index that SQLite's integrity check holds against its table. The measurements reproduce.
+The revision widens no permission and lets nothing more leave.
+
+One thing blocks building it. The plan's Task 8a cannot pass on the Pi as written, because the cap fixture's ledger
+fails the very check the revision now always runs (finding 1). The Should-fixes bound the claim honestly (2, 3) and
+make the interface and tests match what was measured and what main actually does (4 to 7).
+
+## Answers to the six questions
+
+1. **Does one `state()` close the class?** Yes on a stamped ledger, at the check, with three gaps.
+   - How it works: `state()` reads the key, loads every table except the per-object four by `ORDER BY rowid` scans, and
+     reads meta `NOT INDEXED`, all in one read transaction (`permission_ledger.py:1332-1371`). It then trusts the memo or
+     marker for that key, or runs `_full_check`: every part `NOT INDEXED`, then `PRAGMA integrity_check`
+     (`permission_ledger.py:650-728`, `:1216-1234`).
+   - After that, `RowMap` reads go through the very same indexes revision 7 used (`subjects_object`,
+     `lane_notes_object`, `sqlite_autoindex_copies_1`; EXPLAIN QUERY PLAN below). They run on `_late` connections that
+     are checked once, when they open (`:1236-1268`), and never again.
+   - Gap one: a file overwritten in place during the plan's run is read unchecked (finding 2).
+   - Gap two: an unstamped ledger is read with no check at all (finding 3).
+   - Gap three: the marker path trusts D4's key. That is inherited, and the prose says so.
+2. **Is the 851 MiB real, and is the lazy `_with_agent` sound?**
+   - The 851 MiB is real: I reproduced 851 MiB and 17.25 s. The `{**state.seq_at, 0: 0}` reads all 811,000 log times,
+     and `to_tables()` holds 700,000 subject rows and 300,000 lane notes.
+   - The lazy version is sound, with one caveat. `State.from_tables` derives nothing from `agents` or `agent_places`,
+     and there is no `__post_init__`. But `dataclasses.replace` shares `_cache` unless it is passed `_cache={}`
+     (finding 4).
+   - With the seq-0 wrapper, the lazy State's decisions on Task 8's denies equal revision 7's. Without the wrapper, a
+     deny naming another place raises `KeyError: 0`.
+3. **Are the statements about revision 7 accurate?** Yes.
+   - `COSUBJECTS_SQL` searches `sqlite_autoindex_copies_1`, `subjects_object` and `sqlite_autoindex_stores_1`.
+     `latest_lane_note` uses `lane_notes_object`, and `store_row` uses `sqlite_autoindex_stores_1`. `REFUSALS_SQL` scans
+     `records`, `persons` and `places`.
+   - The cap fixture holds no deny and no retirement (`tests/imprint_support.py:2596-2625`, `:824-845`). So
+     `Refusals.any` is false, and the only `state()` call in the imprint path (`imprint_filter.py:570`) never runs at
+     the cap: the cap test runs the calm path only.
+4. **Are the tests feasible and sufficient?** Mostly, but not as written.
+   - The torn-page test can't tear an autoindex with the helper it names, and its "on main the same plan ships m3"
+     is false for two of its parameters (finding 6).
+   - Nothing tests a lazy `LedgerUnreadable`, or the `sqlite3.Error` that `state()`'s own reads raise (finding 5).
+   - `read` and `cosubject_rows` aren't named or counted, and `check_owner` runs inside `_working_copy` on the raw
+     ledger (finding 7).
+   - The lazy-agent test needs a deny that reaches `seq_at[0]` (finding 4).
+   - The cap's deny variant can't run until the fixture is restamped (finding 1).
+5. **Does more leave, or is any permission widened?** No.
+   - `subjects_of(state, ref, None)` minus the owner equals `COSUBJECTS_SQL` on all 100,000 refs of the reference
+     ledger ("differ: 0").
+   - The one semantic difference: `_own_subjects` drops a ref that doesn't parse. That can't bite, because
+     `record_copy` parses both refs (`permission_ledger.py:1975-1976`).
+   - The 8 kept "in sorted order" only decide which reason a memory over the bound is counted under. It stays home
+     either way.
+   - The agent goes into the State only, never into the ledger.
+   - Revision 8 refuses in more cases: a failed check, more than `MAX_RECORDS` records, or a write racing `_late`.
+     That only narrows.
+6. **Are the 14.1 rows consistent?** Yes.
+   - 45.0 + 64.5 + 25.3 + 6.1 = 140.9, as the permissions spec's 15 has it
+     (`docs/superpowers/specs/2026-10-25-permissions-by-place-design.md:2132-2138`).
+   - 145.4 + 140.9 = 286.3, and 165.4 + 140.9 = 306.3. Both are under 384.
+   - A 512-ref prefetch fits in `STATE_ROWS` (65,536), which the 25.3 counts.
+   - The measured 106 MiB is a probe process's peak, not the plan's (finding 9).
+
+## Findings
+
+### 1. Must-fix: the cap fixture's ledger fails the check, so Task 8a's Step 4, and today's cap test, refuse
+
+- **What happens:** `_fixture_ledger` (`engram/tests/imprint_support.py:2596-2625`) creates a stamped ledger
+  (`Ledger.create`, schema version 2). It then inserts 700,000 `subjects` rows by raw SQL and never restamps.
+- **Why it never showed:** on main, nothing on the cap's plan, read or build path calls `Ledger.state()`. The only call
+  is the deny path (`imprint_filter.py:570`), and the cap fixture has no deny.
+- **Under revision 8:** every cap process builds a State. The raw commit moved the key off the marker, so the full check
+  runs and fails: "the projection digest: subjects differs". That becomes `PlanRefused("The permissions ledger can't
+  be read; nothing was planned.")`.
+- **Reproduced:** `review-r8/rawfix.py` (create, register a store by append, insert 50 subject rows by SQL, then
+  `state()` in a fresh process) gives exactly that refusal.
+- **Consequence:** `test_pi_every_process_at_the_cap` (plan, read, build) goes red the day Task 8a merges, and Step 4's
+  `plan-deny` and `build-deny` can't run.
+- **What Task 8a, and section 16's cap bullet, should say:**
+  - `_fixture_ledger` calls `restamp_projection(eh)` (`tests/permissions_memory_support.py:13`) after its inserts.
+  - The fixture kept under `/var/tmp/imprint-cap-<uid>` is versioned so the Pi rebuilds it. `_cap_world` checks only
+    `.ready`, and the store's ids are uuid4, so `STAGE_VERSION` moves too.
+  - The deny variant's deny and retired place are written with `_append` (or restamped), on a copy of `eh`.
+
+### 2. Should-fix: the check holds when the State is built, not through the plan's run
+
+- **The prose:** "it reads the State's per-object rows on a connection checked against that state" (spec:50). Each
+  `_late` connection is checked once, when it opens (`_check_late`, `permission_ledger.py:1254-1268`).
+- **What actually happens:** every `RowMap` and `LogTimes` read after that runs in its own autocommit transaction, with
+  no new key read. The plan's 100,000 memories, and the build's `cosubject_rows`, are read over minutes at the cap.
+- **The risk:** ordinary writes landing mid-run are safe by design (seq filtering). A ledger overwritten in place
+  during the run (same inode, as `cp` onto the path writes it) is read past, through the same indexes, unchecked.
+- **The fix:** state the residual. Better, close it cheaply: after the last per-object read of a plan, a read and a
+  build, read the key once more on the `StateRows` connection and refuse if it moved to a key that neither the memo
+  nor the marker holds. That is `_check_late`'s own test, and it costs one SELECT, one pread and one stat.
+
+### 3. Should-fix: unstamped ledgers stay open, where an open ledger costs the most
+
+- **The prose (spec:63-66):** a schema-1 ledger is read unverified, as revision 7 did and every reader does. That is
+  accurate: `state()` skips `_verify` and `_late(None)` checks nothing (`permission_ledger.py:1355-1358`, `:1236-1240`).
+- **The problem:** the Status line and the revision-history row say the plan's facts are "checked by the projection
+  digest and SQLite's integrity check" with no such caveat. And the plan is the act that copies other people's
+  memories off the machine. If the owner's ledger predates the digest, revision 8 changes nothing for the first real
+  imprint.
+- **Proposal:** refuse plan, read and build on an unstamped ledger with the gate's own words (`UNSTAMPED`,
+  `permission_ledger.py:2911`; the gate already refuses `enforce` there, `:3042-3043`). The way out is one
+  `engram-permissions rebuild`. Add one test.
+- **If that's judged too strict:** run `PRAGMA integrity_check` on such a ledger before the State, which closes the
+  torn-index half of the class. Failing that, at least put "on a stamped ledger" into the Status line and the row.
+
+### 4. Should-fix: name the `_cache={}` and the wrapper's `prefetch` that the measured prototype used
+
+- **Where the text falls short:** the plan's interface says the agent is added "through `dataclasses.replace`" (plan:1142).
+  But `replace` copies `_cache` by reference. `review-r8/replace_cache.py` shows "replace shares _cache: True", and
+  after `layer_boxes` an `lbox` memo (computed from `state.agents` and `agent_places` by `_audience_boxes`,
+  `permissions.py:2987-3030`) sits in the shared dict.
+- **Why it isn't a live bug today:** the memos on `record_matches`'s path (seq-times, lane-tests, record-terms, anc,
+  dom) don't depend on the agent. But a later memo that does would answer for the agent from the State without it.
+- **What the prototype did:** `lazy_agent.py:27` passes `_cache={}`. Its `WithZero` also forwards `prefetch`, without
+  which `State.prefetch` silently skips batching the log times (`permissions.py:497-500`).
+- **Fixes:**
+  - Write both into the interface.
+  - In `test_the_agent_keeps_the_state_lazy`, assert that the State's `_cache` isn't the ledger State's.
+  - Include a deny that reaches `seq_at[0]`: Task 8's jenn deny naming only `place:la-county/parks` does, through
+    `_audience_entry`'s `_meets` on the agent's placement (`permissions.py:986-990`).
+- **Evidence:** `review-r8/seq0.py`. With the wrapper, the lazy decisions equal revision 7's whole State. Without it,
+  `KeyError 0`. A test without such a deny would pass with the wrapper missing.
+
+### 5. Should-fix: the `LedgerUnreadable` to `PlanRefused` mapping covers only the State's build
+
+- **The plan says:** "`LedgerUnreadable` from the State reads as `PlanRefused`" (plan:1144).
+- **What else raises, later and elsewhere:**
+  - `StateRows._query` and `LogTimes._query` raise `LedgerUnreadable` on the lazy reads (`permission_ledger.py:170-175`,
+    `:279-284`). Those happen deep in `base()`, `cosubject_rows` and `record_matches`.
+  - `_late` raises the `_CHANGED` "changed during this read; retry" error when a write lands between `state()`'s
+    COMMIT and its own check, and no marker follows within 50 ms.
+  - `state()`'s whole-table reads, before `_verify`, raise plain `sqlite3.DatabaseError` on a malformed page, because
+    it wraps none of them.
+  - In read and build, `_working_copy`'s callers catch only `sqlite3.Error` and call it "the source store changed"
+    (`imprint.py:842-847`, `:983-988`). The State may now be built inside `check_owner`, in `_working_copy`, so a
+    ledger fault would be reported as the store's.
+- **Is it unsafe?** No, all of these fail closed: the build removes its directory on any `BaseException`
+  (`imprint.py:1031-1035`). But the sentence the spec promises isn't what the owner sees.
+- **Fixes:**
+  - Every `LedgerFacts` read maps `LedgerUnreadable` and `sqlite3.Error` to the ledger's sentence. `_CHANGED` gets a
+    "retry" sentence: the engram server writes lane notes during a plan, so the race can happen.
+  - Add a test where a per-object read fails after `state()` succeeds: monkeypatch `StateRows._query`, then check that
+    plan and build refuse with the sentence and leave no plan or package.
+
+### 6. Should-fix: the torn-page test, as written, can't tear two of its indexes, and its "on main" claim fails for two
+
+The test is spec:2611-2616 and plan:1159-1160.
+
+- **(a) The autoindexes can't be torn with the named helper.** The plan's `tear_index` follows the permissions tests'
+  `_tear_index` (`tests/test_permissions_premerge_fixes.py:69-82`): drop, rebuild as a partial index, then rename in
+  the schema. SQLite refuses `DROP INDEX` on `sqlite_autoindex_copies_1` ("index associated with UNIQUE or PRIMARY KEY
+  constraint cannot be dropped"), and the index's `sql` is NULL.
+  - What works: splice the index's root page from a twin file in which the row was deleted. I prototyped it: the
+    indexed read misses the row, the `NOT INDEXED` read finds it, and `integrity_check` reports "row 4 missing from
+    index sqlite_autoindex_copies_1".
+- **(b) "On main the same plan ships m3" is false for two parameters.**
+  - With `lane_notes_object` torn, main misses only the lane note. Lee's deny still keeps m3 home.
+  - With the stores autoindex torn so that it hides the source store's row, main's `check_owner` refuses with "not
+    registered" (`imprint_filter.py:522-524`). So a test that asserts only `PlanRefused` passes on main.
+  - Each parameter needs its own memory and row:
+    - copies tear: lee recorded on m3's copy source, not on m3;
+    - stores tear: lee as owner of another registered store that m3's copy chain reaches, with only that store's
+      index entry hidden;
+    - lane tear: a memory with a `pending` note and no co-subject.
+  - Every case should assert the "can't be read" sentence.
+- **(c) The tear has to move the key.** A page splice leaves the size and the change counter alone, so only ctime moves
+  the key. Sleep first, as `test_4_the_key_holds_ctime` does (`tests/test_permissions_projection_digest.py:420-436`),
+  or clear the memo and the marker. Otherwise the marker is trusted and the test is flaky.
+
+### 7. Should-fix: name `read`, `cosubject_rows` and `check_owner`'s place, and count all three processes
+
+- `imprint.py read` opens the ledger and runs `package_rows`, so `base` and `_admits` too (`imprint.py:841-856`). It is
+  in 14.1's first row. Yet Task 8a's Files (plan:1132) names only "a plan or a build", and its count test (plan:1154)
+  counts only those two.
+- `cosubject_rows` (`imprint_filter.py:876-884`) is the second user of `cosubjects_of`, and the one that writes
+  `imprint_subjects`.
+- `check_owner` runs inside `_working_copy` on the raw ledger (`imprint.py:334`). In `make_plan` that happens before
+  `c = replace(ctx, ...)`. So `LedgerFacts` has to be passed into `_working_copy`, or keyed by the ledger, or each
+  process builds two States.
+- Say "one per plan, per read and per build", and have the count test cover all three. In 14.1, "once per plan" becomes
+  "once per process".
+
+### 8. Nit: the speed comparison was measured in ref order
+
+- `measure.py`, `peak.py` and `lazy_agent.py` read refs `ORDER BY` object. The plan reads by `(created_at, id)`, and
+  engram ids are uuid4, so the plan's order is effectively shuffled.
+- Shuffled (`review-r8/lazy_random.py`), the State's reads with prefetch take 6.72 s, against 6.65 s for revision 7's
+  queries. That is about equal, not 5.0 against 6.4. The peak is the same 106 MiB.
+- The reference ledger also holds no `copies` rows. Chain reads, one unprefetched query per link
+  (`StateRows.prefetch` loads only the refs it is given), aren't in the measurement.
+- Say both. The conclusion, no slower, holds.
+
+### 9. Nit: the 106 MiB in 14.1 is a probe's whole-process peak
+
+`lazy_agent.py` starts at about 35 MiB (VmHWM 36.5 MB before any read). The plan's base is 96. Write "a process holding
+only the State: 106 MiB, about 71 over its base", so nobody reads it as the plan's peak (spec:2488).
+
+### 10. Nit: stale and missing text
+
+- Spec:459 still says "The plan's query stops at 8 rows for a memory". With no query left, it is the State's read that
+  keeps 8.
+- Plan:1166 keeps `COSUBJECTS_SQL` in the test as an oracle. But `test_the_state_answers_as_the_queries_did` also
+  compares against `REFUSALS_SQL`, so keep it there too.
+- Step 3 should say that `base()`, today a cursor generator deciding each row inline (`imprint_filter.py:648-680`),
+  reads in chunks of 512 so that `prefetch` has refs to batch.
+
+### 11. Nit: a calm-path refusal revision 7 didn't have
+
+With a State always built, a ledger holding more than `MAX_RECORDS` (16,384) records now refuses the plan
+(`permission_ledger.py:1342-1347`), where revision 7's calm path planned. That narrows, and P 5.6 already reads such a
+ledger as unreadable. One sentence in the revision paragraph would do.
+
+## What I ran
+
+All runs were in `/home/doctor/.cache/claude-scratch/wt-imprint-state/engram`, at 601d7102 (code as main cdc639c1),
+with `.venv/bin/python -I`, on the reference ledger at
+`/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-219f737116a6/scratchpad/cosub/home`. It holds
+274 MB: 700,000 subjects, 0 copies, 300,000 lane notes, 10,498 records and 811,000 log rows, stamped v2, with no
+marker.
+
+| Probe | Result |
+|---|---|
+| `cosub/measure.py` | SQL 6.63 s; `state()` 6.66 s; State lookups 5.83 s; differ 0 of 100,000 |
+| `cosub/lazy_agent.py` | `state()` with the lazy agent 6.64 s at 66 MiB; prefetch lookups 4.95 s; peak 106 MiB; 700,000 co-subjects |
+| `cosub/peak.py sql` / `state` | 6.32 s at 35 MiB / 12.08 s at 86 MiB |
+| `cosub/with_agent.py` (under `systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=0`) | `_with_agent` 17.25 s, peak 851 MiB, 700,000 subjects held |
+| `review-r8/eqp.py` | EXPLAIN QUERY PLAN for revision 7's queries, `StateRows.load` and `state()`'s reads (answer 3) |
+| `review-r8/lazy_random.py` | shuffled refs: SQL 6.65 s; State with prefetch 6.72 s after a 6.69 s build; 106 MiB |
+| `review-r8/rawfix.py` | the cap fixture's raw-SQL ledger: `state()` raises "the projection digest: subjects differs" |
+| `review-r8/replace_cache.py` | `dataclasses.replace` shares `_cache`; `lbox` lands in it; `_cache={}` separates it |
+| `review-r8/seq0.py` | Task 8's denies: lazy with the wrapper equals the whole State; without it, `KeyError 0` |
+| autoindex tear | `DROP INDEX` refused; a root-page splice hides the row, and `integrity_check` names the index |
+
+The `review-r8/` scripts are in
+`/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-219f737116a6/scratchpad/review-r8/`.
