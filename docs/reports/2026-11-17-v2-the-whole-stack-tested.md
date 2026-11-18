@@ -17,11 +17,12 @@ at this repository. The rehearsal looks for no gain and nothing here is tested f
   changes by 81 seconds, in ten turns.
 - **On the team's own reading work, lists made from earlier walks held about as much of where a later
   worker went whether they were ordered by roads or by counts of places.**
-- **Added 2026-11-18: the first place found where a turn lacked something an offer could carry is a
-  document.** At two items the plan for the work, already in the repository, gives the calls and returns
-  the held-back tests want, and the turns had not opened it. With the plan named in the task, 11 of 11
-  and 61 of 64 held-back tests pass where 0 of 11 and 55 of 64 had; at the first of the two, a turn that
-  opened the plan with nothing pointing to it reached 10 of 11. Two items, one run each.
+- **Added 2026-11-18: at two items a plan for the work was already in the repository, and no walk had
+  named it.** The plan gives the calls and returns the held-back tests want. In four new turns there,
+  the two that were given the plan's path named it, and their changes pass 11 of 11 and 61 of 64
+  held-back tests. Of the two with the task unchanged, one named the plan with nothing pointing to it
+  and passes 10 of 11; the other did not and passes 54 of 64. Two items and one run of each: that naming
+  the plan is what moved them is a hypothesis.
 - **None of this measures a saving, or an upper bound on one.** That a scored experiment of routes at
   this repository's item work is not worth its turns now is the lead's judgement, not a result.
 
@@ -392,40 +393,51 @@ and `revoke_owner_trust` in another plan, and "granted after" in a spec and in o
 there (027834bf). Those documents were in the two turns' sandboxes. By the turns' own walks neither
 named them: among Markdown files each named `TASK.md` and `README.md` only.
 
-**How often such a document exists, over the list.** For each of the list's 188 items with a reference,
-the names its original commit adds under the source directory were taken (a function, a method, a class,
-or a module's constant in capitals, of six letters or more, that the parent's source does not hold as a
-whole word). 107 items add one. **At 52 of those 107 a Markdown file tracked at the parent already holds
-one of the new names as a whole word:** history 20 of 32, pilot 3 of 3, scored 13 of 28, left out 16 of
-44. At 27 of the 52 a document holds every new name, at 9 half or more, at 16 fewer. Of the name and
-document pairs 218 are in plans, 26 in specs and 41 in other Markdown files. Nine of the 52 were read:
-mostly a plan naming the work's own things (`ship_brief`, `settle_owner_trust`,
-`sign_imprint_receipts`), and some common words in capitals (`RETIRED`, `WRITER`) that say less.
+**How often a document matches, over the list.** For each of the list's 188 items with a reference, the
+names its original commit adds under the source directory were taken (a function, a method, a class, or
+a module's constant in capitals, of six letters or more, that the parent's source does not hold as a
+whole word). 107 items add one. **At 52 of those 107 a Markdown file tracked at the parent holds one of
+the new names as a whole word:** history 20 of 32, pilot 3 of 3, scored 13 of 28, left out 16 of 44. At
+27 of the 52 a document holds every new name, at 9 half or more, at 16 fewer. Of the name and document
+pairs 218 are in plans, 26 in specs and 41 in other Markdown files.
 
-**Whether an ordinary search would find it.** At those 52 items every Markdown file at the parent was a
-candidate, a median of 299 files. The query was the commit's message, which is what the first two probes
-gave their turns as the task. A document that holds a new name was placed:
+**That is a match of words, and whether a matching document is about the item's work is not established
+for the 52.** The lead looked at names and the documents' file names at nine. The reader of this section
+read the documents' text at eighteen: twelve drawn by a fixed seed, all a plan for the item's own work,
+and six chosen to test doubtful matches, of which three are a plan for the item's own work and three are
+chance matches (`_eligible` at 79aaa586 is another component's function; `context_text` at 2123687e is
+an older component's column and argument; `dispatched` at 2ebc78e1 is prose about other work). Eighteen
+cases, six of them chosen, do not estimate the share over the list. The other 136 items are 81 that add
+no such name and 55 with no matching document; they are not shown to lack a document about their work.
+
+**Where an ordinary search would place a matching document.** At those 52 items every Markdown file at
+the parent was a candidate, a median of 299 files. The query was the commit's message, which is what the
+first two probes gave their turns as the task. A document that matches by a new name was placed:
 
 | Order of the documents | First | In the first three | In the first ten |
 | --- | --- | --- | --- |
 | By how many of the message's words a document holds (words of four letters or more; a word in over half the documents counts nothing) | 39 of 52 | 45 | 49 |
 | By a standard weighting of the same words (BM25) | 32 | 47 | 50 |
-| The newest plan first, by the date in its file's name | 24 | 49 | 49 |
+| Plans first, in descending order of the whole file name, which begins with a date; then the other files | 24 | 49 | 49 |
 | By the message's words in the file's name | 21 | 34 | 41 |
 | Drawn by lot (expected) | 0.4 | 1.3 | 3.9 |
 
-Ties are broken by the path. A commit's message is written after the work by those who did it and may
-use the plan's own words; a task in a user's words was not tried. That a document is placed first says
-nothing of what a turn would do with it.
+Ties are broken by the path: of the 39 first places in the first row, 25 lead alone and 14 are first
+among documents tied at one count. Ordering plans by their date alone, with ties by path, gives 26, 46
+and 50 by the reader's reckoning. Taking the newest plans already holds a matching document within three
+at 49 items, against 45 for the words. These are places of documents that match by a word; they are not
+judgements that a document is the right one. A commit's message is written after the work by those who
+did it and may use the plan's own words; a task in a user's words was not tried. That a document is
+placed first says nothing of what a turn would do with it.
 
 **A fourth probe, said before its turns.** Exploratory, four turns, the same worker program and model as
 before. At the two items where a plan held what the failing tests want, one turn with the earlier
 probe's task unchanged, byte for byte, and one with the same task and one added line: "The plan for this
 work is in the repository at" and the plan's path. The two bases differ by that line alone. Known
-beforehand: the plan for d9860589 is 5,016 lines and holds the held-back test's own name and calls among
-its 247 test functions, so naming it shows the turn its tests; the plan for 027834bf is 272 lines with
-no test function in it. Each turn's change was judged by replay and run through the diagnostic above,
-once.
+beforehand: the plan for d9860589 is 5,016 lines and contains the held-back test's own name and calls
+among its 247 test functions; the plan for 027834bf is 272 lines with no test function in it. Each
+turn's change was judged by replay and run through the diagnostic above, once. The outline of this
+design was posted in the ships' room before the first turn; its detail was in the lead's own notes.
 
 | Item | Turn | The plan in its walk | Held-back tests that pass | The room's verdict by replay |
 | --- | --- | --- | --- | --- |
@@ -438,24 +450,33 @@ once.
 
 - **By whether the plan was named in the walk, over the six turns:** named at three, with 10 of 11, 11
   of 11 and 61 of 64 held-back tests passing; not named at three, with 0 of 11, 55 of 64 and 54 of 64.
-- **What still fails where the plan was named.** At 027834bf three tests, each on a refusal's words
-  ('granted after' is wanted and 'That ship is already a contact here' is given; 'revoked' is wanted and
-  'That ship needs a later owner trust' is given). The failures on a return (`None == []`, `{'ok':
-  True}`, `KeyError: 'held'`) are in the unchanged turn's output and not in this one's. At d9860589's
-  unchanged turn one test: the exit code is the 3 that is wanted and the words are not.
-- **A turn found the plan with no line pointing to it once:** the unchanged turn at d9860589, at its
-  ninth step. That is one of the two unchanged turns there and neither of the two at 027834bf.
+- **What still fails where the plan was named.** At 027834bf three tests, each stopping at an assertion
+  on a refusal's words ('granted after' is wanted and 'That ship is already a contact here' is given;
+  'revoked' is wanted and 'That ship needs a later owner trust' is given). What lies beyond those three
+  assertions is not established. The failures on a return (`None == []`, `{'ok': True}`, `KeyError:
+  'held'`) are in the unchanged turn's output and not in this one's. At d9860589 the unchanged turn
+  fails one test, where the exit code is the 3 that is wanted and the words are not; the plan-named turn
+  passes that test too.
+- **A walk named the plan with no line pointing to it once:** the unchanged turn at d9860589, at its
+  ninth step, a step that names four paths. That is one of the four turns that were not given the path:
+  the two of the second probe and the two unchanged ones.
 
-**The lead's reading, which is a judgement.** Where a plan for the work exists, whether the turn opens
-it moved what was handed in more than anything else seen in these probes. It moved calls and returns. It
-did not move refusals' wordings. A first source file was named within 22 seconds at every turn of the
-first three probes; the plan for the work was named at one of the four turns that were not told of it.
+**A hypothesis, and what would test it.** Set beside the turn run in the same hour with the task
+unchanged, the plan-named turn passes 11 of 11 against 10 of 11 at d9860589, where both walks name the
+plan, and 61 of 64 against 54 of 64 at 027834bf, where only its own walk does. The second probe's turns,
+at 0 of 11 and 55 of 64, are history: at d9860589 the unchanged repeat alone went from 0 to 10. That a
+turn which is led to the plan for its work conforms more closely to what the tests want is a hypothesis
+these six turns fit. They also fit the variation between repeated turns, and closer conformity through
+the test snippets one plan contains. Telling these apart would need repeated turns in an order drawn by
+lot, a condition that says a plan exists without giving its path, and plans without the reference's test
+snippets, judged for behaviour.
 
 **What this does not show.** Two items and one run of each new condition: an observation and no rate. A
-turn that opens a plan may differ in other ways, and the added line also tells the turn that a plan
-exists. At d9860589 the plan shows the tests themselves. Nothing here was offered by the room, by a
-search or by a route: the path was written into the task by hand. No time is compared. And the store of
-walks holds no way to a plan that no earlier turn opened, as its owner said of it when this was found.
+walk records the paths a step names and no command or output, so that a named plan was read is not
+shown; a search inside a file leaves the same record. The added line also tells the turn that a plan
+exists. Nothing here was offered by the room, by a search or by a route: the path was written into the
+task by hand. No time is compared. And the store of walks holds no way to a plan that no earlier walk
+named, as its owner said of it when this was found.
 
 ## Reading work: the team's own workers
 
@@ -573,13 +594,15 @@ are means of that share over workers.
 - **The room keeps no words from a failed check, and by the design's rule 9 its store should not.** A
   script in the worker's place can hand in what a reference's tests printed, outside the store. That is
   how the causes above were found.
-- **The design's second arm has a shape here that needs no new store (added 2026-11-18).** The design
-  names notes found by ordinary search as the arm to try before walks. At this repository the plans and
-  specs are such notes: for 52 of the 107 list items that add a name, a document at the parent already
-  holds one, and a count of the commit message's words places such a document first at 39 of the 52. An
-  experiment of it is not designed. It would need tasks not written after the work, a judge of
-  behaviour, and a way to see what a wrong document offered costs; and the other 136 items have no such
-  document by this count.
+- **The design's second arm may have a shape here that needs no new store (added 2026-11-18).** The
+  design names notes found by ordinary search as the arm to try before walks. At this repository plans
+  and specs could be such notes. At 52 of the 107 list items that add a name, a document at the parent
+  matches one by a word; at fifteen of the eighteen whose text was read, it is a plan for the item's own
+  work; and a count of the commit message's words places a matching document first at 39 of the 52, as
+  taking the newest plans does within three at 49. None of that is a judgement of relevance over the
+  list. An experiment of it is not designed. It would need tasks not written after the work, a judge of
+  behaviour, plans kept apart by whether they contain the tests, and a way to see what a wrong document
+  offered costs.
 - **Open, and not decided here:** a larger repository; a grain finer than a file; help after a turn's
   first entry, which nothing here tries; whether a short list of places saves a reader anything, which
   only a trial with readers can say.
@@ -680,4 +703,26 @@ changes,** four, all made here. Every count was worked again and agrees.
 By the lead's count afterwards, which this reader did not check: the six strings named above, which are
 of four items, are in no file of the tree at those items' parents; and by the two turns' own walks,
 neither turn at 027834bf or d9860589 named its plan document, though each was in the turn's sandbox.
-Whether a turn told of its plan would pass was not run.
+At that read, whether a turn told of its plan would pass had not yet been run.
+
+**The section on the plan for the work** was added on 2026-11-18 and read at efab2171 by a sixth fresh
+reader of the other family: **push with named changes,** six, all made here. It worked every count
+again, read the text of eighteen matching documents, and rebuilt the six base commits from the parent
+trees, the task bytes and the check blobs: the new conditions differ in the task file alone.
+
+1. The conclusion is narrowed to a hypothesis. The plan-named turns are set beside the unchanged turns
+   of the same hour, the second probe's turns are kept as history, and what would tell the readings
+   apart is said.
+2. The 52 is called a match of words with relevance not established, with the reader's three chance
+   matches named and the other 136 items divided into their two kinds. "Nine were read" becomes names
+   and file names looked at for nine.
+3. "Named" stands wherever "opened" or "found" stood: a walk records paths, not commands or what came
+   back. One plan is said to contain test snippets, not to show them to the turn.
+4. The sentence that naming the plan did not move refusals' wordings is corrected: at d9860589 the
+   wording failure goes too, and at 027834bf three tests stop at wording assertions.
+5. The newest-plan row is described as the script orders it, with the reader's figures for the order as
+   first worded, and the ties in the words row are counted.
+6. The earlier read's closing sentence is dated to that read.
+
+Not checked by this reader: the relevance of all 52 documents; when the probe's detailed design was
+written, beyond the outline posted before the turns; and any new run.
