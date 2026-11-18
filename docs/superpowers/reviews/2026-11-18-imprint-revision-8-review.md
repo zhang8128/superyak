@@ -392,3 +392,120 @@ are in `/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-
 - **Code read:** `permission_ledger.py:1254-1268` (`_check_late`), `:1332-1371` (`state()`), `:1521-1545` (writers mark
   only with a base key), `:1965-2013` (`record_copy` carries subjects); `server.py:2450-2472` (lane notes written on
   share); `imprint_filter.py:1154-1187` (`_others` and the digest use `cosubject_rows`).
+
+## Last check of the third draft (92b84d52)
+
+
+Reviewer: the same fresh reviewer, on Tardis, 2026-11-18. Scope: R1 to R5 from the re-check, and anything the new
+text breaks or overclaims. I only read files and ran probes: I edited, committed and posted nothing, left the main
+checkout alone, and did not read `~/.engram/imprints/`.
+
+## Verdict: APPROVE WITH CHANGES
+
+R2 to R5 are resolved, and so are R1's three parts as I asked them. The remaining change is one sentence, F1 below.
+
+The new closing rule says a ledger overwritten in place does not pass. It does pass if the overwrite is a clean, older,
+stamped ledger and a writer appends to it during the run. Both a probe and the code show it.
+
+The fix is one more condition, read on a fresh connection. If F1 goes in as written, I don't need to see the spec
+again. The nits are optional.
+
+## R1 to R5
+
+| # | Re-check finding | Third draft |
+|---|---|---|
+| R1(a) | Which key the close compares with | **Resolved.** `Ledger.state()` keeps the key it checked as `Ledger.state_key`, listed in Task 8a's Files as the one change to permissions code. On a stamped ledger K0 is `state_key`; on an unstamped one, K0 is read in the integrity check's transaction. |
+| R1(b) | The whole key, not the counter | **Resolved.** Every field is compared (`dev`, `ino`, `size`, `ctime_ns`, `counter`, `head`), not only the counter as `_check_late` compares it. The close runs before anything is saved. The mid-run test uses a same-size, same-counter copy with lee's row changed, and a marked append passes. |
+| R1(c) | Schema 1 | **Resolved.** K0 comes from the integrity check's transaction, and any change refuses with "Run it again". The cost, one retry when a write lands during the run, is stated, as is the test. |
+| R2 | The torn-page test's claim about revision 7 | **Resolved.** See the notes below this table. |
+| R3 | "Two refusals are new" | **Resolved.** All of them are named. |
+| R4 | Where the cap's deny goes | **Resolved.** The deny is in a cap co-subject's home layer, matching `imprint` for the plan's purpose, and a newly registered place is retired, both appended. This runs: a cap co-subject isn't a registered person, so `_layer` gives `home_of(subject)`, and the fixture's `deny()` audience matches the agent at the owner's home, as Task 8's lee test already shows. |
+| R5 | Who reads co-subjects | **Resolved.** "Every read of them goes through that State, `cosubject_rows` included", for `others`, the digest and `imprint_subjects`, in plan, read and build. |
+
+Notes on R2:
+
+- **The four index cases** run on ledgers with no deny outside the owner's home, so revision 7 builds no State there.
+- **m4 and m5** have their copy links written with `link_copies`, so their own rows don't carry lee.
+- **The `records` case** holds lee's deny and nothing else.
+- **What revision 7 does in each case** is now stated correctly: it ships each memory without lee's `imprint_subjects`
+  row, with its re-lane unsettled, or carrying lee despite lee's no. This matches `main_tear.py`: "home, no deny:
+  ships m3, others_memories 1".
+
+## New findings
+
+### F1. Should-fix: after a clean in-place restore and a writer's marked appends, the close passes
+
+**The claim.** The revision paragraph says "a writer's ordinary append during the run is marked and passes, and a file
+overwritten in place, even at the same size and counter, does not". The history row says the closing read "holds the
+run".
+
+**The probe.** `review-r8/restore_append2.py` builds the State at seq 3, with lee on m3 written by seq 3. It then:
+
+- writes over the ledger in place with a clean backup taken before lee's append, with the same inode;
+- has a writer append twice to it. The writer's base check passes, because the backup is a consistent stamped ledger,
+  so the writer marks its commit.
+
+**The result.**
+
+- The State's lazy read of m3 now returns `[]`, so lee is gone.
+- At the close the whole key has moved, but the marker holds the new key, so the third draft's rule passes.
+- A memory could then ship without lee's co-subject row. That is the class this revision closes.
+
+**Why "verified" isn't enough.** Under D4 it means "some process checked this state". It doesn't mean "this state
+follows the one the State was read at".
+
+**The fix.**
+
+- At the close, also require that the log still holds, at the State's seq, the row K0's head names:
+  `SELECT seq, digest FROM ledger_log WHERE seq = <State seq>` must equal K0's `head`.
+- The log is append-only, so an ordinary write never changes that row. A restore to an older state removes it or
+  changes it. In the probe this check reads `False`.
+
+**Read the close on a fresh read-only connection, not the State's row connection.**
+
+- `head`, and that log row, come through SQLite's page cache. SQLite reuses its cached pages whenever the file's change
+  counter is unchanged.
+- The one-append run (`restore_append.py`) shows this. The restored backup plus one append landed on K0's counter (37).
+  The row connection then read a stale `head` (`3:5149…`) while the marker held the true one (`3:68f7…`). The close
+  refused there, but by the luck of the cache.
+- The probe that gave `[]` for m3 shows the State's own row connection mixing cached and fresh pages.
+- A new connection gives the close fresh pages. If the file was renamed in its place, the close sees the new file; that
+  refuses or passes by the same two rules.
+
+**Add one test case:** a clean older backup restored in place, then two marked appends, and the close refuses.
+
+**What to change in the text.** The paragraph's sentence and the history row then hold as written, with "and the log
+still holds the State's own row" added.
+
+### Nits
+
+- **N1. The mid-run test needs the ctime pause.** "The ledger moved during the run" overwrites the file right after the
+  State is built. If the overwrite lands in the ctime tick of the last append, the whole key is unchanged and the close
+  passes, so the test is flaky on a coarse-ctime filesystem. Pause as the torn-page cases do (`time.sleep(0.02)`, as in
+  `test_4_the_key_holds_ctime`).
+- **N2. The stamped close's refusal sentence.** On a stamped ledger, a moved key that no mark holds is more often an
+  ordinary write whose mark failed (two quick commits, or WAL) than a tear. A rerun runs the full check, which tells the
+  two apart. Give the stamped close the "Run it again" sentence too, or say which sentence it uses. The test asserts
+  "the ledger's sentence", which as written means "can't be read".
+- **N3. More than shares and re-lanes write the ledger.** "A share or a re-lane during the run costs one retry" (on an
+  unstamped ledger) undercounts. A kept `remember` (`record_copy`), genome sync and any CLI act also write it. Say "any
+  write, such as a share or a re-lane".
+- **N4. The index cases need no retirement either.** "On ledgers with no deny outside the owner's home": `REFUSALS_SQL`
+  also counts retirements, and one would make revision 7 build its checked State. Say "no deny outside the owner's home
+  and no retirement".
+
+## What I ran
+
+All runs were in `/home/doctor/.cache/claude-scratch/wt-imprint-state/engram`, with `.venv/bin/python -I`. The scripts
+are in `/tmp/claude-1000/-home-doctor-Projects-superyak/8312d28a-0287-4c9c-83bc-219f737116a6/scratchpad/review-r8/`.
+
+- `git show 92b84d52 -- engram/docs/superpowers/specs engram/docs/superpowers/plans`, read whole. The commit changes
+  docs only; `state_key` is a plan item.
+- **`restore_append.py`:** a clean backup restored in place after `state()`, then one marked append. The close refuses,
+  but only because the row connection reads a stale `head` from SQLite's cache (the counter matched K0's).
+- **`restore_append2.py`:** the same with two appends. The close passes under the third draft's rule, while the State's
+  read of m3 has lost lee. The check of the log row at the State's seq refuses.
+- **Code read:**
+  - `permission_ledger.py`: `:1254-1268` (`_check_late`), `:1298-1314` (`_mark_after_commit`), `:1521-1545` (writers
+    mark only with a base key), `:2603-2616` (`_layer`, `home_of`);
+  - `tests/imprint_support.py:740-795` (`deny`, `link_copies`).

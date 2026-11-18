@@ -1159,10 +1159,12 @@ no check covers, and its deny path held every per-object row (851 MiB at the ref
     `state.lane_notes[ref]`, which the State orders by `(at, seq)`), `.any`, `.retired(subject)` and
     `.refuses(ref, subject)` as Task 8's `Refusals` reads them, now from the State's `records`, `persons` and
     `places`; `.prefetch(refs)` before each chunk of at most 512 memories;
-  - `.close()`, at the end of the process's ledger reads and before anything is saved: the whole key read once more
-    on the State's row connection and compared with K0, every field (`dev`, `ino`, `size`, `ctime_ns`, `counter`,
-    `head`), not only the counter as `_check_late` compares it; a key that differs and that neither the memo nor the
-    marker holds refuses; on an unstamped ledger any difference refuses with the "Run it again" sentence;
+  - `.close()`, at the end of the process's ledger reads and before anything is saved, on a fresh read-only
+    connection (SQLite keeps cached pages while the change counter is unchanged): the whole key read once more and
+    compared with K0, every field (`dev`, `ino`, `size`, `ctime_ns`, `counter`, `head`), not only the counter as
+    `_check_late` compares it, and the log's row at the State's seq read; it refuses with the "Run it again" sentence
+    when the key differs and neither the memo nor the marker holds it, or when that row's digest is not K0's head (an
+    older copy restored and appended to); on an unstamped ledger any difference refuses the same way;
   - every read above, `.close()` included, maps `LedgerUnreadable` and `sqlite3.Error` to `PlanRefused("The
     permissions ledger can't be read; nothing was planned.")`, and the `_CHANGED` race to `PlanRefused("The
     permissions ledger changed while it was read; nothing was planned. Run it again.")` (in `read` and `build`, the
@@ -1177,15 +1179,16 @@ no check covers, and its deny path held every per-object row (851 MiB at the ref
     the test, `.any`, `.retired` and `.refuses` agree with `REFUSALS_SQL` and Task 8's tests, and `.store_row` and
     `.latest_lane_note` equal revision 7's reads;
   - `test_a_torn_page_refuses_the_plan`, parametrized over the five cases of I 16: the four index cases on ledgers
-    with no deny outside the owner's home, their copy links written with `link_copies`, and the `records` case with
+    with no deny outside the owner's home and no retirement, their copy links written with `link_copies`, and the `records` case with
     lee's deny alone; each asserts the ledger's sentence and no saved plan. On main each case's memory ships, as I 16
     says: without lee's `imprint_subjects` row, with its re-lane unsettled, or carrying lee despite lee's no;
   - `test_a_ledger_read_that_fails_late_refuses`, over `plan`, `read` and `build`: `StateRows._query` made to raise
     after the State is built, a `sqlite3.DatabaseError` from the State's reads, and the `_CHANGED` race; no plan or
     package is left;
-  - `test_the_ledger_moved_mid_run_refuses`: after the State, the file overwritten in place by a same-size,
-    same-counter copy with lee's row changed; `.close()` refuses before anything is saved. A marked append passes;
-    on an unstamped ledger any append refuses with "Run it again";
+  - `test_the_ledger_moved_mid_run_refuses`: after the State and a ctime pause, the file overwritten in place by a
+    same-size, same-counter copy with lee's row changed, and, as a second case, by a clean copy from before lee's row
+    then appended to twice by a writer that marks each; `.close()` refuses both before anything is saved. A marked
+    append passes; on an unstamped ledger any append refuses with "Run it again";
   - `test_an_unstamped_ledger_is_checked_by_sqlite`: a schema-1 fixture with a torn `subjects_object` page refuses;
     untorn, it plans;
   - `test_the_agent_keeps_the_state_lazy`: the State's per-object maps are the ledger's `RowMap`s, its `seq_at` is a

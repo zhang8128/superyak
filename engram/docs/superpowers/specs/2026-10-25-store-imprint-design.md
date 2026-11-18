@@ -44,22 +44,26 @@ S2 is the permissions spec's to fix; its revision beside this one does (section 
 more leave a machine, and they widen no permission.
 Revision 8 (2026-11-18, Tardis; board item `fix:imprint-filter-verified-read`; Rio Grande chose this path in all hands
 3436a219; its fresh review, `docs/superpowers/reviews/2026-11-18-imprint-revision-8-review.md`, approved with changes
-twice, and its third draft applies both) reads every fact a plan, a read or a build takes from the source machine's
+three times, and its fourth draft applies them; the last check needs no further reading) reads every fact a plan, a read or a build takes from the source machine's
 permissions ledger from one State per process, built by `Ledger.state()`: the source store's row (D37), cosubjects(m),
 the denies and retirements (5.2), and pending(m)'s lane notes. On a stamped ledger `Ledger.state()` serves a state only
 after the projection digest's full check, whose last step is SQLite's integrity check, which holds every index against
 its table, or on the mark this process or a writer left for that same state (the permissions spec's D4). The State's
 per-object rows are read later, through the same indexes, on a connection checked against that state when it opens.
 So `Ledger.state()` keeps the key it checked, and at the end of its ledger reads, before it saves anything, each
-process reads the ledger's key once more and refuses when any part of it (the file, its size, its ctime, its change
-counter, its head) moved to a state neither the memo nor the marker holds: a writer's ordinary append during the run
-is marked and passes, and a file overwritten in place, even at the same size and counter, does not (the review's 2
-and the re-check's R1). On an unstamped ledger (schema version 1, made before the digest) there is no digest to check,
+process reads the ledger's key once more, on a fresh read-only connection, and refuses with the ledger's "Run it
+again" sentence when any part of it (the file, its size, its ctime, its change counter, its head) moved to a state
+neither the memo nor the marker holds, or when the log's row at the State's seq no longer carries the head that key
+named. A writer's ordinary append during the run is marked and keeps that row, so it passes. A file overwritten in
+place, even at the same size and counter, does not; nor does an older copy restored in place and then appended to by
+a writer, whose marks hold its new keys but whose log no longer holds the State's row (the review's 2, the re-check's
+R1, the last check's F1). On an unstamped ledger (schema version 1, made before the digest) there is no digest to check,
 so the process runs SQLite's integrity check before the State and reads the key in that check's transaction: that
 holds the indexes, and a table page torn there, with its index pages or in a column no index holds, stays unchecked,
 as it does for every reader of such a ledger and did under revision 7 (the review's 3; refusing such a ledger would
 ask the owner for a rebuild that no other reader needs). Writers mark no state there, so on such a ledger any change
-by the closing read refuses with "Run it again", and a share or a re-lane during the run costs one retry.
+by the closing read refuses with "Run it again", and any write during the run (a share, a re-lane, a kept
+`remember`, a genome sync, a CLI act) costs one retry.
 Revision 7 read these facts with direct SQL on the ledger's connection, which no check covers, and built the State
 only when one query found a deny or a retirement, to keep the plan's peak low. The co-subject, store and lane-note
 queries read through the ledger's indexes (`subjects_object`, `lane_notes_object`, and the unique indexes of `copies`
@@ -148,7 +152,7 @@ lists them all.
 | 4 | `05f4538` | Answers the final check (FS1–FS3). Admission runs calibration without its paths analysis, so it reads no road or trail (FS1, option (a)). The calibration test compares the sections that are the same, and the survey's zero session count says why (FS2). The trail spec's I2: a use id is a lowercase uuid4, `imprint.py use` writes `report.json` and `result.json`, finishing a use retires its allow file, `use-finished` records how the run ended, and the use always passes `--lane` (D41). I3: the use's unit gets the shared embedder's socket from the station's `runtime.json` (D29). I6: the recall-row test asserts what the trail spec says holds (FS3). Approved on its check. |
 | 5 | `ade420c` | The consolidation pass. The calibration test leaves out the survey's file and identity facts and fixes one `now` (CS1). `imprint.py use` writes `result.json` for its own errors, so a crash is `failed` and a missing file means the unit was stopped (CS2, D41). The use's unit stops within 60 s of its limit, and the sync finishes it at the first sync after (CN1). The socket rule's edges, and a deploy gate on the user manager's environment (CN2, D29). The survey's counts get a reason that fits both (CN3). `imprint.py use` fills in `LANE` (CN4). What `make station-imprint-use` prints (CN5). `report.json` before `result.json` (CN6). The home layer when the owner is the operator (section 8). Roads-and-trails rows per bulk use (section 12). The recall-row test's `as_of` is at or after t₁ (section 16). |
 | 6 | `e737e02` | The cross-check's fixes. At the station the one home layer is the ceiling itself for every copy; revision 5's layer would have refused every other owner's imprint (XM1, section 8). The recall-row test's source holds no row at or after t₁, or its `as_of` is t₁ with no row at exactly t₁ (XS1). With `route`, admission counts R(I), reading the memories for `trail-evaluation`, and the `admitted` and use receipts carry the count, so the import's rows for roads and trails are defined (XS2). The dry run and the confirm view say that access counts, last-access times and resonances leave and show when memories were recalled together (XS3). An error before the use directory reads as a limit (XN1). In a step-2 ledger the ceiling stays its own term (XN6). |
-| 8 | this file | One checked State per plan, read and build (board item `fix:imprint-filter-verified-read`; Rio Grande's choice, all hands 3436a219; fresh review approved with changes, `2026-11-18-imprint-revision-8-review.md`, applied). Every ledger fact a process reads, the store's row (D37), cosubjects(m), the denies and retirements and the lane notes, comes from one `Ledger.state()`, never from direct SQL through an index or a table page no check covers. On a stamped ledger the projection digest and SQLite's integrity check hold it, and a closing read of the whole key, against the key `state()` checked, holds the run; on an unstamped one, SQLite's integrity check alone, so a torn table page stays unchecked there, and any write during the run refuses. The agent is added to that State without `to_tables()`, so it stays lazy: revision 7's deny path peaked at 851 MiB at the reference ledger. Tests: one State per process, the State's answers against revision 7's queries, a torn page refused, a late read failing, the ledger moved mid-run, an unstamped ledger, the lazy agent, and the cap's processes with a deny on a restamped fixture (5.1, 5.2, 14.1, 16). |
+| 8 | this file | One checked State per plan, read and build (board item `fix:imprint-filter-verified-read`; Rio Grande's choice, all hands 3436a219; fresh review approved with changes, `2026-11-18-imprint-revision-8-review.md`, applied). Every ledger fact a process reads, the store's row (D37), cosubjects(m), the denies and retirements and the lane notes, comes from one `Ledger.state()`, never from direct SQL through an index or a table page no check covers. On a stamped ledger the projection digest and SQLite's integrity check hold it, and a closing read of the whole key, against the key `state()` checked, and of the log's row at the State's seq holds the run; on an unstamped one, SQLite's integrity check alone, so a torn table page stays unchecked there, and any write during the run refuses. The agent is added to that State without `to_tables()`, so it stays lazy: revision 7's deny path peaked at 851 MiB at the reference ledger. Tests: one State per process, the State's answers against revision 7's queries, a torn page refused, a late read failing, the ledger moved mid-run, an unstamped ledger, the lazy agent, and the cap's processes with a deny on a restamped fixture (5.1, 5.2, 14.1, 16). |
 | 7 | main at `cdc639c1` | Andy's decisions of 2026-10-26. The full store may leave with the owner's yes when the copy stays in the owner's home: memories with recorded co-subjects ship with those rows (`imprint_subjects`), bound by the plan digest, counted in the request and manifest (`others`), verified and registered at the station; the ceiling's item 6 keeps their uses inside the owner's home; the owner acknowledges, with counts, that they are copied (D27, D43). A copy that leaves the owner's home keeps revision 6's filter and confirmation. Small hardware: a 2 GB Pi; every process under 512 MiB, every unit `MemoryMax=512M`; one imprint job at a time; streaming and a scratch file on disk for whatever grows with the store; lane and core sets computed in blocks with no n × n matrix, at most 16,000 episodes; per-semantic sets dense, at most 1,024; peak-memory tests on the Pi for every process (D31, D42, section 14.1). After its check: the permissions spec's P36 followed, and a co-subject's no keeps a memory home (M1); the box at n = 0 promises no co-subject (M2); the scratch directory set before Python starts (S1); the tree's edges as (h, min, max) (S2); admission's `RuntimeMaxSec=3600` and a time budget (S3); 14.1's whole sums (S5); the whole-Pi gate from the 2 GB Pi's `MemTotal` (S6); the missing Pi tests (S7); the trail spec's revision 9 (S8). After its re-check: co-subjects read up the `copies` chain, and a memory with more than 8 subjects or a retired co-subject kept home (RM1, S1); the people counted on disk, at most 10 named (S3); `sessions_too_large` beside N (S4). |
 
 ## 1. Why
@@ -2626,7 +2630,8 @@ embedder" while the route gate still runs (section 12).
 - **A torn page hides nothing** (revision 8; the review's 6, the re-check's R2). Each case tears one page of a stamped
   fixture ledger so that a read through it misses one row, by splicing in that page from a twin file without the row
   (an autoindex can't be dropped and rebuilt), after a pause that moves the key's ctime, so no mark is trusted. The
-  four index cases run on ledgers with no deny outside the owner's home, so revision 7 never built a State there:
+  four index cases run on ledgers with no deny outside the owner's home and no retirement, so revision 7 never built
+  a State there:
   `subjects_object`, hiding lee on m3; the unique index of `copies`, hiding the link from m4 to a source that records
   lee (the link written as a `copies` row alone, so m4's own rows don't carry lee, as `record_copy` would write them);
   the unique index of `stores`, hiding another registered store, owned by lee, that m5's chain reaches by such a link;
@@ -2640,11 +2645,12 @@ embedder" while the route gate still runs (section 12).
   between the State and its row connection with no mark after it: `plan`, `read` and `build` each refuse with the
   ledger's sentence (the last with its "run it again" sentence) and leave no plan or package, never "the source store
   changed".
-- **The ledger moved during the run** (revision 8; the review's 2, the re-check's R1). After the State was built,
-  the file is overwritten in place by a copy of the same size and change counter in which lee's row differs: the
-  closing key read refuses the process with the ledger's sentence before anything is saved. A writer's ordinary
-  append during the run, which it marks, passes. On an unstamped ledger, any append during the run refuses with "Run
-  it again".
+- **The ledger moved during the run** (revision 8; the review's 2, the re-check's R1, the last check's F1). After the
+  State was built and a pause that moves ctime, the file is overwritten in place: in one case by a copy of the same
+  size and change counter in which lee's row differs; in another by a clean copy from before lee's subject row, to
+  which a writer then appends twice, marking each. Each time the closing read refuses the process with the "Run it
+  again" sentence before anything is saved. A writer's ordinary append during the run, which it marks, passes. On an
+  unstamped ledger any append during the run refuses with the same sentence.
 - **An unstamped ledger** (revision 8; the review's 3). On a schema-1 fixture ledger with a torn `subjects_object` page,
   `plan` refuses with the ledger's sentence; untorn, it plans as on a stamped one.
 - **The agent keeps the State lazy** (revision 8). With a deny in the ledger, the State the plan tests with holds the
