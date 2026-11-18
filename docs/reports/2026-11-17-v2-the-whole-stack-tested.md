@@ -193,14 +193,14 @@ repository's own merged code runs, and the room's store takes in no text, as the
 passing item was run the same way first and passed.
 
 - **5b0c8376: twelve errors, "AF_UNIX path too long". That is what the tests printed, and it is not the
-  whole cause.** macOS holds a Unix socket's path to 104 bytes, and in the worker's place the temporary
-  directory's own path was 118 characters. The item fails from the shorter directory too. Run again on
-  2026-11-18 with the tests' home 82 characters long, where no test printed that a path was too long:
-  twelve errors again, each "Operation not permitted". A probe in the worker's place takes length out of
-  it by binding a socket by a relative name: the bind is refused in the temporary directory and in the
-  clone, while a socket pair and an ordinary file are allowed in the same run. So the jail refuses a
-  Unix socket's bind in both places a jailed run may write. The words about the path are Python's own:
-  its error for a long name carries no error number from the system.
+  whole cause.** The field for a Unix socket's path on macOS is 104 bytes, and in the worker's place the
+  temporary directory's own path was 118 characters. The item fails from the shorter directory too. Run
+  again on 2026-11-18 with the tests' home 82 characters long, where no test printed that a path was too
+  long: twelve errors again, each "Operation not permitted". A probe in the worker's place takes length
+  out of it by binding a socket by a relative name: the bind is refused in the temporary directory and
+  in the clone, while a socket pair and an ordinary file are allowed in the same run. So, on macOS, the
+  jail refuses a Unix socket's bind in both writable directories. The words about the path are Python's
+  own: its error for a long name carries no error number from the system.
 - **113d188e: "Operation not permitted"** in a test over real HTTPS. The jail forbids the network. That
   is the jail doing its work.
 - **79aaa586, 027834bf, 7c6cda37: the directory's name.** One test of these items asserts that what it
@@ -477,8 +477,8 @@ that wrong, and the reader named the change:
 
 1. The depth is withdrawn as the cause. It is the directory's name, seen directly at one item and
    inferred at the other two, with each run said for the item it was made at.
-2. What follows now tells the two failures apart, the socket's path and the name, and says that the
-   pass and the pilot's driver make such names themselves.
+2. What follows then told the two failures apart, the then-apparent socket-path failure and the name,
+   and said that the pass and the pilot's driver make such names themselves.
 
 **A correction on the socket's path** was made on 2026-11-18. The lead had written a spec for a short
 temporary directory, on the strength of what the tests printed and of a count made outside the jail. Its
@@ -487,3 +487,14 @@ short path inside the jail. None had. The lead's runs then showed the jail refus
 above, and the spec was withdrawn with nothing built from it. Two places in this report put that item's
 failure down to the path's length alone, and both are corrected. The item was already counted among
 those that cannot be judged, so no table and no count changes. Nothing was run on Linux.
+
+That correction was read at bd894772 by a fourth fresh reader of the other family: **push with named
+changes,** three, all made here. The jail's refusal is said for macOS and for the two writable
+directories that were tried, since the profile also lets a run write to `/dev/null` and `/dev/zero`, and
+on Linux a jailed run has other writable places. The 104 bytes are called the field's size, not the
+longest name: one run outside the jail bound a name of 103 bytes and was refused at 104. And the earlier
+read's second item above is put in the past tense. The reader held that the central correction is
+supported, that no table or count changes, and that "whatever the path's length" is an inference from
+these runs and from a profile that allows no network, which the jail's own test asserts, not a
+measurement at every length. Not tested: the other twenty items that failed the census with the same
+words, Linux, and a connection to a socket already bound.

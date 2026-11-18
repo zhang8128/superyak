@@ -157,3 +157,28 @@ The recount holds:
 The socket and network diagnoses hold. Rule 9 permits the diagnostic hand-in: the store receives tracked-file metadata and verdicts; the file’s contents remain outside it. I found no stale denominator elsewhere or private names or machine paths in the changed lines.
 
 Could not check: failing output at 027834bf or 7c6cda37, or a rewritten report. No model, test suite or heavy run was executed; no file changed.
+
+---
+
+# The fresh reader's verdict on the correction about the socket's path
+
+Kept whole, as the reader gave it on 2026-11-18. A fourth fresh reader of the other model family (the
+team's worker w98), reading the correction at bd894772 against the records. Its line numbers are of the
+report at bd894772. The files it names (`probe-5b0c8376.txt`, `tests-short-home-5b0c8376.txt`,
+`outside-the-jail.txt`) are in the evidence kept with the read, not in the repository.
+
+---
+
+push with named changes
+
+1. Report lines 201–202: “both places a jailed run may write” is too broad. `probe-5b0c8376.txt` supports the two tested directories on macOS. `v2/crates/turn/src/jail.rs:840` and `:904` also allow writes to two null devices; its lines 30–32 describe additional writable directories on Linux. Smallest change: “So, on macOS, the jail refuses a Unix socket’s bind in both writable directories.”
+
+2. Report line 196: distinguish field size from usable pathname length. The newly appended `outside-the-jail.txt` records a 104-byte field, but Python 3.15 binds a 103-byte name and rejects 104 bytes with `errno None`. Smallest change: replace the ceiling clause with “the field for a Unix socket’s path on macOS is 104 bytes”, or omit it. Those boundary trials do not establish the kit’s Python 3.13 boundary.
+
+3. Report lines 480–481: “What follows now” still presents the superseded socket-path diagnosis as current. `probe-5b0c8376.txt` and `tests-short-home-5b0c8376.txt` establish the correction. Preserve the historical review by using past tense and “the then-apparent socket-path failure”.
+
+The central correction is supported. The added original diagnostic records TMPDIR 118; the short-home record shows 82 characters, 17 passes and 12 permission errors. The probe shows short relative binds refused in both directories while its pair and file controls succeed. `outside-the-jail.txt` supports the wording about no system error number.
+
+The intent is consistent with the complete macOS profile: `jail.rs:854` denies by default, the generator adds no network allowance, and `:1433–1434` explicitly tests that absence. “Whatever the path’s length” is therefore a policy inference supported by these observations, not an exhaustive measurement. No table or outcome-count change is needed. No private words or machine paths appear in the changed lines.
+
+I did not independently verify the spec’s withdrawal history. These records do not test the other twenty census items, Linux, or a connection to an existing bound socket. I ran no model or runtime test. The evidence README’s provenance correction was verified during this read.
