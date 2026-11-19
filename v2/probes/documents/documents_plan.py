@@ -9,6 +9,7 @@ import argparse
 import collections
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -32,7 +33,9 @@ pilot = import_file("documents_pilot", HERE.parent / "items/pilot_driver.py")
 Refused = pilot.Refused
 git = pilot.git
 digest = pilot.digest
-ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot")
+ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25")
+K1 = 1.2
+B = 0.75
 SEED = 20261118
 EXPECTED = {"9a3f21cf", "71a593d5", "d20c739b", "cd884db7", "c9ceb15b", "671a2250",
     "1113f1db", "0193bde8", "fff1b349", "027834bf", "3879e609", "3f349e89"}
@@ -153,8 +156,19 @@ def select_items(repo, entries, passing, exclude_test_functions=True):
     return selected
 
 
+def bm25_scores(frequencies, use, df):
+    """Score the search's used words, counting all document word occurrences."""
+    lengths = {p: sum(counts.values()) for p, counts in frequencies.items()}
+    count = len(frequencies)
+    average = sum(lengths.values()) / count or 1
+    return {p: round(sum(math.log(1 + (count - df[w] + 0.5) / (df[w] + 0.5))
+        * counts[w] * (K1 + 1) / (counts[w] + K1 * (1 - B + B * lengths[p] / average))
+        for w in sorted(use)), 9) for p, counts in frequencies.items()}
+
+
 def rank_documents(docs, query, matching, commit):
-    counts = {p: set(WORD.findall(d["text"].lower())) for p, d in docs.items()}
+    frequencies = {p: collections.Counter(WORD.findall(d["text"].lower())) for p, d in docs.items()}
+    counts = {p: set(f) for p, f in frequencies.items()}
     words = set(WORD.findall(query.decode("utf-8").lower()))
     df = collections.Counter(w for p in counts for w in words & counts[p])
     use = {w for w in words if df[w] <= len(docs) / 2}
@@ -167,16 +181,21 @@ def rank_documents(docs, query, matching, commit):
         key=lambda p: digest(("%s:lot:%s:%s" % (SEED, commit, p)).encode("ascii")))
     if min(len(search), len(newest), len(lot)) < 3:
         raise Refused("%s: fewer than three candidate documents" % commit)
+    bm25 = bm25_scores(frequencies, use, df)
+    second_search = sorted(docs, key=lambda p: (-bm25[p], p.encode("utf-8")))
+    second_best = min(second_search.index(p) for p in matching)
     return {"search": {"three": search[:3], "best_place": best + 1,
             "tied": sum(scores[p] == scores[search[best]] for p in docs)},
         "newest": {"three": newest[:3], "best_place": min(newest.index(p) for p in matching if p in newest) + 1},
-        "lot": {"three": lot[:3]}}
+        "lot": {"three": lot[:3]},
+        "bm25": {"three": second_search[:3], "best_place": second_best + 1,
+            "tied": sum(bm25[p] == bm25[second_search[second_best]] for p in docs)}}
 
 
 def paragraphs(item):
     result = {"nothing-1": "", "nothing-2": "", "exists": "There is a plan for this work in the repository.",
         "path": "The plan for this work is in the repository at `%s`." % item["direct_path"]}
-    for name in ("search", "newest", "lot"):
+    for name in ("search", "newest", "lot", "bm25"):
         result[name] = "These documents in the repository may bear on this work:\n" + "\n".join(
             "- `%s`" % path for path in item[name]["three"])
     return result
@@ -328,7 +347,7 @@ def make_plan(items, tasks, out, worker, census, worker_secs=None, replay_secs=1
         item.update(facts_sha256=digest(facts.read_bytes()), task_sha256=digest(frozen_tasks[commit]), query_sha256=digest(frozen_tasks[commit]))
         docs = markdown(items / "repo", item["parent"])
         item.update(rank_documents(docs, frozen_tasks[commit], item["matching"], commit))
-        offered = set(item["matching"]) | {p for k in ("search", "newest", "lot") for p in item[k]["three"]}
+        offered = set(item["matching"]) | {p for k in ("search", "newest", "lot", "bm25") for p in item[k]["three"]}
         item["documents"] = {p: docs[p]["blob"] for p in sorted(offered)}
     for item in selected:
         if task_path(tasks, item["commit"], "task").read_bytes() != frozen_tasks[item["commit"]]:

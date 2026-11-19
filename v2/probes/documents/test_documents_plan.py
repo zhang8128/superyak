@@ -250,10 +250,10 @@ class Maker(Fixture):
         item = plan["items"][0]
         self.assertEqual(plan["v"], 1)
         self.assertEqual(plan["seed"], 20261118)
-        self.assertEqual(set(item["rows"]), {"nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot"})
+        self.assertEqual(set(item["rows"]), {"nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25"})
         self.assertEqual(item["rows"]["exists"]["paragraph"], "There is a plan for this work in the repository.")
         self.assertEqual(item["rows"]["path"]["paragraph"], "The plan for this work is in the repository at `docs/plans/z-plan.md`.")
-        for name in ("search", "newest", "lot"):
+        for name in ("search", "newest", "lot", "bm25"):
             self.assertEqual(item["rows"][name]["paragraph"], "These documents in the repository may bear on this work:\n" +
                 "\n".join("- `" + p + "`" for p in item[name]["three"]))
         common = self.task.read_bytes() + b"\nMake this change in the code under `peer/superyak_peer`. Add tests for it if you like.\n"
@@ -268,6 +268,10 @@ class Maker(Fixture):
             self.assertEqual(git(self.out / "src", "rev-parse", "refs/documents/%s/%s" % (item["item"], name)), row["base"])
             changed = git(self.out / "src", "diff", "--name-only", item["rows"]["nothing-1"]["base"], row["base"]).splitlines()
             self.assertEqual(changed, [] if name.startswith("nothing") else ["TASK.md"])
+            self.assertEqual(git(self.out / "src", "show", "-s", "--format=%P", row["wrong"]), row["base"])
+            self.assertEqual(git(self.out / "src", "diff", "--name-only", row["base"], row["wrong"]),
+                "PROBE-UNRELATED.txt")
+            self.assertEqual(self.driver.git(self.out / "src", "show", row["wrong"] + ":TASK.md"), content)
         self.assertEqual(self.driver.load_plan(self.out), plan)
         self.assertEqual(plan["limits"], {"worker_secs": 1200, "check_secs": 900, "replay_secs": 1200,
             "diagnostic_secs": 300, "lease_secs": 1800})
@@ -277,6 +281,21 @@ class Maker(Fixture):
         for directory in self.out.rglob("*"):
             if directory.is_dir():
                 self.assertIsNone(re.search("[0-9a-fA-F]{32}", directory.name))
+
+    def test_bm25_only_offer_is_pinned(self):
+        rank = self.driver.rank_documents
+        def separate_offers(*args):
+            result = rank(*args)
+            for row in ("search", "newest", "lot"):
+                result[row]["three"] = ["docs/plans/a-plan.md", "docs/plans/b-plan.md", "docs/plans/c-plan.md"]
+            result["bm25"]["three"] = ["README.md", "docs/plans/a-plan.md", "docs/plans/b-plan.md"]
+            return result
+        with mock.patch.object(self.driver, "rank_documents", side_effect=separate_offers):
+            item = self.make()["items"][0]
+        self.assertEqual(set(item["documents"]), {"README.md", "docs/plans/a-plan.md", "docs/plans/b-plan.md",
+            "docs/plans/c-plan.md", "docs/plans/z-plan.md", "docs/specs/design.md"})
+        self.assertEqual(item["documents"]["README.md"], git(self.repo, "rev-parse", self.parent + ":README.md"))
+        self.assertIn("- `README.md`", item["rows"]["bm25"]["paragraph"])
 
     def test_changed_input_task_plan_are_refused(self):
         self.make()
@@ -324,6 +343,84 @@ class Maker(Fixture):
 
 
 class Rules(unittest.TestCase):
+    def test_bm25_hand_worked_scores(self):
+        d = module()
+        # N=5, lengths=(3,2,1,2,2), avg=2. alpha has df=2 and beta df=1.
+        # IDFs are ln(12/5) and ln(4). The first file's alpha multiplier
+        # is 2*2.2/(2+1.2*(.25+.75*3/2)) = 88/73; the others are 1 or 0.
+        frequencies = {
+            "plans/a.md": collections.Counter(alpha=2, filler=1),
+            "plans/b.md": collections.Counter(alpha=1, common=1),
+            "plans/c.md": collections.Counter(common=1),
+            "README.md": collections.Counter(beta=1, common=1),
+            "plans/d.md": collections.Counter(fill=1, filler=1),
+        }
+        self.assertEqual(d.bm25_scores(frequencies, {"alpha", "beta"},
+            collections.Counter(alpha=2, beta=1)), {
+                "plans/a.md": 1.055359574, "plans/b.md": 0.875468737,
+                "plans/c.md": 0, "README.md": 1.386294361, "plans/d.md": 0})
+        # Move beta into the alpha document, retaining every length and df.
+        # Its sum is ln(12/5)*88/73 + ln(4)*44/53 = 2.2062454584997875.
+        # Rounding the terms separately instead would give 2.206245459.
+        frequencies["plans/a.md"] = collections.Counter(alpha=2, beta=1)
+        frequencies["README.md"] = collections.Counter(common=2)
+        self.assertEqual(d.bm25_scores(frequencies, {"alpha", "beta"},
+            collections.Counter(alpha=2, beta=1))["plans/a.md"], 2.206245458)
+
+    def test_bm25_search_words_candidates_and_best_matching_file(self):
+        d = module()
+        docs = {"plans/a.md": {"text": "ALPHA alpha filler"},
+            "plans/b.md": {"text": "alpha common"},
+            "plans/c.md": {"text": "common"},
+            "z-note.md": {"text": "BETA common"},
+            "plans/d.md": {"text": "fill filler"},
+            "plans/e.md": {"text": "common"}}
+        ranked = d.rank_documents(docs, b"ALPHA alpha BETA common absent a xx 123",
+            ["plans/a.md", "plans/b.md"], "a" * 40)
+        self.assertEqual(ranked["bm25"], {"three": ["z-note.md", "plans/a.md", "plans/b.md"],
+            "best_place": 2, "tied": 1})
+        self.assertEqual(ranked["search"], {"three": ["plans/a.md", "plans/b.md", "z-note.md"],
+            "best_place": 1, "tied": 3})
+        self.assertEqual(ranked, d.rank_documents(dict(reversed(list(docs.items()))),
+            b"alpha beta common", ["plans/b.md", "plans/a.md"], "a" * 40))
+
+    def test_bm25_sorted_sum_and_empty_documents(self):
+        d = module()
+        # One word each has df=1,2,3 in N=4, so ln arguments are 10/3, 2, 10/7.
+        frequencies = {"a": collections.Counter(alpha=1, beta=1, zeta=1),
+            "b": collections.Counter(beta=1, zeta=1), "c": collections.Counter(zeta=1),
+            "d": collections.Counter()}
+        with mock.patch.object(d.math, "log", wraps=d.math.log) as logarithm:
+            d.bm25_scores(frequencies, ["zeta", "beta", "alpha"],
+                collections.Counter(alpha=1, beta=2, zeta=3))
+        self.assertEqual([call.args[0] for call in logarithm.call_args_list],
+            [1 + 3.5 / 1.5, 2.0, 1 + 1.5 / 3.5] * 4)
+        empty = {"plans/%s.md" % n: {"text": "a xx 123"} for n in range(4)}
+        self.assertEqual(d.rank_documents(empty, b"absent", ["plans/2.md"], "a" * 40)["bm25"],
+            {"three": ["plans/0.md", "plans/1.md", "plans/2.md"], "best_place": 3, "tied": 4})
+        self.assertEqual(d.rank_documents(empty, b"", ["plans/2.md"], "a" * 40)["bm25"],
+            {"three": ["plans/0.md", "plans/1.md", "plans/2.md"], "best_place": 3, "tied": 4})
+
+    def test_bm25_rounded_ties_and_path_bytes(self):
+        d = module()
+        # Compact frequency tables represent repeated words without large text.
+        # N=4, df=2, avg=100000.25: the two alpha scores are
+        # 1.524905498400209 and 1.5249054984459554, both 1.524905498 at 9 places.
+        frequencies = {"plans/b.md": collections.Counter(alpha=100001),
+            "plans/a.md": collections.Counter(alpha=100000),
+            "plans/c.md": collections.Counter(filler=100000),
+            "plans/d.md": collections.Counter(filler=100000)}
+        self.assertEqual(d.bm25_scores(frequencies, {"alpha"}, collections.Counter(alpha=2)),
+            {"plans/b.md": 1.524905498, "plans/a.md": 1.524905498, "plans/c.md": 0, "plans/d.md": 0})
+        # The public ranker must order and count ties on those rounded scores.
+        docs = {p: {"text": " ".join(word for word, count in counts.items() for _ in range(count))}
+            for p, counts in frequencies.items()}
+        self.assertEqual(d.rank_documents(docs, b"alpha", ["plans/b.md"], "a" * 40)["bm25"],
+            {"three": ["plans/a.md", "plans/b.md", "plans/c.md"], "best_place": 2, "tied": 2})
+        docs = {p: {"text": ""} for p in ("é.md", "z.md", "plans/d.md", "plans/c.md", "plans/b.md", "plans/a.md")}
+        self.assertEqual(d.rank_documents(docs, b"", ["plans/b.md"], "a" * 40)["bm25"],
+            {"three": ["plans/a.md", "plans/b.md", "plans/c.md"], "best_place": 2, "tied": 6})
+
     def test_census_parser_only_accepts_passing_reference(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "census.txt"
@@ -360,6 +457,7 @@ class Rules(unittest.TestCase):
             ("halfword " if n < 2 else "")} for n in range(4)}
         ranked = d.rank_documents(docs, b"ubiquitous specific halfword halfword", ["plans/0.md"], "a" * 40)
         self.assertEqual(ranked["search"], {"three": ["plans/0.md", "plans/1.md", "plans/2.md"], "best_place": 1, "tied": 2})
+        self.assertEqual(ranked["bm25"], ranked["search"])
         self.assertEqual(d.task_bytes(b"Work", ""), b"Work\n\n" + d.FIXED.encode() + b"\n")
         with self.assertRaisesRegex(d.Refused, "fewer than three"):
             d.rank_documents({"plans/a.md": {"text": ""}}, b"", ["plans/a.md"], "a" * 40)
@@ -367,14 +465,15 @@ class Rules(unittest.TestCase):
             with self.assertRaises(d.Refused):
                 d.distinct_items(commits)
 
-    def test_order_84_hashes_stable_and_full_commit(self):
+    def test_order_96_hashes_stable_and_full_commit(self):
         driver = module()
         commits = ["%040x" % n for n in range(12)]
         actual = driver.row_order(commits)
         expected = sorted((hashlib.sha256(("20261118:order:%s:%s" % (c, r)).encode("ascii")).hexdigest(), c, r)
-            for c in commits for r in ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot"))
+            for c in commits for r in ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25"))
         self.assertEqual([(r["hash"], r["commit"], r["row"]) for r in actual], expected)
-        self.assertEqual([r["n"] for r in actual], list(range(1, 85)))
+        self.assertEqual([r["n"] for r in actual], list(range(1, 97)))
+        self.assertEqual(driver.ROWS, ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25"))
         for row in actual:
             self.assertEqual(row["item"], row["commit"][:10])
             self.assertEqual(row["directory"], "rows/%03d-%s-%s" % (row["n"], row["commit"][:10], row["row"]))
