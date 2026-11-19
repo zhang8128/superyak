@@ -1,7 +1,9 @@
 # v2: a document offered. The pilot's report
 
 Serenity, 2026-11-19 (UTC). The pilot of `docs/superpowers/specs/2026-11-18-v2-a-document-offered.md`
-(revision 4) was run on 2026-11-19 from 02:30 to 07:32 UTC and judged by 08:37 UTC. Not yet read by anyone but its writer.
+(revision 4) was run on 2026-11-19 from 02:30 to 07:32 UTC and judged by 08:37 UTC. A fresh reader of
+the other model family read it and recomputed its tables from the data beside it: approve with named
+changes, nine, all made here and listed at the end.
 
 ## In short
 
@@ -15,23 +17,30 @@ pass under the turn's change.
   "not worth one" 5 or fewer). Three files by lot are lower at 0.
 - **Told only "There is a plan for this work in the repository", a turn's change passed 367 of the 453
   frozen cases.** With nothing the two runs passed 151 and 154. Given the plan's path: 362.
-- **A list of three files that "may bear on this work" did less, and only where the plan was on the
-  list and the turn named it:** the three newest plans 195, the second search's three 278, the first
-  search's three (which hold no matching file at any item) 153, three by lot 153.
-- **With nothing, a turn's walk names the plan in 1 of 24 turns.** Told that a plan exists, with no
-  path, it names the plan at 11 of 12 items, at its third or fourth step, 16 to 25 seconds in.
-- **No condition is lower than nothing at any item.**
+- **A list of three files that "may bear on this work" passed fewer:** the three newest plans 195, the
+  second search's three 278, the first search's three (which hold no matching file at any item) 153,
+  three by lot 153. Every list row that is higher by the spec's reading is a row whose walk names a
+  matching file.
+- **With nothing, a turn's walk names a matching file in 1 of 24 turns.** Told that a plan exists, with
+  no path, it names one at 11 of 12 items, at its third or fourth step, 15.7 to 25.0 seconds in.
+- **No condition is lower at any item,** by the reading of the spec's section 7.
 
 **What the score is.** It is agreement with the reference's own tests: names, calls and wordings as
-well as behaviour. With nothing a turn does the work under names of its own, and those tests cannot see
-it: at two items the test file cannot even be collected. The pilot does not show that such work is
-worse. It shows that a turn does not look for a plan unasked, that it finds one within seconds when told
-one exists, and that following it brings agreement with the reference.
+well as behaviour. A change that names things otherwise than the reference can leave a test file
+impossible to collect, and then none of its cases runs: that happened at two items, which hold 159 of
+the 453 cases. What a Nothing turn's change does as work was not judged. So the pilot gives two counts
+side by side, the naming of a matching file (1 of 24 turns against 11 of 12 items) and the frozen cases
+passed, and it does not say how the one brings the other.
 
 ## What was run
 
-- **Items:** the twelve of the spec's section 2, of six plans. Each item's task is in a user's words,
-  frozen before any search was run on it (`v2/probes/documents/tasks/`, hashes in `FROZEN.sha256`).
+- **Items:** the twelve of the spec's section 2, of six plans.
+- **Tasks:** each item's task is in a user's words, but no user wrote it. A model wrote each from the
+  finished reference, held to a list of the behaviours and limits the item's tests check and a list of
+  what it must not give (every name, every message's words, every shape). Five readers checked them
+  over three rounds; they were frozen before any search was run on them
+  (`v2/probes/documents/tasks/`, hashes in `FROZEN.sha256`). How far such a task is from what a person
+  would ask was not measured.
 - **Conditions:** eight rows an item, differing only in one paragraph at the task's end, as the spec's
   section 4 gives them. The row "three by the second search" was added after its places were counted
   and before any turn; it is no part of the rule.
@@ -43,14 +52,16 @@ one exists, and that following it brings agreement with the reference.
   items; 149 pass on the parent with no change and 304 do not. The same case lists came out of four full
   runs of the controls, each on a different build of the judge; the pilot's own was the fourth.
 - **Turns:** 96 of 96 recorded, each a hand-in. None reached its limit, no export failed, none was
-  interrupted or run again. A turn took 69 to 423 seconds, median 170; by condition the mean is 169
+  interrupted or run again. A turn took 69 to 423 seconds, median 168; by condition the mean is 169
   to 199 seconds.
 - **Load:** the machine was in other use. The one-minute load before a row ran from 2.7 to 34.2 on 16
-  cores, median 9.9; ten rows began above 18. The rows run in one hashed order, so no condition sits in
+  cores, median 9.8; ten rows began above 18. The rows run in one hashed order, so no condition sits in
   one stretch of it. The judging began at a five-minute load of 6.8 and ended at 12.4.
 - **Judging:** every hand-in's change under the source directory was applied on the item's base in the
   jail and the frozen cases counted; the room then judged the change by replay with the item's own
   check. 96 of 96 rows have a score, and each row's counts add up to its frozen count.
+- **The room's small check on each turn** passes when anything under the source directory differs from
+  the parent. All 96 turns passed it. It says nothing of the work.
 
 ## Each item
 
@@ -76,13 +87,16 @@ the mean of the two Nothing rows by more than the gap between them.
 Three things to know when reading this table:
 
 - **0193bde8** has two frozen cases and no row passes either. **d20c739b** has 34, of which 32 pass with
-  no work, and every row passes those 32 and no more. Neither item could show a difference.
+  no work, and every row passes those 32 and no more. Neither item showed a difference.
 - **027834bf and 3f349e89:** under Nothing (both runs), three by search, three newest plans and three
   by lot, no frozen case ran: the test file imports a name the change does not define, so it cannot be
-  collected. Those ten rows score 0 of 64 and 0 of 95.
+  collected. Those ten rows score 0 of 64 and 0 of 95. The two items hold 159 of the 453 frozen cases
+  and 159 of the 304 that do not pass on the parent; the table after the next shows the totals with
+  and without them.
 - **9a3f21cf:** in five rows (both Nothing rows, three by search, the second search, three by lot) one
-  case that passes on the parent fails under the change. In the three rows whose walk names the plan it
-  does not. One item, and the rows that did not name the plan: this is the changes, not the load.
+  case that passes on the parent fails under the change. In the three rows whose walk names a matching
+  file it does not. That is what the rows show. Why it is so was not looked into, and the load on the
+  machine while a row was judged was not recorded row by row.
 
 ## By condition
 
@@ -102,6 +116,20 @@ in share of frozen cases. The same tallies come out when the shares are taken ov
 pass on the parent, and without the item that had been probed before (027834bf): a plan exists 7 of 11
 items higher, the path 8, three newest plans 6, the second search 3, search 0, lot 0.
 
+**How much of each total rests on the two items whose test file could not be collected** under five
+conditions. They hold 35.1% of the frozen cases and 52.3% of those that do not pass on the parent:
+
+| Condition | Passed at 027834bf and 3f349e89, of 159 | Passed at the other ten items, of 294 |
+| --- | --- | --- |
+| Nothing, first | 0 | 151 |
+| Nothing, second | 0 | 154 |
+| A plan exists | 110 | 257 |
+| The plan's path | 109 | 253 |
+| Three by search | 0 | 153 |
+| Three by the second search | 109 | 169 |
+| Three newest plans | 0 | 195 |
+| Three by lot | 0 | 153 |
+
 **By plan,** the mean difference of the plan's items, with "higher" where it is above the plan's mean
 gap:
 
@@ -116,9 +144,11 @@ gap:
 
 ## The walks
 
-Whether a step of the turn's walk names a matching plan, and at which step and second. A walk holds the
-paths a step names and no command or output, so "names" is all that can be said. "Held" says the three
-offered files include a matching file.
+Whether a step of the turn's walk names a matching file, and at which step and second. A walk holds the
+paths a step names and no command or output, so "names" is all that can be said: not that a file was
+opened, read or followed. A matching file is the item's plan or, at two items, also its design spec; the
+data beside this report does not say which of the two was named. "Held" says the three offered files
+include a matching file. Seconds in the table are cut to whole seconds.
 
 | Item | Nothing, first | Nothing, second | A plan exists | The plan's path | Three by search | Three by the second search | Three newest plans | Three by lot |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -135,39 +165,43 @@ offered files include a matching file.
 | 3879e609 | no | no | step 3, 20 s | step 2, 14 s | no (not held) | no (held) | no (held) | no (not held) |
 | 3f349e89 | no | no | step 4, 22 s | step 2, 17 s | no (not held) | step 4, 22 s (held) | no (held) | no (not held) |
 
-- **Of the 36 offering rows whose walk names a matching plan, 26 are higher. Of the 36 whose walk does
+- **Of the 36 offering rows whose walk names a matching file, 26 are higher. Of the 36 whose walk does
   not, 1 is higher** (71a593d5 under "a plan exists": 33 of 33 against 31 with nothing; its walk names no
-  plan, and what it did instead a walk cannot say).
-- **The 10 rows that name the plan and are not higher** are at 0193bde8 and d20c739b, which could show
-  no difference, and at c9ceb15b and 1113f1db, where the difference is inside or near the baseline gap.
-- **A list holds the plan more often than the turn names it.** The three newest plans hold a matching
-  file at 12 of 12 items and the walk names it at 7. The second search's three hold one at 9 and the walk
-  names it at 6. Where the list held the plan and the walk did not name it, the row scored as Nothing did.
-- **"A plan exists" gives no path.** The walk first names the plan 16 to 25 seconds in. With the path
-  given it is 9 to 22 seconds.
+  matching file, and what it did instead a walk cannot say).
+- **The 10 rows that name one and are not higher** are at 0193bde8 and d20c739b, which showed no
+  difference in any row, and at c9ceb15b and 1113f1db, where the difference is inside the baseline gap.
+- **A list holds a matching file more often than the walk names it.** The three newest plans hold one
+  at 12 of 12 items and the walk names it at 7. The second search's three hold one at 9 and the walk
+  names it at 6. In the eight rows where the list held one and the walk did not name it, the row passed
+  what the item's Nothing rows passed.
+- **"A plan exists" gives no path.** The walk first names a matching file 15.7 to 25.0 seconds in. With
+  the path given it is 9.2 to 21.6 seconds.
 
 ## What the rows show beside the rule
 
-The rule read two conditions and answered "between". The other rows were set out in the spec as a
-positive control (the path), an existence cue, and a draw by lot, with no conclusion fixed on them in
-advance. What they show, as counts:
+The rule read two conditions, with the draw by lot as its guard (lower at three items or fewer), and
+answered "between". The path and the existence cue were set out in the spec as a positive control and a
+cue, with no conclusion fixed on either in advance. What the rows show, as counts:
 
-1. **The existence cue did as much as the path:** 8 and 9 items higher, 367 and 362 frozen cases.
-2. **An offer that misses did nothing and cost nothing here.** Three by search and three by lot hold no
-   matching file at any item; each passes 153 cases against Nothing's 151 and 154, and neither is lower
-   at any item.
-3. **The same sentence with three paths ("may bear on this work") worked only through the plan.** Where
-   the plan was on the list and named, the row is as the path's row; elsewhere as Nothing's.
+1. **The existence cue and the path:** 8 and 9 items higher, 367 and 362 frozen cases. With one run a
+   cell that is one item and five cases apart; a second run could move either by as much.
+2. **Search and lot were within the observed baseline gap at all twelve items.** Each holds no matching
+   file at any item and passes 153 cases against Nothing's 151 and 154. Time and tokens were not
+   compared.
+3. **All ten higher rows among the four list conditions name a matching file;** three of the thirteen
+   list rows that name one are within the baseline gap.
 
 ## What this is not
 
 - **Not a judgement of the work.** The outcome is agreement with the reference's tests. The plans here
   give names, calls, exact assertions and test instructions; a turn that follows one writes what those
-  tests look for. A Nothing turn's change passed the room's small check in all 24 rows, and whether it
-  does the work under other names was not judged.
+  tests look for. A Nothing turn's change passed the room's small check in all 24 rows, which says
+  only that it changed something under the source directory. Whether it does the work was not judged.
 - **Not about work that has no plan.** Every item was chosen because a plan exists, found by the
   finished reference's new names. What a sentence saying "there is a plan" does where there is none, or
   what a standing instruction to look for one costs there, was not tried.
+- **Not a comparison of the existence cue with the path.** They are one item and five cases apart on
+  one run each.
 - **Not a measure of variation.** One run a cell. The two Nothing rows differ at 3 of 12 items, by 1 to
   3 cases; that is one observed gap an item, not an estimate.
 - **Not a test of a difference.** Nothing here is tested for chance. Twelve items of six plans; four
@@ -188,7 +222,7 @@ earlier report: "74 walks and 222 places. Of the 52 items, 43 are absent, 0 fall
 beyond 16." Its script and output are at commit 157239a0 of the branch `tardis/v2-places`:
 `docs/superpowers/specs/2026-11-17-v2-places-not-routes-measure/plan_rank.py` and `plan_rank-output.txt`
 beside it. That count is Tardis's. It bears on this report in one way: a store of walks does not lead to
-a plan no earlier walk named, and in this pilot 1 of 24 unprompted walks named one.
+a plan no earlier walk named, and in this pilot 1 of 24 walks with nothing added named a matching file.
 
 ## What was found on the way
 
@@ -208,10 +242,13 @@ to be right before the first turn; it was run on real rows with a stand-in worke
 ## What I would do next
 
 **This section is my judgement.** The design's second arm asked which notes, found how, help a turn.
-At these items the finder mattered less than the sentence: a turn told that a plan exists found it
-without help, and a turn handed three paths with a weaker sentence opened the right one about half the
-time. So the next question is not a better search. It is whether a standing instruction can stand in
-for knowing that a plan exists:
+At these items a walk named a matching file at 11 of 12 when the turn was told a plan exists and given
+no path, and at 13 of the 21 rows where a list of three held one. My hypothesis from that, which the
+pilot does not test, is that the sentence matters more than the finder: that what a turn lacks is not a
+way to the plan but a reason to look. A deployed room cannot say "a plan exists" without knowing; it can
+say "one may exist". Tardis put the same point in the room, and the doubt that the cue and the path
+cannot be told apart on one run. Whether a standing instruction does what the cue did here is not
+known. So the next question I would ask is not a better search:
 
 - the instruction "look for a plan or spec for this work before you change code", given at every item;
 - at items that have a plan and at items that have none, so that what it costs where there is nothing
@@ -221,6 +258,27 @@ for knowing that a plan exists:
   behaviour that does not depend on the reference's names.
 
 The last is the hard part, and this pilot does not solve it.
+
+## What the report's reader named, and where it is answered
+
+A fresh reader of the other family (the team's w121) read this report at 648c7ba6 and recomputed its
+four tables, every item's baseline, gap, difference and class, the tallies and figures in both readings
+and without the probed item, and the walk counts, from the two data files: approve with named changes.
+
+| Its change | Where |
+| --- | --- |
+| 1. Keep the claims about work and walks within what was observed; "names", not "opens" or "follows"; "matching file" throughout | In short; The walks; What I would do next |
+| 2. Show the weight of the two items whose test file could not be collected | By condition, the second table |
+| 3. No mechanism claimed for the lists; the two exceptions to "as the path's row" | What the rows show beside the rule |
+| 4. No "did as much" and no "cost nothing" | What the rows show beside the rule; What this is not |
+| 5. The tasks are a model's, written from the finished reference | What was run |
+| 6. Load not ruled out at 9a3f21cf | Each item |
+| 7. "Showed no difference", not "could show none" | Each item; The walks |
+| 8. The lot is the rule's guard, not a row with no conclusion fixed | What the rows show beside the rule |
+| 9. Medians corrected (168 seconds, load 9.8); one convention for seconds | What was run; The walks |
+
+What that reader could not check, in its words: "`rows.json` against the actual changes, walks, room
+records or test output". Those are on the machine that ran the pilot.
 
 ## Where the numbers come from
 
