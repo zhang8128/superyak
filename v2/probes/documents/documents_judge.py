@@ -10,7 +10,13 @@ own base with the item's tests run to a JUnit report: cases.json (the frozen cas
 for the room's verdict; then no change at all: parent.json. A reference with no passing case, or one whose room
 verdict by replay is not a pass, stops the judge for that item (controls/<item>/stopped.json says why).
 
-judge: for each recorded row not yet judged, score.json by the spec's section 6. report: the spec's section 7.
+judge: for each recorded row not yet judged, score.json by the spec's section 6. A row whose turns export failed, or
+whose walks export did not exit 0, is exported again from its own room (never run again). A report the judge refuses
+to read is the row's outcome report-refused, with no score; the other rows are judged. Every unscored outcome is one of
+UNSCORED. report: the spec's section 7, on the share over all frozen cases (the rule's) and beside it on the share
+over the new cases (those that fail on the parent). Every judge's own turn begins on the item list's base for the item,
+and is read with the runner's outcome(turns, base): the clock's exit code decides nothing. The plan has eight rows; bm25
+is an offering row outside the rule.
 
 The score's denominator is always the count of frozen cases; nothing a turn's own run counts can move it. A turn's
 code runs only inside the jail: this program applies no change and runs no test outside it.
@@ -57,12 +63,18 @@ Refused = maker.Refused
 load_plan = maker.load_plan
 
 SOURCE = "peer/superyak_peer"
-ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot")
+# bm25 is an offering row outside the rule: it was added after its places were seen and before any turn.
+ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25")
 NOTHING = ("nothing-1", "nothing-2")
-OFFERING = ("exists", "path", "search", "newest", "lot")
-OFFERED_BY = {"path": None, "search": "search", "newest": "newest", "lot": "lot"}
+OFFERING = ("exists", "path", "search", "newest", "lot", "bm25")
+THREES = ("search", "newest", "lot", "bm25")             # the rows that offer three files from the plan's item
 RULE_ROWS = ("nothing-1", "nothing-2", "search", "newest", "lot")
-OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed")
+OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed", "export-failed")
+# Every outcome a judged row can have with no score, in one place; the report names each that occurred.
+UNSCORED = ("clock-failed", "export-failed", "report-refused", "not-applied", "diagnostic-limit",
+    "diagnostic-clock-failed", "diagnostic-no-hand-in", "diagnostic-no-status", "replay-limit", "replay-clock-failed")
+BM25_SENTENCE = ("The bm25 row was added to the plan after its places were seen and before any turn; it is not a row "
+    "of the rule.")
 MAX_OBSTACLES = 20
 LINE_CHARS = 400
 STATUS_ORDER = ("passed", "skipped", "failed", "error")
@@ -71,10 +83,35 @@ DIAGNOSTIC_MARGIN_SECS = 120        # the diagnostic's turn: its tests' limit an
 NO_REPORT = {"cases": {}, "collection_errors": []}
 
 
+class ReportRefused(Refused):
+    """What a turn's commit holds for the judge (its JUnit report or its status) cannot be read safely. A turn's code
+    can cause this, so for a row it is an outcome with no score, never a stop."""
+
+
 # ---------------------------------------------------------------- the plan
 
 def items_by_short(plan):
     return {item["item"]: item for item in plan["items"]}
+
+
+def check_shape(plan):
+    """One plan shape only: every item has every row in ROWS (bm25 included) and a bm25 member as search has, and
+    the order holds each item's every row once. A plan of seven rows is refused."""
+    for item in plan["items"]:
+        if sorted(item["rows"]) != sorted(ROWS):
+            raise Refused("%s: the plan's rows are %s, not %s" % (item["item"], sorted(item["rows"]), sorted(ROWS)))
+        bm25 = item.get("bm25")
+        if not isinstance(bm25, dict) or not isinstance(bm25.get("three"), list) or len(bm25["three"]) != 3 \
+                or type(bm25.get("best_place")) is not int or type(bm25.get("tied")) is not int:
+            raise Refused("%s: the plan has no bm25 member with three, best_place and tied" % item["item"])
+    wanted = sorted((item["commit"], row) for item in plan["items"] for row in ROWS)
+    if sorted((order["commit"], order["row"]) for order in plan["order"]) != wanted:
+        raise Refused("the plan's order is not each item's %d rows once" % len(ROWS))
+    return plan
+
+
+def load_judged_plan(out):
+    return check_shape(load_plan(out))
 
 
 def row_name(order):
@@ -119,23 +156,23 @@ def read_junit(data):
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise Refused("the JUnit report is not UTF-8: %s" % error) from None
+        raise ReportRefused("the JUnit report is not UTF-8: %s" % error) from None
     if not text.strip():
         return {"cases": {}, "collection_errors": []}
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text):
         # XML allows none of these; pytest escapes them. A NUL also lets the parser take UTF-16 or UTF-32 from the
         # report's first bytes whatever encoding it is told: UTF-16 with no byte-order mark is valid UTF-8.
-        raise Refused("the JUnit report holds a control character XML does not allow")
+        raise ReportRefused("the JUnit report holds a control character XML does not allow")
     if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.IGNORECASE):
         # The report is written inside the jail, where a turn's code runs; pytest writes no DOCTYPE.
-        raise Refused("the JUnit report declares a DOCTYPE or an entity")
+        raise ReportRefused("the JUnit report declares a DOCTYPE or an entity")
     try:
         # Parsed as UTF-8 whatever the report declares: no other encoding reaches the parser.
         parser = ElementTree.XMLParser(encoding="utf-8")
         parser.feed(data)
         root = parser.close()
     except ElementTree.ParseError as error:
-        raise Refused("the JUnit report does not parse: %s" % error) from None
+        raise ReportRefused("the JUnit report does not parse: %s" % error) from None
     cases, collection = {}, []
     for case in root.iter("testcase"):
         classname, name = case.get("classname") or "", case.get("name") or ""
@@ -158,8 +195,9 @@ def read_junit(data):
     return {"cases": cases, "collection_errors": collection}
 
 
-def score_cases(frozen, report):
-    """Counts over the frozen cases only. `of` is len(frozen) whatever the run collected."""
+def score_cases(frozen, report, new):
+    """Counts over the frozen cases only. `of` is len(frozen) whatever the run collected; `of_new` is how many of them
+    are `new` (do not pass on the parent) and `passed_new` how many of those pass here."""
     frozen = sorted(set(frozen))
     counts = {"passed": 0, "failed": 0, "error": 0, "skipped": 0, "not_run": 0}
     obstacles = []
@@ -172,7 +210,10 @@ def score_cases(frozen, report):
         if status in ("failed", "error") and len(obstacles) < MAX_OBSTACLES:
             obstacles.append(line)
     held = set(frozen)
+    if not set(new) <= held:
+        raise Refused("a new case is not a frozen case")
     counts.update(of=len(frozen), unfrozen=sum(1 for case in report["cases"] if case not in held),
+        of_new=len(set(new)), passed_new=sum(1 for case in set(new) if report["cases"].get(case, ("",))[0] == "passed"),
         collection_errors=list(report["collection_errors"]), first_obstacles=obstacles)
     return counts
 
@@ -193,13 +234,14 @@ def first_named(steps, wanted):
 def offered_paths(item, row):
     if row == "path":
         return [item["direct_path"]]
-    if row in ("search", "newest", "lot"):
+    if row in THREES:
         return list(item[row]["three"])
     return []
 
 
 def read_walk(path, item, row):
-    """matching_named and offered_named from the row's walks.jsonl (one walk, or none)."""
+    """matching_named and offered_named from the row's walks.jsonl (one walk, or none). The bm25 row's offered files
+    are read as the search row's are: its plan member's three."""
     lines = [line for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()] \
         if Path(path).exists() else []
     if len(lines) > 1:
@@ -271,19 +313,23 @@ def jail_turn(directory, items, commit, worker_dir, plan, secs):
         % (done.returncode, done.stdout[-20000:], done.stderr[-20000:]))
 
 
-def turn_outcome(directory):
+def turn_base(listed, commit):
+    """The commit a judge's own turn begins on: the item list's base for the item's commit, the one turn.sh gives the
+    room (pilot_driver's turn: item_from(listed(items)), then `--base entry["base"]`)."""
+    return pilot.item_from(listed, commit)["base"]
+
+
+def turn_outcome(directory, base):
     """How the run's one turn ended, read as the runner reads a row: (outcome, commit, verdict). The outcome is the
-    runner's: handed-in, limit, no-hand-in or clock-failed; the verdict is the room's bool for a hand-in, else None."""
+    runner's outcome(turns, base), `base` the commit the turn began on: a turn whose commit is its base handed in
+    nothing. The clock's exit code decides nothing (the room exits 1 on a finished turn); turn.sh's clock.exit stays
+    in the turn's directory for a reader. The verdict is the room's bool for a hand-in, else None."""
     directory = Path(directory)
     try:
         turns = json.loads((directory / "turns.json").read_bytes())
     except (OSError, ValueError):
         turns = None
-    try:
-        code = int((directory / "clock.exit").read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        code = -1
-    kind, commit = runner.outcome(turns, code)
+    kind, commit = runner.outcome(turns, base)
     passed = turns[0].get("passed") if kind == "handed-in" else None
     return kind, commit, passed if type(passed) is bool else None
 
@@ -297,17 +343,18 @@ def committed(repo, commit, name):
     meta, _, path = listed.partition(b"\t")
     mode, kind, blob = meta.split()
     if path != name.encode("utf-8") or kind != b"blob" or mode not in (b"100644", b"100755"):
-        raise Refused("%s in the turn's commit is not a regular file (mode %s)" % (name, mode.decode("ascii")))
+        raise ReportRefused("%s in the turn's commit is not a regular file (mode %s)" % (name, mode.decode("ascii")))
     size = int(pilot.git(repo, "cat-file", "-s", blob.decode("ascii")))
     if size > MAX_REPORT:
-        raise Refused("%s in the turn's commit holds %d bytes, over %d" % (name, size, MAX_REPORT))
+        raise ReportRefused("%s in the turn's commit holds %d bytes, over %d" % (name, size, MAX_REPORT))
     return pilot.git(repo, "cat-file", "blob", blob.decode("ascii"))
 
 
-def diagnostic(directory, items, commit, patch, plan):
+def diagnostic(directory, items, commit, patch, plan, base):
     """The change applied and the item's tests run in the jail: {"turn", "applied", "limit", "report"}. `turn` is
     how the room's turn ended, with "no-status" for a hand-in with no jail-status.json; only a turn that handed in
-    its status has `applied` and a report. `limit` is true when the turn or its tests reached their limit."""
+    its status has `applied` and a report. `limit` is true when the turn or its tests reached their limit. `base` is
+    the commit the turn begins on (turn_base). A report or status the judge will not read raises ReportRefused."""
     limit = plan["limits"]["diagnostic_secs"]
     worker = Path(directory) / "stand-in"
     worker.mkdir(parents=True)
@@ -317,7 +364,7 @@ def diagnostic(directory, items, commit, patch, plan):
     (worker / "explain.py").write_text(EXPLAIN % limit, encoding="utf-8")
     turn = Path(directory) / "turn"
     jail_turn(turn, items, commit, worker, plan, limit + DIAGNOSTIC_MARGIN_SECS)
-    kind, turn_commit, _ = turn_outcome(turn)
+    kind, turn_commit, _ = turn_outcome(turn, base)
     if kind != "handed-in":
         return {"turn": kind, "applied": None, "limit": kind == "limit", "report": NO_REPORT}
     status = committed(turn / "repo", turn_commit, "jail-status.json")
@@ -326,15 +373,15 @@ def diagnostic(directory, items, commit, patch, plan):
     try:
         status = json.loads(status)
     except ValueError:
-        raise Refused("%s: jail-status.json is not JSON" % directory) from None
+        raise ReportRefused("jail-status.json is not JSON") from None
     if not isinstance(status, dict):
-        raise Refused("%s: jail-status.json is not an object" % directory)
+        raise ReportRefused("jail-status.json is not an object")
     report = committed(turn / "repo", turn_commit, "jail-junit.xml") or b""
     return {"turn": kind, "applied": status.get("apply_exit") == 0, "limit": status.get("limit") is True,
         "report": read_junit(report)}
 
 
-def replay(directory, items, commit, patch, plan):
+def replay(directory, items, commit, patch, plan, base):
     """The change by the earlier probes' stand-in, judged by the room with the item's frozen check, the turn limited
     to the plan's replay_secs: (how the turn ended, the room's verdict)."""
     worker = Path(directory) / "stand-in"
@@ -343,7 +390,7 @@ def replay(directory, items, commit, patch, plan):
     shutil.copyfile(ITEMS / "stand-in.sh", worker / "worker.sh")
     (worker / "worker.sh").chmod(0o755)
     jail_turn(Path(directory) / "turn", items, commit, worker, plan, plan["limits"]["replay_secs"])
-    kind, _, verdict = turn_outcome(Path(directory) / "turn")
+    kind, _, verdict = turn_outcome(Path(directory) / "turn", base)
     return kind, verdict
 
 
@@ -381,7 +428,7 @@ def move_aside(directory):
 
 def controls(out, items):
     out = Path(out).resolve()
-    plan = load_plan(out)
+    plan = load_judged_plan(out)
     items = items_dir(plan, items)
     listed = check_items(plan, items)
     (out / "controls").mkdir(exist_ok=True)
@@ -395,7 +442,7 @@ def controls(out, items):
         entry = pilot.item_from(listed, item["commit"])
         repo = Path(items).resolve() / "repo"
         patch = source_patch(repo, entry["base"], entry["reference"])
-        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan)
+        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan, entry["base"])
         passed = sorted(case for case, (status, _) in ran["report"]["cases"].items() if status == "passed")
         counts = {status: sum(1 for held, _ in ran["report"]["cases"].values() if held == status)
             for status in ("passed", "failed", "error", "skipped")}
@@ -410,7 +457,7 @@ def controls(out, items):
             stop = "no case passes on the reference (%s)" % json.dumps(counts, sort_keys=True)
         else:
             pilot.write_json(directory / "cases.json", {"commit": item["commit"], "cases": passed, "counts": counts})
-            kind, verdict = replay(directory / "reference" / "replay", items, item["commit"], patch, plan)
+            kind, verdict = replay(directory / "reference" / "replay", items, item["commit"], patch, plan, entry["base"])
             if kind in ("limit", "clock-failed"):
                 stop = "the reference's replay turn ended %s" % kind
             elif verdict is not True:
@@ -419,7 +466,7 @@ def controls(out, items):
             pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": stop})
             print("%s: stopped: %s" % (item["item"], stop))
             continue
-        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan)
+        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan, entry["base"])
         if parent["limit"] or parent["turn"] != "handed-in":
             pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason":
                 "the parent's run reached its limit" if parent["limit"] else "the parent's turn ended %s" % parent["turn"]})
@@ -435,19 +482,54 @@ def controls(out, items):
     return 0
 
 
-def parent_score(directory, frozen):
+def parent_score(directory, frozen, new):
     held = json.loads((directory / "parent" / "junit.json").read_text(encoding="utf-8"))
     return score_cases(frozen, {"cases": {key: tuple(value) for key, value in held["cases"].items()},
-        "collection_errors": held["collection_errors"]})
+        "collection_errors": held["collection_errors"]}, new)
+
+
+def new_cases(directory, frozen):
+    """The frozen cases that do not pass on the parent (parent.json's `passed`): the cases a change must make pass."""
+    return sorted(set(frozen) - set(pilot.load(directory / "parent.json")["passed"]))
 
 
 # ---------------------------------------------------------------- judge
 
-def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None):
-    """score.json's value for one recorded row (not written here). Every row's `of` is the count of frozen cases,
-    scored or not; a row with no score keeps what was counted beside its named outcome."""
+def read_turns(path, base):
+    """(outcome, turn_commit, at_limit) from an `item turns --json` export, decided as the runner's run_turn decides
+    them from its own export: runner.outcome(turns, base), and at_limit when the one turn ended timed_out."""
+    try:
+        turns = json.loads(Path(path).read_bytes())
+    except (OSError, ValueError):
+        turns = None
+    kind, commit = runner.outcome(turns, base)
+    at_limit = (isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
+        and isinstance(turns[0].get("measured"), dict) and turns[0]["measured"].get("ended") == "timed_out")
+    return kind, commit, at_limit
+
+
+def export_again(out, plan, order, judged, what):
+    """The room's own export (`item turns` or `item walks`, with --json) run again from the row's room/, with the
+    plan's pinned program and environment, as the runner's export ran it; written under the judged row. The item's id
+    is the second word of the row's item.txt. Returns the export's exit code."""
+    recorded = row_dir(out, order)
+    words = (recorded / "item.txt").read_text(encoding="utf-8").split()
+    if len(words) < 2 or words[0] != order["commit"]:
+        raise Refused("%s: item.txt does not name the row's commit and the room's item" % order["directory"])
+    name = {"turns": "turns.json", "walks": "walks.jsonl"}[what]
+    return runner.export(plan["programs"]["yak"]["path"], dict(plan["environment"]), recorded / "room", words[1],
+        what, Path(judged) / name, Path(judged) / (what + ".err"))
+
+
+def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None, listed=None, run_export=None):
+    """score.json's value for one recorded row (not written here). Every row's `of` is the count of frozen cases and
+    its `of_new` the count of those that do not pass on the parent, scored or not; a row with no score keeps what was
+    counted beside its named outcome, which is one of UNSCORED. A row whose turns export failed, or whose walks export
+    did not exit 0, is exported again from its room (never run again). `listed` is the item list: a diagnostic's and
+    a replay's turn begin on its base for the item (turn_base)."""
     run_diagnostic = run_diagnostic or diagnostic
     run_replay = run_replay or replay
+    run_export = run_export or export_again
     item = items_by_short(plan)[order["item"]]
     recorded = row_dir(out, order)
     judged = judged_dir(out, order)
@@ -457,50 +539,70 @@ def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None):
     if (record.get("n"), record.get("commit"), record.get("row")) != (order["n"], order["commit"], order["row"]):
         raise Refused("%s: record.json names row %r of %r, not the plan's" % (order["directory"], record.get("n"),
             record.get("commit")))
-    commit = record.get("turn_commit")
-    if record["outcome"] == "handed-in" and not commit:
+    for key in ("turns_exit", "walks_exit"):
+        if type(record.get(key)) is not int:
+            raise Refused("%s: record.json's %s is %r" % (order["directory"], key, record.get(key)))
+    if (record["outcome"] == "export-failed") != (record["turns_exit"] != 0):
+        raise Refused("%s: record.json's outcome %s with turns_exit %d" % (order["directory"], record["outcome"],
+            record["turns_exit"]))
+    kind, commit, at_limit = record["outcome"], record.get("turn_commit"), record.get("at_limit") is True
+    if kind == "handed-in" and not commit:
         raise Refused("%s: handed in with no turn_commit" % order["directory"])
-    if record["outcome"] == "no-hand-in" and commit:
-        raise Refused("%s: no hand-in, yet turn_commit is %s" % (order["directory"], commit))
+    if kind != "handed-in" and commit:
+        raise Refused("%s: %s, yet turn_commit is %s" % (order["directory"], kind, commit))
+    again, walks = {}, recorded / "walks.jsonl"
+    if kind == "export-failed":
+        again["turns"] = run_export(out, plan, order, judged, "turns")
+        if again["turns"] == 0:
+            kind, commit, at_limit = read_turns(judged / "turns.json", item["rows"][order["row"]]["base"])
+    if record["walks_exit"] != 0:
+        again["walks"] = run_export(out, plan, order, judged, "walks")
+        walks = judged / "walks.jsonl" if again["walks"] == 0 else None
     controls_dir = out / "controls" / item["item"]
     frozen = pilot.load(controls_dir / "cases.json")["cases"]
-    score = {"n": order["n"], "commit": order["commit"], "row": order["row"], "room_passed": None}
-    matching, offered = read_walk(recorded / "walks.jsonl", item, order["row"])
+    new = new_cases(controls_dir, frozen)
+    score = {"n": order["n"], "commit": order["commit"], "row": order["row"], "room_passed": None,
+        "at_limit": at_limit, "exported_again": again}
+    # A walk that could not be read names nothing: its fields are null, not empty.
+    matching, offered = read_walk(walks, item, order["row"]) if walks is not None else (None, None)
     score.update(matching_named=matching, offered_named=offered)
-    if record["outcome"] == "clock-failed":
-        score.update(score_cases(frozen, NO_REPORT), outcome="clock-failed", scored=False)
+
+    def done(counted, outcome, scored, **more):
+        if scored == (outcome in UNSCORED):
+            raise Refused("%s: outcome %s %s a score" % (order["directory"], outcome, "with" if scored else "without"))
+        score.update(counted, outcome=outcome, scored=scored, **more)
         return score
+    if kind in ("clock-failed", "export-failed"):
+        return done(score_cases(frozen, NO_REPORT, new), kind, False)
     if not commit:
-        score.update(parent_score(controls_dir, frozen), outcome=record["outcome"], scored=True)
-        return score
+        return done(parent_score(controls_dir, frozen, new), kind, True)
     patch = source_patch(recorded / "repo", item["rows"][order["row"]]["base"], commit)
     if not patch.strip():
-        score.update(parent_score(controls_dir, frozen), outcome="unchanged-source", scored=True)
-        return score
-    ran = run_diagnostic(judged / "diagnostic", items, order["commit"], patch, plan)
-    counted = score_cases(frozen, ran["report"])
+        return done(parent_score(controls_dir, frozen, new), "unchanged-source", True)
+    base = turn_base(listed, order["commit"])
+    try:
+        ran = run_diagnostic(judged / "diagnostic", items, order["commit"], patch, plan, base)
+    except ReportRefused as error:
+        # A turn's code wrote what the judge refuses to read; the other rows are judged all the same.
+        return done(score_cases(frozen, NO_REPORT, new), "report-refused", False, reason=str(error))
+    counted = score_cases(frozen, ran["report"], new)
     if ran["limit"]:
-        score.update(counted, outcome="diagnostic-limit", scored=False)
-        return score
+        return done(counted, "diagnostic-limit", False)
     if ran["turn"] != "handed-in":
-        score.update(counted, outcome="diagnostic-" + ran["turn"], scored=False)
-        return score
+        return done(counted, "diagnostic-" + ran["turn"], False)
     if not ran["applied"]:
-        score.update(counted, outcome="not-applied", scored=False)
-        return score
-    kind, verdict = run_replay(judged / "replay", items, order["commit"], patch, plan)
-    if kind in ("limit", "clock-failed"):
-        score.update(counted, outcome="replay-" + kind, scored=False)
-        return score
-    score.update(counted, outcome=record["outcome"], scored=True, room_passed=verdict)
-    return score
+        return done(counted, "not-applied", False)
+    replayed, verdict = run_replay(judged / "replay", items, order["commit"], patch, plan, base)
+    if replayed in ("limit", "clock-failed"):
+        return done(counted, "replay-" + replayed, False)
+    return done(counted, kind, True, room_passed=verdict)
 
 
 def judge(out, items, rows=None):
     out = Path(out).resolve()
-    plan = load_plan(out)
+    plan = load_judged_plan(out)
     items = items_dir(plan, items)
-    check_items(plan, items)
+    listed = check_items(plan, items)
     (out / "judged").mkdir(exist_ok=True)
     done = 0
     for order in plan["order"]:
@@ -519,7 +621,7 @@ def judge(out, items, rows=None):
         if judged.exists():
             move_aside(judged)
         judged.mkdir()
-        score = judge_row(out, items, plan, order)
+        score = judge_row(out, items, plan, order, listed=listed)
         pilot.write_json(judged / "score.json", score)
         done += 1
         print("%s: %s, %s" % (order["directory"], score["outcome"],
@@ -529,8 +631,9 @@ def judge(out, items, rows=None):
 
 # ---------------------------------------------------------------- report
 
-def share(score):
-    return Fraction(score["passed"], score["of"])
+def share(score, new=False):
+    """The share of the frozen cases that pass; with `new`, of the frozen cases that fail on the parent."""
+    return Fraction(score["passed_new"], score["of_new"]) if new else Fraction(score["passed"], score["of"])
 
 
 def classify(d, r):
@@ -541,21 +644,22 @@ def classify(d, r):
     return "within"
 
 
-def usable(score):
-    return score is not None and score.get("scored") is True and score.get("of", 0) > 0
+def usable(score, new=False):
+    return score is not None and score.get("scored") is True and score.get("of_new" if new else "of", 0) > 0
 
 
-def item_reading(scores):
-    """One item's b, r and each offering row's d and class, from {row: score or None}. None where not read."""
-    if not all(usable(scores.get(row)) for row in NOTHING):
+def item_reading(scores, new=False):
+    """One item's b, r and each offering row's d and class, from {row: score or None}, on the share over all frozen
+    cases or, with `new`, on the share over the new ones (an item whose of_new is 0 is not read). None where not read."""
+    if not all(usable(scores.get(row), new) for row in NOTHING):
         return None
-    n1, n2 = share(scores["nothing-1"]), share(scores["nothing-2"])
+    n1, n2 = share(scores["nothing-1"], new), share(scores["nothing-2"], new)
     b, r = (n1 + n2) / 2, abs(n1 - n2)
     conditions = {}
     for row in OFFERING:
-        if usable(scores.get(row)):
-            d = share(scores[row]) - b
-            conditions[row] = {"o": share(scores[row]), "d": d, "class": classify(d, r)}
+        if usable(scores.get(row), new):
+            d = share(scores[row], new) - b
+            conditions[row] = {"o": share(scores[row], new), "d": d, "class": classify(d, r)}
     return {"n1": n1, "n2": n2, "b": b, "r": r, "conditions": conditions}
 
 
@@ -619,74 +723,100 @@ def number(value):
     return None if value is None else float(value)
 
 
+def attempts_of(directory, record):
+    """(earlier attempts, interrupted attempts) from the record's own fields: an attempt is interrupted when it had
+    started and its clock had not exited, as the runner counts interrupted_attempts; the two must agree."""
+    attempts = record.get("attempts")
+    if not isinstance(attempts, list) or not all(isinstance(held, dict) for held in attempts):
+        raise Refused("%s: record.json has no attempts list" % directory)
+    interrupted = sum(1 for held in attempts if held.get("started") is True and held.get("clock_exited") is not True)
+    if (record.get("earlier_attempts"), record.get("interrupted_attempts")) != (len(attempts), interrupted):
+        raise Refused("%s: record.json's attempt counts do not agree with its attempts" % directory)
+    return len(attempts), interrupted
+
+
 def make_report(out):
     out = Path(out).resolve()
-    plan = load_plan(out)
-    scores, records, unjudged = {}, {}, []
+    plan = load_judged_plan(out)
+    scores, unjudged = {}, []
+    outcomes, judged_outcomes = {}, {}
+    at_limit = {row: 0 for row in ROWS}
+    earlier, interrupted = {row: 0 for row in ROWS}, {row: 0 for row in ROWS}
+    recorded = 0
     for order in plan["order"]:
         record_path = row_dir(out, order) / "record.json"
         score_path = judged_dir(out, order) / "score.json"
-        if record_path.exists():
-            records[order["directory"]] = pilot.load(record_path)
-        if score_path.exists():
-            score = pilot.load(score_path)
+        record = pilot.load(record_path) if record_path.exists() else None
+        score = pilot.load(score_path) if score_path.exists() else None
+        if score is not None:
             if (score.get("n"), score.get("commit"), score.get("row")) != (order["n"], order["commit"], order["row"]):
                 raise Refused("%s: score.json names another row" % order["directory"])
             scores.setdefault(order["item"], {})[order["row"]] = score
-        elif record_path.exists():
-            unjudged.append(order["directory"])
-    readings = {item["item"]: item_reading(scores.get(item["item"], {})) for item in plan["items"]}
-    probed = {item["item"] for item in plan["items"] if item["probed_before"]}
-    items_tally = {row: tally(readings, row) for row in OFFERING}
-    without = {row: tally(readings, row, lambda item: item not in probed) for row in OFFERING}
-    every = plan_summaries(plan, readings)
-    unprobed = plan_summaries(plan, readings, lambda item: not item["probed_before"])
-    plans_tally = every["plans_tally"]
-    rule = spending_rule(plan, scores, items_tally, plans_tally)
-    interrupted = out / "rows" / "interrupted"
-    outcomes, at_limit = {}, {row: 0 for row in ROWS}
-    for directory, record in records.items():
-        outcomes[record.get("outcome")] = outcomes.get(record.get("outcome"), 0) + 1
-        if record.get("at_limit") is True:       # a record without the key is not at its limit
-            at_limit[record.get("row")] = at_limit.get(record.get("row"), 0) + 1
-    judged_outcomes = {}
-    for item_scores in scores.values():
-        for score in item_scores.values():
             judged_outcomes[score["outcome"]] = judged_outcomes.get(score["outcome"], 0) + 1
+        if record is None:
+            continue
+        recorded += 1
+        if score is None:
+            unjudged.append(order["directory"])
+        outcomes[record.get("outcome")] = outcomes.get(record.get("outcome"), 0) + 1
+        # A judged row's at_limit is the judge's (it may come from turns exported again); a record without the key is
+        # not at its limit.
+        if (score if score is not None and "at_limit" in score else record).get("at_limit") is True:
+            at_limit[order["row"]] += 1
+        many, cut = attempts_of(order["directory"], record)
+        earlier[order["row"]] += many
+        interrupted[order["row"]] += cut
+    probed = {item["item"] for item in plan["items"] if item["probed_before"]}
     stopped = {}
     for item in plan["items"]:
         held = out / "controls" / item["item"] / "stopped.json"
         if held.exists():
             stopped[item["item"]] = pilot.load(held)["reason"]
+    parent = {}
+    for item in plan["items"]:
+        directory = out / "controls" / item["item"]
+        if (directory / "parent.json").exists():
+            frozen = pilot.load(directory / "cases.json")["cases"]
+            parent[item["item"]] = {"passed": len(pilot.load(directory / "parent.json")["passed"]), "of": len(frozen),
+                "of_new": len(new_cases(directory, frozen))}
     report = {
-        "v": 1,
-        "rows": {"planned": len(plan["order"]), "recorded": len(records), "judged": sum(map(len, scores.values())),
+        "v": 2,
+        "rows": {"planned": len(plan["order"]), "recorded": recorded, "judged": sum(map(len, scores.values())),
             "unjudged": unjudged, "outcomes": outcomes, "judged_outcomes": judged_outcomes,
-            "at_limit": at_limit,
-            "interrupted": len([name for name in os.listdir(interrupted)]) if interrupted.is_dir() else 0},
+            "unscored": {outcome: judged_outcomes[outcome] for outcome in UNSCORED if outcome in judged_outcomes},
+            "at_limit": at_limit, "earlier_attempts": earlier, "interrupted": interrupted},
         "controls_stopped": stopped,
-        "items": {item["item"]: None if readings[item["item"]] is None else {
+        "parent": parent,
+        "probed": sorted(probed),
+        "plan_of": {item["item"]: item["plan_group"] for item in plan["items"]},
+        "places": {item["item"]: {"search": item["search"]["best_place"], "search_tied": item["search"]["tied"],
+            "newest": item["newest"]["best_place"], "bm25": item["bm25"]["best_place"], "bm25_tied": item["bm25"]["tied"]}
+            for item in plan["items"]},
+    }
+    for suffix, new in (("", False), ("_new", True)):
+        readings = {item["item"]: item_reading(scores.get(item["item"], {}), new) for item in plan["items"]}
+        items_tally = {row: tally(readings, row) for row in OFFERING}
+        every = plan_summaries(plan, readings)
+        if not new:
+            # The rule of the spec's section 7 reads the share over all frozen cases, and only RULE_ROWS.
+            report["rule"] = spending_rule(plan, scores, items_tally, every["plans_tally"])
+        report["items" + suffix] = {item["item"]: None if readings[item["item"]] is None else {
             "probed_before": item["probed_before"], "plan_group": item["plan_group"],
             "n1": number(readings[item["item"]]["n1"]), "n2": number(readings[item["item"]]["n2"]),
             "b": number(readings[item["item"]]["b"]), "r": number(readings[item["item"]]["r"]),
             "conditions": {row: {"o": number(held["o"]), "d": number(held["d"]), "class": held["class"]}
-                for row, held in readings[item["item"]]["conditions"].items()}} for item in plan["items"]},
-        "parent": {item["item"]: {"passed": len(pilot.load(out / "controls" / item["item"] / "parent.json")["passed"]),
-            "of": len(pilot.load(out / "controls" / item["item"] / "cases.json")["cases"])}
-            for item in plan["items"] if (out / "controls" / item["item"] / "parent.json").exists()},
-        "tally": items_tally, "tally_without_probed": without, "probed": sorted(probed),
-        "plan_of": {item["item"]: item["plan_group"] for item in plan["items"]},
-        "rule": rule,
-        "places": {item["item"]: {"search": item["search"]["best_place"], "search_tied": item["search"]["tied"],
-            "newest": item["newest"]["best_place"]} for item in plan["items"]},
-    }
-    for suffix, held in (("", every), ("_without_probed", unprobed)):
-        report["plans" + suffix] = {group: {"items": value["items"], "conditions": {row: {"D": number(cond["D"]),
-            "R": number(cond["R"]), "class": cond["class"], "on": cond["on"]} for row, cond in value["conditions"].items()}}
-            for group, value in held["plans"].items()}
-        report["plans_tally" + suffix] = held["plans_tally"]
-        report["figures" + suffix] = {row: number(value) for row, value in held["figures"].items()}
-        report["figures_on" + suffix] = held["figures_on"]
+                for row, held in readings[item["item"]]["conditions"].items()}} for item in plan["items"]}
+        report["tally" + suffix] = items_tally
+        report["tally_without_probed" + suffix] = {row: tally(readings, row, lambda item: item not in probed)
+            for row in OFFERING}
+        unprobed = plan_summaries(plan, readings, lambda item: not item["probed_before"])
+        for part, held in (("", every), ("_without_probed", unprobed)):
+            report["plans" + part + suffix] = {group: {"items": value["items"], "conditions": {row: {
+                "D": number(cond["D"]), "R": number(cond["R"]), "class": cond["class"], "on": cond["on"]}
+                for row, cond in value["conditions"].items()}} for group, value in held["plans"].items()}
+            report["plans_tally" + part + suffix] = held["plans_tally"]
+            report["figures" + part + suffix] = {row: number(value) for row, value in held["figures"].items()}
+            report["figures_on" + part + suffix] = held["figures_on"]
     return report
 
 
@@ -698,60 +828,79 @@ def cell(value):
     return str(value)
 
 
+def counted(pairs):
+    return ", ".join("%s %d" % pair for pair in pairs) or "none"
+
+
+SHARES = (("", "shares of the frozen cases"),
+    ("_new", "shares of the new cases: the frozen cases that fail on the parent; an item whose of_new is 0 is not read"))
+
+
 def report_markdown(report):
     lines = ["# A document offered: the report", ""]
     rows = report["rows"]
-    lines += ["Rows: %d planned, %d recorded, %d judged, %d recorded and not judged; %d interrupted and taken up again."
-        % (rows["planned"], rows["recorded"], rows["judged"], len(rows["unjudged"]), rows["interrupted"]), "",
-        "Recorded outcomes: %s. Judged outcomes: %s." % (
-        ", ".join("%s %d" % pair for pair in sorted(rows["outcomes"].items())) or "none",
-        ", ".join("%s %d" % pair for pair in sorted(rows["judged_outcomes"].items())) or "none"), "",
+    lines += ["Rows: %d planned, %d recorded, %d judged, %d recorded and not judged." % (rows["planned"],
+        rows["recorded"], rows["judged"], len(rows["unjudged"])), "",
+        "Attempts interrupted (started, clock not exited) and taken up again, by condition, from the records: %s; "
+        "earlier attempts of any kind: %s." % (counted((row, rows["interrupted"][row]) for row in ROWS),
+        counted((row, rows["earlier_attempts"][row]) for row in ROWS)), "",
+        "Recorded outcomes: %s. Judged outcomes: %s." % (counted(sorted(rows["outcomes"].items())),
+        counted(sorted(rows["judged_outcomes"].items()))), "",
+        "Rows with no score, by outcome: %s." % counted((outcome, rows["unscored"][outcome]) for outcome in UNSCORED
+        if outcome in rows["unscored"]), "",
         "Rows the room ended at their limit, by condition: %s." % ", ".join("%s %d" % (row, rows["at_limit"][row])
-        for row in ROWS), ""]
+        for row in ROWS), "", BM25_SENTENCE, ""]
     for item, reason in sorted(report["controls_stopped"].items()):
         lines.append("Controls stopped at %s: %s" % (item, reason))
-    lines += ["", "## Each item (shares of the frozen cases)", "",
-        "| item | plan | parent | n1 | n2 | b | r | " + " | ".join("%s d (class)" % row for row in OFFERING) + " |",
-        "| --- " * (7 + len(OFFERING)) + "|"]
-    for item, held in report["items"].items():
-        parent = report["parent"].get(item)
-        if held is None:
-            lines.append("| %s | %s | %s | no baseline |" % (item, report["plan_of"][item], "-" if parent is None
-                else "%d of %d" % (parent["passed"], parent["of"])) + " |" * (3 + len(OFFERING)))
-            continue
-        mark = " (probed)" if held["probed_before"] else ""
-        lines.append("| %s%s | %s | %s | %s | %s | %s | %s | %s |" % (item, mark, held["plan_group"],
-            "-" if parent is None else "%d of %d" % (parent["passed"], parent["of"]), cell(held["n1"]),
-            cell(held["n2"]), cell(held["b"]), cell(held["r"]), " | ".join(
-            "%s (%s)" % (cell(held["conditions"][row]["d"]), held["conditions"][row]["class"])
-            if row in held["conditions"] else "not read" for row in OFFERING)))
-    lines += ["", "## Each condition over the items", "", "| condition | higher | lower | within | items it stands on |"
-        " without the probed: higher | lower | within | on |", "| --- " * 9 + "|"]
-    for row in OFFERING:
-        a, w = report["tally"][row], report["tally_without_probed"][row]
-        lines.append("| %s | %d | %d | %d | %d | %d | %d | %d | %d |" % (row, a["higher"], a["lower"], a["within"],
-            a["on"], w["higher"], w["lower"], w["within"], w["on"]))
-    for suffix, title in (("", "By plan"), ("_without_probed", "By plan, without the probed item")):
-        lines += ["", "## " + title, "", "| plan | items | " + " | ".join("%s D, R (class)" % row for row in OFFERING)
-            + " |", "| --- " * (2 + len(OFFERING)) + "|"]
-        for group, held in report["plans" + suffix].items():
-            lines.append("| %s | %s | %s |" % (group, ", ".join(held["items"]), " | ".join(
-                "%s, %s (%s; on %d)" % (cell(held["conditions"][row]["D"]), cell(held["conditions"][row]["R"]),
-                held["conditions"][row]["class"], held["conditions"][row]["on"]) if row in held["conditions"]
-                else "not read" for row in OFFERING)))
-        lines += ["", "Every plan weighing the same: " + "; ".join("%s %s (%d plans, %d items)" % (row,
-            cell(report["figures" + suffix][row]), report["figures_on" + suffix][row]["plans"],
-            report["figures_on" + suffix][row]["items"]) for row in OFFERING) + ". Plans higher: " + "; ".join(
-            "%s %d of %d" % (row, report["plans_tally" + suffix][row]["higher"], report["plans_tally" + suffix][row]["on"])
-            for row in OFFERING) + "."]
-    lines += ["", "## The rule for where to spend next", ""]
+    for suffix, title in SHARES:
+        lines += ["", "## Each item (%s)" % title, "",
+            "| item | plan | parent | of | of_new | n1 | n2 | b | r | " + " | ".join("%s d (class)" % row
+            for row in OFFERING) + " |", "| --- " * (9 + len(OFFERING)) + "|"]
+        for item, held in report["items" + suffix].items():
+            parent = report["parent"].get(item)
+            first = "%s | %s | %s | %s" % (report["plan_of"][item], "-" if parent is None else "%d of %d" % (
+                parent["passed"], parent["of"]), "-" if parent is None else parent["of"],
+                "-" if parent is None else parent["of_new"])
+            if held is None:
+                lines.append("| %s | %s | no baseline |" % (item, first) + " |" * (3 + len(OFFERING)))
+                continue
+            mark = " (probed)" if held["probed_before"] else ""
+            lines.append("| %s%s | %s | %s | %s | %s | %s | %s |" % (item, mark, first, cell(held["n1"]),
+                cell(held["n2"]), cell(held["b"]), cell(held["r"]), " | ".join(
+                "%s (%s)" % (cell(held["conditions"][row]["d"]), held["conditions"][row]["class"])
+                if row in held["conditions"] else "not read" for row in OFFERING)))
+        lines += ["", "## Each condition over the items (%s)" % title, "",
+            "| condition | higher | lower | within | items it stands on |"
+            " without the probed: higher | lower | within | on |", "| --- " * 9 + "|"]
+        for row in OFFERING:
+            a, w = report["tally" + suffix][row], report["tally_without_probed" + suffix][row]
+            lines.append("| %s | %d | %d | %d | %d | %d | %d | %d | %d |" % (row, a["higher"], a["lower"],
+                a["within"], a["on"], w["higher"], w["lower"], w["within"], w["on"]))
+        for part, named in (("", "By plan"), ("_without_probed", "By plan, without the probed item")):
+            key = part + suffix
+            lines += ["", "## %s (%s)" % (named, title), "", "| plan | items | " + " | ".join(
+                "%s D, R (class)" % row for row in OFFERING) + " |", "| --- " * (2 + len(OFFERING)) + "|"]
+            for group, held in report["plans" + key].items():
+                lines.append("| %s | %s | %s |" % (group, ", ".join(held["items"]), " | ".join(
+                    "%s, %s (%s; on %d)" % (cell(held["conditions"][row]["D"]), cell(held["conditions"][row]["R"]),
+                    held["conditions"][row]["class"], held["conditions"][row]["on"]) if row in held["conditions"]
+                    else "not read" for row in OFFERING)))
+            lines += ["", "Every plan weighing the same: " + "; ".join("%s %s (%d plans, %d items)" % (row,
+                cell(report["figures" + key][row]), report["figures_on" + key][row]["plans"],
+                report["figures_on" + key][row]["items"]) for row in OFFERING) + ". Plans higher: " + "; ".join(
+                "%s %d of %d" % (row, report["plans_tally" + key][row]["higher"], report["plans_tally" + key][row]["on"])
+                for row in OFFERING) + "."]
+    lines += ["", "## The rule for where to spend next", "",
+        "The rule reads the shares of all frozen cases at the rows %s; bm25 is not among them." % ", ".join(RULE_ROWS), ""]
     rule = report["rule"]
     lines.append("**%s**." % rule["decision"].capitalize() + ("" if not rule["missing"] else
         " The rule is not applied: these rows it needs have no score: %s." % ", ".join(rule["missing"])))
-    lines += ["", "## Places counted before any turn", "", "| item | search: best place | tied | newest plans: best place |",
-        "| --- | --- | --- | --- |"]
+    lines += ["", "## Places counted before any turn", "", BM25_SENTENCE, "",
+        "| item | search: best place | tied | bm25: best place | tied | newest plans: best place |",
+        "| --- | --- | --- | --- | --- | --- |"]
     for item, held in report["places"].items():
-        lines.append("| %s | %s | %s | %s |" % (item, cell(held["search"]), cell(held["search_tied"]), cell(held["newest"])))
+        lines.append("| %s | %s | %s | %s | %s | %s |" % (item, cell(held["search"]), cell(held["search_tied"]),
+            cell(held["bm25"]), cell(held["bm25_tied"]), cell(held["newest"])))
     return "\n".join(lines) + "\n"
 
 
