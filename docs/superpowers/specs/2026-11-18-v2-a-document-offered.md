@@ -5,7 +5,8 @@ seven) and a second fresh reader read revision 2 (approve with named changes, fo
 them. Since then the twelve tasks were written, read and frozen, and the three scripts were built and
 read. Revision 4 takes in what those reads and the lead's runs on the real room found, and adds one row.
 Every change is listed at the end. It changes no code of the room: the pilot is run by scripts over the
-room as it is. Before any model turn this revision has one read to pass.
+room as it is. A fresh reader of the other family read this revision: approve with named changes, five,
+all made here and listed last in the table at the end.
 
 ## 1. What it is, and what it is not
 
@@ -65,8 +66,9 @@ been seen, one of them among the twelve:
   files at the parent counts nothing.
 - **The third rule:** no matching file has a line that, after any spaces, begins `def test_`.
 
-The maker rebuilds the forty and the twelve from the census's 188 lines and refuses any other result,
-and refuses an item list whose sha256 does not begin 4b25d330.
+The maker rebuilds the twelve from the census's 188 lines and refuses any other twelve, and refuses an
+item list whose sha256 does not begin 4b25d330. That forty items meet the first two rules is asserted
+by a test of the maker over the repository's own history, not by the maker when it runs.
 
 Forty items meet the first two rules and twelve meet all three: 9a3f21cf, 71a593d5, d20c739b, cd884db7,
 c9ceb15b, 671a2250, 1113f1db, 0193bde8, fff1b349, 027834bf, 3879e609, 3f349e89. By the list's parts seven
@@ -194,10 +196,13 @@ eight task files are byte for byte the same up to that paragraph.
   above said before the count, Three by search is run all the same. What it shows is of three files
   that share words with the task and are not a matching file. The search's rule is not changed.
 - **A second search, added after that count: the row `bm25`.** Same candidates, same words, same
-  query, and the same words left out for being in more than half the files. For a file, `tf` is how
-  many times a word occurs in it, `L` how many words it holds counting every occurrence, `avg` the
-  mean of `L` over the candidates (1 if that mean is 0), `N` the number of candidates and `df` the
-  number that hold the word. A file's score is the sum, over the query's words in sorted order, of
+  query, and the same words left out for being in more than half the files. The words summed over are
+  the query's different words that are kept, each once, however often the task repeats one. For a
+  file, `tf` is how many times a word occurs in it; `L` is how many words the whole file holds,
+  counting every occurrence of every word of the pattern, those not in the query and those left out
+  among them; `avg` is the mean of `L` over the candidates (1 if that mean is 0); `N` is the number of
+  candidates and `df` the number that hold the word. A file's score is the sum, over those words in
+  sorted order, of
   `log(1 + (N - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * L / avg))`, with the
   natural logarithm, rounded to nine decimal places. Highest first; ties by the path's bytes.
 - **What that row is and is not.** The lead counted four orderings on the frozen tasks outside the
@@ -279,10 +284,15 @@ its cases from the candidate's own constants, so the number of cases can change 
     judge asked for it once more;
   - the diagnostic reached its limit, its clock failed, it handed in nothing, or it wrote no status;
   - the replay reached its limit or its clock failed (the diagnostic's counts are kept beside it);
-  - the test run's report was refused.
+  - the test run's report, or the status file beside it, was refused: too big, not an ordinary file,
+    not UTF-8, not what its format requires.
 
   The report names each that occurred, with its count. A diagnostic that reaches its limit is not
   thereby the instrument's fault; why it did is not decided here.
+- **A control is not a row.** A row that fails in any of these ways never stops the judging of other
+  rows. A control that fails in any of them stops its item: the judge writes why, the runner starts
+  no turn of that item and none after it in the order, and so the pilot does not begin until every
+  item's controls stand. The lead then mends the cause and makes the plan again.
 - **What a row with no score does to the reading of section 7.** If either Nothing row of an item has
   no score, that item has no baseline and no gap, and no condition is read at it. If an offering row has
   no score, that condition is not read at that item. Every table says how many items it stands on. If
@@ -317,8 +327,11 @@ same without 027834bf.
 
 **The second reading.** Every tally here and by plan is given again with `b`, `r` and `d` taken on the
 share of the cases that do not pass on the parent. An item with no such case is left out of that
-reading, and each table says how many items it stands on. The rule below is read on the share of all
-frozen cases, as revision 3 fixed it before the parent's counts were seen.
+reading, and each table says how many items it stands on. A plan's `D` and `R` are taken over the same
+items, those read under that condition; a plan with no such item is not read; and a condition's figure
+over the plans is given only when all six plans are read, with the number of plans and items it stands
+on beside it. By the controls no item is without such a case. The rule below is read on the share of
+all frozen cases, as revision 3 fixed it before the parent's counts were seen.
 
 **By plan.** For each of the six plans and each offering condition, over that plan's items: `D` is the
 mean of the items' `d` and `R` the mean of the items' `r`. The condition is **higher at the plan** when
@@ -344,6 +357,16 @@ either alone.
 **Three by a second search is no part of the rule.** It is given in every table beside the others. It
 was added after its places were seen, so nothing above is decided by it, and a row of it with no score
 does not suspend the rule.
+
+**What the generated report must say before its tables,** in the report itself and not only here:
+
+- that the second search was chosen after four orderings were compared on these same twelve items, and
+  is no part of the spending rule; and in every table that condition is labelled "selected after
+  retrieval counts";
+- that every score is read from a report written inside the jail by a run the turn's own code is part
+  of, and could be forged by it;
+- that the room's verdict by replay is one more observation beside the score. It does not vouch for
+  the score.
 
 ## 8. What is built
 
@@ -450,4 +473,9 @@ and of the other family than what it read.
 | A second count over the cases that do not pass on the parent, and a second reading of every tally | The lead's run of the controls | Sections 6 and 7 |
 | The report read outside the jail is bounded; a refused report is a row with no score; a score can be forged | The reader of the judge | Sections 6 and 10 |
 | Every outcome with no score listed | The builder of the judge | Section 6 |
+| A refused status file named; a control's failure told apart from a row's | The reader of revision 4 | Section 6 |
+| The second ordering's words and lengths said exactly | The reader of revision 4 | Section 4 |
+| A plan with no item in the second reading; when the figure over plans is given | The reader of revision 4 | Section 7 |
+| What the generated report must say before its tables | The reader of revision 4 | Section 7 |
+| The forty asserted by a test, the twelve by the maker | The reader of revision 4 | Section 2 |
 | A walk that could not be exported is unknown | The builder of the runner | Section 6 |
