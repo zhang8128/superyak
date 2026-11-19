@@ -83,7 +83,7 @@ output for that turn, and returns the outcome and a field `no_commit`.
   `commit` and forty hexadecimal characters, then optionally `; timed out`, optionally `; no new commit: `
   and a reason, and optionally `; rechecked: ` and a state. A state is one of the nine the room writes; any
   other words there make the line no ended event. The recheck is the room's last words, so a reason is read
-  without it. A lease number above the room's 32-bit count is not the room's and matches no event. Only an ended event whose item is
+  without it. A lease number outside the room's 32-bit count, below nought or above it, is not the room's and matches no event. Only an ended event whose item is
   the row's item (`item.txt`) and whose lease and commit are the exported turn's is this turn's. Other
   lines, and ended events of another item, lease or commit, are not evidence. With no such event, or more
   than one, `no_commit` is `null` and the outcome is as today.
@@ -156,7 +156,8 @@ spec to say before its turns.
     as the verdict;
   - a recheck after a refusal, after "the turn committed nothing", and with no reason; words after a reason
     that are no recheck in the room's states stay part of the reason;
-  - a lease at the room's largest count, one above it, and one too large to write as text;
+  - a lease of nought, at the room's largest count, one above it, a negative one, and one too large to write
+    as text, of either sign;
   - an ended event of another item, another lease or another commit, and unrelated lines that hold
     "no new commit": not evidence, so `null` and the outcome as today;
   - no ended event, and two: `null` and the outcome as today;
@@ -216,7 +217,8 @@ spec to say before its turns.
    states ("The clock's line"; the naming function's tests).
 3. The costs and walk counts of a refused row are promised for the second judge's report only (section 3;
    "Tests").
-4. A lease number above the room's count matches no event and is never turned into text.
+4. A lease number outside the room's count, of either sign, matches no event and is never turned into text
+   (the confirming reader, w134, found that a very large negative one still raised; that is mended too).
 
 Run on the real room with no model, from the build as read: the stand-in in the Codex program's place was
 refused by the room with the single-repository sentence, its record says `refused` and "refused: single

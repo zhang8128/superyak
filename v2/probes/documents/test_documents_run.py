@@ -223,8 +223,13 @@ class TurnEnd(unittest.TestCase):
         self.assertEqual(self.end(log(ended(SINGLE, lease=str(top))), exported(lease=top)),
             ("refused", None, "refused: single repository"))
         self.assertEqual(self.end(log(ended(SINGLE, lease=str(top + 1))), exported(lease=top + 1)), today)
-        # Python refuses to write a number of this size as text; the naming must not ask it to.
+        # Python refuses to write a number of this size as text, of either sign; the naming must not ask it to.
         self.assertEqual(self.end(log(ended(SINGLE)), exported(lease=10 ** 5000)), today)
+        self.assertEqual(self.end(log(ended(SINGLE)), exported(lease=-(10 ** 5000))), today)
+        self.assertEqual(self.end(log(ended(SINGLE, lease="-1")), exported(lease=-1)), today)
+        # Nought is in the room's count.
+        self.assertEqual(self.end(log(ended(SINGLE, lease="0")), exported(lease=0)),
+            ("refused", None, "refused: single repository"))
 
     def test_what_is_not_this_turns_ended_event_is_not_evidence(self):
         today = ("no-hand-in", None, None)

@@ -61,7 +61,8 @@ STATE = "(?:draft|open|leased|checking|passed verified|passed unverified|failed|
 # read without them: a reason is named by how it begins, or by being the room's one sentence for nothing committed.
 ENDED = re.compile(r"[0-9]{2}:[0-9]{2}:[0-9]{2} ended (\S+) lease ([0-9]+): " + STATE + r", commit ([0-9a-f]{40})"
     r"(?:; timed out)?(?:; no new commit: (.*?))?(?:; rechecked: " + STATE + r")?")
-# The room counts leases in 32 bits. A larger number in an export is not the room's, and is never turned into text.
+# The room counts leases in 32 bits, from nought up. A number outside that in an export is not the room's, and is
+# never turned into text: Python refuses to write a very long number, of either sign.
 MAX_LEASE = 0xFFFFFFFF
 
 
@@ -81,7 +82,7 @@ def no_commit_of(reason):
 def clock_reason(clock, item, lease, commit):
     """no_commit from the clock's captured output: the one ended event of this item, lease and commit, named; None
     when there is no such event, more than one, or one with no reason. Any other line is not evidence."""
-    if not isinstance(clock, str) or type(lease) is not int or lease > MAX_LEASE:
+    if not isinstance(clock, str) or type(lease) is not int or lease < 0 or lease > MAX_LEASE:
         return None
     found = []
     for line in clock.split("\n"):
