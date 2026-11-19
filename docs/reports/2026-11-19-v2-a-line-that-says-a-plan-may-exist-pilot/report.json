@@ -1,0 +1,815 @@
+{
+ "controls_stopped": {},
+ "counts": {
+  "A may": {
+   "first_source_second": {
+    "mean": 13.89875,
+    "on": 24
+   },
+   "names_matching": 24,
+   "plans_paths": [
+    "docs/superpowers/plans/2026-10-27-chat-paging.md",
+    "docs/superpowers/plans/2026-10-27-pairing-code.md",
+    "docs/superpowers/plans/2026-10-27-public-route.md",
+    "docs/superpowers/plans/2026-10-28-federation-pull.md",
+    "docs/superpowers/plans/2026-10-28-remote-connector.md",
+    "docs/superpowers/plans/2026-11-02-owner-trust.md",
+    "docs/superpowers/plans/2026-11-03-ship-home-and-crossing.md",
+    "docs/superpowers/specs/2026-10-27-federation-pull-design.md",
+    "docs/superpowers/specs/2026-10-27-public-route-design.md",
+    "docs/superpowers/specs/2026-11-03-ship-home-and-crossing-design.md"
+   ],
+   "steps": {
+    "mean": 18.625,
+    "on": 24
+   },
+   "tokens": {
+    "mean": 50792.708333333336,
+    "on": 24
+   },
+   "turns": 24,
+   "turns_naming_plans_paths": 24,
+   "walks_read": 24,
+   "worker_seconds": {
+    "mean": 183.30170833333332,
+    "on": 24
+   }
+  },
+  "N may": {
+   "first_source_second": {
+    "mean": 14.114416666666665,
+    "on": 12
+   },
+   "plans_paths": [
+    "docs/superpowers/plans/2026-10-27-public-route.md",
+    "docs/superpowers/plans/2026-10-27-rail-lessons-hook.md",
+    "docs/superpowers/plans/2026-11-09-own-lessons.md"
+   ],
+   "steps": {
+    "mean": 15.833333333333334,
+    "on": 12
+   },
+   "tokens": {
+    "mean": 50788.416666666664,
+    "on": 12
+   },
+   "turns": 12,
+   "turns_naming_plans_paths": 6,
+   "walks_read": 12,
+   "worker_seconds": {
+    "mean": 126.47408333333334,
+    "on": 12
+   }
+  },
+  "N nothing": {
+   "first_source_second": {
+    "mean": 11.884166666666667,
+    "on": 12
+   },
+   "plans_paths": [],
+   "steps": {
+    "mean": 12.583333333333334,
+    "on": 12
+   },
+   "tokens": {
+    "mean": 41350.0,
+    "on": 12
+   },
+   "turns": 12,
+   "turns_naming_plans_paths": 0,
+   "walks_read": 12,
+   "worker_seconds": {
+    "mean": 97.29983333333332,
+    "on": 12
+   }
+  },
+  "P may": {
+   "first_source_second": {
+    "mean": 12.486833333333335,
+    "on": 12
+   },
+   "names_matching": 12,
+   "plans_paths": [
+    "docs/superpowers/plans/2026-10-03-ds9-station.md",
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+    "docs/superpowers/plans/2026-11-03-lessons-room-adds.md",
+    "docs/superpowers/specs/2026-11-03-lessons-room-adds-design.md"
+   ],
+   "steps": {
+    "mean": 13.833333333333334,
+    "on": 12
+   },
+   "tokens": {
+    "mean": 51715.333333333336,
+    "on": 12
+   },
+   "turns": 12,
+   "turns_naming_plans_paths": 12,
+   "walks_read": 12,
+   "worker_seconds": {
+    "mean": 103.90341666666666,
+    "on": 12
+   }
+  },
+  "P nothing": {
+   "first_source_second": {
+    "mean": 13.092999999999998,
+    "on": 12
+   },
+   "names_matching": 4,
+   "plans_paths": [
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+    "docs/superpowers/plans/2026-11-03-lessons-room-adds.md",
+    "docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md",
+    "docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md",
+    "docs/superpowers/specs/2026-11-03-lessons-room-adds-design.md"
+   ],
+   "steps": {
+    "mean": 15.333333333333334,
+    "on": 12
+   },
+   "tokens": {
+    "mean": 43465.166666666664,
+    "on": 12
+   },
+   "turns": 12,
+   "turns_naming_plans_paths": 8,
+   "walks_read": 12,
+   "worker_seconds": {
+    "mean": 121.24291666666666,
+    "on": 12
+   }
+  }
+ },
+ "items": {
+  "2ebc78e1d8": {
+   "b": 0.5,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.5,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 0.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 1.0
+  },
+  "383c54438d": {
+   "b": 0.8333333333333334,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.16666666666666666,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": false,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.8333333333333334,
+   "n2": 0.8333333333333334,
+   "plan_group": "ds9-station",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "426ad7fbd5": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "4971bdb360": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [
+     "NOTICE_TEMPLATE",
+     "_post_notice"
+    ],
+    "names_a_matching_file": false
+   },
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": "ship-status-and-claims",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "603434cf1e": {
+   "b": 0.9565217391304348,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.0,
+   "m": 0.9565217391304348,
+   "m1": 0.9565217391304348,
+   "m2": 0.9565217391304348,
+   "message": null,
+   "n1": 0.9565217391304348,
+   "n2": 0.9565217391304348,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "6ba4650f4d": {
+   "b": 0.30952380952380953,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.6428571428571429,
+   "m": 0.9523809523809523,
+   "m1": 0.9523809523809523,
+   "m2": 0.9523809523809523,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [
+     "addable_contacts"
+    ],
+    "names_a_matching_file": false
+   },
+   "n1": 0.0,
+   "n2": 0.6190476190476191,
+   "plan_group": "lessons-room-adds",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.6190476190476191
+  },
+  "82bff0db02": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "906b3f734b": {
+   "b": 0.9428571428571428,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.0,
+   "m": 0.9428571428571428,
+   "m1": 0.9428571428571428,
+   "m2": 0.9428571428571428,
+   "message": null,
+   "n1": 0.9428571428571428,
+   "n2": 0.9428571428571428,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "b50b2c109c": {
+   "b": 0.9,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.08,
+   "m": 0.98,
+   "m1": 0.96,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.88,
+   "n2": 0.92,
+   "plan_group": "station-backups-alerts",
+   "pool": "P",
+   "rm": 0.04,
+   "rn": 0.04
+  },
+  "c42ee1f498": {
+   "b": 0.9333333333333333,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.06666666666666667,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 1.0,
+   "n2": 0.8666666666666667,
+   "plan_group": "ship-status-and-claims",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.13333333333333333
+  },
+  "ca2d0d80ea": {
+   "b": 0.7142857142857143,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.2857142857142857,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.7142857142857143,
+   "n2": 0.7142857142857143,
+   "plan_group": "station-backups-alerts",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "edec7384ab": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  }
+ },
+ "items_new": {
+  "2ebc78e1d8": {
+   "b": 0.5,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.5,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 0.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 1.0
+  },
+  "383c54438d": {
+   "b": 0.0,
+   "ceiling": false,
+   "class": "higher",
+   "d": 1.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": false,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.0,
+   "n2": 0.0,
+   "plan_group": "ds9-station",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "426ad7fbd5": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "4971bdb360": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [
+     "NOTICE_TEMPLATE",
+     "_post_notice"
+    ],
+    "names_a_matching_file": false
+   },
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": "ship-status-and-claims",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "603434cf1e": {
+   "b": 0.6666666666666666,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.0,
+   "m": 0.6666666666666666,
+   "m1": 0.6666666666666666,
+   "m2": 0.6666666666666666,
+   "message": null,
+   "n1": 0.6666666666666666,
+   "n2": 0.6666666666666666,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "6ba4650f4d": {
+   "b": 0.30952380952380953,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.6428571428571429,
+   "m": 0.9523809523809523,
+   "m1": 0.9523809523809523,
+   "m2": 0.9523809523809523,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [
+     "addable_contacts"
+    ],
+    "names_a_matching_file": false
+   },
+   "n1": 0.0,
+   "n2": 0.6190476190476191,
+   "plan_group": "lessons-room-adds",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.6190476190476191
+  },
+  "82bff0db02": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "906b3f734b": {
+   "b": 0.0,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.0,
+   "m": 0.0,
+   "m1": 0.0,
+   "m2": 0.0,
+   "message": null,
+   "n1": 0.0,
+   "n2": 0.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "b50b2c109c": {
+   "b": 0.6666666666666666,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.3333333333333333,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.5,
+   "n2": 0.8333333333333334,
+   "plan_group": "station-backups-alerts",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.3333333333333333
+  },
+  "c42ee1f498": {
+   "b": 0.75,
+   "ceiling": false,
+   "class": "within",
+   "d": 0.25,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 1.0,
+   "n2": 0.5,
+   "plan_group": "ship-status-and-claims",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.5
+  },
+  "ca2d0d80ea": {
+   "b": 0.2,
+   "ceiling": false,
+   "class": "higher",
+   "d": 0.8,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": {
+    "cites_a_task_or_step": true,
+    "counted_names_held": [],
+    "names_a_matching_file": false
+   },
+   "n1": 0.2,
+   "n2": 0.2,
+   "plan_group": "station-backups-alerts",
+   "pool": "P",
+   "rm": 0.0,
+   "rn": 0.0
+  },
+  "edec7384ab": {
+   "b": 1.0,
+   "ceiling": true,
+   "class": "within",
+   "d": 0.0,
+   "m": 1.0,
+   "m1": 1.0,
+   "m2": 1.0,
+   "message": null,
+   "n1": 1.0,
+   "n2": 1.0,
+   "plan_group": null,
+   "pool": "N",
+   "rm": 0.0,
+   "rn": 0.0
+  }
+ },
+ "line": "There may be a plan for this work in the repository. Look for one before you change code.",
+ "part_a": {
+  "items": {
+   "0193bde842": {
+    "may-1": {
+     "of": 2,
+     "passed": 0
+    },
+    "may-2": {
+     "of": 2,
+     "passed": 0
+    }
+   },
+   "027834bf0e": {
+    "may-1": {
+     "of": 64,
+     "passed": 61
+    },
+    "may-2": {
+     "of": 64,
+     "passed": 61
+    }
+   },
+   "1113f1dbb4": {
+    "may-1": {
+     "of": 42,
+     "passed": 17
+    },
+    "may-2": {
+     "of": 42,
+     "passed": 16
+    }
+   },
+   "3879e60983": {
+    "may-1": {
+     "of": 74,
+     "passed": 74
+    },
+    "may-2": {
+     "of": 74,
+     "passed": 74
+    }
+   },
+   "3f349e89f0": {
+    "may-1": {
+     "of": 95,
+     "passed": 0
+    },
+    "may-2": {
+     "of": 95,
+     "passed": 48
+    }
+   },
+   "671a225045": {
+    "may-1": {
+     "of": 10,
+     "passed": 7
+    },
+    "may-2": {
+     "of": 10,
+     "passed": 6
+    }
+   },
+   "71a593d5a4": {
+    "may-1": {
+     "of": 33,
+     "passed": 33
+    },
+    "may-2": {
+     "of": 33,
+     "passed": 33
+    }
+   },
+   "9a3f21cfa8": {
+    "may-1": {
+     "of": 8,
+     "passed": 8
+    },
+    "may-2": {
+     "of": 8,
+     "passed": 8
+    }
+   },
+   "c9ceb15bae": {
+    "may-1": {
+     "of": 27,
+     "passed": 26
+    },
+    "may-2": {
+     "of": 27,
+     "passed": 26
+    }
+   },
+   "cd884db76f": {
+    "may-1": {
+     "of": 22,
+     "passed": 22
+    },
+    "may-2": {
+     "of": 22,
+     "passed": 22
+    }
+   },
+   "d20c739bd0": {
+    "may-1": {
+     "of": 34,
+     "passed": 32
+    },
+    "may-2": {
+     "of": 34,
+     "passed": 32
+    }
+   },
+   "fff1b349cc": {
+    "may-1": {
+     "of": 42,
+     "passed": 36
+    },
+    "may-2": {
+     "of": 42,
+     "passed": 37
+    }
+   }
+  },
+  "names_matching": 24,
+  "turns": 24,
+  "walks_read": 24
+ },
+ "part_b_run": true,
+ "pools": {
+  "N": {
+   "higher": 0,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.08333333333333333,
+   "on": 6,
+   "within": 6
+  },
+  "P": {
+   "all_at_ceiling": false,
+   "groups": {
+    "ds9-station": {
+     "mean_d": 0.16666666666666666,
+     "on": 1
+    },
+    "lessons-room-adds": {
+     "mean_d": 0.6428571428571429,
+     "on": 1
+    },
+    "ship-status-and-claims": {
+     "mean_d": 0.03333333333333333,
+     "on": 2
+    },
+    "station-backups-alerts": {
+     "mean_d": 0.18285714285714286,
+     "on": 2
+    }
+   },
+   "groups_on": 4,
+   "higher": 4,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.206984126984127,
+   "mean_groups": 0.25642857142857145,
+   "on": 6,
+   "within": 2
+  }
+ },
+ "pools_new": {
+  "N": {
+   "higher": 0,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.08333333333333333,
+   "on": 6,
+   "within": 6
+  },
+  "P": {
+   "all_at_ceiling": false,
+   "groups": {
+    "ds9-station": {
+     "mean_d": 1.0,
+     "on": 1
+    },
+    "lessons-room-adds": {
+     "mean_d": 0.6428571428571429,
+     "on": 1
+    },
+    "ship-status-and-claims": {
+     "mean_d": 0.125,
+     "on": 2
+    },
+    "station-backups-alerts": {
+     "mean_d": 0.5666666666666667,
+     "on": 2
+    }
+   },
+   "groups_on": 4,
+   "higher": 3,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.5043650793650793,
+   "mean_groups": 0.5836309523809524,
+   "on": 6,
+   "within": 3
+  }
+ },
+ "rows": {
+  "judged": 72,
+  "outcomes": {
+   "handed-in": 71,
+   "no-hand-in": 1
+  },
+  "planned": 72,
+  "recorded": 72,
+  "unjudged": [],
+  "unscored": {}
+ },
+ "rule": {
+  "decision": "worth a larger trial",
+  "missing": [],
+  "no_gain_possible": false
+ },
+ "v": 2
+}

@@ -1,0 +1,98 @@
+{
+ "as_the_rule_reads": {
+  "items": {
+   "2ebc78e1d8": {
+    "b": 0.5,
+    "class": "within",
+    "d": 0.5,
+    "m": 1.0,
+    "m1": 1.0,
+    "m2": 1.0,
+    "n1": 0.0,
+    "n2": 1.0,
+    "rm": 0.0,
+    "rn": 1.0
+   }
+  },
+  "pool_N": {
+   "higher": 0,
+   "lower": 0,
+   "mean_d": 0.08333333333333333,
+   "on": 6,
+   "within": 6
+  },
+  "pool_P": {
+   "higher": 4,
+   "lower": 0,
+   "mean_d": 0.206984126984127,
+   "mean_groups": 0.25642857142857145,
+   "on": 6,
+   "within": 2
+  },
+  "rule": "worth a larger trial"
+ },
+ "items_touched_in_part_b": [
+  "2ebc78e1d8"
+ ],
+ "pair_from_the_one_taken_row": {
+  "items": {
+   "2ebc78e1d8": {
+    "b": 1.0,
+    "class": "within",
+    "d": 0.0,
+    "m": 1.0,
+    "m1": 1.0,
+    "m2": 1.0,
+    "n1": 1.0,
+    "n2": 1.0,
+    "rm": 0.0,
+    "rn": 0.0
+   }
+  },
+  "note": "the touched pair's gap is zero by construction, not by observation",
+  "pool_N": {
+   "higher": 0,
+   "lower": 0,
+   "mean_d": 0.0,
+   "on": 6,
+   "within": 6
+  },
+  "pool_P": {
+   "higher": 4,
+   "lower": 0,
+   "mean_d": 0.206984126984127,
+   "mean_groups": 0.25642857142857145,
+   "on": 6,
+   "within": 2
+  },
+  "rule": "worth a larger trial"
+ },
+ "refused_rows": [
+  {
+   "directory": "rows/056-2ebc78e1d8-nothing-1",
+   "item": "2ebc78e1d8",
+   "n": 56,
+   "room_says": "the work tree must contain a single repository",
+   "row": "nothing-1"
+  }
+ ],
+ "touched_items_left_out": {
+  "items": {},
+  "pool_N": {
+   "higher": 0,
+   "lower": 0,
+   "mean_d": 0.0,
+   "on": 5,
+   "within": 5
+  },
+  "pool_P": {
+   "higher": 4,
+   "lower": 0,
+   "mean_d": 0.206984126984127,
+   "mean_groups": 0.25642857142857145,
+   "on": 6,
+   "within": 2
+  },
+  "rule": "worth a larger trial"
+ }
+}

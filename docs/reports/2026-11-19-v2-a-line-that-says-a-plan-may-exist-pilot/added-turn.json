@@ -1,0 +1,51 @@
+{
+ "log": [
+  "the added turn begins 15:53:53 UTC",
+  "{ 6.19 12.22 13.65 }",
+  "ran rows/056-2ebc78e1d8-nothing-1",
+  "turn exit 0",
+  "the added turn ended 15:56:08 UTC",
+  "{ 4.14 9.77 12.50 }",
+  "rows/056-2ebc78e1d8-nothing-1: handed-in, 89 of 89",
+  "judge exit 0",
+  "its judging ended 15:56:31 UTC"
+ ],
+ "order_equal": true,
+ "plan_equal_to_the_pilots": {
+  "environment": true,
+  "items": true,
+  "limits": true,
+  "line": true,
+  "list_sha256": true,
+  "programs": true,
+  "seed": true,
+  "spec_sha256": true,
+  "walk": true,
+  "worker": true
+ },
+ "turns": [
+  {
+   "at_limit": false,
+   "began": "2026-11-19 15:53:54 UTC",
+   "ended": "2026-11-19 15:56:08 UTC",
+   "first_source_second": 11.211,
+   "item": "2ebc78e1d8",
+   "judged": true,
+   "n": 56,
+   "of": 89,
+   "of_new": 89,
+   "outcome": "handed-in",
+   "passed": 89,
+   "passed_new": 89,
+   "plans_named": [],
+   "room_passed": true,
+   "room_said": "passed verified, commit 3f566d1573fcf813a9a4cd017e4055ac9639a5ca; rechecked: passed verified",
+   "row": "nothing-1",
+   "scored": true,
+   "steps": 15,
+   "tokens": 56591,
+   "worker_seconds": 127.597
+  }
+ ],
+ "what": "one turn run after the pilot, in a directory of its own with the same plan; outside the pilot's plan and its rule; the pilot's own row is as it was recorded"
+}

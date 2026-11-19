@@ -1,0 +1,333 @@
+{
+ "at_limit": 0,
+ "ceiling": {
+  "N": 3,
+  "P": 1
+ },
+ "ceiling_items": [
+  "426ad7fbd5",
+  "4971bdb360",
+  "82bff0db02",
+  "edec7384ab"
+ ],
+ "collection_errors_count": 3,
+ "collection_errors_rows": [
+  "2ebc78e1d8 nothing-1",
+  "3f349e89f0 may-1",
+  "6ba4650f4d nothing-1"
+ ],
+ "collection_errors_text": "2ebc78e1, nothing 1; 3f349e89, the line 1; 6ba4650f, nothing 1",
+ "counts_add_up": true,
+ "earlier_attempts": 0,
+ "first_began": "2026-11-19 12:22:41 UTC",
+ "frozen": {
+  "N": {
+   "may-1": 306,
+   "may-1 new": 110,
+   "may-2": 306,
+   "may-2 new": 110,
+   "nothing-1": 217,
+   "nothing-1 new": 21,
+   "nothing-2": 306,
+   "nothing-2 new": 110,
+   "of": 309,
+   "of_new": 113
+  },
+  "P": {
+   "may-1": 111,
+   "may-1 new": 58,
+   "may-2": 112,
+   "may-2 new": 58,
+   "nothing-1": 82,
+   "nothing-1 new": 28,
+   "nothing-2": 94,
+   "nothing-2 new": 41,
+   "of": 113,
+   "of_new": 59
+  }
+ },
+ "group_means": {
+  "A may": {
+   "steps": 18.6,
+   "tokens": 50793.0,
+   "worker_seconds": 183.3
+  },
+  "N may": {
+   "steps": 15.8,
+   "tokens": 50788.0,
+   "worker_seconds": 126.5
+  },
+  "N nothing": {
+   "steps": 12.6,
+   "tokens": 41350.0,
+   "worker_seconds": 97.3
+  },
+  "P may": {
+   "steps": 13.8,
+   "tokens": 51715.0,
+   "worker_seconds": 103.9
+  },
+  "P nothing": {
+   "steps": 15.3,
+   "tokens": 43465.0,
+   "worker_seconds": 121.2
+  }
+ },
+ "last_ended": "2026-11-19 15:11:48 UTC",
+ "limits": {
+  "check_secs": 900,
+  "diagnostic_secs": 300,
+  "lease_secs": 1800,
+  "replay_secs": 1200,
+  "worker_secs": 1200
+ },
+ "load_before": {
+  "max": 12.54,
+  "median": 5.07,
+  "min": 1.84,
+  "rows_above_18": 0
+ },
+ "messages_P": {
+  "cite_a_task_or_step": 5,
+  "hold_counted_names": 2,
+  "items": 6,
+  "name_a_matching_file": 0
+ },
+ "named_when": {
+  "A may": {
+   "second_max": 34.806,
+   "second_min": 11.223,
+   "step_max": 6,
+   "step_min": 2
+  },
+  "P may": {
+   "second_max": 21.227,
+   "second_min": 12.807,
+   "step_max": 4,
+   "step_min": 3
+  }
+ },
+ "names_matching": {
+  "A may": "24 of 24",
+  "P may": "12 of 12",
+  "P nothing": "4 of 12"
+ },
+ "outcomes": {
+  "handed-in": 71,
+  "no-hand-in": 1
+ },
+ "paired_costs": {
+  "N": {
+   "seconds": {
+    "items": 6,
+    "items_less": 0,
+    "items_more": 6,
+    "mean": 29.2
+   },
+   "steps": {
+    "items": 6,
+    "items_less": 0,
+    "items_more": 6,
+    "mean": 3.2
+   },
+   "tokens": {
+    "items": 6,
+    "items_less": 2,
+    "items_more": 4,
+    "mean": 9438.7
+   }
+  },
+  "P": {
+   "seconds": {
+    "items": 6,
+    "items_less": 5,
+    "items_more": 1,
+    "mean": -17.3
+   },
+   "steps": {
+    "items": 6,
+    "items_less": 4,
+    "items_more": 2,
+    "mean": -1.5
+   },
+   "tokens": {
+    "items": 6,
+    "items_less": 2,
+    "items_more": 4,
+    "mean": 8250.0
+   }
+  }
+ },
+ "part_a": {
+  "names_matching": 24,
+  "turns": 24,
+  "walks_read": 24
+ },
+ "part_a_items": 12,
+ "part_a_items_naming_in_a_line_row": 12,
+ "part_a_items_whose_two_line_runs_are_within_one_case": 11,
+ "part_a_totals": {
+  "first bm25": 278,
+  "first bm25 new": 130,
+  "first exists": 367,
+  "first exists new": 218,
+  "first lot": 153,
+  "first lot new": 5,
+  "first newest": 195,
+  "first newest new": 46,
+  "first nothing-1": 151,
+  "first nothing-1 new": 3,
+  "first nothing-2": 154,
+  "first nothing-2 new": 6,
+  "first path": 362,
+  "first path new": 213,
+  "first search": 153,
+  "first search new": 5,
+  "may-1": 316,
+  "may-1 new": 167,
+  "may-2": 363,
+  "may-2 new": 214,
+  "of": 453,
+  "of_new": 304
+ },
+ "part_b_items_with_a_line_row_below_a_taken_nothing_row": 0,
+ "plan_sha256": "5893a5e836c0df019320f76a7181ec31a1996aa927ef5ea983e7280f54de960a",
+ "pool_N_items_whose_taken_rows_all_pass_the_same": 6,
+ "pool_N_naming_plans": {
+  "may": {
+   "items": 3,
+   "of": 12,
+   "turns": 6
+  },
+  "nothing": {
+   "items": 0,
+   "of": 12,
+   "turns": 0
+  }
+ },
+ "pool_P_items_naming_in_a_line_row": 6,
+ "pool_P_nothing_naming": {
+  "items": 3,
+  "turns": 4
+ },
+ "pools": {
+  "N": {
+   "higher": 0,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.08333333333333333,
+   "on": 6,
+   "within": 6
+  },
+  "P": {
+   "all_at_ceiling": false,
+   "groups": {
+    "ds9-station": {
+     "mean_d": 0.16666666666666666,
+     "on": 1
+    },
+    "lessons-room-adds": {
+     "mean_d": 0.6428571428571429,
+     "on": 1
+    },
+    "ship-status-and-claims": {
+     "mean_d": 0.03333333333333333,
+     "on": 2
+    },
+    "station-backups-alerts": {
+     "mean_d": 0.18285714285714286,
+     "on": 2
+    }
+   },
+   "groups_on": 4,
+   "higher": 4,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.206984126984127,
+   "mean_groups": 0.25642857142857145,
+   "on": 6,
+   "within": 2
+  }
+ },
+ "pools_new": {
+  "N": {
+   "higher": 0,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.08333333333333333,
+   "on": 6,
+   "within": 6
+  },
+  "P": {
+   "all_at_ceiling": false,
+   "groups": {
+    "ds9-station": {
+     "mean_d": 1.0,
+     "on": 1
+    },
+    "lessons-room-adds": {
+     "mean_d": 0.6428571428571429,
+     "on": 1
+    },
+    "ship-status-and-claims": {
+     "mean_d": 0.125,
+     "on": 2
+    },
+    "station-backups-alerts": {
+     "mean_d": 0.5666666666666667,
+     "on": 2
+    }
+   },
+   "groups_on": 4,
+   "higher": 3,
+   "items": 6,
+   "lower": 0,
+   "mean_d": 0.5043650793650793,
+   "mean_groups": 0.5836309523809524,
+   "on": 6,
+   "within": 3
+  }
+ },
+ "room_passed_by_group": {
+  "A may": "8 of 24",
+  "N may": "8 of 12",
+  "N nothing": "7 of 12",
+  "P may": "9 of 12",
+  "P nothing": "3 of 12"
+ },
+ "room_refused": [
+  {
+   "item": "2ebc78e1d8",
+   "n": 56,
+   "room_says": "the work tree must contain a single repository",
+   "row": "nothing-1",
+   "steps": 13,
+   "tokens_output": 4279,
+   "worker_seconds": 120.181
+  }
+ ],
+ "rows_in_rows_json": 72,
+ "rows_planned": 72,
+ "rule": {
+  "decision": "worth a larger trial",
+  "missing": [],
+  "no_gain_possible": false
+ },
+ "scored": 72,
+ "seconds": {
+  "max": 376.0,
+  "median": 122.5,
+  "min": 51.0
+ },
+ "walks_read": 72,
+ "worker": {
+  "model": "gpt-6.1-sol",
+  "name": "codex:gpt-6.1-sol",
+  "version": "codex-cli 0.163.0"
+ },
+ "worker_seconds": {
+  "max": 371.84,
+  "median": 118.8,
+  "min": 46.178
+ }
+}
