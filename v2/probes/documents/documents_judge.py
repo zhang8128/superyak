@@ -14,6 +14,18 @@ judge: for each recorded row not yet judged, score.json by the spec's section 6.
 
 The score's denominator is always the count of frozen cases; nothing a turn's own run counts can move it. A turn's
 code runs only inside the jail: this program applies no change and runs no test outside it.
+
+Every room this program starts (a control's, a diagnostic's, a replay's) runs the plan's pinned room program with the
+plan's environment and the plan's limits given to the clock explicitly, as the runner starts a row. A diagnostic or a
+replay whose turn reaches its limit, whose clock fails, or which hands in nothing is kept as its own outcome with no
+score, beside what was counted.
+
+The JUnit report is read on the host from the diagnostic's commit: its blob must be a regular file of at most
+MAX_REPORT bytes (its size is read before its contents), UTF-8, with no document type and no entity declaration, and it
+is parsed as UTF-8 whatever it declares. That makes the parse safe; it does not make the report true. A turn's code
+runs in the test runner's own process in the jail and can write the report, so a change can forge an all-pass report.
+The room's verdict by replay, which runs the item's frozen check and none of the turn's code, stands beside every score
+for that reason.
 """
 import argparse
 import importlib.util
@@ -38,8 +50,11 @@ def import_file(name, path):
     return value
 
 
-pilot = import_file("pilot_driver", ITEMS / "pilot_driver.py")
-Refused = pilot.Refused
+maker = import_file("documents_plan", HERE / "documents_plan.py")
+runner = import_file("documents_run", HERE / "documents_run.py")
+pilot = maker.pilot
+Refused = maker.Refused
+load_plan = maker.load_plan
 
 SOURCE = "peer/superyak_peer"
 ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot")
@@ -51,22 +66,32 @@ OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed")
 MAX_OBSTACLES = 20
 LINE_CHARS = 400
 STATUS_ORDER = ("passed", "skipped", "failed", "error")
+MAX_REPORT = 8 * 1024 * 1024        # bytes of a committed file the judge reads; its size is read first
+DIAGNOSTIC_MARGIN_SECS = 120        # the diagnostic's turn: its tests' limit and this, to apply the change and commit
+NO_REPORT = {"cases": {}, "collection_errors": []}
 
 
 # ---------------------------------------------------------------- the plan
 
-def load_plan(out):
-    """Until the maker is joined: plan.json, held against plan.sha256. The join replaces this with the maker's."""
-    out = Path(out)
-    raw = (out / "plan.json").read_bytes()
-    held = (out / "plan.sha256").read_text(encoding="ascii").split()
-    if not held or held[0] != pilot.digest(raw):
-        raise Refused("plan.json's sha256 is %s; plan.sha256 holds %s" % (pilot.digest(raw), held[0] if held else "nothing"))
-    return json.loads(raw)
-
-
 def items_by_short(plan):
     return {item["item"]: item for item in plan["items"]}
+
+
+def row_name(order):
+    """The last part of a row's directory. The maker stores `rows/<nnn>-<item>-<row>`, relative to the plan's
+    directory, and the runner writes there; the judge reads the record there and judges in `judged/<the same name>`."""
+    name = "%03d-%s-%s" % (order["n"], order["item"], order["row"])
+    if order["directory"] != "rows/" + name:
+        raise Refused("the plan's directory for row %r is %r, not rows/%s" % (order["n"], order["directory"], name))
+    return name
+
+
+def row_dir(out, order):
+    return Path(out) / "rows" / row_name(order)
+
+
+def judged_dir(out, order):
+    return Path(out) / "judged" / row_name(order)
 
 
 # ---------------------------------------------------------------- the JUnit report
@@ -91,13 +116,24 @@ def read_junit(data):
 
     A case's id is `classname::name`. A collection error is a testcase with an empty classname and an error (pytest
     names it by the module's dotted path). Where an id appears more than once its worst status stands."""
-    if not data.strip():
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Refused("the JUnit report is not UTF-8: %s" % error) from None
+    if not text.strip():
         return {"cases": {}, "collection_errors": []}
-    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text):
+        # XML allows none of these; pytest escapes them. A NUL also lets the parser take UTF-16 or UTF-32 from the
+        # report's first bytes whatever encoding it is told: UTF-16 with no byte-order mark is valid UTF-8.
+        raise Refused("the JUnit report holds a control character XML does not allow")
+    if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.IGNORECASE):
         # The report is written inside the jail, where a turn's code runs; pytest writes no DOCTYPE.
         raise Refused("the JUnit report declares a DOCTYPE or an entity")
     try:
-        root = ElementTree.fromstring(data)
+        # Parsed as UTF-8 whatever the report declares: no other encoding reaches the parser.
+        parser = ElementTree.XMLParser(encoding="utf-8")
+        parser.feed(data)
+        root = parser.close()
     except ElementTree.ParseError as error:
         raise Refused("the JUnit report does not parse: %s" % error) from None
     cases, collection = {}, []
@@ -220,64 +256,95 @@ json.dump(status, open("jail-status.json", "w"), sort_keys=True)
 """
 
 
-def jail_turn(directory, items, commit, worker_dir):
-    """One turn of the room, its jail and a script worker, through the earlier probes' turn.sh."""
-    environment = dict(os.environ)
-    environment["YAK_JAIL_READ"] = environment.get("YAK_JAIL_READ", "") + os.pathsep + str(worker_dir)
-    subprocess.run(["sh", str(ITEMS / "turn.sh"), str(directory), str(items), commit,
-        "script:" + str(Path(worker_dir) / "worker.sh")], env=environment, capture_output=True)
+def jail_turn(directory, items, commit, worker_dir, plan, secs):
+    """One turn of the room, its jail and a script worker, through the earlier probes' turn.sh, with the plan's
+    pinned room program and environment (as the runner's planned_environment sets them) and the plan's limits given
+    to the clock explicitly: `secs` for the turn, the plan's lease. The script worker's directory is added to what
+    the jail may read. What turn.sh prints is kept beside the turn's directory."""
+    environment = dict(plan["environment"])
+    environment.update(YAK=plan["programs"]["yak"]["path"], YAK_PROBE_PATH=plan["environment"]["PATH"],
+        YAK_JAIL_READ=plan["environment"]["YAK_JAIL_READ"] + os.pathsep + str(worker_dir))
+    done = subprocess.run(["/bin/sh", str(ITEMS / "turn.sh"), str(directory), str(items), commit,
+        "script:" + str(Path(worker_dir) / "worker.sh"), "--concurrent", "1", "--turn-secs", str(secs),
+        "--lease-secs", str(plan["limits"]["lease_secs"])], env=environment, capture_output=True)
+    Path(str(directory) + ".log").write_bytes(b"exit %d\n--- stdout ---\n%s\n--- stderr ---\n%s"
+        % (done.returncode, done.stdout[-20000:], done.stderr[-20000:]))
 
 
-def handed_in(directory):
-    """The commit the room recorded for the run's one turn and its verdict, or (None, None)."""
-    record = Path(directory) / "turns.json"
-    if not record.exists():
-        return None, None
-    turns = json.loads(record.read_text(encoding="utf-8"))
-    if not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict):
-        return None, None
-    passed = turns[0].get("passed")
-    return turns[0].get("commit"), passed if type(passed) is bool else None
-
-
-def shown(repo, commit, name):
+def turn_outcome(directory):
+    """How the run's one turn ended, read as the runner reads a row: (outcome, commit, verdict). The outcome is the
+    runner's: handed-in, limit, no-hand-in or clock-failed; the verdict is the room's bool for a hand-in, else None."""
+    directory = Path(directory)
     try:
-        return pilot.git(repo, "show", "%s:%s" % (commit, name))
-    except Refused:
+        turns = json.loads((directory / "turns.json").read_bytes())
+    except (OSError, ValueError):
+        turns = None
+    try:
+        code = int((directory / "clock.exit").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        code = -1
+    kind, commit = runner.outcome(turns, code)
+    passed = turns[0].get("passed") if kind == "handed-in" else None
+    return kind, commit, passed if type(passed) is bool else None
+
+
+def committed(repo, commit, name):
+    """A file the turn committed, or None where it committed none. Refused unless it is a regular file of at most
+    MAX_REPORT bytes; the size is read before the contents are captured."""
+    listed = pilot.git(repo, "ls-tree", "-z", commit, "--", name).split(b"\0")[0]
+    if not listed:
         return None
+    meta, _, path = listed.partition(b"\t")
+    mode, kind, blob = meta.split()
+    if path != name.encode("utf-8") or kind != b"blob" or mode not in (b"100644", b"100755"):
+        raise Refused("%s in the turn's commit is not a regular file (mode %s)" % (name, mode.decode("ascii")))
+    size = int(pilot.git(repo, "cat-file", "-s", blob.decode("ascii")))
+    if size > MAX_REPORT:
+        raise Refused("%s in the turn's commit holds %d bytes, over %d" % (name, size, MAX_REPORT))
+    return pilot.git(repo, "cat-file", "blob", blob.decode("ascii"))
 
 
-def diagnostic(directory, items, commit, patch, limit):
-    """The change applied and the item's tests run in the jail: {"applied", "limit", "report"} or a Refused."""
+def diagnostic(directory, items, commit, patch, plan):
+    """The change applied and the item's tests run in the jail: {"turn", "applied", "limit", "report"}. `turn` is
+    how the room's turn ended, with "no-status" for a hand-in with no jail-status.json; only a turn that handed in
+    its status has `applied` and a report. `limit` is true when the turn or its tests reached their limit."""
+    limit = plan["limits"]["diagnostic_secs"]
     worker = Path(directory) / "stand-in"
     worker.mkdir(parents=True)
     (worker / "change.patch").write_bytes(patch)
     (worker / "worker.sh").write_text(WORKER, encoding="utf-8")
     (worker / "worker.sh").chmod(0o755)
     (worker / "explain.py").write_text(EXPLAIN % limit, encoding="utf-8")
-    jail_turn(Path(directory) / "turn", items, commit, worker)
-    turn_commit, _ = handed_in(Path(directory) / "turn")
-    if turn_commit is None:
-        raise Refused("%s: the diagnostic's turn recorded no commit" % directory)
-    repo = Path(directory) / "turn" / "repo"
-    status = shown(repo, turn_commit, "jail-status.json")
+    turn = Path(directory) / "turn"
+    jail_turn(turn, items, commit, worker, plan, limit + DIAGNOSTIC_MARGIN_SECS)
+    kind, turn_commit, _ = turn_outcome(turn)
+    if kind != "handed-in":
+        return {"turn": kind, "applied": None, "limit": kind == "limit", "report": NO_REPORT}
+    status = committed(turn / "repo", turn_commit, "jail-status.json")
     if status is None:
-        raise Refused("%s: the diagnostic handed in no jail-status.json" % directory)
-    status = json.loads(status)
-    report = shown(repo, turn_commit, "jail-junit.xml") or b""
-    return {"applied": status.get("apply_exit") == 0, "limit": status.get("limit") is True,
+        return {"turn": "no-status", "applied": None, "limit": False, "report": NO_REPORT}
+    try:
+        status = json.loads(status)
+    except ValueError:
+        raise Refused("%s: jail-status.json is not JSON" % directory) from None
+    if not isinstance(status, dict):
+        raise Refused("%s: jail-status.json is not an object" % directory)
+    report = committed(turn / "repo", turn_commit, "jail-junit.xml") or b""
+    return {"turn": kind, "applied": status.get("apply_exit") == 0, "limit": status.get("limit") is True,
         "report": read_junit(report)}
 
 
-def replay(directory, items, commit, patch):
-    """The change by the earlier probes' stand-in, judged by the room with the item's frozen check: its verdict."""
+def replay(directory, items, commit, patch, plan):
+    """The change by the earlier probes' stand-in, judged by the room with the item's frozen check, the turn limited
+    to the plan's replay_secs: (how the turn ended, the room's verdict)."""
     worker = Path(directory) / "stand-in"
     worker.mkdir(parents=True)
     (worker / "reference.patch").write_bytes(patch)
     shutil.copyfile(ITEMS / "stand-in.sh", worker / "worker.sh")
     (worker / "worker.sh").chmod(0o755)
-    jail_turn(Path(directory) / "turn", items, commit, worker)
-    return handed_in(Path(directory) / "turn")[1]
+    jail_turn(Path(directory) / "turn", items, commit, worker, plan, plan["limits"]["replay_secs"])
+    kind, _, verdict = turn_outcome(Path(directory) / "turn")
+    return kind, verdict
 
 
 def source_patch(repo, base, commit):
@@ -317,7 +384,6 @@ def controls(out, items):
     plan = load_plan(out)
     items = items_dir(plan, items)
     listed = check_items(plan, items)
-    limit = plan["limits"]["diagnostic_secs"]
     (out / "controls").mkdir(exist_ok=True)
     for item in plan["items"]:
         directory = out / "controls" / item["item"]
@@ -329,27 +395,34 @@ def controls(out, items):
         entry = pilot.item_from(listed, item["commit"])
         repo = Path(items).resolve() / "repo"
         patch = source_patch(repo, entry["base"], entry["reference"])
-        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, limit)
+        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan)
         passed = sorted(case for case, (status, _) in ran["report"]["cases"].items() if status == "passed")
         counts = {status: sum(1 for held, _ in ran["report"]["cases"].values() if held == status)
             for status in ("passed", "failed", "error", "skipped")}
         stop = None
-        if not ran["applied"] or ran["limit"]:
-            stop = "the reference's diagnostic %s" % ("did not apply" if not ran["applied"] else "reached its limit")
+        if ran["limit"]:
+            stop = "the reference's diagnostic reached its limit"
+        elif ran["turn"] != "handed-in":
+            stop = "the reference's diagnostic turn ended %s" % ran["turn"]
+        elif not ran["applied"]:
+            stop = "the reference's diagnostic did not apply"
         elif not passed:
             stop = "no case passes on the reference (%s)" % json.dumps(counts, sort_keys=True)
         else:
             pilot.write_json(directory / "cases.json", {"commit": item["commit"], "cases": passed, "counts": counts})
-            verdict = replay(directory / "reference" / "replay", items, item["commit"], patch)
-            if verdict is not True:
+            kind, verdict = replay(directory / "reference" / "replay", items, item["commit"], patch, plan)
+            if kind in ("limit", "clock-failed"):
+                stop = "the reference's replay turn ended %s" % kind
+            elif verdict is not True:
                 stop = "the room's verdict on the reference by replay is %s" % json.dumps(verdict)
         if stop is not None:
             pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": stop})
             print("%s: stopped: %s" % (item["item"], stop))
             continue
-        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", limit)
-        if parent["limit"]:
-            pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": "the parent's run reached its limit"})
+        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan)
+        if parent["limit"] or parent["turn"] != "handed-in":
+            pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason":
+                "the parent's run reached its limit" if parent["limit"] else "the parent's turn ended %s" % parent["turn"]})
             continue
         frozen = set(passed)
         (directory / "parent" / "junit.json").write_text(json.dumps({"cases": {key: list(value) for key, value in
@@ -370,18 +443,15 @@ def parent_score(directory, frozen):
 
 # ---------------------------------------------------------------- judge
 
-UNSCORED = {"of": 0, "passed": 0, "failed": 0, "error": 0, "skipped": 0, "not_run": 0, "unfrozen": 0,
-    "collection_errors": [], "first_obstacles": []}
-
-
 def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None):
-    """score.json's value for one recorded row (not written here)."""
+    """score.json's value for one recorded row (not written here). Every row's `of` is the count of frozen cases,
+    scored or not; a row with no score keeps what was counted beside its named outcome."""
     run_diagnostic = run_diagnostic or diagnostic
     run_replay = run_replay or replay
     item = items_by_short(plan)[order["item"]]
-    row_dir = out / "rows" / order["directory"]
-    judged = out / "judged" / order["directory"]
-    record = pilot.load(row_dir / "record.json")
+    recorded = row_dir(out, order)
+    judged = judged_dir(out, order)
+    record = pilot.load(recorded / "record.json")
     if record.get("outcome") not in OUTCOMES:
         raise Refused("%s: record.json's outcome is %r" % (order["directory"], record.get("outcome")))
     if (record.get("n"), record.get("commit"), record.get("row")) != (order["n"], order["commit"], order["row"]):
@@ -395,29 +465,34 @@ def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None):
     controls_dir = out / "controls" / item["item"]
     frozen = pilot.load(controls_dir / "cases.json")["cases"]
     score = {"n": order["n"], "commit": order["commit"], "row": order["row"], "room_passed": None}
-    matching, offered = read_walk(row_dir / "walks.jsonl", item, order["row"])
+    matching, offered = read_walk(recorded / "walks.jsonl", item, order["row"])
     score.update(matching_named=matching, offered_named=offered)
     if record["outcome"] == "clock-failed":
-        score.update(UNSCORED, outcome="clock-failed", scored=False)
+        score.update(score_cases(frozen, NO_REPORT), outcome="clock-failed", scored=False)
         return score
     if not commit:
         score.update(parent_score(controls_dir, frozen), outcome=record["outcome"], scored=True)
         return score
-    patch = source_patch(row_dir / "repo", item["rows"][order["row"]]["base"], commit)
+    patch = source_patch(recorded / "repo", item["rows"][order["row"]]["base"], commit)
     if not patch.strip():
         score.update(parent_score(controls_dir, frozen), outcome="unchanged-source", scored=True)
         return score
-    limit = plan["limits"]["diagnostic_secs"]
-    ran = run_diagnostic(judged / "diagnostic", items, order["commit"], patch, limit)
+    ran = run_diagnostic(judged / "diagnostic", items, order["commit"], patch, plan)
     counted = score_cases(frozen, ran["report"])
-    if not ran["applied"]:
-        score.update(counted, outcome="not-applied", scored=False)
-        return score
     if ran["limit"]:
         score.update(counted, outcome="diagnostic-limit", scored=False)
         return score
-    score.update(counted, outcome=record["outcome"], scored=True,
-        room_passed=run_replay(judged / "replay", items, order["commit"], patch))
+    if ran["turn"] != "handed-in":
+        score.update(counted, outcome="diagnostic-" + ran["turn"], scored=False)
+        return score
+    if not ran["applied"]:
+        score.update(counted, outcome="not-applied", scored=False)
+        return score
+    kind, verdict = run_replay(judged / "replay", items, order["commit"], patch, plan)
+    if kind in ("limit", "clock-failed"):
+        score.update(counted, outcome="replay-" + kind, scored=False)
+        return score
+    score.update(counted, outcome=record["outcome"], scored=True, room_passed=verdict)
     return score
 
 
@@ -431,9 +506,9 @@ def judge(out, items, rows=None):
     for order in plan["order"]:
         if rows is not None and done >= rows:
             break
-        if not (out / "rows" / order["directory"] / "record.json").exists():
+        if not (row_dir(out, order) / "record.json").exists():
             continue
-        judged = out / "judged" / order["directory"]
+        judged = judged_dir(out, order)
         if (judged / "score.json").exists():
             continue
         controls_dir = out / "controls" / order["item"]
@@ -515,6 +590,17 @@ def by_plan(plan, readings):
     return table, figures
 
 
+def plan_summaries(plan, readings, keep=lambda item: True):
+    """The by-plan table, its tally of plans, the equally weighted figure and what each figure stands on (plans and
+    items), over the plan's items that `keep` keeps."""
+    table, figures = by_plan({"items": [item for item in plan["items"] if keep(item)]}, readings)
+    tallied = {row: {"higher": sum(1 for group in table.values() if group["conditions"].get(row, {}).get("class")
+        == "higher"), "on": sum(1 for group in table.values() if row in group["conditions"])} for row in OFFERING}
+    on = {row: {"plans": len(table) if figures[row] is not None else 0, "items": sum(group["conditions"][row]["on"]
+        for group in table.values()) if figures[row] is not None else 0} for row in OFFERING}
+    return {"plans": table, "plans_tally": tallied, "figures": figures, "figures_on": on}
+
+
 def spending_rule(plan, scores, items_tally, plans_tally):
     missing = ["%s %s" % (item["item"], row) for item in plan["items"] for row in RULE_ROWS
         if not usable(scores.get(item["item"], {}).get(row))]
@@ -538,8 +624,8 @@ def make_report(out):
     plan = load_plan(out)
     scores, records, unjudged = {}, {}, []
     for order in plan["order"]:
-        record_path = out / "rows" / order["directory"] / "record.json"
-        score_path = out / "judged" / order["directory"] / "score.json"
+        record_path = row_dir(out, order) / "record.json"
+        score_path = judged_dir(out, order) / "score.json"
         if record_path.exists():
             records[order["directory"]] = pilot.load(record_path)
         if score_path.exists():
@@ -553,9 +639,9 @@ def make_report(out):
     probed = {item["item"] for item in plan["items"] if item["probed_before"]}
     items_tally = {row: tally(readings, row) for row in OFFERING}
     without = {row: tally(readings, row, lambda item: item not in probed) for row in OFFERING}
-    plans, figures = by_plan(plan, readings)
-    plans_tally = {row: {"higher": sum(1 for group in plans.values() if group["conditions"].get(row, {}).get("class")
-        == "higher"), "on": sum(1 for group in plans.values() if row in group["conditions"])} for row in OFFERING}
+    every = plan_summaries(plan, readings)
+    unprobed = plan_summaries(plan, readings, lambda item: not item["probed_before"])
+    plans_tally = every["plans_tally"]
     rule = spending_rule(plan, scores, items_tally, plans_tally)
     interrupted = out / "rows" / "interrupted"
     outcomes, at_limit = {}, {row: 0 for row in ROWS}
@@ -590,15 +676,17 @@ def make_report(out):
             for item in plan["items"] if (out / "controls" / item["item"] / "parent.json").exists()},
         "tally": items_tally, "tally_without_probed": without, "probed": sorted(probed),
         "plan_of": {item["item"]: item["plan_group"] for item in plan["items"]},
-        "plans": {group: {"items": held["items"], "conditions": {row: {"D": number(value["D"]), "R": number(value["R"]),
-            "class": value["class"], "on": value["on"]} for row, value in held["conditions"].items()}}
-            for group, held in plans.items()},
-        "plans_tally": plans_tally,
-        "figures": {row: number(value) for row, value in figures.items()},
         "rule": rule,
         "places": {item["item"]: {"search": item["search"]["best_place"], "search_tied": item["search"]["tied"],
             "newest": item["newest"]["best_place"]} for item in plan["items"]},
     }
+    for suffix, held in (("", every), ("_without_probed", unprobed)):
+        report["plans" + suffix] = {group: {"items": value["items"], "conditions": {row: {"D": number(cond["D"]),
+            "R": number(cond["R"]), "class": cond["class"], "on": cond["on"]} for row, cond in value["conditions"].items()}}
+            for group, value in held["plans"].items()}
+        report["plans_tally" + suffix] = held["plans_tally"]
+        report["figures" + suffix] = {row: number(value) for row, value in held["figures"].items()}
+        report["figures_on" + suffix] = held["figures_on"]
     return report
 
 
@@ -643,17 +731,20 @@ def report_markdown(report):
         a, w = report["tally"][row], report["tally_without_probed"][row]
         lines.append("| %s | %d | %d | %d | %d | %d | %d | %d | %d |" % (row, a["higher"], a["lower"], a["within"],
             a["on"], w["higher"], w["lower"], w["within"], w["on"]))
-    lines += ["", "## By plan", "", "| plan | items | " + " | ".join("%s D, R (class)" % row for row in OFFERING) + " |",
-        "| --- " * (2 + len(OFFERING)) + "|"]
-    for group, held in report["plans"].items():
-        lines.append("| %s | %s | %s |" % (group, ", ".join(held["items"]), " | ".join(
-            "%s, %s (%s; on %d)" % (cell(held["conditions"][row]["D"]), cell(held["conditions"][row]["R"]),
-            held["conditions"][row]["class"], held["conditions"][row]["on"]) if row in held["conditions"]
-            else "not read" for row in OFFERING)))
-    lines += ["", "Every plan weighing the same: " + "; ".join("%s %s" % (row, cell(report["figures"][row]))
-        for row in OFFERING) + ". Plans higher: " + "; ".join("%s %d of %d" % (row, report["plans_tally"][row][
-        "higher"], report["plans_tally"][row]["on"]) for row in OFFERING) + ".", "",
-        "## The rule for where to spend next", ""]
+    for suffix, title in (("", "By plan"), ("_without_probed", "By plan, without the probed item")):
+        lines += ["", "## " + title, "", "| plan | items | " + " | ".join("%s D, R (class)" % row for row in OFFERING)
+            + " |", "| --- " * (2 + len(OFFERING)) + "|"]
+        for group, held in report["plans" + suffix].items():
+            lines.append("| %s | %s | %s |" % (group, ", ".join(held["items"]), " | ".join(
+                "%s, %s (%s; on %d)" % (cell(held["conditions"][row]["D"]), cell(held["conditions"][row]["R"]),
+                held["conditions"][row]["class"], held["conditions"][row]["on"]) if row in held["conditions"]
+                else "not read" for row in OFFERING)))
+        lines += ["", "Every plan weighing the same: " + "; ".join("%s %s (%d plans, %d items)" % (row,
+            cell(report["figures" + suffix][row]), report["figures_on" + suffix][row]["plans"],
+            report["figures_on" + suffix][row]["items"]) for row in OFFERING) + ". Plans higher: " + "; ".join(
+            "%s %d of %d" % (row, report["plans_tally" + suffix][row]["higher"], report["plans_tally" + suffix][row]["on"])
+            for row in OFFERING) + "."]
+    lines += ["", "## The rule for where to spend next", ""]
     rule = report["rule"]
     lines.append("**%s**." % rule["decision"].capitalize() + ("" if not rule["missing"] else
         " The rule is not applied: these rows it needs have no score: %s." % ", ".join(rule["missing"])))
