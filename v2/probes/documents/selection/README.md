@@ -9,7 +9,13 @@ For `docs/superpowers/specs/2026-11-19-v2-a-line-that-says-a-plan-may-exist.md`,
   parent, and the names the commit adds that the first pilot's second rule counts. A pool P item also
   has its matching files and its direct path. Made with the maker's own functions.
 - `pool-p.record.json`, `pool-n.record.json`: the selecting readers' records, one for each pool, written
-  by the reader and by no one else.
+  by the reader. The lead changes one thing only, and says so in the record's `lead_note` with a count
+  and the hash of the reader's own file: a path string that the lead's private-word scan flags is
+  replaced by a placeholder. No verdict, reason, subject, term or query is changed. Pool N's record has
+  27 such strings; pool P's has none.
+- A record may hold more than the form below asks (pool N's has the reader's notes on method and on how
+  each file was read), and pool N's names the last place walked `last_n` where the form says
+  `stopped_n`. Both are the reader's and are left as written.
 
 ## A reader's record
 
