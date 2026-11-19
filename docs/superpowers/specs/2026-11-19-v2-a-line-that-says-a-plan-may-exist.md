@@ -1,10 +1,11 @@
 # v2: a line that says a plan may exist. A second pilot
 
-Serenity, 2026-11-19 (UTC). Revision 2. A fresh reader of the other family read revision 1: do not
+Serenity, 2026-11-19 (UTC). Revision 3. A fresh reader of the other family read revision 1: do not
 approve, six findings. Revision 1 reran the first pilot's twelve items with their documents taken out of
-the base; the reader showed that no rule of file names can make "no plan exists" true, and the design is
-dropped. This revision is the spend the reader proposed, with one small part added. What it named and
-where each is answered is at the end. Not built. It changes no code of the room.
+the base; the reader showed that no rule of file names can make "no plan exists" true, and the design
+was dropped. Revision 2 was the spend that reader proposed, with one small part added. A second fresh
+reader read it: approve with named changes, six, all made in this revision. What both named and where
+each is answered is at the end. Not built. It changes no code of the room.
 
 It follows the pilot "a document offered" (`docs/superpowers/specs/2026-11-18-v2-a-document-offered.md`,
 revision 4; report `docs/reports/2026-11-19-v2-a-document-offered-pilot.md`). Where this spec is silent,
@@ -69,29 +70,48 @@ second rule):
   name, and no Markdown file tracked at the first parent, in any folder and with no limit of five,
   holds a counted name as a whole word. 46 commits, 43 of them not used before.
 
-**Selection, frozen before any turn.** Each pool is put in ascending order of the SHA-256, in
-hexadecimal, of the ASCII text `20261120:pick:<commit>`, the commit's forty lower-case characters, with
-no newline. A fresh reader of the other family than the lead walks each order and takes an item or
-skips it, with its reason written down, until six are taken from each:
+**Selection, all of it finished and frozen before the first model turn.** Each pool is put in ascending
+order of the SHA-256, in hexadecimal, of the ASCII text `20261120:pick:<commit>`, the commit's forty
+lower-case characters, with no newline. An item used before is left out of the order.
 
-- **From pool P,** an item is taken when the reader, having read the matching file at the item's parent
-  and the commit's change, finds that the file is a plan for this item's own work and gives something
-  the item's tests use. No more than two items of one plan are taken.
-- **From pool N,** an item is taken when the reader's review finds no document at the parent that
-  specifies the item's work. The review, for each item: from the commit's message and change, the
-  reader writes down the work's subject and its distinctive terms (identifiers, routes, table and file
-  names, the message's own nouns); searches the path and the text of every Markdown file at the parent
-  for each; reads every file a search finds; and says "none found" or names the file. A file that
-  specifies the work under another name counts. An item with any doubt is skipped.
+**The review.** A fresh reader of the other family than the lead walks each order and accepts an item
+or skips it, with its reason written down:
 
-The reader's record, for every item walked: the terms searched, the files read, the verdict. It is
-kept beside the plan and its hash pinned.
+- **In pool P,** an item is accepted when the reader, having read the matching file at the item's
+  parent and the commit's change, finds that the file is a plan for this item's own work and gives
+  something the item's tests use. The reader also says which plan the item belongs to: where several
+  matching files are of one piece of planned work (a plan and its design spec, say) they are one plan
+  group, and the reader writes the group's name and its reason.
+- **In pool N,** an item is accepted when the review finds no document that specifies the item's work.
+  For each item: from the commit's message and change the reader writes down the work's subject and
+  its distinctive terms (identifiers, routes, table and file names, the message's own nouns); searches
+  the path and the text of every Markdown file tracked at the first parent for each; reads every file a
+  search finds; and says "none found" or names the file. A file that specifies the work under another
+  name counts. An item with any doubt is skipped.
 
-**What "none found" is.** It is the outcome of that review by one reader. It is not a showing that no
-document bears on the work. The report says "no plan found by the review", never "no plan exists".
+**The reader's record,** for every item walked: the terms; the exact queries, each with how it matched
+(whole word or substring, case kept or folded, path or text); the complete list of what each query
+found, path hits among them; the files read; the verdict and its reason; and for pool P the plan group.
+It is kept beside the plan and its hash pinned.
 
-**After the controls,** an item none of whose frozen cases fails on the parent is replaced by the next
-of its pool's order that the reader takes: such an item can show no gain.
+**One walk decides the twelve.** For each pool, going through its order once: an item is taken when the
+reader accepted it, and (pool P) fewer than two items of its plan group are already taken, and its
+controls stand, and not every frozen case passes on its parent. An item whose every frozen case passes
+on the parent is skipped: it can show no gain. A control that fails is not a skip: it stops the walk
+until its cause is mended, as in the first pilot. The walk ends at six taken. A skipped item is never
+returned to, and taking a later item does not reopen an earlier one.
+
+**If either pool ends before six are taken,** no model turn of part B is run. The lead reports how far
+each pool got and this spec comes back for revision. Part A may then run alone: its 24 rows are frozen
+as a plan of their own, and the report says part B was not run and gives no outcome of the rule.
+
+**What "none found" is.** It is the outcome of that review by one reader of the Markdown files tracked
+at the item's first parent. It does not cover documents in other formats or what the history holds, and
+it is not a showing that no document bears on the work. The report says "no plan found by the review",
+never "no plan exists".
+
+**The cohort is fixed by this walk and by nothing after it.** No item is replaced because of what a
+model turn did at it, a strong baseline among those things.
 
 ## 5. Part B's tasks and rows
 
@@ -105,6 +125,15 @@ every item.
 A commit's message is written after the work by those who did it, in their own words for it. It may
 carry the plan's names and it may name the plan. That is what is tried here: the line beside a task
 that already speaks the work's language.
+
+**What that costs the pilot.** Where a message names the plan or gives the names the tests need, a turn
+with nothing added may already find the plan or pass the tests, and the line has little left to add. A
+result with no gain at pool P then does not settle what the line does for a task that says less; part
+A is the only place this pilot looks at that.
+
+**Recorded before any turn, for every pool P item, and pinned:** whether its message names a matching
+file's path or file name; whether it cites a task or step number of a plan; and which of the item's
+counted names it holds. The report gives these beside the item's four scores.
 
 Four rows an item: `nothing-1`, `nothing-2`, `may-1`, `may-2`. 48 turns. The four task files of an item
 are byte for byte the same up to the last paragraph, and the maker proves it.
@@ -147,8 +176,13 @@ gaps. If either row of a pair has no score, that pair gives no number for the it
 taken as the cell. Every raw `d`, `rn` and `rm` is printed.
 
 **Part B, a pool.** The mean of `d` over the pool's items that have one, with the number of items it
-stands on; and for pool P the mean over plans of each plan's mean `d`. Beside it: how many items are
-higher, lower and within.
+stands on; and for pool P the mean over plan groups of each group's mean `d`, with the number of groups
+it stands on. A group with no item that has a `d` is left out. An aggregate with nothing under it is
+printed as "not available", never as zero. Beside it: how many items are higher, lower and within.
+
+**Two words kept apart.** A Nothing pair is at its **ceiling** when both rows pass every frozen case:
+there the line could add nothing on this count. Equal scores short of that show **no observed gain**,
+which is another thing.
 
 **Counts beside the scores, by pool and row kind:** in how many turns the walk names a matching file
 (pool P); the distinct paths under `plans`, `specs` or `reviews` a walk names; the first second a
@@ -158,13 +192,20 @@ source path is named; steps, seconds, tokens.
 frozen cases passed at each item in each run, beside the first pilot's rows. No class.
 
 **A rule for whether a larger trial of the line is worth running.** It was written by the lead after
-the first pilot's results were seen. It is a heuristic for spending, no protection against chance, and
-it recommends nothing for the room. It reads part B alone:
+the first pilot's results were seen. Its thresholds are the lead's preferences, not calibrated: two
+runs at six items cannot tell a small loss from noise. It is no protection against chance, and it
+recommends nothing for the room. It reads part B alone, once, on the shares of all frozen cases; the
+reading on the cases that do not pass on the parent is given beside it and decides nothing:
 
-- **Worth a larger trial:** at pool N the mean `d` is zero or above and no item is lower; and at pool P
-  the mean `d`, and the mean over plans, are zero or above.
+- **Worth a larger trial:** at pool P the mean `d` and the mean over plan groups are both above zero and
+  at least one item is higher; and at pool N the mean `d` is zero or above and no item is lower.
 - **Not worth one:** at pool N two or more items are lower, or the mean `d` is below -0.05.
-- **Between:** reported as that.
+- **Between:** anything else, a result where nothing moves among them. When every pool P pair is at its
+  ceiling the report says the pool could show no gain.
+
+**The rule reads agreement with the reference's tests and nothing else.** It leaves out what the line
+costs in seconds and tokens. Those are printed beside its outcome, by pool and row kind, and a decision
+to spend has to weigh them; the rule does not.
 
 The rule needs both Nothing rows and both line rows of every part B item. If one has no score the rule
 is not applied and the report says which. "Within" is not a finding of no cost: a loss inside a wide
@@ -176,8 +217,12 @@ Changes to the first pilot's three scripts, in place, each with tests and a muta
 added. The first pilot is judged and reported; its plan is not read by the changed scripts.
 
 1. **The maker:** the two parts; the pools, their orders and the pinned record of the selection; the
-   commit's message as a task with its exact bytes; the rows; the order over 72.
-2. **The runner:** unchanged but for what its tests show it needs.
+   walk that decides the twelve, which needs the candidates' controls before the plan is made; the
+   commit's message as a task with its exact bytes and its recorded annotation; the rows; the order
+   over 72, or over part A's 24 when part B is not run.
+2. **The runner:** before its first turn it checks the controls of every item of the plan, not only
+   of the next row's item, and starts nothing unless all stand. Otherwise unchanged but for what its
+   tests show it needs.
 3. **The judge:** the readings of section 8 with two runs a cell; the walk's counts of section 7; the
    tables; the rule.
 4. **The scripts' tests on a second machine:** the three test files are added to the list the
@@ -196,8 +241,9 @@ them, the selecting reader's review of up to 62 candidates, and the controls.
 
 ## 11. What this narrows, said before any turn
 
-- Twelve fresh items of one repository and one component, six an arm; one worker program and model; one
-  machine. Part A's twelve are seen.
+- Twelve fresh items of one repository and one component, six a pool; one worker program and model; one
+  machine. Both row kinds are run at every item: a pool is where an item came from, not a treatment.
+  Part A's twelve are seen.
 - The outcome is agreement with the reference's tests: names, calls and wordings as well as behaviour.
   Nothing here judges a change as work.
 - Pool P's plans hold test code. A turn that names one may be taking its tests' own expectations from
@@ -225,3 +271,19 @@ reproduced the removal counts and the first pilot's totals.
 | 5. No rule for a cell with one run missing | Section 8: a pair with a missing score gives no number |
 | 6. Each question claimed more than its rows show; "takes up", "false", "days apart" | Sections 1, 7 and 8 say what is named and counted; the false assurance row is dropped |
 | Its spend: 48 turns at twelve unused items, six with a plan confirmed by reading and six with none found | Part B. Part A, 24 turns at the seen twelve, is the lead's addition and enters no rule |
+
+A second fresh reader of the other family (the team's w123) read revision 2 at e0c7f0b0: approve with
+named changes. It reproduced the first pilot's totals from its data and, by a calculation of its own,
+the counts 188, 157 and 101 and the pools' 28 and 46. What it named is made in revision 3:
+
+| Its change | Where |
+| --- | --- |
+| 1. A result with no gain passed the rule; the rule leaves out seconds and tokens | Section 8: a gain at pool P required; "between" for nothing moving; the costs printed beside it and said to be outside it |
+| 2. The message task's limit must reach the reading; record what each pool P message gives away | Section 5: what that costs; the pinned record. Section 8: ceiling and no observed gain kept apart |
+| 3. One selection contract: plan groups, one walk, the cap, controls, a pool that ends early, all before any turn; a check of every item's controls | Section 4; section 9, the runner |
+| 4. The review's record: exact queries, how each matched, every hit; its scope | Section 4 |
+| 5. Empty aggregates; the rule read once, on all frozen cases | Section 8 |
+| 6. "Six a pool", not "six an arm" | Section 11 |
+
+It could not check, in its words: "the lead's used-item list or therefore the unused counts and
+ten-plan distribution", or "that six eligible items survive either review".
