@@ -81,6 +81,10 @@
   "replay_secs": 1200,
   "worker_secs": 1200
  },
+ "line_below_nothing": {
+  "N": 0,
+  "P": 0
+ },
  "load_before": {
   "max": 12.54,
   "median": 5.07,
@@ -90,6 +94,7 @@
  "messages_P": {
   "cite_a_task_or_step": 5,
   "hold_counted_names": 2,
+  "hold_counted_names_text": "4971bdb3 and 6ba4650f",
   "items": 6,
   "name_a_matching_file": 0
  },
@@ -122,19 +127,19 @@
     "items": 6,
     "items_less": 0,
     "items_more": 6,
-    "mean": 29.2
+    "mean": 29.17425
    },
    "steps": {
     "items": 6,
     "items_less": 0,
     "items_more": 6,
-    "mean": 3.2
+    "mean": 3.25
    },
    "tokens": {
     "items": 6,
     "items_less": 2,
     "items_more": 4,
-    "mean": 9438.7
+    "mean": 9438.416666666666
    }
   },
   "P": {
@@ -142,7 +147,7 @@
     "items": 6,
     "items_less": 5,
     "items_more": 1,
-    "mean": -17.3
+    "mean": -17.339500000000005
    },
    "steps": {
     "items": 6,
@@ -154,7 +159,7 @@
     "items": 6,
     "items_less": 2,
     "items_more": 4,
-    "mean": 8250.0
+    "mean": 8250.166666666666
    }
   }
  },

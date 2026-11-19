@@ -3,38 +3,47 @@
 Serenity, 2026-11-19 (UTC). The pilot of
 `docs/superpowers/specs/2026-11-19-v2-a-line-that-says-a-plan-may-exist.md` (revision 3): its turns ran from
 2026-11-19 12:22:41 UTC to 2026-11-19 15:11:48 UTC, and its judging from 15:11:48 to 15:52:37 UTC the same
-day. Not yet read by a fresh reader.
+day. Read by a fresh reader of the other model family (w129): approve with named changes, eight, made as
+named. The section "An added look" and its line in "In short" were written after that read and are not yet
+read.
 
 ## In short
 
-The first pilot found that a turn told "There is a plan for this work in the repository" finds the plan and
-follows it. That sentence can only be said by someone who knows a plan exists. This pilot asks what a line
-does that anyone could put at the end of every task: "There may be a plan for this work in the repository.
-Look for one before you change code." It was tried where a plan is known and where a reader found none.
+In the first pilot, a turn told "There is a plan for this work in the repository" had a walk that names the
+plan at 11 of 12 items, and its change passed far more of the reference's tests. That sentence can only be
+said by someone who knows a plan exists. This pilot asks what a line does that anyone could put at the end
+of every task: "There may be a plan for this work in the repository. Look for one before you change code."
+It was tried where a plan is known and where a selecting reader's review found none.
 
 - **The rule fixed before any turn says "worth a larger trial".** It reads twelve items no model turn had
   touched. Where a reader had confirmed a plan (pool P), the line is higher than nothing at 4 of 6 items and
-  lower at 0. Where a reader's review found no plan (pool N), it is lower at 0 of 6. The rule says only
+  lower at 0. Where the selecting review found no plan (pool N), it is lower at 0 of 6. The rule says only
   whether a larger trial is worth running.
-- **Where a plan exists, the line did what "There is a plan" did.** In pool P nothing's two runs passed 82
-  and 94 of 113 frozen cases and the line's two 111 and 112. At the first pilot's twelve items (part A, a
-  look only) the line's two runs passed 316 and 363 of 453; "There is a plan" passed 367 there and nothing
-  151 and 154.
+- **The line increased agreement with the reference's tests over nothing in both settings.** In pool P
+  nothing's two runs passed 82 and 94 of 113 frozen cases and the line's two 111 and 112. At the first
+  pilot's twelve items (part A, a look only) the line's two runs passed 316 and 363 of 453; "There is a
+  plan" passed 367 there, one run, and nothing 151 and 154. The lower of the line's two runs holds one row
+  whose test file could not be collected. Pool P had no "There is a plan" row, so the two sentences are
+  compared only at the seen items.
 - **Under the line a turn's walk names the plan every time one is known:** 24 of 24 turns in part A and 12
   of 12 in pool P.
-- **Where no plan was found, the line changed no score.** At 6 of pool N's 6 items, every row whose change
-  was taken passes the same number of cases, with the line or without. At 3 of them both Nothing rows
-  already pass every case, so there the line could not have shown a gain; what the six show is no loss.
+- **Where the selecting review found no plan, no score changed among the hand-ins that were taken.** At 6 of
+  pool N's 6 items, every row whose change was taken passes the same number of cases, with the line or
+  without. At 3 of them both Nothing rows already pass every case, so there the line could not have shown a
+  gain. No score loss was observed at these six items.
 - **What it cost there.** In pool N a turn under the line took 126.5 seconds of the worker's time against
-  97.3 with nothing: more at 6 of 6 items, 29.2 seconds a turn in the mean, with 3.2 more steps and 9,439
+  97.3 with nothing: more at 6 of 6 items, 29.2 seconds a turn in the mean, with 3.2 more steps and 9,438
   more tokens. In pool P the line's turns were shorter at 5 of 6 items.
+- **How much of the score is names, an added look after the scores:** of the cases that do not pass on the
+  parent, 43 of 59 in pool P fail there for want of a name, and 295 of 304 at the first pilot's items. On
+  pool P's 16 others the line's two runs pass 16 and 16 and nothing's 8 and 7.
 - **One hand-in was refused by the room:** a Nothing row at a pool N item. By the spec it is scored as its
   parent. That one row raises pool N's mean difference from 0.000 to 0.083. The rule reads the same with it
   and without it.
 
 **What the score is.** It is agreement with the reference's own tests: names, calls and wordings as well as
-behaviour. It does not say a change is better work. In part B the task is the commit's own message, which is
-more than a user's words would give: at 5 of pool P's 6 items it cites a task or a step of the plan.
+behaviour. It does not say a change is better work. In part B the task is the commit's own message, which
+may supply clues a user's task would omit: at 5 of pool P's 6 items it cites a task or a step of the plan.
 
 ## What was run
 
@@ -91,10 +100,13 @@ more than a user's words would give: at 5 of pool P's 6 items it cites a task or
   after I had written that there were none.)
 - **What the spec says.** Every scheduled row is kept, a turn with no hand-in is scored as its base, and a
   row with a record is never run again. So the row is in every table as recorded, marked `*`, at 0 of 89.
-- **Which way it tilts, written and posted before any score was read:** it lowers that item's baseline, so
-  it raises pool N's mean difference, toward "worth a larger trial".
-- **The rule three ways.** The second and third lines are outside the rule: an added look, fixed before the
-  scores, made with the judge's own functions.
+- **Which way it tilts.** It lowers that item's baseline, so it raises pool N's mean difference, toward
+  "worth a larger trial". I posted this in the ships' room at 15:00 UTC, before the judging began at
+  15:11:48. That post is not among this report's files; it is my word here.
+- **The rule three ways.** The second and third lines are outside the rule: an added look, made with the
+  judge's own functions. I wrote its script before the judging began; that too is my word and is not in
+  these files. The second line puts the item's one taken Nothing row in the refused row's place, so that
+  pair's gap is zero by construction and not by observation.
 
 | reading | pool N's mean difference | on items | the rule |
 | --- | --- | --- | --- |
@@ -133,9 +145,13 @@ repeated rows, and "within" otherwise. `*` marks the refused row.
   not already pass on the parent.
 - **Pool P:** 4971bdb3 passes every case in every row. At the other five the line's rows pass as many as the
   better Nothing row or more; no row under the line passes fewer cases than a taken Nothing row at its item
-  (0 of 12 items).
+  (0 of 6 pool P items; in pool N 0 of 6).
 - **6ba4650f, nothing 1:** the test file could not be collected, so that row is 0 of 21. Its walk names the
   plan. The other Nothing row, whose walk does not, passes 13.
+
+The gaps between an item's repeated rows (`rn` and `rm`) and what its commit's message holds are columns of
+the same table in the judge's own report, `report.md` beside this one. 2 of pool P's messages hold a name
+the item's commit adds (4971bdb3 and 6ba4650f).
 
 **The pools, as the rule reads them** (shares of all frozen cases):
 
@@ -168,13 +184,16 @@ In all, over all frozen cases: in pool P nothing's two runs pass 82 and 94 of 11
 | c42ee1f4 | P | ship-status-and-claims | 4 | 4 | 2 | 4 | 4 | +0.250 | within |
 | ca2d0d80 | P | station-backups-alerts | 5 | 1 | 1 | 5 | 5 | +0.800 | higher |
 
-On these cases pool P's mean d is 0.504 with 3 items higher and 0 lower; pool N's is 0.083 with 0 lower. In
-all, of pool P's 59 such cases nothing's two runs passed 28 and 41 and the line's two 58 and 58.
+On these cases pool P's mean d is 0.504 with 3 items higher and 0 lower, and its mean over the 4 plan groups
+is 0.584; pool N's is 0.083 with 0 lower. In all, of pool P's 59 such cases nothing's two runs passed 28 and
+41 and the line's two 58 and 58.
 
 ## Part A, beside the first pilot's rows
 
 The first pilot's eight rows at its twelve items, read from its own `rows.json`, and the line's two runs at
-the same items. One run a cell in the first pilot; two here. No class and no rule.
+the same items. One run a cell in the first pilot; two here. No class and no rule. The first pilot's row
+"the second search" was chosen there after four orderings had been compared on these twelve items; it was an
+added look in that pilot too.
 
 | item | cases | nothing 1 | nothing 2 | a plan exists | the path | three by search | the second search | three newest plans | three by lot | the line 1 | the line 2 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -275,8 +294,8 @@ said.
 
 - **Under the line the plan is named in every turn where one is known:** 12 of 12 in pool P, at step 3 or 4
   and 13 to 21 seconds in; and 24 of 24 in part A, at step 2 to 6 and 11 to 35 seconds in.
-- **With nothing, a commit's message was sometimes enough:** in pool P 4 of 12 Nothing turns name a matching
-  file, at 3 items. No message names one (0 of 6); 5 cite a task or a step.
+- **With nothing:** in pool P the walks of 4 of 12 Nothing turns name a matching file, at 3 items. No
+  message names one (0 of 6); 5 cite a task or a step.
 
 Pool N has no matching file. What its walks name under a plans, specs or reviews folder:
 
@@ -307,13 +326,13 @@ Pool N has no matching file. What its walks name under a plans, specs or reviews
 | edec7384 | the line 1 | 0 | - |
 | edec7384 | the line 2 | 0 | - |
 
-- With nothing, no pool N walk names such a path (0 of 12 turns). Under the line 6 of 12 do, at 3 items:
-  plans for neighbouring work. They are 4 pairs of item and file. The selecting reader had read 2 of them at
-  that item and judged that they do not specify its work. The other 2 its searches had not found and it had
-  not read (2026-10-27-public-route.md at 2ebc78e1; 2026-10-27-rail-lessons-hook.md at 906b3f73); nobody has
-  judged whether either specifies the item's work. No Markdown file at an item's parent holds a name its
-  commit adds: that is how the pool was drawn. The scores at these items are the same with the line and
-  without.
+- With nothing, no pool N walk names such a path (0 of 12 turns). Under the line 6 of 12 do, at 3 items.
+  They are 4 pairs of item and file, each file under a plans folder. The selecting reader had read 2 of them
+  at that item and judged that they do not specify its work. The other 2 its searches had not found and it
+  had not read (2026-10-27-public-route.md at 2ebc78e1; 2026-10-27-rail-lessons-hook.md at 906b3f73); nobody
+  has assessed whether either specifies the item's work. No Markdown file at an item's parent holds a name
+  its commit adds: that is how the pool was drawn. Among the hand-ins that were taken, the scores at these
+  items are the same with the line and without.
 
 ## What the line cost
 
@@ -332,22 +351,22 @@ Each part B item, the mean of its two Nothing rows against the mean of its two r
 
 | item | pool | worker seconds: nothing | the line | difference | tokens: nothing | the line | difference | steps: nothing | the line | difference |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2ebc78e1 | N | 120.4 | 125.1 | +4.7 | 37492.0 | 49246.0 | +11754 | 13.5 | 15.0 | +1.5 |
-| 426ad7fb | N | 114.1 | 131.1 | +17.0 | 41082.0 | 35785.0 | -5297 | 15.5 | 16.0 | +0.5 |
-| 603434cf | N | 108.6 | 157.3 | +48.7 | 51854.0 | 72693.0 | +20839 | 15.5 | 21.5 | +6.0 |
-| 82bff0db | N | 67.1 | 72.4 | +5.3 | 40807.0 | 37614.0 | -3193 | 9.0 | 10.5 | +1.5 |
-| 906b3f73 | N | 93.1 | 183.6 | +90.5 | 34516.0 | 66497.0 | +31981 | 11.0 | 19.0 | +8.0 |
-| edec7384 | N | 80.5 | 89.3 | +8.8 | 42348.0 | 42896.0 | +548 | 11.0 | 13.0 | +2.0 |
-| 383c5443 | P | 125.2 | 88.4 | -36.8 | 41643.0 | 54326.0 | +12683 | 16.0 | 12.0 | -4.0 |
-| 4971bdb3 | P | 146.9 | 119.3 | -27.6 | 48598.0 | 58055.0 | +9457 | 18.5 | 15.5 | -3.0 |
-| 6ba4650f | P | 165.0 | 153.5 | -11.5 | 48829.0 | 68953.0 | +20124 | 19.5 | 20.0 | +0.5 |
-| b50b2c10 | P | 120.4 | 95.3 | -25.1 | 35844.0 | 61088.0 | +25244 | 12.0 | 11.0 | -1.0 |
-| c42ee1f4 | P | 98.9 | 59.3 | -39.6 | 50250.0 | 33258.0 | -16992 | 15.0 | 11.5 | -3.5 |
-| ca2d0d80 | P | 71.1 | 107.8 | +36.7 | 35628.0 | 34612.0 | -1016 | 11.0 | 13.0 | +2.0 |
+| 2ebc78e1 | N | 120.4 | 125.1 | +4.7 | 37491.5 | 49246.0 | +11754.5 | 13.5 | 15.0 | +1.5 |
+| 426ad7fb | N | 114.1 | 131.1 | +17.0 | 41082.5 | 35785.0 | -5297.5 | 15.5 | 16.0 | +0.5 |
+| 603434cf | N | 108.6 | 157.3 | +48.7 | 51854.5 | 72693.0 | +20838.5 | 15.5 | 21.5 | +6.0 |
+| 82bff0db | N | 67.1 | 72.4 | +5.4 | 40807.0 | 37614.0 | -3193.0 | 9.0 | 10.5 | +1.5 |
+| 906b3f73 | N | 93.1 | 183.6 | +90.5 | 34516.5 | 66497.0 | +31980.5 | 11.0 | 19.0 | +8.0 |
+| edec7384 | N | 80.5 | 89.3 | +8.8 | 42348.0 | 42895.5 | +547.5 | 11.0 | 13.0 | +2.0 |
+| 383c5443 | P | 125.2 | 88.4 | -36.8 | 41643.0 | 54326.0 | +12683.0 | 16.0 | 12.0 | -4.0 |
+| 4971bdb3 | P | 146.9 | 119.3 | -27.7 | 48597.5 | 58055.0 | +9457.5 | 18.5 | 15.5 | -3.0 |
+| 6ba4650f | P | 165.0 | 153.5 | -11.6 | 48829.0 | 68953.0 | +20124.0 | 19.5 | 20.0 | +0.5 |
+| b50b2c10 | P | 120.4 | 95.3 | -25.2 | 35844.5 | 61088.5 | +25244.0 | 12.0 | 11.0 | -1.0 |
+| c42ee1f4 | P | 98.9 | 59.3 | -39.5 | 50249.5 | 33257.5 | -16992.0 | 15.0 | 11.5 | -3.5 |
+| ca2d0d80 | P | 71.1 | 107.8 | +36.7 | 35627.5 | 34612.0 | -1015.5 | 11.0 | 13.0 | +2.0 |
 
-- **Pool N, where the look finds no plan for the work:** more seconds at 6 of 6 items (29.2 in the mean),
-  more steps at 6 (3.2), more tokens at 4 (9,439).
-- **Pool P, where it finds one:** fewer seconds at 5 of 6 items (17.3 fewer in the mean), more tokens at 4
+- **Pool N (no plan found by the selecting review):** more seconds at 6 of 6 items (29.2 in the mean), more
+  steps at 6 (3.2), more tokens at 4 (9,438).
+- **Pool P (a plan confirmed):** fewer seconds at 5 of 6 items (17.3 fewer in the mean), more tokens at 4
   (8,250 more in the mean).
 - **The room's own verdict by replay,** beside the scores and vouching for none: true in 3 of 12 Nothing
   rows and 9 of 12 rows under the line in pool P; 7 of 12 and 8 of 12 in pool N; 8 of 24 in part A.
@@ -361,16 +380,74 @@ records:
 | first pilot, nothing | 24 | 183.9 | 155.6 |
 | second pilot, the line (part A) | 24 | 183.3 | 158.2 |
 
+## An added look, chosen after the scores were read: how the cases fail on the parent
+
+Both pilots' reports say the score is agreement with the reference's tests, names included. This look asks
+how much of it is names. It was not in the spec, it was chosen after the scores were read, and it changes no
+class and no rule.
+
+Each frozen case that does not pass on the parent is put in one of three kinds by how it failed there, read
+from the parent's own run in the item's controls:
+
+- **missing name:** it failed there for want of a name (an import, an attribute, a fixture, a call's
+  arguments), or it was never collected because its file could not be imported;
+- **assertion:** it ran there and failed on an assertion;
+- **other:** it failed there in any other way (a missing key, say).
+
+A case of the first kind can pass only under a change that uses the reference's names. A case of the other
+two ran on the parent's names. It may still need a new name further on, so these are candidates for a check
+of behaviour and not proof of one. Each row's cases were read from the report its judging committed, and
+every row's total equals the judge's score, in both pilots.
+
+| item | pool | assertion: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | other: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | missing name: cases | nothing 1 | nothing 2 | the line 1 | the line 2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2ebc78e1 | N | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 89 | 0 | 89 | 89 | 89 |
+| 426ad7fb | N | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 | 16 | 16 | 16 |
+| 603434cf | N | 0 | 0 | 0 | 0 | 0 | 3 | 2 | 2 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| 82bff0db | N | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 1 | 1 |
+| 906b3f73 | N | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| edec7384 | N | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 383c5443 | P | 1 | 0 | 0 | 1 | 1 | 2 | 0 | 0 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| 4971bdb3 | P | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 20 | 20 | 20 | 20 | 20 |
+| 6ba4650f | P | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 21 | 0 | 13 | 20 | 20 |
+| b50b2c10 | P | 4 | 3 | 3 | 4 | 4 | 1 | 0 | 1 | 1 | 1 | 1 | 0 | 1 | 1 | 1 |
+| c42ee1f4 | P | 2 | 2 | 1 | 2 | 2 | 2 | 2 | 1 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| ca2d0d80 | P | 3 | 1 | 1 | 3 | 3 | 1 | 0 | 0 | 1 | 1 | 1 | 0 | 0 | 1 | 1 |
+| **pool P** | P | 10 | 6 | 5 | 10 | 10 | 6 | 2 | 2 | 6 | 6 | 43 | 20 | 34 | 42 | 42 |
+| **pool N** | N | 4 | 2 | 2 | 2 | 2 | 3 | 2 | 2 | 2 | 2 | 106 | 17 | 106 | 106 | 106 |
+
+- **Pool P:** of 59 cases not passing on the parent, 43 want a name. On the 16 others, nothing's two runs
+  pass 8 and 7 and the line's two 16 and 16.
+- **Pool N:** of 113, 106 want a name, 89 of them at one item. On the 7 others every row passes 4; the two
+  at 906b3f73 pass in no row.
+
+The first pilot's twelve items, its eight rows and the line's two, summed over the items:
+
+| how the case fails on the parent | cases | nothing 1 | nothing 2 | a plan exists | the path | three by search | the second search | three newest plans | three by lot | the line 1 | the line 2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| assertion | 8 | 0 | 0 | 7 | 6 | 0 | 0 | 5 | 0 | 5 | 6 |
+| other | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 1 |
+| missing name | 295 | 3 | 6 | 210 | 206 | 5 | 130 | 40 | 5 | 161 | 207 |
+
+- **Of the 304 cases not passing on the parent there, 295 want a name.** What the first pilot's score
+  measured was almost wholly whether a change used the reference's names.
+- On the 9 others: nothing 0 and 0; "There is a plan" 8; the line 6 and 7.
+- **A case that passes on the parent stops passing** in 2 of this pilot's 72 rows (both at b50b2c10, one
+  Nothing row and one under the line) and in 5 of the first pilot's 96.
+
+As counts, and no more: in pool P the rows under the line, whose walks all name the plan, also pass more of
+the cases that ran on the parent's names. The numbers are small, the sorting was made after the fact, and a
+case's kind is read from the first line of its failure on the parent.
+
 ## What this is not
 
 - **Not a judgement of the work.** The score is agreement with the reference's own tests. In part B the task
-  is the commit's own message, so a Nothing turn starts with more than a user's words would give it, and the
-  line has less left to add than "There is a plan" had in the first pilot, where the tasks withheld every
-  name.
+  is the commit's own message, which may supply clues a user's task would omit. No task in a user's words
+  was run in part B, so what the line adds beside one is not known from it.
 - **Not a showing that pool N has no plan.** One reader's review of the Markdown files tracked at the item's
-  first parent found none, and the line's own turns opened 2 files that review had not read there. The same
-  reader found a specifying document at 20 of the 34 candidates it walked, each of which the selection's
-  word screen had passed. A review can miss one too.
+  first parent found none, and the walks of the line's own turns name 2 files under a plans folder that the
+  review had not read there. The same reader found a specifying document at 20 of the 34 candidates it
+  walked, each of which the selection's word screen had passed. A review can miss one too.
 - **Not a measure of what the line costs in score where there is no plan.** Pool N shows no loss at 6 items,
   3 of which could not show a gain. It does not show that no item would lose.
 - **Not a measure of variation.** Two runs a cell. A gap between two runs is one observed gap an item, and
@@ -389,11 +466,12 @@ records:
 
 - **A turn can lose its whole change to a rule it was never told.** The room refuses to commit a work tree
   that holds a second repository. What a worker reads at its start says to commit, or to leave a message for
-  the room to commit with; it does not say this. The refusal is the room guarding its own git, and it should
-  stay. One sentence in what every turn reads would let a worker avoid it.
+  the room to commit with; it does not say this. My judgement is to keep the guard, which protects the
+  room's own git, and to explain it to workers; that may prevent some refusals. What made the repository
+  here is not known, so it is not shown that a sentence would have prevented this one.
 - **A record's word can hide the room's.** The runner calls a turn that ends on its base's commit "no
   hand-in", whether the worker changed nothing or the room refused its change. Only the clock's log tells
-  them apart. The record should carry the room's own sentence.
+  them apart. I propose that the record say which it was.
 - **A search that finds nothing needs a known case to find.** My check that no test makes a repository
   searched two spellings and missed a helper; another ship's read caught it within the hour.
 - **The scripts' tests now run on three machines.** The first pilot's were pushed with their tests run on
@@ -405,18 +483,21 @@ records:
 
 **This section is my judgement.**
 
-- **Run the larger trial the rule points to, with the costs counted in.** The line cost about half a minute
-  a turn where the look found nothing for the work, and it saved time where it found the plan. A larger
-  trial should fix beforehand what cost is worth what gain, which this pilot's rule left out.
-- **Give pool N room to move.** 3 of its 6 items could not rise and 0 fell. A trial that asks whether the
-  line harms needs items where a Nothing turn passes some cases and not all, and more than six of them.
+- **Run the larger trial the rule points to, with the costs counted in.** The line's turns took about half a
+  minute longer in pool N and were shorter at most pool P items. A larger trial should fix beforehand what
+  cost is worth what gain, which this pilot's rule left out.
+- **More items where the selecting review finds no plan.** 3 of pool N's 6 items could not rise and 0 fell.
+  Six items cannot say the line never costs score. A larger trial needs more of them, with baselines that
+  can show a gain as well as a loss.
 - **Use a task in a user's words in part B as well.** The commit's message cites a task or a step at 5 of
-  pool P's 6 items, and with nothing added 4 of 12 turns found a matching file from it. With such a task the
-  line's gain is what is left after the message.
+  pool P's 6 items, and with nothing added the walks of 4 of 12 turns name a matching file. A task in a
+  user's words was not run in part B; what the line adds beside one is not known.
 - **Tell every turn the one-repository rule, and carry the room's sentence in the record,** before the next
   turns are run.
-- **A behaviour check that does not depend on the reference's names** is still the missing instrument, as
-  the first pilot's report said.
+- **Build the next trial on cases that ran on the parent's names.** The added look found them inside the
+  tests already frozen: few at these items, and where they are the line's rows passed more of them. A count
+  with no model over every item whose reference passes the jail would say how many such cases there are; a
+  trial scored on them would be nearer to a check of behaviour than either pilot.
 
 ## Where the numbers come from
 
@@ -429,6 +510,10 @@ Beside this report, in `2026-11-19-v2-a-line-that-says-a-plan-may-exist-pilot/`:
 - `facts.json` and `run.json`: the counts this report's sentences use.
 - `refused-row.json`: the rule as it reads and the two readings beside it.
 - `added-turn.json`: the one turn run after the pilot, outside its plan.
+- `per-case.json`: the added look: each item's cases by how they fail on the parent, and each row's passes
+  among them, for both pilots.
+- `first-pilot-worker-seconds.json`: the first pilot's worker seconds for the 36 rows the last table of
+  "What the line cost" uses, read from its turn records.
 
 Every table above was made from the judge's data by script and none was typed; the numbers in the sentences
 are filled from those files. The first pilot's columns are read from its own `rows.json`. The rooms, the

@@ -1,0 +1,2326 @@
+{
+ "counts": {
+  "N_missing_name_at_its_largest_item": 89,
+  "every_row_total_equals_the_judges_score": {
+   "first": true,
+   "second": true
+  },
+  "not_passing_on_the_parent": {
+   "N": 113,
+   "P": 59,
+   "part_a": 304
+  },
+  "part_a": {
+   "assertion": {
+    "bm25": 0,
+    "cases": 8,
+    "exists": 7,
+    "lot": 0,
+    "may-1": 5,
+    "may-2": 6,
+    "newest": 5,
+    "nothing-1": 0,
+    "nothing-2": 0,
+    "path": 6,
+    "search": 0
+   },
+   "missing name": {
+    "bm25": 130,
+    "cases": 295,
+    "exists": 210,
+    "lot": 5,
+    "may-1": 161,
+    "may-2": 207,
+    "newest": 40,
+    "nothing-1": 3,
+    "nothing-2": 6,
+    "path": 206,
+    "search": 5
+   },
+   "other": {
+    "bm25": 0,
+    "cases": 1,
+    "exists": 1,
+    "lot": 0,
+    "may-1": 1,
+    "may-2": 1,
+    "newest": 1,
+    "nothing-1": 0,
+    "nothing-2": 0,
+    "path": 1,
+    "search": 0
+   }
+  },
+  "part_a_without_a_missing_name": {
+   "bm25": 0,
+   "cases": 9,
+   "exists": 8,
+   "lot": 0,
+   "may-1": 6,
+   "may-2": 7,
+   "newest": 6,
+   "nothing-1": 0,
+   "nothing-2": 0,
+   "path": 7,
+   "search": 0
+  },
+  "part_b": {
+   "N": {
+    "assertion": {
+     "cases": 4,
+     "may-1": 2,
+     "may-2": 2,
+     "nothing-1": 2,
+     "nothing-2": 2
+    },
+    "missing name": {
+     "cases": 106,
+     "may-1": 106,
+     "may-2": 106,
+     "nothing-1": 17,
+     "nothing-2": 106
+    },
+    "other": {
+     "cases": 3,
+     "may-1": 2,
+     "may-2": 2,
+     "nothing-1": 2,
+     "nothing-2": 2
+    }
+   },
+   "P": {
+    "assertion": {
+     "cases": 10,
+     "may-1": 10,
+     "may-2": 10,
+     "nothing-1": 6,
+     "nothing-2": 5
+    },
+    "missing name": {
+     "cases": 43,
+     "may-1": 42,
+     "may-2": 42,
+     "nothing-1": 20,
+     "nothing-2": 34
+    },
+    "other": {
+     "cases": 6,
+     "may-1": 6,
+     "may-2": 6,
+     "nothing-1": 2,
+     "nothing-2": 2
+    }
+   }
+  },
+  "part_b_without_a_missing_name": {
+   "N": {
+    "cases": 7,
+    "may-1": 4,
+    "may-2": 4,
+    "nothing-1": 4,
+    "nothing-2": 4
+   },
+   "P": {
+    "cases": 16,
+    "may-1": 16,
+    "may-2": 16,
+    "nothing-1": 8,
+    "nothing-2": 7
+   }
+  },
+  "rows_where_a_case_passing_on_the_parent_no_longer_passes": {
+   "first": 5,
+   "first_rows": 96,
+   "second": 2,
+   "second_rows": 72
+  }
+ },
+ "first_pilot": {
+  "every_row_total_equals_the_judges_score": true,
+  "items": {
+   "0193bde842": {
+    "assertion": 0,
+    "frozen": 2,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "027834bf0e": {
+    "assertion": 0,
+    "frozen": 64,
+    "missing name": 64,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "1113f1dbb4": {
+    "assertion": 0,
+    "frozen": 42,
+    "missing name": 27,
+    "other": 0,
+    "pass_on_the_parent": 15
+   },
+   "3879e60983": {
+    "assertion": 0,
+    "frozen": 74,
+    "missing name": 59,
+    "other": 0,
+    "pass_on_the_parent": 15
+   },
+   "3f349e89f0": {
+    "assertion": 0,
+    "frozen": 95,
+    "missing name": 95,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "671a225045": {
+    "assertion": 1,
+    "frozen": 10,
+    "missing name": 9,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "71a593d5a4": {
+    "assertion": 0,
+    "frozen": 33,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 31
+   },
+   "9a3f21cfa8": {
+    "assertion": 4,
+    "frozen": 8,
+    "missing name": 0,
+    "other": 1,
+    "pass_on_the_parent": 3
+   },
+   "c9ceb15bae": {
+    "assertion": 0,
+    "frozen": 27,
+    "missing name": 4,
+    "other": 0,
+    "pass_on_the_parent": 23
+   },
+   "cd884db76f": {
+    "assertion": 0,
+    "frozen": 22,
+    "missing name": 15,
+    "other": 0,
+    "pass_on_the_parent": 7
+   },
+   "d20c739bd0": {
+    "assertion": 0,
+    "frozen": 34,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 32
+   },
+   "fff1b349cc": {
+    "assertion": 3,
+    "frozen": 42,
+    "missing name": 16,
+    "other": 0,
+    "pass_on_the_parent": 23
+   }
+  },
+  "label": "the first pilot",
+  "rows": [
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 1,
+    "n": 1,
+    "of": 42,
+    "other": 0,
+    "passed": 16,
+    "row": "bm25",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 2,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "bm25",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 62,
+    "n": 3,
+    "of": 64,
+    "other": 0,
+    "passed": 62,
+    "row": "exists",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 0,
+    "n": 4,
+    "of": 64,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "fff1b349cc",
+    "missing name": 0,
+    "n": 5,
+    "of": 42,
+    "other": 0,
+    "passed": 23,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 0,
+    "n": 6,
+    "of": 33,
+    "other": 0,
+    "passed": 31,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 7,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "lot",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 7,
+    "n": 8,
+    "of": 10,
+    "other": 0,
+    "passed": 7,
+    "row": "exists",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 0,
+    "n": 9,
+    "of": 64,
+    "other": 0,
+    "passed": 0,
+    "row": "newest",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 6,
+    "n": 10,
+    "of": 10,
+    "other": 0,
+    "passed": 6,
+    "row": "newest",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 11,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "search",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 12,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 13,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "bm25",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 14,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "exists",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 15,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "path",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 16,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "bm25",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "fff1b349cc",
+    "missing name": 0,
+    "n": 17,
+    "of": 42,
+    "other": 0,
+    "passed": 23,
+    "row": "lot",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 18,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "search",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 2,
+    "n": 19,
+    "of": 27,
+    "other": 0,
+    "passed": 25,
+    "row": "search",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 3,
+    "n": 20,
+    "of": 22,
+    "other": 0,
+    "passed": 10,
+    "row": "lot",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 6,
+    "n": 21,
+    "of": 10,
+    "other": 0,
+    "passed": 6,
+    "row": "path",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 22,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "path",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 0,
+    "n": 23,
+    "of": 22,
+    "other": 0,
+    "passed": 7,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 24,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 25,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 2,
+    "n": 26,
+    "of": 42,
+    "other": 0,
+    "passed": 17,
+    "row": "path",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 0,
+    "n": 27,
+    "of": 33,
+    "other": 0,
+    "passed": 31,
+    "row": "lot",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 0,
+    "n": 28,
+    "of": 42,
+    "other": 0,
+    "passed": 15,
+    "row": "lot",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 4,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 29,
+    "of": 8,
+    "other": 1,
+    "passed": 8,
+    "row": "newest",
+    "still_passing_of_the_parents": 3
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 30,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "exists",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 31,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "newest",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 32,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 33,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "lot",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 34,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "path",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "fff1b349cc",
+    "missing name": 0,
+    "n": 35,
+    "of": 42,
+    "other": 0,
+    "passed": 23,
+    "row": "search",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 48,
+    "n": 36,
+    "of": 95,
+    "other": 0,
+    "passed": 48,
+    "row": "path",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 0,
+    "n": 37,
+    "of": 33,
+    "other": 0,
+    "passed": 31,
+    "row": "search",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 2,
+    "n": 38,
+    "of": 27,
+    "other": 0,
+    "passed": 25,
+    "row": "lot",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 39,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "search",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 1,
+    "n": 40,
+    "of": 42,
+    "other": 0,
+    "passed": 16,
+    "row": "exists",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 41,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "lot",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 42,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 0,
+    "n": 43,
+    "of": 42,
+    "other": 0,
+    "passed": 15,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 2,
+    "n": 44,
+    "of": 42,
+    "other": 0,
+    "passed": 17,
+    "row": "newest",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "fff1b349cc",
+    "missing name": 0,
+    "n": 45,
+    "of": 42,
+    "other": 0,
+    "passed": 23,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 59,
+    "n": 46,
+    "of": 74,
+    "other": 0,
+    "passed": 74,
+    "row": "exists",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 4,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 47,
+    "of": 8,
+    "other": 1,
+    "passed": 8,
+    "row": "exists",
+    "still_passing_of_the_parents": 3
+   },
+   {
+    "assertion": 0,
+    "item": "fff1b349cc",
+    "missing name": 0,
+    "n": 48,
+    "of": 42,
+    "other": 0,
+    "passed": 23,
+    "row": "bm25",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 0,
+    "n": 49,
+    "of": 42,
+    "other": 0,
+    "passed": 15,
+    "row": "search",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 50,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "newest",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 51,
+    "of": 8,
+    "other": 0,
+    "passed": 2,
+    "row": "search",
+    "still_passing_of_the_parents": 2
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 59,
+    "n": 52,
+    "of": 74,
+    "other": 0,
+    "passed": 74,
+    "row": "path",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 53,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "exists",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 1,
+    "item": "fff1b349cc",
+    "missing name": 12,
+    "n": 54,
+    "of": 42,
+    "other": 0,
+    "passed": 36,
+    "row": "newest",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 55,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "bm25",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 0,
+    "n": 56,
+    "of": 64,
+    "other": 0,
+    "passed": 0,
+    "row": "search",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 61,
+    "n": 57,
+    "of": 64,
+    "other": 0,
+    "passed": 61,
+    "row": "bm25",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 2,
+    "n": 58,
+    "of": 27,
+    "other": 0,
+    "passed": 25,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 2,
+    "item": "fff1b349cc",
+    "missing name": 10,
+    "n": 59,
+    "of": 42,
+    "other": 0,
+    "passed": 35,
+    "row": "path",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 48,
+    "n": 60,
+    "of": 95,
+    "other": 0,
+    "passed": 48,
+    "row": "bm25",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 0,
+    "n": 61,
+    "of": 10,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 62,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 0,
+    "n": 63,
+    "of": 64,
+    "other": 0,
+    "passed": 0,
+    "row": "lot",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 64,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "exists",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 1,
+    "n": 65,
+    "of": 42,
+    "other": 0,
+    "passed": 16,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 3,
+    "item": "fff1b349cc",
+    "missing name": 13,
+    "n": 66,
+    "of": 42,
+    "other": 0,
+    "passed": 39,
+    "row": "exists",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 0,
+    "n": 67,
+    "of": 10,
+    "other": 0,
+    "passed": 0,
+    "row": "bm25",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 68,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "newest",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 69,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "newest",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 70,
+    "of": 8,
+    "other": 0,
+    "passed": 2,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 2
+   },
+   {
+    "assertion": 0,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 71,
+    "of": 8,
+    "other": 0,
+    "passed": 2,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 2
+   },
+   {
+    "assertion": 4,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 72,
+    "of": 8,
+    "other": 1,
+    "passed": 8,
+    "row": "path",
+    "still_passing_of_the_parents": 3
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 73,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "bm25",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 3,
+    "n": 74,
+    "of": 22,
+    "other": 0,
+    "passed": 10,
+    "row": "search",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 0,
+    "n": 75,
+    "of": 10,
+    "other": 0,
+    "passed": 0,
+    "row": "lot",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 76,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "newest",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 77,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "path",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 0,
+    "n": 78,
+    "of": 33,
+    "other": 0,
+    "passed": 31,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 61,
+    "n": 79,
+    "of": 64,
+    "other": 0,
+    "passed": 61,
+    "row": "path",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 80,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "exists",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 81,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "lot",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 0,
+    "n": 82,
+    "of": 10,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 83,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "path",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 84,
+    "of": 8,
+    "other": 0,
+    "passed": 2,
+    "row": "bm25",
+    "still_passing_of_the_parents": 2
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 3,
+    "n": 85,
+    "of": 22,
+    "other": 0,
+    "passed": 10,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 48,
+    "n": 86,
+    "of": 95,
+    "other": 0,
+    "passed": 48,
+    "row": "exists",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 87,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 88,
+    "of": 8,
+    "other": 0,
+    "passed": 2,
+    "row": "lot",
+    "still_passing_of_the_parents": 2
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 89,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "search",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 90,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "newest",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 0,
+    "n": 91,
+    "of": 64,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 92,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "newest",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 93,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "bm25",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 94,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 0,
+    "n": 95,
+    "of": 10,
+    "other": 0,
+    "passed": 0,
+    "row": "search",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 0,
+    "n": 96,
+    "of": 74,
+    "other": 0,
+    "passed": 15,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 15
+   }
+  ],
+  "samples_of_first_lines": {
+   "assertion": [
+    "AssertionError: ((PosixPath('<a path>",
+    "AssertionError: assert 200 == 404",
+    "AssertionError: assert ['NoneType', 'NoneType'] == ['Problem', 'dict']",
+    "AssertionError: assert ['b32c67a9de5...06e9444', ...] == ['7d7aa8ad971...237454fe162a']",
+    "AssertionError: assert ['be3ebb36399...ffd8fc2', ...] == ['0ff56ee23c7...e730326', ...]",
+    "AssertionError: limit=0",
+    "assert (2 == 1)",
+    "assert False"
+   ],
+   "missing name": [
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'",
+    "AttributeError: 'Federation' object has no attribute 'pull_once'",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'",
+    "AttributeError: 'State' object has no attribute 'sign_in_lanes'",
+    "AttributeError: 'Store' object has no attribute 'session_is_valid'",
+    "AttributeError: 'Store' object has no attribute 'ship_key_is_valid'",
+    "ImportError: cannot import name 'TRUST_CAP' from 'superyak_peer.federation' (<a path>",
+    "ImportError: cannot import name 'federation_lock' from 'superyak_peer.dispatch' (<a path>",
+    "ImportError: cannot import name 'pairing_code' from 'superyak_peer.identity' (<a path>",
+    "ImportError: cannot import name 'show_code' from 'superyak_peer.identity' (<a path>",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (<a path>",
+    "ImportError: cannot import name 'verify_pull' from 'superyak_peer.identity' (<a path>"
+   ],
+   "other": [
+    "KeyError: 'total'"
+   ]
+  },
+  "what": "an added look, chosen after the scores were read"
+ },
+ "second_pilot": {
+  "every_row_total_equals_the_judges_score": true,
+  "items": {
+   "0193bde842": {
+    "assertion": 0,
+    "frozen": 2,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "027834bf0e": {
+    "assertion": 0,
+    "frozen": 64,
+    "missing name": 64,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "1113f1dbb4": {
+    "assertion": 0,
+    "frozen": 42,
+    "missing name": 27,
+    "other": 0,
+    "pass_on_the_parent": 15
+   },
+   "2ebc78e1d8": {
+    "assertion": 0,
+    "frozen": 89,
+    "missing name": 89,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "383c54438d": {
+    "assertion": 1,
+    "frozen": 18,
+    "missing name": 0,
+    "other": 2,
+    "pass_on_the_parent": 15
+   },
+   "3879e60983": {
+    "assertion": 0,
+    "frozen": 74,
+    "missing name": 59,
+    "other": 0,
+    "pass_on_the_parent": 15
+   },
+   "3f349e89f0": {
+    "assertion": 0,
+    "frozen": 95,
+    "missing name": 95,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "426ad7fbd5": {
+    "assertion": 0,
+    "frozen": 133,
+    "missing name": 16,
+    "other": 0,
+    "pass_on_the_parent": 117
+   },
+   "4971bdb360": {
+    "assertion": 0,
+    "frozen": 20,
+    "missing name": 20,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "603434cf1e": {
+    "assertion": 0,
+    "frozen": 23,
+    "missing name": 0,
+    "other": 3,
+    "pass_on_the_parent": 20
+   },
+   "671a225045": {
+    "assertion": 1,
+    "frozen": 10,
+    "missing name": 9,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "6ba4650f4d": {
+    "assertion": 0,
+    "frozen": 21,
+    "missing name": 21,
+    "other": 0,
+    "pass_on_the_parent": 0
+   },
+   "71a593d5a4": {
+    "assertion": 0,
+    "frozen": 33,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 31
+   },
+   "82bff0db02": {
+    "assertion": 1,
+    "frozen": 22,
+    "missing name": 1,
+    "other": 0,
+    "pass_on_the_parent": 20
+   },
+   "906b3f734b": {
+    "assertion": 2,
+    "frozen": 35,
+    "missing name": 0,
+    "other": 0,
+    "pass_on_the_parent": 33
+   },
+   "9a3f21cfa8": {
+    "assertion": 4,
+    "frozen": 8,
+    "missing name": 0,
+    "other": 1,
+    "pass_on_the_parent": 3
+   },
+   "b50b2c109c": {
+    "assertion": 4,
+    "frozen": 25,
+    "missing name": 1,
+    "other": 1,
+    "pass_on_the_parent": 19
+   },
+   "c42ee1f498": {
+    "assertion": 2,
+    "frozen": 15,
+    "missing name": 0,
+    "other": 2,
+    "pass_on_the_parent": 11
+   },
+   "c9ceb15bae": {
+    "assertion": 0,
+    "frozen": 27,
+    "missing name": 4,
+    "other": 0,
+    "pass_on_the_parent": 23
+   },
+   "ca2d0d80ea": {
+    "assertion": 3,
+    "frozen": 14,
+    "missing name": 1,
+    "other": 1,
+    "pass_on_the_parent": 9
+   },
+   "cd884db76f": {
+    "assertion": 0,
+    "frozen": 22,
+    "missing name": 15,
+    "other": 0,
+    "pass_on_the_parent": 7
+   },
+   "d20c739bd0": {
+    "assertion": 0,
+    "frozen": 34,
+    "missing name": 2,
+    "other": 0,
+    "pass_on_the_parent": 32
+   },
+   "edec7384ab": {
+    "assertion": 1,
+    "frozen": 7,
+    "missing name": 0,
+    "other": 0,
+    "pass_on_the_parent": 6
+   },
+   "fff1b349cc": {
+    "assertion": 3,
+    "frozen": 42,
+    "missing name": 16,
+    "other": 0,
+    "pass_on_the_parent": 23
+   }
+  },
+  "label": "the second pilot",
+  "rows": [
+   {
+    "assertion": 4,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 1,
+    "of": 8,
+    "other": 1,
+    "passed": 8,
+    "row": "may-1",
+    "still_passing_of_the_parents": 3
+   },
+   {
+    "assertion": 1,
+    "item": "edec7384ab",
+    "missing name": 0,
+    "n": 2,
+    "of": 7,
+    "other": 0,
+    "passed": 7,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 6
+   },
+   {
+    "assertion": 0,
+    "item": "6ba4650f4d",
+    "missing name": 13,
+    "n": 3,
+    "of": 21,
+    "other": 0,
+    "passed": 13,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "426ad7fbd5",
+    "missing name": 16,
+    "n": 4,
+    "of": 133,
+    "other": 0,
+    "passed": 133,
+    "row": "may-2",
+    "still_passing_of_the_parents": 117
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 5,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "may-1",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 1,
+    "item": "82bff0db02",
+    "missing name": 1,
+    "n": 6,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "may-1",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "906b3f734b",
+    "missing name": 0,
+    "n": 7,
+    "of": 35,
+    "other": 0,
+    "passed": 33,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 33
+   },
+   {
+    "assertion": 0,
+    "item": "c9ceb15bae",
+    "missing name": 3,
+    "n": 8,
+    "of": 27,
+    "other": 0,
+    "passed": 26,
+    "row": "may-2",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 9,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "may-1",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "906b3f734b",
+    "missing name": 0,
+    "n": 10,
+    "of": 35,
+    "other": 0,
+    "passed": 33,
+    "row": "may-1",
+    "still_passing_of_the_parents": 33
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 48,
+    "n": 11,
+    "of": 95,
+    "other": 0,
+    "passed": 48,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 3,
+    "item": "b50b2c109c",
+    "missing name": 0,
+    "n": 12,
+    "of": 25,
+    "other": 0,
+    "passed": 22,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 19
+   },
+   {
+    "assertion": 4,
+    "item": "b50b2c109c",
+    "missing name": 1,
+    "n": 13,
+    "of": 25,
+    "other": 1,
+    "passed": 24,
+    "row": "may-1",
+    "still_passing_of_the_parents": 18
+   },
+   {
+    "assertion": 1,
+    "item": "fff1b349cc",
+    "missing name": 12,
+    "n": 14,
+    "of": 42,
+    "other": 0,
+    "passed": 36,
+    "row": "may-1",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 1,
+    "item": "383c54438d",
+    "missing name": 0,
+    "n": 15,
+    "of": 18,
+    "other": 2,
+    "passed": 18,
+    "row": "may-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 7,
+    "n": 16,
+    "of": 10,
+    "other": 0,
+    "passed": 7,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "426ad7fbd5",
+    "missing name": 16,
+    "n": 17,
+    "of": 133,
+    "other": 0,
+    "passed": 133,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 117
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 61,
+    "n": 18,
+    "of": 64,
+    "other": 0,
+    "passed": 61,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "671a225045",
+    "missing name": 6,
+    "n": 19,
+    "of": 10,
+    "other": 0,
+    "passed": 6,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 1,
+    "item": "82bff0db02",
+    "missing name": 1,
+    "n": 20,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "may-2",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 2,
+    "item": "c42ee1f498",
+    "missing name": 0,
+    "n": 21,
+    "of": 15,
+    "other": 2,
+    "passed": 15,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 11
+   },
+   {
+    "assertion": 0,
+    "item": "027834bf0e",
+    "missing name": 61,
+    "n": 22,
+    "of": 64,
+    "other": 0,
+    "passed": 61,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "603434cf1e",
+    "missing name": 0,
+    "n": 23,
+    "of": 23,
+    "other": 2,
+    "passed": 22,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 24,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "may-1",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 1,
+    "item": "82bff0db02",
+    "missing name": 1,
+    "n": 25,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "2ebc78e1d8",
+    "missing name": 89,
+    "n": 26,
+    "of": 89,
+    "other": 0,
+    "passed": 89,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 3,
+    "item": "ca2d0d80ea",
+    "missing name": 1,
+    "n": 27,
+    "of": 14,
+    "other": 1,
+    "passed": 14,
+    "row": "may-2",
+    "still_passing_of_the_parents": 9
+   },
+   {
+    "assertion": 0,
+    "item": "6ba4650f4d",
+    "missing name": 20,
+    "n": 28,
+    "of": 21,
+    "other": 0,
+    "passed": 20,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 3,
+    "item": "ca2d0d80ea",
+    "missing name": 1,
+    "n": 29,
+    "of": 14,
+    "other": 1,
+    "passed": 14,
+    "row": "may-1",
+    "still_passing_of_the_parents": 9
+   },
+   {
+    "assertion": 1,
+    "item": "ca2d0d80ea",
+    "missing name": 0,
+    "n": 30,
+    "of": 14,
+    "other": 0,
+    "passed": 10,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 9
+   },
+   {
+    "assertion": 3,
+    "item": "b50b2c109c",
+    "missing name": 1,
+    "n": 31,
+    "of": 25,
+    "other": 1,
+    "passed": 23,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 18
+   },
+   {
+    "assertion": 4,
+    "item": "9a3f21cfa8",
+    "missing name": 0,
+    "n": 32,
+    "of": 8,
+    "other": 1,
+    "passed": 8,
+    "row": "may-2",
+    "still_passing_of_the_parents": 3
+   },
+   {
+    "assertion": 2,
+    "item": "fff1b349cc",
+    "missing name": 12,
+    "n": 33,
+    "of": 42,
+    "other": 0,
+    "passed": 37,
+    "row": "may-2",
+    "still_passing_of_the_parents": 23
+   },
+   {
+    "assertion": 0,
+    "item": "603434cf1e",
+    "missing name": 0,
+    "n": 34,
+    "of": 23,
+    "other": 2,
+    "passed": 22,
+    "row": "may-1",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 1,
+    "item": "edec7384ab",
+    "missing name": 0,
+    "n": 35,
+    "of": 7,
+    "other": 0,
+    "passed": 7,
+    "row": "may-1",
+    "still_passing_of_the_parents": 6
+   },
+   {
+    "assertion": 0,
+    "item": "426ad7fbd5",
+    "missing name": 16,
+    "n": 36,
+    "of": 133,
+    "other": 0,
+    "passed": 133,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 117
+   },
+   {
+    "assertion": 2,
+    "item": "c42ee1f498",
+    "missing name": 0,
+    "n": 37,
+    "of": 15,
+    "other": 2,
+    "passed": 15,
+    "row": "may-1",
+    "still_passing_of_the_parents": 11
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 38,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "6ba4650f4d",
+    "missing name": 0,
+    "n": 39,
+    "of": 21,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "4971bdb360",
+    "missing name": 20,
+    "n": 40,
+    "of": 20,
+    "other": 0,
+    "passed": 20,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 4,
+    "item": "b50b2c109c",
+    "missing name": 1,
+    "n": 41,
+    "of": 25,
+    "other": 1,
+    "passed": 25,
+    "row": "may-2",
+    "still_passing_of_the_parents": 19
+   },
+   {
+    "assertion": 0,
+    "item": "2ebc78e1d8",
+    "missing name": 89,
+    "n": 42,
+    "of": 89,
+    "other": 0,
+    "passed": 89,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 1,
+    "item": "383c54438d",
+    "missing name": 0,
+    "n": 43,
+    "of": 18,
+    "other": 2,
+    "passed": 18,
+    "row": "may-2",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "6ba4650f4d",
+    "missing name": 20,
+    "n": 44,
+    "of": 21,
+    "other": 0,
+    "passed": 20,
+    "row": "may-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 2,
+    "item": "c42ee1f498",
+    "missing name": 0,
+    "n": 45,
+    "of": 15,
+    "other": 2,
+    "passed": 15,
+    "row": "may-2",
+    "still_passing_of_the_parents": 11
+   },
+   {
+    "assertion": 0,
+    "item": "3f349e89f0",
+    "missing name": 0,
+    "n": 46,
+    "of": 95,
+    "other": 0,
+    "passed": 0,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 59,
+    "n": 47,
+    "of": 74,
+    "other": 0,
+    "passed": 74,
+    "row": "may-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 2,
+    "n": 48,
+    "of": 42,
+    "other": 0,
+    "passed": 17,
+    "row": "may-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "1113f1dbb4",
+    "missing name": 1,
+    "n": 49,
+    "of": 42,
+    "other": 0,
+    "passed": 16,
+    "row": "may-2",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 50,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "may-2",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 1,
+    "item": "82bff0db02",
+    "missing name": 1,
+    "n": 51,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "4971bdb360",
+    "missing name": 20,
+    "n": 52,
+    "of": 20,
+    "other": 0,
+    "passed": 20,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "906b3f734b",
+    "missing name": 0,
+    "n": 53,
+    "of": 35,
+    "other": 0,
+    "passed": 33,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 33
+   },
+   {
+    "assertion": 1,
+    "item": "ca2d0d80ea",
+    "missing name": 0,
+    "n": 54,
+    "of": 14,
+    "other": 0,
+    "passed": 10,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 9
+   },
+   {
+    "assertion": 0,
+    "item": "4971bdb360",
+    "missing name": 20,
+    "n": 55,
+    "of": 20,
+    "other": 0,
+    "passed": 20,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "2ebc78e1d8",
+    "missing name": 0,
+    "n": 56,
+    "of": 89,
+    "other": 0,
+    "passed": 0,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "4971bdb360",
+    "missing name": 20,
+    "n": 57,
+    "of": 20,
+    "other": 0,
+    "passed": 20,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "cd884db76f",
+    "missing name": 15,
+    "n": 58,
+    "of": 22,
+    "other": 0,
+    "passed": 22,
+    "row": "may-1",
+    "still_passing_of_the_parents": 7
+   },
+   {
+    "assertion": 1,
+    "item": "edec7384ab",
+    "missing name": 0,
+    "n": 59,
+    "of": 7,
+    "other": 0,
+    "passed": 7,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 6
+   },
+   {
+    "assertion": 0,
+    "item": "383c54438d",
+    "missing name": 0,
+    "n": 60,
+    "of": 18,
+    "other": 0,
+    "passed": 15,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "603434cf1e",
+    "missing name": 0,
+    "n": 61,
+    "of": 23,
+    "other": 2,
+    "passed": 22,
+    "row": "may-2",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "383c54438d",
+    "missing name": 0,
+    "n": 62,
+    "of": 18,
+    "other": 0,
+    "passed": 15,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 1,
+    "item": "c42ee1f498",
+    "missing name": 0,
+    "n": 63,
+    "of": 15,
+    "other": 1,
+    "passed": 13,
+    "row": "nothing-2",
+    "still_passing_of_the_parents": 11
+   },
+   {
+    "assertion": 0,
+    "item": "426ad7fbd5",
+    "missing name": 16,
+    "n": 64,
+    "of": 133,
+    "other": 0,
+    "passed": 133,
+    "row": "may-1",
+    "still_passing_of_the_parents": 117
+   },
+   {
+    "assertion": 1,
+    "item": "edec7384ab",
+    "missing name": 0,
+    "n": 65,
+    "of": 7,
+    "other": 0,
+    "passed": 7,
+    "row": "may-2",
+    "still_passing_of_the_parents": 6
+   },
+   {
+    "assertion": 0,
+    "item": "603434cf1e",
+    "missing name": 0,
+    "n": 66,
+    "of": 23,
+    "other": 2,
+    "passed": 22,
+    "row": "nothing-1",
+    "still_passing_of_the_parents": 20
+   },
+   {
+    "assertion": 0,
+    "item": "3879e60983",
+    "missing name": 59,
+    "n": 67,
+    "of": 74,
+    "other": 0,
+    "passed": 74,
+    "row": "may-2",
+    "still_passing_of_the_parents": 15
+   },
+   {
+    "assertion": 0,
+    "item": "71a593d5a4",
+    "missing name": 2,
+    "n": 68,
+    "of": 33,
+    "other": 0,
+    "passed": 33,
+    "row": "may-2",
+    "still_passing_of_the_parents": 31
+   },
+   {
+    "assertion": 0,
+    "item": "0193bde842",
+    "missing name": 0,
+    "n": 69,
+    "of": 2,
+    "other": 0,
+    "passed": 0,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "d20c739bd0",
+    "missing name": 0,
+    "n": 70,
+    "of": 34,
+    "other": 0,
+    "passed": 32,
+    "row": "may-2",
+    "still_passing_of_the_parents": 32
+   },
+   {
+    "assertion": 0,
+    "item": "2ebc78e1d8",
+    "missing name": 89,
+    "n": 71,
+    "of": 89,
+    "other": 0,
+    "passed": 89,
+    "row": "may-1",
+    "still_passing_of_the_parents": 0
+   },
+   {
+    "assertion": 0,
+    "item": "906b3f734b",
+    "missing name": 0,
+    "n": 72,
+    "of": 35,
+    "other": 0,
+    "passed": 33,
+    "row": "may-2",
+    "still_passing_of_the_parents": 33
+   }
+  ],
+  "samples_of_first_lines": {
+   "assertion": [
+    "AssertionError: ((PosixPath('<a path>",
+    "AssertionError: assert (True and False)",
+    "AssertionError: assert 0 == 1",
+    "AssertionError: assert 11 == 12",
+    "AssertionError: assert 2 == 0",
+    "AssertionError: assert 200 == 404",
+    "AssertionError: assert 404 == 400",
+    "AssertionError: assert 404 == 403",
+    "AssertionError: assert 493 == 448",
+    "AssertionError: assert False",
+    "AssertionError: assert ['23f0567158b...0651e70', ...] == ['855dae9823d...04fcd3130f12']",
+    "AssertionError: assert ['Breadth aga...ash command.'] == ['Breadth aga...ash command.']"
+   ],
+   "missing name": [
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'",
+    "AttributeError: 'Federation' object has no attribute 'pull_once'",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'",
+    "AttributeError: 'State' object has no attribute 'sign_in_lanes'",
+    "AttributeError: 'Store' object has no attribute 'session_is_valid'",
+    "AttributeError: 'Store' object has no attribute 'ship_key_is_valid'",
+    "AttributeError: <module 'superyak_peer.backups' from '<a path>",
+    "AttributeError: module 'superyak_peer.__main__' has no attribute 'SHUTDOWN_GRACE'",
+    "AttributeError: module 'superyak_peer.alerts' has no attribute 'LOCK_WAIT'",
+    "ImportError: cannot import name 'TRUST_CAP' from 'superyak_peer.federation' (<a path>",
+    "ImportError: cannot import name 'federation_lock' from 'superyak_peer.dispatch' (<a path>",
+    "ImportError: cannot import name 'pairing_code' from 'superyak_peer.identity' (<a path>"
+   ],
+   "other": [
+    "Failed: DID NOT RAISE Problem",
+    "FileNotFoundError: [Errno 2] No such file or directory: '<a path>",
+    "KeyError: 'on_watch'",
+    "KeyError: 'total'",
+    "KeyError: 'watch_until'",
+    "SystemExit: 2",
+    "TypeError: string indices must be integers, not 'str'",
+    "sqlite3.OperationalError: attempt to write a readonly database"
+   ]
+  },
+  "what": "an added look, chosen after the scores were read"
+ },
+ "what": "an added look, chosen after the scores were read"
+}
