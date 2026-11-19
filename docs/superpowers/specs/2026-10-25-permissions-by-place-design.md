@@ -1747,9 +1747,15 @@ for each name in its config (`engram/lighthouse_daemon.py:506-518`), including o
 - **Before the raise, no house carries the id** (2026-11-18, Tardis; the projection digest section 2 review's
   follow-up, `docs/superpowers/reviews/2026-11-03-projection-digest-section2-review.md:162-165`). A ledger whose gate
   was never raised marks no house, so a house that carries its id while `gate_raised` is not set comes from a ledger
-  that was raised and is now an older copy of itself, restored from before the raise. Under `gate off` on a ledger
-  never raised, the act removes `permissions_ledger_id` from each house that carries one, whatever it names
-  (`unreadable`, an earlier ledger's id, or this one's), and leaves an unmarked house as it is.
+  that was raised and is now an older copy of itself, restored from before the raise. Two other paths give the same
+  state, and closed is right for both: a first raise cut short, since the act marks the houses before its log row
+  commits (`_make` before `_append`, `engram/permission_ledger.py:1820-1822`); and a home that ran `gate off` on a
+  never-raised ledger under the code before this change, which wrote this ledger's id into a house that carried
+  another mark (R50 as first written). Under `gate off` on a ledger never raised, the act now removes
+  `permissions_ledger_id` from each house that carries one, whatever it names (`unreadable`, an earlier ledger's id,
+  or this one's), and leaves an unmarked house as it is. The act's `houses` lists each house whose mark it changed:
+  marked under a raised gate, unmarked under a never-raised `off`, and the body's `meta`, which sets `gate_raised`
+  only when the gate is raised, tells the two apart (Serenity's read, all hands fdbb4496).
 
 Every reader computes the effective gate at every request: the daemon over the houses it serves, an engram server
 over the published house.
@@ -1765,9 +1771,10 @@ over the published house.
 
 So a ledger deleted by mistake, or a house made again after the raise, never reads `off` while any house still
 carries the id. A house that reads closed for want of the id, such as one restored from before the raise, is marked
-by running `engram-permissions gate <current mode>` again, with the yes. A ledger restored from before the raise
-reads closed until its owner raises the gate again, or runs `gate off`, which removes the houses' marks; either is
-the owner's terminal act with the yes.
+by running `engram-permissions gate <current mode>` again, with the yes. A house that carries this ledger's id while
+the gate was never raised reads closed, whichever of the three paths above made it, until its owner raises the gate
+again or runs `gate off`, which removes the houses' marks; either is the owner's terminal act with the yes, and the
+cause text names both.
 
 Closed means fail closed: the daemon serves nothing, `share` and `permit` refuse, and the `remember` guard refuses
 as under `enforce`. Each says why. A `[permissions]` section in `config.toml` is ignored with a warning: config
