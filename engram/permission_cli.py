@@ -692,13 +692,24 @@ def _revoke_grant(a):
 def gate_plan_lines(plan: dict, *, marking: bool) -> list[str]:
     """What a `gate` act would use if applied now (R26, R27), for `sign` here and `gate` in Task 27. `marking` is
     whether the act marks an unmarked house: under `shadow` and `enforce`, and under `off` once the gate was raised;
-    under `off` on a ledger never raised it marks only a house marked `unreadable` or with another ledger's id
-    (R50)."""
-    which = ("each that does not carry this ledger's id" if marking else
-             "only each that carries `unreadable` or another ledger's id, since the gate was never raised")
+    under `off` on a ledger never raised it removes the mark of each house that carries one (R50 as revised). A house
+    that carries this ledger's id while the gate was never raised is set apart, with the path that may have made it
+    and the move for each (P 12.3, "Before the raise")."""
+    which = ("the yes marks each that does not carry this ledger's id" if marking else
+             "the yes removes the mark of each that carries one, since the gate was never raised")
     lines = [f"gate plan, read now (the yes reads the houses again):",
-             f"  published house: {plan['published_house']}", f"  the houses on disk; the yes marks {which}:"]
+             f"  published house: {plan['published_house']}", f"  the houses on disk; {which}:"]
     lines += [f"    - {h}" for h in plan["houses"]] or ["    (none)"]
+    if plan.get("this_id"):
+        lines += ["  these carry this ledger's id though it was never raised, so the gate reads closed (P 12.3):"]
+        lines += [f"    - {h}" for h in plan["this_id"]]
+        lines += ["  one of three things made that state:",
+                  "    - an older or rebuilt copy of this ledger was put in place: it lost every act after it, "
+                  "revocations and denies included, so first put back the newest copy, or make the lost acts again, "
+                  "since raising this copy puts its revoked allows back in force;",
+                  "    - a first raise was cut short: raise the gate again;",
+                  "    - a `gate off` before 2026-11-19 wrote this id: `gate off` again removes it.",
+                  "  `gate off` removes these marks, and the home reads `off`."]
     if plan["lacking_029"]:
         lines.append("  houses that lack migration 029: each serves nothing under `shadow` or `enforce` until an "
                      "engram server opens it once:")
