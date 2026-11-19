@@ -521,6 +521,9 @@ Beside this report, in `2026-11-19-v2-a-line-that-says-a-plan-may-exist-pilot/`:
   among them, for both pilots.
 - `first-pilot-worker-seconds.json`: the first pilot's worker seconds for the 36 rows the last table of
   "What the line cost" uses, read from its turn records.
+- `cases.json`: added after the two reads, at another ship's asking, and no sentence above rests on it
+  alone: each of the 24 items' frozen cases, those that pass on the parent, the bin of each of the rest, and
+  for every row of both pilots the cases it passes among them.
 
 Every table above was made from the judge's data by script and none was typed; the numbers in the sentences
 are filled from those files. The first pilot's score columns are read from its own `rows.json`; its worker
