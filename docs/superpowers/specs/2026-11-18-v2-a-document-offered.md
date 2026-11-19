@@ -166,7 +166,7 @@ eight task files are byte for byte the same up to that paragraph.
 | Three newest plans | The same sentence and three paths | The three files under a `plans` folder whose names come last in byte order. A practical baseline with a strong advantage in time: here a plan is committed just before its work |
 | Three nonmatching by lot | The same sentence and three paths | Three files drawn by lot from those under `plans` and `specs` folders that are not matching files of the item |
 
-- **"May bear on this work" is itself a suggestion.** What is seen under the last three conditions is of
+- **"May bear on this work" is itself a suggestion.** What is seen under the last four conditions is of
   that sentence with those paths.
 - **Nonmatching is not wrong.** A file that the second rule does not find can still be about the work:
   at 9a3f21cf the design spec beside the plan gives the paging call the tests use and is not a matching
@@ -196,8 +196,8 @@ eight task files are byte for byte the same up to that paragraph.
 - **A second search, added after that count: the row `bm25`.** Same candidates, same words, same
   query, and the same words left out for being in more than half the files. For a file, `tf` is how
   many times a word occurs in it, `L` how many words it holds counting every occurrence, `avg` the
-  mean of `L` over the candidates, `N` the number of candidates and `df` the number that hold the
-  word. A file's score is the sum, over the query's words in sorted order, of
+  mean of `L` over the candidates (1 if that mean is 0), `N` the number of candidates and `df` the
+  number that hold the word. A file's score is the sum, over the query's words in sorted order, of
   `log(1 + (N - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * L / avg))`, with the
   natural logarithm, rounded to nine decimal places. Highest first; ties by the path's bytes.
 - **What that row is and is not.** The lead counted four orderings on the frozen tasks outside the
@@ -205,7 +205,9 @@ eight task files are byte for byte the same up to that paragraph.
   divided by the file's own count of different words. They hold a matching file within three at 0,
   9, 9 and 3 of the twelve. This one was taken as the usual form of such a search, after seeing
   those counts and before any turn. Its nine of twelve is a count on the twelve items it was chosen
-  on, not an estimate for other tasks. The maker's own places for it are written in the plan.
+  on, not an estimate for other tasks. The maker's own places for it are written in the plan: 17, 3,
+  19, 1, 2, 1, 1, 22, 3, 2, 2 and 3 in the order of section 2's list, with no ties, the same as the
+  lead's count.
 - A document is offered by its path alone. Nothing of its text is put in the task.
 
 ## 5. The turns
@@ -360,8 +362,8 @@ No change to the room. Scripts in `v2/probes/documents/`, each with tests, built
 
 The earlier probes' scripts did these by hand and are the starting point.
 
-**Tests.** Unit tests, and one test of the whole path against the real room and its jail with a script
-named for the worker and no model, run by the lead before any reader sees the build. Between them they
+**Tests.** Unit tests, and the lead's runs of the whole path against the real room and its jail, with a
+stand-in script in the worker's place and no model, kept command by command. Between them they
 must show: all eight rows of an item scheduled and each recorded once; each row's paragraph exactly as
 section 4 gives it; a result where some frozen cases pass and some fail; a test file that cannot be
 collected, scored as not run; a turn with no hand-in and one stopped at its limit, kept and scored as
