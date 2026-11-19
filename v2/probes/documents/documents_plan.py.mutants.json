@@ -1,19 +1,19 @@
 {
  "file": "documents_plan.py",
- "source_sha256": "bc1840759186d6068f63e84f5d710b3bc2dd2df103ec76cd560a948174cd3c75",
+ "source_sha256": "dc36d994395a59f23ccbabf722d617e1f1e2f40ef5802897bae0360920b8db6a",
  "control": {
   "command": "python3 -I v2/probes/documents/test_documents_plan.py",
   "returncode": 0,
   "last_lines": [
    "----------------------------------------------------------------------",
-   "Ran 17 tests in 35.003s",
+   "Ran 19 tests in 63.172s",
    "",
    "OK"
   ]
  },
  "mutants": [
   {
-   "line": 407,
+   "line": 416,
    "kind": "condition",
    "before": "__name__ == \"__main__\"",
    "after": "not (__name__ == \"__main__\")",
@@ -21,6 +21,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_output_directory_cannot_hold_full_id (__main__.Maker.test_output_directory_cannot_hold_full_id)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
@@ -28,13 +29,16 @@
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 3
   },
   {
    "line": 36,
@@ -46,7 +50,9 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
    "line": 83,
@@ -57,6 +63,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -64,10 +71,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 164,
+   "line": 168,
    "kind": "condition",
    "before": "min(len(search), len(newest), len(lot)) < 3",
    "after": "not (min(len(search), len(newest), len(lot)) < 3)",
@@ -75,16 +84,19 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 201,
+   "line": 205,
    "kind": "condition",
    "before": "index is not None",
    "after": "not (index is not None)",
@@ -92,13 +104,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 259,
+   "line": 264,
    "kind": "condition",
    "before": "len(found) != 1",
    "after": "not (len(found) != 1)",
@@ -106,15 +121,18 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 271,
+   "line": 276,
    "kind": "condition",
    "before": "family not in (\"script\", \"claude\", \"codex\") or not model or any(c.isspace() for c in worker)",
    "after": "not (family not in (\"script\", \"claude\", \"codex\") or not model or any(c.isspace() for c in worker))",
@@ -122,6 +140,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (worker='codex:')",
@@ -132,10 +151,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 273,
+   "line": 278,
    "kind": "condition",
    "before": "family == \"script\" and not os.path.isabs(model)",
    "after": "not (family == \"script\" and not os.path.isabs(model))",
@@ -143,6 +164,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
@@ -151,10 +173,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 276,
+   "line": 281,
    "kind": "condition",
    "before": "not path or not os.path.isfile(path) or not os.access(path, os.X_OK)",
    "after": "not (not path or not os.path.isfile(path) or not os.access(path, os.X_OK))",
@@ -162,6 +186,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -170,10 +195,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 279,
+   "line": 284,
    "kind": "condition",
    "before": "not version",
    "after": "not (not version)",
@@ -181,6 +208,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -189,10 +217,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 291,
+   "line": 296,
    "kind": "condition",
    "before": "any(type(n) is not int or n <= 0 for n in limits.values())",
    "after": "not (any(type(n) is not int or n <= 0 for n in limits.values()))",
@@ -200,6 +230,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -208,13 +239,15 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 307,
+   "line": 312,
    "kind": "condition",
-   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
-   "after": "not (expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "before": "not list_sha256.startswith(expected_list_sha256)",
+   "after": "not (not list_sha256.startswith(expected_list_sha256))",
    "killed": true,
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
@@ -222,25 +255,49 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 363,
+   "line": 316,
+   "kind": "condition",
+   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
+   "after": "not (expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 372,
    "kind": "condition",
    "before": "digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip()",
    "after": "not (digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip())",
    "killed": true,
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 374,
+   "line": 383,
    "kind": "condition",
    "before": "family != \"script\"",
    "after": "not (family != \"script\")",
@@ -249,10 +306,12 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 407,
+   "line": 416,
    "kind": "comparison",
    "before": "__name__ == \"__main__\"",
    "after": "not (__name__ == \"__main__\")",
@@ -260,6 +319,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_output_directory_cannot_hold_full_id (__main__.Maker.test_output_directory_cannot_hold_full_id)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
@@ -267,13 +327,17 @@
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)",
-    "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+    "test_collision_is_refused (__main__.Rules.test_collision_is_refused)",
+    "test_python_39 (__main__.Rules.test_python_39)"
+   ],
+   "reason": "",
+   "column": 3
   },
   {
    "line": 21,
@@ -284,10 +348,14 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_python_39 (__main__.Rules.test_python_39)"
+   ],
+   "reason": "",
+   "column": 20
   },
   {
    "line": 45,
@@ -296,8 +364,11 @@
    "after": "'[a-z][a-z0-9_]{4,}'",
    "killed": true,
    "tests": [
+    "test_python_39 (__main__.Rules.test_python_39)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ]
+   ],
+   "reason": "",
+   "column": 18
   },
   {
    "line": 46,
@@ -306,7 +377,13 @@
    "after": "'^\\\\+\\\\s*(?:async\\\\s+def|def|class)\\\\s+([A-Za-z_][A-Za-z0-9_]*)|^\\\\+([A-Z][A-Z0-9_]{4,})\\\\s*='",
    "killed": false,
    "tests": [],
-   "reason": "Increasing the constant-name regex minimum is redundant with the later eight-character minimum."
+   "reason": "Equivalent: raising the UPPER_CASE regex minimum is redundant with the later eight-character name minimum.",
+   "column": 19,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
    "line": 54,
@@ -317,6 +394,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -324,7 +402,9 @@
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 56,
@@ -335,12 +415,15 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 65,
@@ -355,7 +438,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 73,
@@ -366,6 +451,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -373,7 +459,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 102,
@@ -382,16 +470,13 @@
    "after": "not (folder in path.split(\"/\")[:-1])",
    "killed": true,
    "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 106,
@@ -406,10 +491,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 113,
+   "line": 116,
    "kind": "condition",
    "before": "match",
    "after": "not (match)",
@@ -417,6 +504,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -425,10 +513,12 @@
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 120,
+   "line": 123,
    "kind": "condition",
    "before": "len(paths) <= 5",
    "after": "not (len(paths) <= 5)",
@@ -440,10 +530,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 131,
+   "line": 134,
    "kind": "condition",
    "before": "commit not in passing or not isinstance(entry.get(\"reference\"), str)",
    "after": "not (commit not in passing or not isinstance(entry.get(\"reference\"), str))",
@@ -455,10 +547,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 136,
+   "line": 139,
    "kind": "condition",
    "before": "not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines())",
    "after": "not (not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines()))",
@@ -469,13 +563,15 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 143,
+   "line": 147,
    "kind": "condition",
-   "before": "not held or any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)",
-   "after": "not (not held or any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held))",
+   "before": "not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held))",
+   "after": "not (not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
    "killed": true,
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
@@ -484,10 +580,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 164,
+   "line": 168,
    "kind": "comparison",
    "before": "min(len(search), len(newest), len(lot)) < 3",
    "after": "not (min(len(search), len(newest), len(lot)) < 3)",
@@ -495,16 +593,19 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 182,
+   "line": 186,
    "kind": "condition",
    "before": "task.endswith(b\"\\n\")",
    "after": "not (task.endswith(b\"\\n\"))",
@@ -512,10 +613,12 @@
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 25
   },
   {
-   "line": 201,
+   "line": 205,
    "kind": "comparison",
    "before": "index is not None",
    "after": "not (index is not None)",
@@ -523,13 +626,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 239,
+   "line": 244,
    "kind": "condition",
    "before": "parent != item[\"parent\"]",
    "after": "not (parent != item[\"parent\"])",
@@ -537,13 +643,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 242,
+   "line": 247,
    "kind": "condition",
    "before": "changed - {b\"TASK.md\"}",
    "after": "not (changed - {b\"TASK.md\"})",
@@ -551,13 +660,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 245,
+   "line": 250,
    "kind": "condition",
    "before": "actual != task_bytes(task, row[\"paragraph\"]) or digest(actual) != row[\"task_file_sha256\"]",
    "after": "not (actual != task_bytes(task, row[\"paragraph\"]) or digest(actual) != row[\"task_file_sha256\"])",
@@ -565,13 +677,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 259,
+   "line": 264,
    "kind": "comparison",
    "before": "len(found) != 1",
    "after": "not (len(found) != 1)",
@@ -579,15 +694,18 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 271,
+   "line": 276,
    "kind": "boolean",
    "before": "family not in (\"script\", \"claude\", \"codex\") or not model or any(c.isspace() for c in worker)",
    "after": "((family not in (\"script\", \"claude\", \"codex\")) and (not model) and (any(c.isspace() for c in worker)))",
@@ -595,10 +713,12 @@
    "tests": [
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (worker='codex:')",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (worker='codex:two words')"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 273,
+   "line": 278,
    "kind": "boolean",
    "before": "family == \"script\" and not os.path.isabs(model)",
    "after": "((family == \"script\") or (not os.path.isabs(model)))",
@@ -606,6 +726,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -614,29 +735,39 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 275,
+   "line": 280,
    "kind": "condition",
    "before": "family == \"script\"",
    "after": "not (family == \"script\")",
    "killed": true,
    "tests": [
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 20
   },
   {
-   "line": 276,
+   "line": 281,
    "kind": "boolean",
    "before": "not path or not os.path.isfile(path) or not os.access(path, os.X_OK)",
    "after": "((not path) and (not os.path.isfile(path)) and (not os.access(path, os.X_OK)))",
    "killed": false,
    "tests": [],
-   "reason": "No absolute missing or non-executable worker was supplied; valid programs and earlier worker-format refusals leave this branch untested."
+   "reason": "Fixture gap in existing code: no missing or non-executable absolute worker path is supplied; valid programs and earlier syntax refusals do not distinguish this guard.",
+   "column": 7,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 278,
+   "line": 283,
    "kind": "condition",
    "before": "family == \"script\"",
    "after": "not (family == \"script\")",
@@ -644,6 +775,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
@@ -652,10 +784,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 26
   },
   {
-   "line": 279,
+   "line": 284,
    "kind": "negation",
    "before": "not version",
    "after": "version",
@@ -663,6 +797,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -671,10 +806,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 285,
+   "line": 290,
    "kind": "condition",
    "before": "not match",
    "after": "not (not match)",
@@ -682,6 +819,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -690,30 +828,63 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 299,
+   "line": 304,
    "kind": "number",
    "before": "1200",
    "after": "1201",
-   "killed": true,
-   "tests": [
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 79,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+    ]
+   }
   },
   {
-   "line": 299,
+   "line": 304,
    "kind": "number",
    "before": "300",
    "after": "301",
-   "killed": true,
-   "tests": [
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 101,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+    ]
+   }
   },
   {
-   "line": 302,
+   "line": 305,
+   "kind": "embedded-number",
+   "before": "\"4b25d330\"",
+   "after": "'00000000'",
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 48,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)"
+    ]
+   }
+  },
+  {
+   "line": 308,
    "kind": "condition",
    "before": "not directory.exists() and re.search(r\"[0-9a-fA-F]{32}\", directory.name)",
    "after": "not (not directory.exists() and re.search(r\"[0-9a-fA-F]{32}\", directory.name))",
@@ -724,15 +895,18 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 307,
-   "kind": "boolean",
-   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
-   "after": "((expected is not None) or ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "line": 312,
+   "kind": "negation",
+   "before": "not list_sha256.startswith(expected_list_sha256)",
+   "after": "list_sha256.startswith(expected_list_sha256)",
    "killed": true,
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
@@ -740,11 +914,33 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 325,
+   "line": 316,
+   "kind": "boolean",
+   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
+   "after": "((expected is not None) or ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 334,
    "kind": "condition",
    "before": "task_path(tasks, item[\"commit\"], \"task\").read_bytes() != frozen_tasks[item[\"commit\"]]",
    "after": "not (task_path(tasks, item[\"commit\"], \"task\").read_bytes() != frozen_tasks[item[\"commit\"]])",
@@ -752,13 +948,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 337,
+   "line": 346,
    "kind": "condition",
    "before": "actual != entry[\"base\"]",
    "after": "not (actual != entry[\"base\"])",
@@ -766,13 +965,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 340,
+   "line": 349,
    "kind": "condition",
    "before": "meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
    "after": "not (meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"])",
@@ -780,68 +982,100 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 363,
+   "line": 372,
    "kind": "comparison",
    "before": "digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip()",
    "after": "not (digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip())",
-   "killed": true,
-   "tests": [
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 7,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+    ]
+   }
   },
   {
-   "line": 371,
+   "line": 380,
    "kind": "condition",
    "before": "actual != expected",
    "after": "not (actual != expected)",
-   "killed": true,
-   "tests": [
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+    ]
+   }
   },
   {
-   "line": 374,
+   "line": 383,
    "kind": "comparison",
    "before": "family != \"script\"",
    "after": "not (family != \"script\")",
-   "killed": true,
-   "tests": [
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 7,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+    ]
+   }
   },
   {
-   "line": 376,
+   "line": 385,
    "kind": "condition",
    "before": "not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
    "after": "not (not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"])",
-   "killed": true,
-   "tests": [
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+    ]
+   }
   },
   {
-   "line": 395,
+   "line": 404,
    "kind": "condition",
    "before": "args.stage == \"make\"",
    "after": "not (args.stage == \"make\")",
-   "killed": true,
-   "tests": [
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
+    ]
+   }
   },
   {
    "line": 54,
@@ -852,6 +1086,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -859,7 +1094,9 @@
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 56,
@@ -870,22 +1107,32 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 65,
    "kind": "boolean",
    "before": "len(words) >= 5 and words[-1] == \"passed\" and words[-3] == \"0\"",
    "after": "((len(words) >= 5) or (words[-1] == \"passed\") or (words[-3] == \"0\"))",
-   "killed": true,
-   "tests": [
-    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+    ]
+   }
   },
   {
    "line": 76,
@@ -900,7 +1147,9 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
    "line": 85,
@@ -909,7 +1158,13 @@
    "after": "1",
    "killed": false,
    "tests": [],
-   "reason": "Skipping the first character of a batch header's object id leaves its parsed size and body unchanged; the echoed id is not used."
+   "reason": "Equivalent for the batch format: this skips the first character of an unused object-id header field; size and payload boundaries are still recovered.",
+   "column": 13,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
    "line": 96,
@@ -924,10 +1179,12 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 66
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "condition",
    "before": "len(name) >= 8 and \"_\" in name[1:-1] and not name.startswith(\"__\") and not has_word(parent_source, name)",
    "after": "not (len(name) >= 8 and \"_\" in name[1:-1] and not name.startswith(\"__\") and not has_word(parent_source, name))",
@@ -937,12 +1194,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
-   "line": 120,
+   "line": 123,
    "kind": "comparison",
    "before": "len(paths) <= 5",
    "after": "not (len(paths) <= 5)",
@@ -952,22 +1212,32 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 131,
+   "line": 134,
    "kind": "boolean",
    "before": "commit not in passing or not isinstance(entry.get(\"reference\"), str)",
    "after": "((commit not in passing) and (not isinstance(entry.get(\"reference\"), str)))",
-   "killed": true,
-   "tests": [
-    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+    ]
+   }
   },
   {
-   "line": 136,
+   "line": 139,
    "kind": "boolean",
    "before": "not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines())",
    "after": "((not ADDED.search(diff)) or (not any(ADDED.match(line) for line in diff.splitlines())))",
@@ -977,49 +1247,66 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 143,
+   "line": 147,
    "kind": "boolean",
-   "before": "not held or any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)",
-   "after": "((not held) and (any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
-   "killed": true,
-   "tests": [
-    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
-   ]
+   "before": "not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held))",
+   "after": "((not held) and (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+    ]
+   }
   },
   {
-   "line": 156,
+   "line": 160,
    "kind": "filter",
    "before": "df[w] <= len(docs) / 2",
    "after": "not (df[w] <= len(docs) / 2)",
-   "killed": true,
-   "tests": [
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 31,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+    ]
+   }
   },
   {
-   "line": 164,
+   "line": 168,
    "kind": "number",
    "before": "3",
    "after": "4",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck with focused tests; initial run was not counted killed. See recheck evidence.",
+   "column": 49,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+    ]
+   }
   },
   {
-   "line": 184,
+   "line": 188,
    "kind": "condition",
    "before": "paragraph",
    "after": "not (paragraph)",
@@ -1027,38 +1314,54 @@
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 66
   },
   {
-   "line": 191,
+   "line": 195,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
     "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)"
-   ]
+   ],
+   "reason": "",
+   "column": 34
   },
   {
-   "line": 200,
+   "line": 204,
    "kind": "embedded-number",
    "before": "\"2026-11-18T00:00:00Z\"",
    "after": "'2026-11-19T00:00:00Z'",
    "killed": false,
    "tests": [],
-   "reason": "The tests bind parents and content, not a particular deterministic author/committer timestamp; changing the date produces other pinned base ids."
+   "reason": "Only the fixed Git author or committer date changes. Object ids change consistently; no specification fixes this date.",
+   "column": 27,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 200,
+   "line": 204,
    "kind": "embedded-number",
    "before": "\"2026-11-18T00:00:00Z\"",
    "after": "'2026-11-19T00:00:00Z'",
    "killed": false,
    "tests": [],
-   "reason": "The tests bind parents and content, not a particular deterministic author/committer timestamp; changing the date produces other pinned base ids."
+   "reason": "Only the fixed Git author or committer date changes. Object ids change consistently; no specification fixes this date.",
+   "column": 73,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 239,
+   "line": 244,
    "kind": "comparison",
    "before": "parent != item[\"parent\"]",
    "after": "not (parent != item[\"parent\"])",
@@ -1066,23 +1369,28 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 245,
+   "line": 250,
    "kind": "boolean",
    "before": "actual != task_bytes(task, row[\"paragraph\"]) or digest(actual) != row[\"task_file_sha256\"]",
    "after": "((actual != task_bytes(task, row[\"paragraph\"])) and (digest(actual) != row[\"task_file_sha256\"]))",
    "killed": true,
    "tests": [
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 258,
+   "line": 263,
    "kind": "filter",
    "before": "commit.startswith(p.name.split(\".\")[0])",
    "after": "not (commit.startswith(p.name.split(\".\")[0]))",
@@ -1090,14 +1398,17 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 65
   },
   {
-   "line": 259,
+   "line": 264,
    "kind": "number",
    "before": "1",
    "after": "2",
@@ -1105,14 +1416,17 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 21
   },
   {
-   "line": 261,
+   "line": 266,
    "kind": "number",
    "before": "0",
    "after": "1",
@@ -1120,14 +1434,17 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 17
   },
   {
-   "line": 271,
+   "line": 276,
    "kind": "comparison",
    "before": "family not in (\"script\", \"claude\", \"codex\")",
    "after": "not (family not in (\"script\", \"claude\", \"codex\"))",
@@ -1135,6 +1452,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
@@ -1143,10 +1461,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 271,
+   "line": 276,
    "kind": "negation",
    "before": "not model",
    "after": "model",
@@ -1154,6 +1474,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (worker='codex:')",
@@ -1163,103 +1484,9 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
-  },
-  {
-   "line": 273,
-   "kind": "comparison",
-   "before": "family == \"script\"",
-   "after": "not (family == \"script\")",
-   "killed": true,
-   "tests": [
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
-  },
-  {
-   "line": 273,
-   "kind": "negation",
-   "before": "not os.path.isabs(model)",
-   "after": "os.path.isabs(model)",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
-  },
-  {
-   "line": 275,
-   "kind": "comparison",
-   "before": "family == \"script\"",
-   "after": "not (family == \"script\")",
-   "killed": true,
-   "tests": [
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
-  },
-  {
-   "line": 276,
-   "kind": "negation",
-   "before": "not path",
-   "after": "path",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
-  },
-  {
-   "line": 276,
-   "kind": "negation",
-   "before": "not os.path.isfile(path)",
-   "after": "os.path.isfile(path)",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
-  },
-  {
-   "line": 276,
-   "kind": "negation",
-   "before": "not os.access(path, os.X_OK)",
-   "after": "os.access(path, os.X_OK)",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
-    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 54
   },
   {
    "line": 278,
@@ -1268,8 +1495,21 @@
    "after": "not (family == \"script\")",
    "killed": true,
    "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 278,
+   "kind": "negation",
+   "before": "not os.path.isabs(model)",
+   "after": "os.path.isabs(model)",
+   "killed": true,
+   "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
@@ -1278,10 +1518,112 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 30
   },
   {
-   "line": 285,
+   "line": 280,
+   "kind": "comparison",
+   "before": "family == \"script\"",
+   "after": "not (family == \"script\")",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 20
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not path",
+   "after": "path",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not os.path.isfile(path)",
+   "after": "os.path.isfile(path)",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 19
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not os.access(path, os.X_OK)",
+   "after": "os.access(path, os.X_OK)",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 47
+  },
+  {
+   "line": 283,
+   "kind": "comparison",
+   "before": "family == \"script\"",
+   "after": "not (family == \"script\")",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 26
+  },
+  {
+   "line": 290,
    "kind": "negation",
    "before": "not match",
    "after": "match",
@@ -1289,6 +1631,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -1297,10 +1640,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 288,
+   "line": 293,
    "kind": "condition",
    "before": "worker_secs is None",
    "after": "not (worker_secs is None)",
@@ -1308,26 +1653,31 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 54
   },
   {
-   "line": 289,
+   "line": 294,
    "kind": "number",
    "before": "900",
    "after": "901",
    "killed": true,
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
-   ]
+   ],
+   "reason": "",
+   "column": 22
   },
   {
-   "line": 302,
+   "line": 308,
    "kind": "boolean",
    "before": "not directory.exists() and re.search(r\"[0-9a-fA-F]{32}\", directory.name)",
    "after": "((not directory.exists()) or (re.search(r\"[0-9a-fA-F]{32}\", directory.name)))",
@@ -1338,12 +1688,15 @@
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 307,
+   "line": 316,
    "kind": "comparison",
    "before": "expected is not None",
    "after": "not (expected is not None)",
@@ -1351,24 +1704,33 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 7
   },
   {
-   "line": 307,
+   "line": 316,
    "kind": "boolean",
    "before": "{i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)",
    "after": "(({i[\"commit\"][:8] for i in selected} != expected) and (len(selected) != len(expected)))",
    "killed": false,
    "tests": [],
-   "reason": "The fixtures test cohort refusal and the historical selector separately, not a successful default-canonical make; conjunction and individual admission checks remain incompletely isolated."
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 33,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 325,
+   "line": 334,
    "kind": "comparison",
    "before": "task_path(tasks, item[\"commit\"], \"task\").read_bytes() != frozen_tasks[item[\"commit\"]]",
    "after": "not (task_path(tasks, item[\"commit\"], \"task\").read_bytes() != frozen_tasks[item[\"commit\"]])",
@@ -1376,13 +1738,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 337,
+   "line": 346,
    "kind": "comparison",
    "before": "actual != entry[\"base\"]",
    "after": "not (actual != entry[\"base\"])",
@@ -1390,32 +1755,43 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 340,
+   "line": 349,
    "kind": "boolean",
    "before": "meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
    "after": "((meta[\"parent\"] != item[\"parent\"]) and (git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]))",
    "killed": false,
    "tests": [],
-   "reason": "Fixture metadata and the fetched first parent agree; no inconsistent input-item metadata is supplied."
+   "reason": "Fixture gap in existing code: item metadata and the actual Git parent are consistent; no fixture makes only one parent check disagree.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 345,
+   "line": 354,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
-   ]
+   ],
+   "reason": "",
+   "column": 17
   },
   {
-   "line": 353,
+   "line": 362,
    "kind": "condition",
    "before": "plan[\"inputs\"][pin_path(path)] != item[kind + \"_sha256\"]",
    "after": "not (plan[\"inputs\"][pin_path(path)] != item[kind + \"_sha256\"])",
@@ -1423,69 +1799,76 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
-   "line": 371,
+   "line": 380,
    "kind": "comparison",
    "before": "actual != expected",
    "after": "not (actual != expected)",
    "killed": true,
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 373,
+   "line": 382,
    "kind": "number",
    "before": "0",
    "after": "1",
-   "killed": false,
-   "tests": [],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-    ]
-   },
-   "reason": "Killed on recheck after strengthening the covering fixture; see recheck evidence."
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 50
   },
   {
-   "line": 376,
+   "line": 385,
    "kind": "boolean",
    "before": "not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
    "after": "((not found) and (str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]))",
    "killed": true,
    "tests": [
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 395,
+   "line": 404,
    "kind": "comparison",
    "before": "args.stage == \"make\"",
    "after": "not (args.stage == \"make\")",
    "killed": true,
    "tests": [
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 401,
+   "line": 410,
    "kind": "number",
    "before": "0",
    "after": "1",
    "killed": true,
    "tests": [
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
    "line": 65,
@@ -1500,7 +1883,9 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
    "line": 65,
@@ -1515,7 +1900,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 31
   },
   {
    "line": 65,
@@ -1530,7 +1917,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 57
   },
   {
    "line": 76,
@@ -1539,10 +1928,16 @@
    "after": "((kind == b\"blob\") or (mode in (b\"100644\", b\"100755\")))",
    "killed": false,
    "tests": [],
-   "reason": "The fixture tree has regular files only; symlink/gitlink and executable-file mode alternatives are not exercised."
+   "reason": "Fixture gap in existing code: tree entries are regular blobs, without symlinks, submodules or unusual modes to distinguish this filter.",
+   "column": 15,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 114,
+   "line": 117,
    "kind": "boolean",
    "before": "match.group(1) or match.group(2)",
    "after": "((match.group(1)) and (match.group(2)))",
@@ -1550,6 +1945,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -1558,20 +1954,24 @@
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 19
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "boolean",
    "before": "len(name) >= 8 and \"_\" in name[1:-1] and not name.startswith(\"__\") and not has_word(parent_source, name)",
    "after": "((len(name) >= 8) or (\"_\" in name[1:-1]) or (not name.startswith(\"__\")) or (not has_word(parent_source, name)))",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
-   "line": 119,
+   "line": 122,
    "kind": "filter",
    "before": "has_word(docs[p][\"text\"], name)",
    "after": "not (has_word(docs[p][\"text\"], name))",
@@ -1579,6 +1979,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -1586,20 +1987,24 @@
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 36
   },
   {
-   "line": 120,
+   "line": 123,
    "kind": "number",
    "before": "5",
    "after": "6",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 25
   },
   {
-   "line": 122,
+   "line": 125,
    "kind": "condition",
    "before": "under(path, \"plans\") or under(path, \"specs\")",
    "after": "not (under(path, \"plans\") or under(path, \"specs\"))",
@@ -1609,12 +2014,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 19
   },
   {
-   "line": 131,
+   "line": 134,
    "kind": "comparison",
    "before": "commit not in passing",
    "after": "not (commit not in passing)",
@@ -1626,10 +2034,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 131,
+   "line": 134,
    "kind": "negation",
    "before": "not isinstance(entry.get(\"reference\"), str)",
    "after": "isinstance(entry.get(\"reference\"), str)",
@@ -1639,20 +2049,29 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 36
   },
   {
-   "line": 136,
+   "line": 139,
    "kind": "negation",
    "before": "not ADDED.search(diff)",
    "after": "ADDED.search(diff)",
    "killed": false,
    "tests": [],
-   "reason": "This optimization only skips needless document reads; subsequent matching still rejects items without qualifying names."
+   "reason": "Equivalent fast-path removal: no qualifying additions still produce an empty matching-document set and are rejected later.",
+   "column": 11,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 136,
+   "line": 139,
    "kind": "negation",
    "before": "not any(ADDED.match(line) for line in diff.splitlines())",
    "after": "any(ADDED.match(line) for line in diff.splitlines())",
@@ -1662,11 +2081,14 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 38
   },
   {
-   "line": 139,
+   "line": 142,
    "kind": "filter",
    "before": "p.startswith(SOURCE + \"/\")",
    "after": "not (p.startswith(SOURCE + \"/\"))",
@@ -1676,11 +2098,14 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 55
   },
   {
-   "line": 143,
+   "line": 147,
    "kind": "negation",
    "before": "not held",
    "after": "held",
@@ -1690,11 +2115,31 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 156,
+   "line": 147,
+   "kind": "boolean",
+   "before": "exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)",
+   "after": "((exclude_test_functions) or (any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 24
+  },
+  {
+   "line": 160,
    "kind": "comparison",
    "before": "df[w] <= len(docs) / 2",
    "after": "not (df[w] <= len(docs) / 2)",
@@ -1702,27 +2147,25 @@
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 31
   },
   {
-   "line": 160,
+   "line": 164,
    "kind": "filter",
    "before": "under(p, \"plans\")",
    "after": "not (under(p, \"plans\"))",
    "killed": true,
    "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 40
   },
   {
-   "line": 162,
+   "line": 166,
    "kind": "filter",
    "before": "(under(p, \"plans\") or under(p, \"specs\")) and p not in matching",
    "after": "not ((under(p, \"plans\") or under(p, \"specs\")) and p not in matching)",
@@ -1730,10 +2173,12 @@
    "tests": [
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ]
+   ],
+   "reason": "",
+   "column": 37
   },
   {
-   "line": 245,
+   "line": 250,
    "kind": "comparison",
    "before": "actual != task_bytes(task, row[\"paragraph\"])",
    "after": "not (actual != task_bytes(task, row[\"paragraph\"]))",
@@ -1741,13 +2186,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 245,
+   "line": 250,
    "kind": "comparison",
    "before": "digest(actual) != row[\"task_file_sha256\"]",
    "after": "not (digest(actual) != row[\"task_file_sha256\"])",
@@ -1755,13 +2203,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 59
   },
   {
-   "line": 269,
+   "line": 274,
    "kind": "filter",
    "before": "os.environ.get(k)",
    "after": "not (os.environ.get(k))",
@@ -1769,6 +2220,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (worker='unknown:model')",
@@ -1782,10 +2234,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 75
   },
   {
-   "line": 288,
+   "line": 293,
    "kind": "comparison",
    "before": "worker_secs is None",
    "after": "not (worker_secs is None)",
@@ -1793,16 +2247,19 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 54
   },
   {
-   "line": 291,
+   "line": 296,
    "kind": "boolean",
    "before": "type(n) is not int or n <= 0",
    "after": "((type(n) is not int) and (n <= 0))",
@@ -1812,10 +2269,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 296,
+   "line": 301,
    "kind": "condition",
    "before": "family == \"script\"",
    "after": "not (family == \"script\")",
@@ -1823,38 +2282,54 @@
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 69
   },
   {
-   "line": 302,
+   "line": 308,
    "kind": "negation",
    "before": "not directory.exists()",
    "after": "directory.exists()",
    "killed": true,
    "tests": [
     "test_output_directory_cannot_hold_full_id (__main__.Maker.test_output_directory_cannot_hold_full_id)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 307,
+   "line": 316,
    "kind": "comparison",
    "before": "{i[\"commit\"][:8] for i in selected} != expected",
    "after": "not ({i[\"commit\"][:8] for i in selected} != expected)",
    "killed": false,
    "tests": [],
-   "reason": "The fixtures test cohort refusal and the historical selector separately, not a successful default-canonical make; conjunction and individual admission checks remain incompletely isolated."
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 33,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 307,
+   "line": 316,
    "kind": "comparison",
    "before": "len(selected) != len(expected)",
    "after": "not (len(selected) != len(expected))",
    "killed": false,
    "tests": [],
-   "reason": "The fixtures test cohort refusal and the historical selector separately, not a successful default-canonical make; conjunction and individual admission checks remain incompletely isolated."
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 84,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 340,
+   "line": 349,
    "kind": "comparison",
    "before": "meta[\"parent\"] != item[\"parent\"]",
    "after": "not (meta[\"parent\"] != item[\"parent\"])",
@@ -1862,13 +2337,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 340,
+   "line": 349,
    "kind": "comparison",
    "before": "git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
    "after": "not (git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"])",
@@ -1876,13 +2354,16 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 47
   },
   {
-   "line": 353,
+   "line": 362,
    "kind": "comparison",
    "before": "plan[\"inputs\"][pin_path(path)] != item[kind + \"_sha256\"]",
    "after": "not (plan[\"inputs\"][pin_path(path)] != item[kind + \"_sha256\"])",
@@ -1890,71 +2371,94 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
-   "line": 373,
+   "line": 382,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": false,
    "tests": [],
+   "reason": "Equivalent: increasing split maxsplit still leaves the same worker-family component at index zero.",
+   "column": 47,
    "recheck": {
     "file": "documents_plan.py.recheck-mutants.json",
     "killed": false,
     "tests": []
-   },
-   "reason": "Increasing split's maximum preserves the first field; one colon is enough and only field zero is used."
+   }
   },
   {
-   "line": 376,
+   "line": 385,
    "kind": "negation",
    "before": "not found",
    "after": "found",
-   "killed": false,
-   "tests": [],
-   "reason": "The worker-shadow test finds a different executable; it does not exercise a lookup returning None while the pinned file still exists."
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 376,
+   "line": 385,
    "kind": "comparison",
    "before": "str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
    "after": "not (str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"])",
    "killed": true,
    "tests": [
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 24
   },
   {
-   "line": 390,
+   "line": 399,
    "kind": "number",
    "before": "1200",
    "after": "1201",
    "killed": false,
    "tests": [],
-   "reason": "CLI make defaults are not exercised with a full canonical items directory; function defaults and explicit limits are covered."
+   "reason": "Fixture gap in existing code: CLI make defaults are not exercised with a canonical list; the CLI test runs show.",
+   "column": 57,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 391,
+   "line": 400,
    "kind": "number",
    "before": "300",
    "after": "301",
    "killed": false,
    "tests": [],
-   "reason": "CLI make defaults are not exercised with a full canonical items directory; function defaults and explicit limits are covered."
+   "reason": "Fixture gap in existing code: CLI make defaults are not exercised with a canonical list; the CLI test runs show.",
+   "column": 61,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 404,
+   "line": 413,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
    "line": 54,
@@ -1965,6 +2469,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -1972,7 +2477,9 @@
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 28
   },
   {
    "line": 65,
@@ -1987,7 +2494,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 25
   },
   {
    "line": 74,
@@ -1996,7 +2505,13 @@
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "The fixture paths contain no tab; increasing the split limit leaves ordinary ls-tree records unchanged."
+   "reason": "Fixture gap in existing code: no tracked file name contains a tab, so increasing the ls-tree split limit is not distinguished.",
+   "column": 43,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
    "line": 76,
@@ -2011,7 +2526,9 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
    "line": 76,
@@ -2026,7 +2543,9 @@
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 35
   },
   {
    "line": 89,
@@ -2037,7 +2556,9 @@
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 23
   },
   {
    "line": 91,
@@ -2046,10 +2567,16 @@
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "Skipping the first character of the next batch header's object id leaves its size/body fields unchanged."
+   "reason": "Equivalent for the batch format: this skips the first character of the next unused object-id header field; size and payload boundaries are still recovered.",
+   "column": 25,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "comparison",
    "before": "len(name) >= 8",
    "after": "not (len(name) >= 8)",
@@ -2059,12 +2586,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 15
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "comparison",
    "before": "\"_\" in name[1:-1]",
    "after": "not (\"_\" in name[1:-1])",
@@ -2074,12 +2604,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 34
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "negation",
    "before": "not name.startswith(\"__\")",
    "after": "name.startswith(\"__\")",
@@ -2089,12 +2622,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 56
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "negation",
    "before": "not has_word(parent_source, name)",
    "after": "has_word(parent_source, name)",
@@ -2104,12 +2640,15 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 86
   },
   {
-   "line": 122,
+   "line": 125,
    "kind": "boolean",
    "before": "under(path, \"plans\") or under(path, \"specs\")",
    "after": "((under(path, \"plans\")) and (under(path, \"specs\")))",
@@ -2119,22 +2658,27 @@
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 19
   },
   {
-   "line": 162,
+   "line": 166,
    "kind": "boolean",
    "before": "(under(p, \"plans\") or under(p, \"specs\")) and p not in matching",
    "after": "((under(p, \"plans\") or under(p, \"specs\")) or (p not in matching))",
    "killed": true,
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ]
+   ],
+   "reason": "",
+   "column": 37
   },
   {
-   "line": 166,
+   "line": 170,
    "kind": "number",
    "before": "1",
    "after": "2",
@@ -2142,35 +2686,72 @@
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 65
   },
   {
-   "line": 168,
+   "line": 172,
    "kind": "number",
    "before": "1",
    "after": "2",
-   "killed": false,
-   "tests": [],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-    ]
-   },
-   "reason": "Killed on recheck after strengthening the covering fixture; see recheck evidence."
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 110
   },
   {
-   "line": 208,
+   "line": 212,
    "kind": "embedded-number",
-   "before": "\"#!/bin/sh\\nif git -c core.fsmonitor=false diff --quiet %s HEAD -- %s; then\\n\"\n        \" echo 'FAIL: nothing under the source differs from the parent' >&2\\n exit 1\\nfi\\necho ok\\n\"",
-   "after": "\"#!/bin/sh\\nif git -c core.fsmonitor=false diff --quiet %s HEAD -- %s; then\\n echo 'FAIL: nothing under the source differs from the parent' >&2\\n exit 0\\nfi\\necho ok\\n\"",
-   "killed": false,
-   "tests": [],
-   "reason": "The trusted generated check is inspected and frozen but never executed outside the jail; changing its shell exit status survives these stand-ins."
+   "before": "\"#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\n\"\n        \"status=$?\\nif [ \\\"$status\\\" -eq 1 ]; then\\n echo ok\\n exit 0\\nfi\\n\"\n        \"echo 'FAIL: source difference not established' >&2\\nexit 1\\n\"",
+   "after": "'#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\nstatus=$?\\nif [ \"$status\" -eq 1 ]; then\\n echo ok\\n exit 0\\nfi\\necho \\'FAIL: source difference not established\\' >&2\\nexit 0\\n'",
+   "killed": true,
+   "tests": [
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=0)",
+    "source difference not established\\n'",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=2)",
+    "source difference not established\\n'",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=127)",
+    "source difference not established\\n'",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=128)",
+    "source difference not established\\n'",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)"
+   ],
+   "reason": "",
+   "column": 12
   },
   {
-   "line": 287,
+   "line": 212,
+   "kind": "embedded-number",
+   "before": "\"#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\n\"\n        \"status=$?\\nif [ \\\"$status\\\" -eq 1 ]; then\\n echo ok\\n exit 0\\nfi\\n\"\n        \"echo 'FAIL: source difference not established' >&2\\nexit 1\\n\"",
+   "after": "'#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\nstatus=$?\\nif [ \"$status\" -eq 1 ]; then\\n echo ok\\n exit 1\\nfi\\necho \\'FAIL: source difference not established\\' >&2\\nexit 1\\n'",
+   "killed": true,
+   "tests": [
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=1)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)"
+   ],
+   "reason": "",
+   "column": 12
+  },
+  {
+   "line": 212,
+   "kind": "embedded-number",
+   "before": "\"#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\n\"\n        \"status=$?\\nif [ \\\"$status\\\" -eq 1 ]; then\\n echo ok\\n exit 0\\nfi\\n\"\n        \"echo 'FAIL: source difference not established' >&2\\nexit 1\\n\"",
+   "after": "'#!/bin/sh\\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\\nstatus=$?\\nif [ \"$status\" -eq 0 ]; then\\n echo ok\\n exit 0\\nfi\\necho \\'FAIL: source difference not established\\' >&2\\nexit 1\\n'",
+   "killed": true,
+   "tests": [
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=0)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=1)",
+    "source difference not established\\n'",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)"
+   ],
+   "reason": "",
+   "column": 12
+  },
+  {
+   "line": 292,
    "kind": "number",
    "before": "1",
    "after": "2",
@@ -2178,6 +2759,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
@@ -2186,10 +2768,12 @@
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 41
   },
   {
-   "line": 291,
+   "line": 296,
    "kind": "comparison",
    "before": "type(n) is not int",
    "after": "not (type(n) is not int)",
@@ -2197,14 +2781,17 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 11
   },
   {
-   "line": 291,
+   "line": 296,
    "kind": "comparison",
    "before": "n <= 0",
    "after": "not (n <= 0)",
@@ -2212,14 +2799,17 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 33
   },
   {
-   "line": 296,
+   "line": 301,
    "kind": "comparison",
    "before": "family == \"script\"",
    "after": "not (family == \"script\")",
@@ -2227,17 +2817,21 @@
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
-   ]
+   ],
+   "reason": "",
+   "column": 69
   },
   {
-   "line": 302,
+   "line": 308,
    "kind": "embedded-number",
    "before": "r\"[0-9a-fA-F]{32}\"",
    "after": "'[0-9a-fA-F]{33}'",
    "killed": true,
    "tests": [
     "test_output_directory_cannot_hold_full_id (__main__.Maker.test_output_directory_cannot_hold_full_id)"
-   ]
+   ],
+   "reason": "",
+   "column": 48
   },
   {
    "line": 56,
@@ -2248,7 +2842,9 @@
    "tests": [
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 19
   },
   {
    "line": 58,
@@ -2259,7 +2855,9 @@
    "tests": [
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_collision_is_refused (__main__.Rules.test_collision_is_refused)"
-   ]
+   ],
+   "reason": "",
+   "column": 25
   },
   {
    "line": 66,
@@ -2274,7 +2872,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 28
   },
   {
    "line": 88,
@@ -2285,6 +2885,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -2292,7 +2893,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 43
   },
   {
    "line": 102,
@@ -2306,12 +2909,15 @@
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 39
   },
   {
-   "line": 114,
+   "line": 117,
    "kind": "number",
    "before": "1",
    "after": "2",
@@ -2319,6 +2925,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
@@ -2327,40 +2934,48 @@
     "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 31
   },
   {
-   "line": 114,
+   "line": 117,
    "kind": "number",
    "before": "2",
    "after": "3",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 49
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "number",
    "before": "8",
    "after": "9",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 28
   },
   {
-   "line": 156,
+   "line": 160,
    "kind": "number",
    "before": "2",
    "after": "3",
    "killed": true,
    "tests": [
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 52
   },
   {
-   "line": 162,
+   "line": 166,
    "kind": "boolean",
    "before": "under(p, \"plans\") or under(p, \"specs\")",
    "after": "((under(p, \"plans\")) and (under(p, \"specs\")))",
@@ -2368,16 +2983,19 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 38
   },
   {
-   "line": 162,
+   "line": 166,
    "kind": "comparison",
    "before": "p not in matching",
    "after": "not (p not in matching)",
@@ -2385,36 +3003,43 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 82
   },
   {
-   "line": 166,
+   "line": 170,
    "kind": "number",
    "before": "3",
    "after": "4",
    "killed": true,
    "tests": [
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ]
+   ],
+   "reason": "",
+   "column": 40
   },
   {
-   "line": 167,
+   "line": 171,
    "kind": "comparison",
    "before": "scores[p] == scores[search[best]]",
    "after": "not (scores[p] == scores[search[best]])",
    "killed": true,
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ]
+   ],
+   "reason": "",
+   "column": 24
   },
   {
-   "line": 168,
+   "line": 172,
    "kind": "number",
    "before": "3",
    "after": "4",
@@ -2422,42 +3047,35 @@
    "tests": [
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
    ],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-    ]
-   }
+   "reason": "",
+   "column": 36
   },
   {
-   "line": 169,
+   "line": 173,
    "kind": "number",
    "before": "3",
    "after": "4",
-   "killed": false,
-   "tests": [],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-    ]
-   },
-   "reason": "Killed on recheck after strengthening the covering fixture; see recheck evidence."
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 30
   },
   {
-   "line": 188,
+   "line": 192,
    "kind": "number",
    "before": "10",
    "after": "11",
    "killed": true,
    "tests": [
     "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)"
-   ]
+   ],
+   "reason": "",
+   "column": 37
   },
   {
-   "line": 258,
+   "line": 263,
    "kind": "number",
    "before": "0",
    "after": "1",
@@ -2465,29 +3083,44 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
-   ]
+   ],
+   "reason": "",
+   "column": 101
   },
   {
-   "line": 291,
+   "line": 296,
    "kind": "number",
    "before": "0",
    "after": "1",
    "killed": false,
    "tests": [],
-   "reason": "No successful one-second limit is supplied, so rejecting one as well as zero is not detected."
+   "reason": "Fixture gap in existing code: no valid one-second limit is supplied, so rejecting one as well as zero is not detected.",
+   "column": 38,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 400,
+   "line": 409,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "The show test parses JSON and does not assert its presentation indentation; plan.json serialization remains the imported writer's responsibility."
+   "reason": "Only the CLI JSON display indentation changes. Tests compare parsed JSON, and the frozen plan writer is unchanged.",
+   "column": 54,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
    "line": 65,
@@ -2502,7 +3135,9 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 38
   },
   {
    "line": 65,
@@ -2517,10 +3152,12 @@
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
-   ]
+   ],
+   "reason": "",
+   "column": 64
   },
   {
-   "line": 145,
+   "line": 149,
    "kind": "negation",
    "before": "not under(p, \"plans\")",
    "after": "under(p, \"plans\")",
@@ -2528,26 +3165,24 @@
    "tests": [
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ]
+   ],
+   "reason": "",
+   "column": 42
   },
   {
-   "line": 146,
+   "line": 150,
    "kind": "number",
    "before": "10",
    "after": "11",
-   "killed": false,
-   "tests": [],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-    ]
-   },
-   "reason": "Killed on recheck after strengthening the covering fixture; see recheck evidence."
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 59
   },
   {
-   "line": 168,
+   "line": 172,
    "kind": "filter",
    "before": "p in newest",
    "after": "not (p in newest)",
@@ -2555,6 +3190,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -2562,20 +3198,8 @@
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
    ],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
-     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-    ]
-   }
+   "reason": "",
+   "column": 95
   },
   {
    "line": 57,
@@ -2584,20 +3208,28 @@
    "after": "11",
    "killed": false,
    "tests": [],
-   "reason": "Only a refusal message's abbreviated id changes; the ten-character collision guard is unchanged."
+   "reason": "Only the displayed collision prefix changes from ten to eleven characters; collision detection is unchanged and the diagnostic prefix is not asserted exactly.",
+   "column": 79,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 46
   },
   {
-   "line": 168,
+   "line": 172,
    "kind": "comparison",
    "before": "p in newest",
    "after": "not (p in newest)",
@@ -2605,6 +3237,7 @@
    "tests": [
     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
@@ -2612,57 +3245,65 @@
     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
    ],
-   "recheck": {
-    "file": "documents_plan.py.recheck-mutants.json",
-    "killed": true,
-    "tests": [
-     "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-     "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-     "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-     "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-     "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-     "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
-     "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-    ]
-   }
+   "reason": "",
+   "column": 95
   },
   {
-   "line": 307,
+   "line": 316,
    "kind": "number",
    "before": "8",
    "after": "9",
    "killed": false,
    "tests": [],
-   "reason": "The fixtures test cohort refusal and the historical selector separately, not a successful default-canonical make; conjunction and individual admission checks remain incompletely isolated."
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 47,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 115,
+   "line": 118,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
     "test_name_and_document_boundaries (__main__.Rules.test_name_and_document_boundaries)"
-   ]
+   ],
+   "reason": "",
+   "column": 49
   },
   {
-   "line": 161,
+   "line": 165,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "Increasing rsplit's maximum leaves the final filename component unchanged."
+   "reason": "Equivalent: increasing rsplit maxsplit leaves the final filename component unchanged.",
+   "column": 37,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   },
   {
-   "line": 161,
+   "line": 165,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "Increasing rsplit's maximum leaves the final filename component unchanged."
+   "reason": "Fixture gap in existing code: all fixture plans share a directory, so the full-path tie break reproduces filename order even when the directory component is used.",
+   "column": 41,
+   "recheck": {
+    "file": "documents_plan.py.recheck-mutants.json",
+    "killed": false,
+    "tests": []
+   }
   }
  ]
 }

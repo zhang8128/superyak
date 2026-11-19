@@ -100,7 +100,8 @@ class Fixture(unittest.TestCase):
     def make(self):
         with mock.patch.dict(os.environ, self.env):
             return self.driver.make_plan(self.items, self.tasks, self.out,
-                "script:" + str(self.worker), self.census, expected=None)
+                "script:" + str(self.worker), self.census, expected=None,
+                expected_list_sha256=hashlib.sha256(self.list.read_bytes()).hexdigest())
 
 
 class Maker(Fixture):
@@ -117,7 +118,8 @@ class Maker(Fixture):
         worker.chmod(0o755)
         self.env["YAK_PROBE_PATH"] = os.pathsep.join((str(early), str(late), os.environ["PATH"]))
         with mock.patch.dict(os.environ, self.env):
-            plan = self.driver.make_plan(self.items, self.tasks, self.out, "codex:fixture", self.census, expected=None)
+            plan = self.driver.make_plan(self.items, self.tasks, self.out, "codex:fixture", self.census, expected=None,
+                expected_list_sha256=hashlib.sha256(self.list.read_bytes()).hexdigest())
         self.assertEqual(plan["worker"], {"name": "codex:fixture", "version": "fixture-version", "model": "fixture"})
         self.assertEqual(self.driver.load_plan(self.out), plan)
         shadow = early / "codex"
@@ -165,8 +167,52 @@ class Maker(Fixture):
             self.driver.task_path(self.tmp, self.commit, "facts")
         with self.assertRaisesRegex(self.driver.Refused, "cohort differs"):
             with mock.patch.dict(os.environ, self.env):
-                self.driver.make_plan(self.items, self.tasks, self.out, "script:" + str(self.worker), self.census)
+                self.driver.make_plan(self.items, self.tasks, self.out, "script:" + str(self.worker), self.census,
+                    expected_list_sha256=hashlib.sha256(self.list.read_bytes()).hexdigest())
         self.assertFalse(self.out.exists())
+
+    def test_item_list_hash_is_required_even_with_fixture_cohort(self):
+        with mock.patch.dict(os.environ, self.env):
+            with self.assertRaisesRegex(self.driver.Refused, "items.json sha256 differs: expected 4b25d330"):
+                self.driver.make_plan(self.items, self.tasks, self.out,
+                    "script:" + str(self.worker), self.census, expected=None)
+        self.assertFalse(self.out.exists())
+        expected = hashlib.sha256(self.list.read_bytes()).hexdigest()
+        self.list.write_bytes(self.list.read_bytes() + b"\n")
+        with mock.patch.dict(os.environ, self.env):
+            with self.assertRaisesRegex(self.driver.Refused, "items.json sha256 differs"):
+                self.driver.make_plan(self.items, self.tasks, self.out,
+                    "script:" + str(self.worker), self.census, expected=None, expected_list_sha256=expected)
+        plan = self.make()
+        self.assertEqual(plan["list_sha256"], hashlib.sha256(self.list.read_bytes()).hexdigest())
+
+    def test_small_check_requires_git_difference_exit(self):
+        script = self.driver.check_script(self.parent)
+        shell = __import__("shutil").which("sh")
+        fake_bin = self.tmp / "check-bin"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        for status in (0, 1, 2, 127, 128):
+            with self.subTest(status=status):
+                fake_git.write_text("#!/bin/sh\nexit %s\n" % status)
+                fake_git.chmod(0o755)
+                done = subprocess.run([shell], input=script, capture_output=True,
+                    cwd=self.repo, env=dict(os.environ, PATH=str(fake_bin)))
+                self.assertEqual(done.returncode, 0 if status == 1 else 1, done.stderr)
+                self.assertEqual(done.stdout, b"ok\n" if status == 1 else b"")
+        fake_git.unlink()
+        missing = subprocess.run([shell], input=script, capture_output=True,
+            cwd=self.repo, env=dict(os.environ, PATH=str(fake_bin)))
+        self.assertEqual(missing.returncode, 1)
+        unchanged = subprocess.run([shell], input=script, capture_output=True, cwd=self.repo)
+        self.assertEqual(unchanged.returncode, 1)
+        (self.repo / "peer/superyak_peer/work.py").write_text("changed_value = 2\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "source changed")
+        changed = subprocess.run([shell], input=script, capture_output=True, cwd=self.repo)
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        absent = subprocess.run([shell], input=self.driver.check_script("0" * 40), capture_output=True, cwd=self.repo)
+        self.assertEqual(absent.returncode, 1)
 
     def test_selection_and_ranking(self):
         selected = self.driver.select_items(self.repo, [self.entry], self.driver.census_passes(self.census))
@@ -193,6 +239,10 @@ class Maker(Fixture):
         docs["docs/specs/design.md"]["text"] += "\n    def test_leak(): pass\n"
         with mock.patch.object(self.driver, "markdown", return_value=docs):
             self.assertEqual(self.driver.select_items(self.repo, [self.entry], {self.commit}), [])
+            self.assertEqual(len(self.driver.select_items(self.repo, [self.entry], {self.commit}, exclude_test_functions=False)), 1)
+        docs["docs/specs/design.md"]["text"] = docs["docs/specs/design.md"]["text"].replace("def test_", "async def test_")
+        with mock.patch.object(self.driver, "markdown", return_value=docs):
+            self.assertEqual(len(self.driver.select_items(self.repo, [self.entry], {self.commit})), 1)
         self.assertEqual(self.driver.select_items(self.repo, [self.entry], set()), [])
 
     def test_paragraphs_bases_pins_and_directory_names(self):
@@ -255,14 +305,22 @@ class Maker(Fixture):
         altered["rows"]["exists"]["task_file_sha256"] = "0" * 64
         with self.assertRaisesRegex(self.driver.Refused, "TASK.md"):
             self.driver.prove_bases(self.out / "src", altered, self.task.read_bytes())
-        original = self.driver.git
-        def answer(repo, *words):
-            if words[0] == "diff":
-                return b"peer/superyak_peer/work.py\0"
-            return original(repo, *words)
-        with mock.patch.object(self.driver, "git", side_effect=answer):
-            with self.assertRaisesRegex(self.driver.Refused, "TASK.md"):
-                self.driver.prove_bases(self.out / "src", item, self.task.read_bytes())
+        # A real sibling base with the right parent and identical TASK.md, but
+        # different source, must fail the proof even if the task hashes match.
+        altered = json.loads(json.dumps(item))
+        src = self.out / "src"
+        index = self.tmp / "counterexample.index"
+        self.driver.git_as(src, "read-tree", item["rows"]["exists"]["base"], index=index)
+        blob = self.driver.git_as(src, "hash-object", "-w", "--stdin", data=b"changed_value = 2\n").decode().strip()
+        self.driver.git_as(src, "update-index", "--cacheinfo", "100644,%s,peer/superyak_peer/work.py" % blob, index=index)
+        tree = self.driver.git_as(src, "write-tree", index=index).decode().strip()
+        counterexample = self.driver.git_as(src, "commit-tree", tree, "-p", item["parent"], "-m", "outside task").decode().strip()
+        self.assertEqual(git(src, "show", counterexample + ":TASK.md"),
+            git(src, "show", item["rows"]["exists"]["base"] + ":TASK.md"))
+        self.assertEqual(git(src, "show", "-s", "--format=%P", counterexample), item["parent"])
+        altered["rows"]["exists"]["base"] = counterexample
+        with self.assertRaisesRegex(self.driver.Refused, "outside TASK.md"):
+            self.driver.prove_bases(src, altered, self.task.read_bytes())
 
 
 class Rules(unittest.TestCase):
@@ -282,6 +340,10 @@ class Rules(unittest.TestCase):
         for name in ("a_bcdefg", "abcdef_g", "ABC_DEFG"):
             self.assertTrue(d.matching_documents("+def %s():" % name, "", {"plans/a.md": {"text": name}}))
         self.assertTrue(d.matching_documents("+ABC_DEFG = 1", "", {"plans/a.md": {"text": "ABC_DEFG"}}))
+        for line in ("+    def ab_12345():", "+    async def ab_12345():", "+    class ab_12345:"):
+            self.assertTrue(d.matching_documents(line, "", {"plans/a.md": {"text": "ab_12345"}}))
+        for line in ("+    ABC_DEFG = 1", "+abc_defg = 1"):
+            self.assertFalse(d.matching_documents(line, "", {"plans/a.md": {"text": "ABC_DEFG abc_defg"}}))
         self.assertEqual(dict(d.matching_documents("+def abc_defg():", "abc_defg", good)), {})
         self.assertTrue(d.matching_documents("+def abc_defg():", "xabc_defgx", good))
         five = {"plans/%s.md" % n: {"text": "abc_defg"} for n in range(5)}
@@ -325,8 +387,13 @@ class Rules(unittest.TestCase):
 
     def test_frozen_twelve_ids_selected_by_rules_from_repository_history(self):
         driver = module()
-        census = driver.census_passes(HERE / "census-2026-11-18.txt")
-        entries = [{"commit": c, "reference": c} for c in census]
+        census_file = HERE / "census-2026-11-18.txt"
+        census = driver.census_passes(census_file)
+        # Include failing references too, so removing rule 1 changes the census.
+        commits = [line.split()[0] for line in census_file.read_text().splitlines()]
+        entries = [{"commit": c, "reference": c} for c in commits]
+        first_two = driver.select_items(ROOT, entries, census, exclude_test_functions=False)
+        self.assertEqual(len(first_two), 40)
         selected = driver.select_items(ROOT, entries, census)
         self.assertEqual({i["commit"][:8] for i in selected}, {
             "9a3f21cf", "71a593d5", "d20c739b", "cd884db7", "c9ceb15b", "671a2250",

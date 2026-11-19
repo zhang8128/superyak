@@ -1,0 +1,55 @@
+{
+ "file": "documents_plan.py",
+ "source_sha256": "dc36d994395a59f23ccbabf722d617e1f1e2f40ef5802897bae0360920b8db6a",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_plan.py Maker Rules.test_census_parser_only_accepts_passing_reference Rules.test_name_and_document_boundaries Rules.test_search_half_threshold_ties_and_task_bytes Rules.test_order_84_hashes_stable_and_full_commit Rules.test_collision_is_refused Rules.test_python_39",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 18 tests in 9.328s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 246,
+   "kind": "proof-self-diff",
+   "before": "first, row[\"base\"]",
+   "after": "row[\"base\"], row[\"base\"]",
+   "killed": true,
+   "tests": [
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)"
+   ],
+   "reason": "",
+   "column": 94
+  },
+  {
+   "line": 130,
+   "kind": "test-function-gate-disabled",
+   "before": "exclude_test_functions=True",
+   "after": "exclude_test_functions=False",
+   "killed": true,
+   "tests": [
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 41
+  },
+  {
+   "line": 213,
+   "kind": "check-accepts-git-errors",
+   "before": "-eq 1",
+   "after": "-ne 0",
+   "killed": true,
+   "tests": [
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=2)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=127)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit) (status=128)",
+    "test_small_check_requires_git_difference_exit (__main__.Maker.test_small_check_requires_git_difference_exit)"
+   ],
+   "reason": "",
+   "column": 37
+  }
+ ]
+}
