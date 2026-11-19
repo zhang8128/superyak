@@ -268,8 +268,8 @@ fn the_prompt_is_the_item_its_check_and_the_rules() {
     assert_eq!(
         (text.len(), digest.as_str()),
         (
-            1459,
-            "8699a0aba2df7a5be0be41c461772bb05ba3ca5834a678e50d4741cc47706884"
+            1714,
+            "36b7820fff9b8d5b5485e16ad22fc6062eb8e32ccb99ee8f616ea5e71e00b651"
         )
     );
     assert!(text.contains("Make the greeting say bye"));

@@ -86,15 +86,16 @@ class Plan2:
     def order(self, item, row):
         return [held for held in self.plan["order"] if held["item"] == item["item"] and held["row"] == row][0]
 
-    def record(self, item, row, walk=None, turns=None, walks_exit=0, outcome="no-hand-in"):
-        """A no-hand-in row as the runner writes it, with the room's turns export and its one walk."""
+    def record(self, item, row, walk=None, turns=None, walks_exit=0, outcome="no-hand-in", **more):
+        """A no-hand-in row as the runner writes it, with the room's turns export and its one walk; `more` are further
+        fields of its record (no_commit, say)."""
         order = self.order(item, row)
         directory = self.out / order["directory"]
         directory.mkdir()
         (directory / "item.txt").write_text("%s room-item script:/pinned/worker.sh\n" % order["commit"])
         (directory / "record.json").write_text(json.dumps({"n": order["n"], "commit": order["commit"], "row": row,
             "outcome": outcome, "turn_commit": None, "at_limit": False, "turns_exit": 0, "walks_exit": walks_exit,
-            "earlier_attempts": 0, "attempts": [], "interrupted_attempts": 0}))
+            "earlier_attempts": 0, "attempts": [], "interrupted_attempts": 0, **more}))
         (directory / "turns.json").write_text(json.dumps(turns if turns is not None else
             [{"commit": None, "passed": None, "measured": {"ended": "exited"}}]))
         if walk is not None:
@@ -754,6 +755,79 @@ class Report(unittest.TestCase):
         path.write_text(json.dumps(dict(held, row="may-2")))
         with self.assertRaisesRegex(Refused, "another row"):
             judge2.make_report(plan.out)
+
+
+class RefusedHandIn(unittest.TestCase):
+    """A hand-in the room refused (spec 2026-11-19, section 3), judged by judge2.judge with the first judge's own
+    judge_row, and read in the report."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_a_refused_part_b_row_suspends_the_rule_by_name_and_a_part_a_row_suspends_nothing(self):
+        a, p1, n1 = plan_item(0, "A"), plan_item(1, "B", "P", "g1"), plan_item(3, "B", "N")
+        plan = Plan2(self.temporary.name, [a, p1, n1])
+        walk = {"steps": [{"seq": 0, "seen_ms": 1500, "named": [["docs/plans/p1.md", "a" * 40]]},
+            {"seq": 1, "seen_ms": 3000, "named": [[SOURCE + "/a.py", "b" * 40]]}]}
+
+        def turns(worker_ms, tokens, steps):
+            return [{"commit": "b" * 40, "lease_no": 1, "passed": False, "steps": steps, "measured": {"ended": "exited",
+                "worker_ms": worker_ms, "tokens": {"fresh_in": tokens, "output": 0}}}]
+        for row in ("nothing-1", "nothing-2", "may-1"):
+            plan.record(p1, row, walk={"steps": []}, turns=turns(10000, 100, 5))
+        plan.record(p1, "may-2", walk=walk, turns=turns(30000, 300, 9), outcome="refused",
+            no_commit="refused: single repository")
+        for row in judge2.PART_ROWS["B"]:
+            plan.record(n1, row, walk={"steps": []}, turns=turns(10000, 100, 5))
+        plan.record(a, "may-1", walk=walk, turns=turns(20000, 200, 7), outcome="refused", no_commit="refused: gitlinks")
+        plan.record(a, "may-2", walk={"steps": []}, turns=turns(10000, 100, 5))
+        with mock.patch.object(first, "check_items", lambda held, items: None):
+            judge2.judge(plan.out, "items")
+        refused = first.pilot.load(plan.out / "judged" / plan.order(p1, "may-2")["directory"][len("rows/"):]
+            / "score.json")
+        self.assertEqual((refused["outcome"], refused["scored"], refused["of"], refused["of_new"], refused["no_commit"]),
+            ("refused", False, 4, 3, "refused: single repository"))
+        # Its costs and what its walk names are kept: they describe work that was done.
+        self.assertEqual((refused["worker_seconds"], refused["tokens"], refused["steps"], refused["steps_from"],
+            refused["walk_read"], refused["plans_named"], refused["first_source_second"]),
+            (30.0, 300, 9, "room", True, ["docs/plans/p1.md"], 3.0))
+        report = judge2.write_report(plan.out)
+        self.assertEqual(report["rule"], {"decision": "suspended", "missing": ["%s may-2" % p1["item"]],
+            "no_gain_possible": None})
+        for suffix in ("", "_new"):
+            held = report["items" + suffix][p1["item"]]
+            self.assertEqual((held["m"], held["d"], held["class"]), (None, None, None), suffix)
+            self.assertIsNotNone(held["b"], suffix)
+            self.assertIsNotNone(report["items" + suffix][n1["item"]]["d"], suffix)
+        self.assertEqual(report["rows"]["unscored"], {"refused": 2})
+        self.assertEqual(report["rows"]["outcomes"], {"refused": 2, "no-hand-in": 8})
+        self.assertEqual(report["part_a"]["items"][a["item"]], {"may-1": None, "may-2": {"passed": 1, "of": 4}})
+        self.assertEqual(report["counts"]["P may"]["worker_seconds"], {"mean": 20.0, "on": 2})
+        self.assertEqual(report["counts"]["P may"]["tokens"], {"mean": 200, "on": 2})
+        self.assertEqual(report["counts"]["P may"]["steps"], {"mean": 7, "on": 2})
+        self.assertEqual((report["counts"]["P may"]["turns_naming_plans_paths"], report["counts"]["P may"]["names_matching"]),
+            (1, 1))
+        self.assertEqual(report["counts"]["A may"]["worker_seconds"], {"mean": 15.0, "on": 2})
+        text = (plan.out / "report.md").read_text()
+        self.assertIn("Rows with no score, by outcome: refused 2.", text)
+        self.assertIn("**Suspended.** The rule is not applied: these rows it needs have no score: %s may-2." % p1["item"],
+            text)
+        self.assertIn("| %s | no score | 1 of 4 |" % a["item"], text)
+        # Only the part A row refused: the rule reads part B alone and is not suspended by it.
+        (plan.out / "judged" / plan.order(p1, "may-2")["directory"][len("rows/"):] / "score.json").unlink()
+        record = plan.out / plan.order(p1, "may-2")["directory"] / "record.json"
+        held = json.loads(record.read_text())
+        del held["no_commit"]
+        record.write_text(json.dumps(dict(held, outcome="no-hand-in")))
+        with mock.patch.object(first, "check_items", lambda held, items: None):
+            judge2.judge(plan.out, "items")
+        report = judge2.make_report(plan.out)
+        self.assertNotEqual(report["rule"]["decision"], "suspended")
+        self.assertEqual(report["rule"]["missing"], [])
+        self.assertEqual(report["rows"]["unscored"], {"refused": 1})
 
 
 class Source(unittest.TestCase):

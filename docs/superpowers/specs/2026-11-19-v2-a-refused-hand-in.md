@@ -1,8 +1,10 @@
 # v2: a hand-in the room refuses is told beforehand and named afterwards
 
 Serenity, 2026-11-19 (UTC). A small change to what every turn reads and to the pilots' runner and judges.
-Revision 2. Revision 1 was read by a fresh reader of the other family (w130): approve with named changes,
-seven. They are made here as named; the last section lists them.
+Revision 3. Revision 1 was read by a fresh reader of the other family (w130): approve with named changes,
+seven, made in revision 2 as named. The build of revision 2 was read by another (w133): join with named
+changes, four. Three are in the code; where they touch this spec's words, and for the fourth, this revision
+changes them. The last two sections list both sets.
 
 ## Why
 
@@ -77,8 +79,11 @@ One function, in one place both use, takes the export of a turn, the row's item,
 output for that turn, and returns the outcome and a field `no_commit`.
 
 - **The clock's line.** An ended event is a line of the form the clock writes for a turn's end: the
-  runner's time stamp, `ended`, the item, the lease number, the verdict words, `commit` and forty
-  hexadecimal characters, and optionally `; no new commit: ` and a reason. Only an ended event whose item is
+  runner's time stamp, `ended`, the item, the lease number, the item's state in the room's own words,
+  `commit` and forty hexadecimal characters, then optionally `; timed out`, optionally `; no new commit: `
+  and a reason, and optionally `; rechecked: ` and a state. A state is one of the nine the room writes; any
+  other words there make the line no ended event. The recheck is the room's last words, so a reason is read
+  without it. A lease number outside the room's 32-bit count, below nought or above it, is not the room's and matches no event. Only an ended event whose item is
   the row's item (`item.txt`) and whose lease and commit are the exported turn's is this turn's. Other
   lines, and ended events of another item, lease or commit, are not evidence. With no such event, or more
   than one, `no_commit` is `null` and the outcome is as today.
@@ -124,7 +129,9 @@ What follows from the judges as they are, with no change to their arithmetic:
   naming the row; a refused part A row suspends nothing.
 - The readings on all frozen cases and on the cases that do not pass on the parent both leave the refused
   row's score out and keep their denominators.
-- The row's seconds, tokens, steps and walk counts are kept: they describe work that was done.
+- In the second judge the row's seconds, tokens, steps and walk counts stay in the counts beside the rule:
+  they describe work that was done. The first judge's report gives no costs and no walk counts for a row
+  with no score, a refused one included; the row's own files keep them.
 - Both reports count refused rows by name among the rows with no score.
 
 What a later trial does about such a row (run it again once, or leave its cell out) is for that trial's
@@ -145,7 +152,12 @@ spec to say before its turns.
   - any other reason: `no-hand-in`, "other";
   - the base's commit, measured end `timed_out`, a refusal line: `limit`;
   - a commit of the turn's own at its limit: `handed-in`, `at_limit` true, `no_commit` `null`;
-  - a real line with its time stamp, matched on item, lease and commit;
+  - a real line with its time stamp, matched on item, lease and commit, for each of the room's nine states
+    as the verdict;
+  - a recheck after a refusal, after "the turn committed nothing", and with no reason; words after a reason
+    that are no recheck in the room's states stay part of the reason;
+  - a lease of nought, at the room's largest count, one above it, a negative one, and one too large to write
+    as text, of either sign;
   - an ended event of another item, another lease or another commit, and unrelated lines that hold
     "no new commit": not evidence, so `null` and the outcome as today;
   - no ended event, and two: `null` and the outcome as today;
@@ -156,10 +168,12 @@ spec to say before its turns.
 - **The judges:** a `refused` row has no score in either; the first judge's rule is suspended by one it
   needs and its item has no baseline; the second judge's rule is suspended by a part B one and not by a part
   A one; both readings leave its score out and keep their denominators; its costs and walk counts are in the
-  report; both reports count it by name.
+  second judge's report; both reports count it by name.
 - **On the real room, with no model, before any reader:**
   - a script put in the place of a Codex worker's program, so that `seal` runs: it changes a file under the
-    source directory, commits nothing, and leaves a directory named `.git` in a subfolder. Expected: the
+    source directory, commits nothing, and leaves a directory named `.git` in a subfolder. Asked for its
+    version, as the maker asks a worker's program in its own working directory, it prints one line and
+    changes nothing; a test holds that. Expected: the
     room refuses; the row's record says `refused` and "refused: single repository";
   - beside it, as a description of what is and not as a guard: a script worker that commits its change and
     leaves the same nested directory. Expected: `handed-in`, `no_commit` `null`.
@@ -194,3 +208,20 @@ spec to say before its turns.
    with what follows in each judge.
 7. The test list is completed, the whole-suite script is named, and the either-or test and the
    unconditional claim are cut.
+
+## The build's reader's named changes, and where each is made
+
+1. The stand-in for the Codex program answers a version question and changes nothing (the stand-in; a test
+   in the runner's tests that also shows it would otherwise have changed the directory).
+2. The whole grammar of an ended line is parsed, the recheck with it, and a verdict must be one of the room's
+   states ("The clock's line"; the naming function's tests).
+3. The costs and walk counts of a refused row are promised for the second judge's report only (section 3;
+   "Tests").
+4. A lease number outside the room's count, of either sign, matches no event and is never turned into text
+   (the confirming reader, w134, found that a very large negative one still raised; that is mended too).
+
+Run on the real room with no model, from the build as read: the stand-in in the Codex program's place was
+refused by the room with the single-repository sentence, its record says `refused` and "refused: single
+repository", and it has no score; the script worker that commits for itself was taken, `handed-in` with
+`no_commit` null. Both rows ran on the room program the pilot's controls were made with, so the two new
+sentences were not in what those turns read; the turn crate's tests hold them.

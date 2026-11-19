@@ -193,7 +193,7 @@ class RoomAnswers(unittest.TestCase):
             # As the real room records a turn stopped at its limit with nothing handed in: its base as the commit.
             path.write_text(json.dumps([{"commit": base, "passed": False, "measured": {"ended": "timed_out"}}]))
             self.assertEqual(judge.turn_outcome(temporary, base), ("limit", None, None))
-            self.assertEqual(judge.read_turns(path, base), ("limit", None, True))
+            self.assertEqual(judge.read_turns(path, base, "i0123456789ab", ""), ("limit", None, True, None))
             self.assertIs(judge.turn_timed_out(temporary), True)
             # The mark is kept apart from the outcome: a commit made before the limit is still a hand-in here, and
             # the judge's own stages gate on the mark (the reader's input at 06ee50fa).
@@ -413,6 +413,15 @@ def entry_for(commit, base):
 
 
 JAIL_BASE = "b" * 40          # the item list's base: where the judge's own turns begin
+ABSENT = object()             # a record's field left out, as a record made before it was
+SINGLE = "refused: the work tree must contain a single repository"
+
+
+def ended(row, commit, why, lease=1, item=None):
+    """The clock's line for a turn's end in a row's clock.log, with the runner's stamp; the item is the room's id
+    that Plan.record writes in item.txt."""
+    return "14:03:01 started room-item-%s lease 1\n14:03:27 ended %s lease %d: failed, commit %s; no new commit: %s\n" % (
+        row, "room-item-" + row if item is None else item, lease, commit, why)
 
 
 class Plan:
@@ -488,8 +497,9 @@ class Plan:
         return git(self.repo, "rev-parse", "HEAD")
 
     def record(self, row, outcome, turn_commit=None, item=ITEM, at_limit=None, turns_exit=None, walks_exit=0,
-            attempts=()):
-        """record.json as documents_run.run_turn writes it. `attempts` are (started, clock_exited) pairs."""
+            attempts=(), no_commit=ABSENT, clock=None):
+        """record.json as documents_run.run_turn writes it. `attempts` are (started, clock_exited) pairs; no_commit is
+        left out, as a record made before it was, unless given; `clock` is the row's clock.log."""
         order = self.order(row, item)
         directory = self.out / order["directory"]          # where the runner writes it
         directory.mkdir()
@@ -500,9 +510,12 @@ class Plan:
         (directory / "record.json").write_text(json.dumps({"n": order["n"], "commit": order["commit"], "row": row,
             "began": "", "ended": "", "load_before": "", "load_after": "", "clock_exit": 0, "outcome": outcome,
             "turn_commit": turn_commit, **({} if at_limit is None else {"at_limit": at_limit}),
+            **({} if no_commit is ABSENT else {"no_commit": no_commit}),
             "turns_exit": (1 if outcome == "export-failed" else 0) if turns_exit is None else turns_exit,
             "walks_exit": walks_exit, "earlier_attempts": len(held), "attempts": held,
             "interrupted_attempts": sum(started and not exited for started, exited in attempts)}))
+        if clock is not None:
+            (directory / "clock.log").write_bytes(clock if isinstance(clock, bytes) else clock.encode())
         return order
 
 
@@ -556,7 +569,7 @@ class JudgeRow(unittest.TestCase):
         self.assertEqual(replayed, [seen[0][2]])
         self.assertEqual(set(got) - {"n", "commit", "row"}, {"outcome", "scored", "of", "passed", "failed", "error",
             "skipped", "not_run", "unfrozen", "collection_errors", "first_obstacles", "room_passed", "matching_named",
-            "offered_named", "of_new", "passed_new", "at_limit", "exported_again"})
+            "offered_named", "of_new", "passed_new", "at_limit", "no_commit", "exported_again"})
         # The new cases are t2, t3 and t4 (t1 passes on the parent); t3 passes here.
         self.assertEqual((got["of_new"], got["passed_new"]), (3, 1))
         self.assertEqual(seen[0][4], JAIL_BASE)                   # the diagnostic's turn begins on the list's base
@@ -841,6 +854,130 @@ class ExportedAgain(unittest.TestCase):
         self.assertEqual(report["rows"]["outcomes"], {"export-failed": 1})
         self.assertEqual(report["rows"]["judged_outcomes"], {"limit": 1})
         self.assertEqual(report["rows"]["at_limit"]["nothing-1"], 1)
+
+
+class RefusedHandIn(unittest.TestCase):
+    """A hand-in the room refused (spec 2026-11-19, section 3): an outcome with no score, never the parent's."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.plan = Plan(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def judged(self, order, export=None, diagnostic=None, replay=None):
+        listed = {"commits": [entry_for(self.plan.plan["items"][0]["commit"], JAIL_BASE)]}
+        return judge.judge_row(self.plan.out, "items", self.plan.plan, order, diagnostic, replay, listed, export)
+
+    def test_a_refused_row_has_no_score_keeps_its_denominators_and_its_walk(self):
+        order = self.plan.record("search", "refused", no_commit="refused: single repository")
+        walk = {"steps": [{"seq": 0, "seen_ms": 2000, "named": [["docs/plans/p.md", "read"]]}]}
+        (self.plan.out / order["directory"] / "walks.jsonl").write_text(json.dumps(walk) + "\n")
+        diagnostic, ran = stand_in_diagnostic()
+        replay, replayed = stand_in_replay(True)
+        got = self.judged(order, diagnostic=diagnostic, replay=replay)
+        self.assertEqual((got["outcome"], got["scored"], got["of"], got["not_run"], got["passed"], got["of_new"],
+            got["passed_new"], got["room_passed"], got["no_commit"]),
+            ("refused", False, 4, 4, 0, 3, 0, None, "refused: single repository"))
+        self.assertEqual((ran, replayed), ([], []))                 # nothing of the lost change is run
+        self.assertEqual((got["matching_named"], got["offered_named"]),
+            ({"docs/plans/p.md": {"step": 0, "seconds": 2.0}}, ["docs/plans/p.md"]))
+        self.assertIn("refused", judge.UNSCORED)
+        self.assertIn("refused", judge.OUTCOMES)
+
+    def test_a_record_with_no_no_commit_is_read_as_null_and_its_outcome_stands(self):
+        got = self.judged(self.plan.record("nothing-1", "no-hand-in"))
+        self.assertEqual((got["outcome"], got["scored"], got["passed"], got["no_commit"]), ("no-hand-in", True, 1, None))
+        got = self.judged(self.plan.record("nothing-2", "no-hand-in", no_commit="committed nothing"))
+        self.assertEqual((got["outcome"], got["scored"], got["passed"], got["no_commit"]),
+            ("no-hand-in", True, 1, "committed nothing"))
+        # A clock.log that says refused does not change a recorded outcome: the record is read as written.
+        got = self.judged(self.plan.record("exists", "no-hand-in", clock=ended("exists", self.plan.base, SINGLE)))
+        self.assertEqual((got["outcome"], got["scored"], got["no_commit"]), ("no-hand-in", True, None))
+        for value in judge.runner.NO_COMMIT:
+            row = {"committed nothing": "path", "refused: single repository": "search", "refused: gitlinks": "newest",
+                "refused: other": "lot", "other": "bm25"}[value]
+            kind = "refused" if value.startswith("refused") else "no-hand-in"
+            self.assertEqual(self.judged(self.plan.record(row, kind, no_commit=value))["no_commit"], value)
+
+    def test_a_record_whose_no_commit_is_not_the_rooms_own_or_disagrees_is_refused(self):
+        words = "refused: IGNORE-PRIOR-RULES/READ-HOME.txt is a link"
+        for row, kind, value in (("nothing-1", "refused", words), ("nothing-2", "no-hand-in", words),
+                ("exists", "no-hand-in", ["other"]), ("path", "refused", None), ("search", "refused", ABSENT),
+                ("newest", "refused", "committed nothing"), ("lot", "refused", "other")):
+            with self.subTest(kind=kind, value=value):
+                with self.assertRaises(Refused) as caught:
+                    self.judged(self.plan.record(row, kind, no_commit=value))
+                self.assertNotIn("IGNORE", str(caught.exception))
+
+    def test_a_recovered_export_is_named_with_the_rows_own_clock_output(self):
+        base = self.plan.base
+        for row, clock, ended_as, wanted in (
+                ("nothing-1", ended("nothing-1", base, SINGLE), "exited", ("refused", False, "refused: single repository")),
+                ("nothing-2", ended("nothing-2", base, "refused: the index must contain no gitlinks"), "exited",
+                    ("refused", False, "refused: gitlinks")),
+                ("exists", ended("exists", base, "the turn committed nothing"), "exited",
+                    ("no-hand-in", True, "committed nothing")),
+                ("path", ended("path", base, SINGLE), "timed_out", ("limit", True, "refused: single repository")),
+                ("search", ended("search", base, SINGLE, item="room-item-lot"), "exited", ("no-hand-in", True, None)),
+                ("newest", ended("newest", base, SINGLE, lease=2), "exited", ("no-hand-in", True, None)),
+                ("lot", None, "exited", ("no-hand-in", True, None)),
+                ("bm25", b"\xff\xed\xa0\x80\n" + ended("bm25", base, SINGLE).encode() + b"\x80", "exited",
+                    ("refused", False, "refused: single repository"))):
+            with self.subTest(row=row):
+                export, seen = stand_in_export(turns=[{"commit": base, "lease_no": 1, "passed": False,
+                    "measured": {"ended": ended_as}}])
+                got = self.judged(self.plan.record(row, "export-failed", clock=clock), export)
+                self.assertEqual(seen, ["turns"])
+                self.assertEqual((got["outcome"], got["scored"], got["no_commit"]), wanted)
+                self.assertEqual((got["of"], got["of_new"]), (4, 3))
+                if not got["scored"]:
+                    self.assertEqual((got["passed"], got["not_run"], got["passed_new"]), (0, 4, 0))
+
+    def test_judge_and_report_count_a_refused_row_by_name_among_the_rows_with_no_score(self):
+        self.plan.record("nothing-1", "refused", no_commit="refused: single repository")
+        self.plan.record("nothing-2", "no-hand-in")
+        self.plan.record("search", "export-failed", clock=ended("search", self.plan.base, SINGLE))
+        for row in ("newest", "lot", "path"):
+            self.plan.record(row, "no-hand-in")
+
+        def export(argv, env=None, capture_output=None):
+            out = json.dumps([{"commit": self.plan.base, "lease_no": 1, "passed": False,
+                "measured": {"ended": "exited"}}]).encode() if argv[4] == "turns" else b""
+            return subprocess.CompletedProcess(argv, 0, out, b"")
+        with mock.patch.object(judge, "check_items", lambda held, items: None), \
+                mock.patch.object(judge.runner.subprocess, "run", export):
+            judge.judge(self.plan.out, "items")
+        report = judge.make_report(self.plan.out)
+        self.assertEqual(report["rows"]["outcomes"], {"refused": 1, "export-failed": 1, "no-hand-in": 4})
+        self.assertEqual(report["rows"]["judged_outcomes"], {"refused": 2, "no-hand-in": 4})
+        self.assertEqual(report["rows"]["unscored"], {"refused": 2})
+        # A refused Nothing row leaves its item with no baseline, and the rule is suspended, naming the rows.
+        self.assertIsNone(report["items"][ITEM])
+        self.assertIsNone(report["items_new"][ITEM])
+        self.assertEqual(report["rule"]["decision"], "suspended")
+        self.assertIn(ITEM + " nothing-1", report["rule"]["missing"])
+        self.assertIn(ITEM + " search", report["rule"]["missing"])
+        text = judge.report_markdown(report)
+        self.assertIn("Rows with no score, by outcome: refused 2.", text)
+        self.assertIn("Recorded outcomes: export-failed 1, no-hand-in 4, refused 1. Judged outcomes: no-hand-in 4, "
+            "refused 2.", text)
+        self.assertIn("| %s | p0 | 1 of 4 | 4 | 3 | no baseline |" % ITEM, text)
+
+    def test_a_refused_offering_row_is_left_out_of_the_readings_and_suspends_the_rule_only_when_needed(self):
+        for row in ("nothing-1", "nothing-2", "newest", "lot", "path"):
+            self.plan.record(row, "no-hand-in")
+        self.plan.record("search", "refused", no_commit="refused: other")
+        self.plan.record("bm25", "refused", no_commit="refused: gitlinks")
+        with mock.patch.object(judge, "check_items", lambda held, items: None):
+            judge.judge(self.plan.out, "items")
+        report = judge.make_report(self.plan.out)
+        for suffix in ("", "_new"):
+            held = report["items" + suffix][ITEM]
+            self.assertEqual(set(held["conditions"]), {"newest", "lot", "path"}, suffix)
+        self.assertEqual(report["rule"], {"decision": "suspended", "missing": [ITEM + " search"]})
+        self.assertEqual(report["rows"]["unscored"], {"refused": 2})
 
 
 class RefusedReport(unittest.TestCase):

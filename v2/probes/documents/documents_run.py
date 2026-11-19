@@ -47,26 +47,98 @@ def planned_environment(plan):
         os.environ.update(before)
 
 
-def outcome(turns, base):
+# Why a turn that handed in its base made no commit of its own, as one of a fixed list of the room's own reasons. The
+# reason's text is never kept: a refusal about the clone can repeat a name the worker chose.
+NO_COMMIT = ("committed nothing", "refused: single repository", "refused: gitlinks", "refused: other", "other")
+# In the place of the parsed turns.json, when the room's export of the turn did not exit 0.
+EXPORT_FAILED = object()
+# An item's state, in the words yak's state_name writes: an ended line's verdict, and the state after a recheck.
+STATE = "(?:draft|open|leased|checking|passed verified|passed unverified|failed|blocked|abandoned)"
+# The clock's line for a turn's end, as clock.log holds it: the runner's time stamp, then the clock's own words
+# (yak's event_line): `ended <item> lease <n>: <state>, commit <40 hex>`, `; timed out` when the clock says so,
+# `; no new commit: <reason>` when the turn handed in its base, and `; rechecked: <state>` when the hand-in was
+# checked again. ASCII digits only. The recheck is the room's last words, so a reason whose own text ends in them is
+# read without them: a reason is named by how it begins, or by being the room's one sentence for nothing committed.
+ENDED = re.compile(r"[0-9]{2}:[0-9]{2}:[0-9]{2} ended (\S+) lease ([0-9]+): " + STATE + r", commit ([0-9a-f]{40})"
+    r"(?:; timed out)?(?:; no new commit: (.*?))?(?:; rechecked: " + STATE + r")?")
+# The room counts leases in 32 bits, from nought up. A number outside that in an export is not the room's, and is
+# never turned into text: Python refuses to write a very long number, of either sign.
+MAX_LEASE = 0xFFFFFFFF
+
+
+def no_commit_of(reason):
+    """The fixed name of the clock's reason for no new commit."""
+    if reason == "the turn committed nothing":
+        return "committed nothing"
+    if reason.startswith("refused: the work tree must contain a single repository"):
+        return "refused: single repository"
+    if reason.startswith("refused: the index must contain no gitlinks"):
+        return "refused: gitlinks"
+    if reason.startswith("refused:"):
+        return "refused: other"
+    return "other"
+
+
+def clock_reason(clock, item, lease, commit):
+    """no_commit from the clock's captured output: the one ended event of this item, lease and commit, named; None
+    when there is no such event, more than one, or one with no reason. Any other line is not evidence."""
+    if not isinstance(clock, str) or type(lease) is not int or lease < 0 or lease > MAX_LEASE:
+        return None
+    found = []
+    for line in clock.split("\n"):
+        held = ENDED.fullmatch(line)
+        if held and held.group(1) == item and held.group(2) == str(lease) and held.group(3) == commit:
+            found.append(held.group(4))
+    if len(found) != 1 or found[0] is None:
+        return None
+    return no_commit_of(found[0])
+
+
+def read_clock(path):
+    """A clock.log's text as the naming reads it: bytes that are not UTF-8 replaced; empty when it cannot be read."""
+    try:
+        return Path(path).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def turn_end(turns, base, item, clock):
+    """How a row's turn ended: (outcome, the turn's own commit or None, no_commit). `turns` is the parsed turns.json,
+    or EXPORT_FAILED; `item` the room's id of the row's item (item.txt); `clock` the clock's captured output. In
+    order: an export that failed or is not one well-formed turn; a commit of the turn's own; the base's commit at the
+    turn's limit; the base's commit with a refusal; the base's commit otherwise. The export's measured end decides a
+    limit, not the clock's own words, which a failed seal can leave out."""
+    if turns is EXPORT_FAILED:
+        return "export-failed", None, None
     if not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict):
-        return "clock-failed", None
+        return "clock-failed", None, None
     turn = turns[0]
     commit = turn.get("commit")
     measured = turn.get("measured") or {}
     ended = measured.get("ended") if isinstance(measured, dict) else None
     if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
-        if commit == base:
-            # The real room records the base's own commit for a turn that handed in nothing, whether it finished
-            # or was stopped at its limit; only how it ended tells the two apart.
-            return ("limit" if ended == "timed_out" else "no-hand-in"), None
-        return "handed-in", commit
+        if commit != base:
+            return "handed-in", commit, None
+        # The real room records the base's own commit for a turn that handed in nothing, whether it finished or was
+        # stopped at its limit; only how it ended tells the two apart, and only the clock's line says why.
+        no_commit = clock_reason(clock, item, turn.get("lease_no"), commit)
+        if ended == "timed_out":
+            return "limit", None, no_commit
+        if no_commit is not None and no_commit.startswith("refused"):
+            return "refused", None, no_commit
+        return "no-hand-in", None, no_commit
     if commit is not None:
-        return "clock-failed", None
+        return "clock-failed", None, None
     if ended == "timed_out":
-        return "limit", None
+        return "limit", None, None
     if ended == "exited":
-        return "no-hand-in", None
-    return "clock-failed", None
+        return "no-hand-in", None, None
+    return "clock-failed", None, None
+
+
+def outcome(turns, base):
+    """turn_end with no clock output: the outcome and the turn's commit, as before a refusal could be named."""
+    return turn_end(turns, base, None, "")[:2]
 
 
 def written_by(worker):
@@ -179,12 +251,14 @@ def run_turn(out, plan, row, item, lock_fd):
         turns = json.loads((directory / "turns.json").read_bytes())
     except ValueError:
         turns = None
-    kind, commit = outcome(turns, base["base"]) if turns_exit == 0 else ("export-failed", None)
+    kind, commit, no_commit = turn_end(turns if turns_exit == 0 else EXPORT_FAILED, base["base"], identity,
+        read_clock(directory / "clock.log"))
     at_limit = (turns_exit == 0 and isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
         and isinstance(turns[0].get("measured"), dict) and turns[0]["measured"].get("ended") == "timed_out")
     record = {"n": row["n"], "commit": row["commit"], "row": row["row"], "began": began, "ended": ended,
         "load_before": load_before, "load_after": load_after, "clock_exit": code, "outcome": kind,
-        "turn_commit": commit, "at_limit": at_limit, "turns_exit": turns_exit, "walks_exit": walks_exit,
+        "turn_commit": commit, "no_commit": no_commit, "at_limit": at_limit, "turns_exit": turns_exit,
+        "walks_exit": walks_exit,
         "earlier_attempts": len(attempts), "attempts": attempts,
         "interrupted_attempts": sum(a["started"] and not a["clock_exited"] for a in attempts)}
     pilot.write_json(directory / "record.tmp", record)

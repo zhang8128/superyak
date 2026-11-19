@@ -1,0 +1,29 @@
+#!/bin/sh
+# In the place of the Codex program for one turn (first on the clock's search path, worker codex:<any model>), so
+# that the room's own commit runs. Run by the room in the clone's top, it reads its prompt, prints the least of a
+# Codex event stream, appends one comment line to a source file, commits nothing, leaves a directory named .git
+# in a new subfolder, and exits 0. See README.md.
+# The maker asks a worker's program for its version, in its own working directory: answer and touch nothing.
+case "${1:-}" in
+    --version)
+        printf '%s\n' 'codex-stand-in 1'
+        exit 0
+        ;;
+esac
+cat > /dev/null
+printf '%s\n' '{"thread_id":"stand-in","type":"thread.started"}' '{"type":"turn.started"}'
+file=
+for candidate in peer/superyak_peer/*.py; do
+    if [ -f "$candidate" ]; then
+        file=$candidate
+        break
+    fi
+done
+if [ -z "$file" ]; then
+    printf '%s\n' 'stand-in: no file under peer/superyak_peer/ to change' >&2
+    exit 1
+fi
+printf '%s\n' '# A line a stand-in added, to be handed in.' >> "$file"
+mkdir -p scratch-repository/.git
+printf '%s\n' '{"type":"turn.completed","usage":{"cache_write_input_tokens":0,"cached_input_tokens":0,"input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}'
+exit 0
