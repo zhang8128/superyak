@@ -1749,7 +1749,7 @@ for each name in its config (`engram/lighthouse_daemon.py:506-518`), including o
   was never raised marks no house, so a house that carries its id while `gate_raised` is not set comes from a ledger
   that was raised and is now an older copy of itself, restored from before the raise. Two other paths give the same
   state, and closed is right for both: a first raise cut short, since the act marks the houses before its log row
-  commits (`_make` before `_append`, `engram/permission_ledger.py:1820-1822`); and a home that ran `gate off` on a
+  commits (`_make` before `_append`, `engram/permission_ledger.py:1819-1821`); and a home that ran `gate off` on a
   never-raised ledger under the code before this change, which wrote this ledger's id into a house that carried
   another mark (R50 as first written). Under `gate off` on a ledger never raised, the act now removes
   `permissions_ledger_id` from each house that carries one, whatever it names (`unreadable`, an earlier ledger's id,
