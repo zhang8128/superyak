@@ -186,10 +186,12 @@ class Runner(fixtures.Fixture):
         self.assertEqual([r["n"] for r in self.records()], [1, 2])
         self.assertEqual(self.run.run_rows(self.out, rows=2), 2)
         self.assertEqual([r["n"] for r in self.records()], [1, 2, 3, 4])
-        self.assertEqual(self.run.run_rows(self.out), 3)
+        self.assertEqual(self.run.run_rows(self.out), 4)
         self.assertEqual(self.run.run_rows(self.out), 0)
         calls = [json.loads(l) for l in (self.tmp / "calls.jsonl").read_text().splitlines()]
-        self.assertEqual([c["n"] for c in calls], list(range(1, 8)))
+        self.assertEqual([c["n"] for c in calls], list(range(1, 9)))
+        self.assertEqual({record["row"] for record in self.records()},
+            {"nothing-1", "nothing-2", "exists", "path", "search", "newest", "lot", "bm25"})
         for call in calls:
             words = call["args"]
             for key, value in (("--daily-turns", "1"), ("--concurrent", "1"), ("--turn-secs", "1200"), ("--lease-secs", "1800")):
@@ -204,6 +206,8 @@ class Runner(fixtures.Fixture):
             self.assertEqual(record["commit"], row["commit"])
             self.assertEqual(record["row"], row["row"])
             directory = self.out / row["directory"]
+            self.assertEqual((directory / "repo/TASK.md").read_bytes(), self.driver.task_bytes(
+                self.task.read_bytes(), self.plan["items"][0]["rows"][row["row"]]["paragraph"]))
             for name in ("repo", "room", "item.txt", "started.txt", "ended.txt", "load-before.txt", "load-after.txt", "clock.log", "clock.exit", "turns.json", "walks.jsonl", "walks.err"):
                 self.assertTrue((directory / name).exists(), name)
             self.assertFalse((directory / "record.tmp").exists())

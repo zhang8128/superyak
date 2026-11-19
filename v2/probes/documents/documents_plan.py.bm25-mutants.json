@@ -1,0 +1,378 @@
+{
+ "file": "documents_plan.py",
+ "source_sha256": "f225a05d872328fb6e4dc746c9bf4e87c3d707c42dfe5adf43720275345764e9",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_plan.py Rules.test_bm25_hand_worked_scores Rules.test_bm25_search_words_candidates_and_best_matching_file Rules.test_bm25_sorted_sum_and_empty_documents Rules.test_bm25_rounded_ties_and_path_bytes Rules.test_search_half_threshold_ties_and_task_bytes Rules.test_order_96_hashes_stable_and_full_commit Maker.test_paragraphs_bases_pins_and_directory_names Maker.test_bm25_only_offer_is_pinned",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 8 tests in 4.399s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 37,
+   "column": 5,
+   "kind": "number",
+   "before": "1.2",
+   "after": "2.2",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 38,
+   "column": 4,
+   "kind": "number",
+   "before": "0.75",
+   "after": "1.75",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 163,
+   "column": 14,
+   "kind": "boolean",
+   "before": "sum(lengths.values()) / count or 1",
+   "after": "((sum(lengths.values()) / count) and (1))",
+   "killed": true,
+   "tests": [
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 163,
+   "column": 47,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent: the average fallback is used only when every document has zero words. Every term frequency is then zero, so any positive fallback gives all-zero scores. The separate fallback-to-zero mutant is killed by the empty-document test."
+  },
+  {
+   "line": 166,
+   "column": 31,
+   "kind": "number",
+   "before": "9",
+   "after": "10",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 191,
+   "column": 73,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 191,
+   "column": 41,
+   "kind": "number",
+   "before": "3",
+   "after": "4",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 192,
+   "column": 24,
+   "kind": "comparison",
+   "before": "bm25[p] == bm25[second_search[second_best]]",
+   "after": "not (bm25[p] == bm25[second_search[second_best]])",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 165,
+   "column": 28,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 34,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 165,
+   "column": 52,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 55,
+   "kind": "number",
+   "before": "0.5",
+   "after": "1.5",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 71,
+   "kind": "number",
+   "before": "0.5",
+   "after": "1.5",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 15,
+   "kind": "bm25-unrounded-scores",
+   "before": "round(sum(math.log(1 + (count - df[w] + 0.5) / (df[w] + 0.5))\n        * counts[w] * (K1 + 1) / (counts[w] + K1 * (1 - B + B * lengths[p] / average))\n        for w in sorted(use)), 9)",
+   "after": "sum(math.log(1 + (count - df[w] + 0.5) / (df[w] + 0.5))\n        * counts[w] * (K1 + 1) / (counts[w] + K1 * (1 - B + B * lengths[p] / average))\n        for w in sorted(use))",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 25,
+   "kind": "bm25-rounds-each-term",
+   "before": "math.log(1 + (count - df[w] + 0.5) / (df[w] + 0.5))\n        * counts[w] * (K1 + 1) / (counts[w] + K1 * (1 - B + B * lengths[p] / average))",
+   "after": "round(math.log(1 + (count - df[w] + 0.5) / (df[w] + 0.5))\n        * counts[w] * (K1 + 1) / (counts[w] + K1 * (1 - B + B * lengths[p] / average)), 9)",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 166,
+   "column": 8,
+   "kind": "bm25-unsorted-sum",
+   "before": "for w in sorted(use)",
+   "after": "for w in use",
+   "killed": true,
+   "tests": [
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 166,
+   "column": 8,
+   "kind": "bm25-reverse-sum",
+   "before": "for w in sorted(use)",
+   "after": "for w in sorted(use, reverse=True)",
+   "killed": true,
+   "tests": [
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 164,
+   "column": 25,
+   "kind": "bm25-base-ten-log",
+   "before": "math.log(1 +",
+   "after": "math.log10(1 +",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 161,
+   "column": 18,
+   "kind": "bm25-distinct-length",
+   "before": "sum(counts.values())",
+   "after": "len(counts)",
+   "killed": true,
+   "tests": [
+    "test_bm25_hand_worked_scores (__main__.Rules.test_bm25_hand_worked_scores)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 163,
+   "column": 36,
+   "kind": "bm25-zero-average",
+   "before": "/ count or 1",
+   "after": "/ count or 0",
+   "killed": true,
+   "tests": [
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 184,
+   "column": 4,
+   "kind": "bm25-includes-common-words",
+   "before": "bm25 = bm25_scores(frequencies, use, df)",
+   "after": "bm25 = bm25_scores(frequencies, words, df)",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 185,
+   "column": 47,
+   "kind": "bm25-ascending-score",
+   "before": "(-bm25[p], p.encode(\"utf-8\"))",
+   "after": "(bm25[p], p.encode(\"utf-8\"))",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 185,
+   "column": 47,
+   "kind": "bm25-no-path-tie",
+   "before": "(-bm25[p], p.encode(\"utf-8\"))",
+   "after": "(-bm25[p],)",
+   "killed": true,
+   "tests": [
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 185,
+   "column": 47,
+   "kind": "bm25-reverse-path-tie",
+   "before": "(-bm25[p], p.encode(\"utf-8\"))",
+   "after": "(-bm25[p], bytes(255 - b for b in p.encode(\"utf-8\")))",
+   "killed": true,
+   "tests": [
+    "test_bm25_sorted_sum_and_empty_documents (__main__.Rules.test_bm25_sorted_sum_and_empty_documents)",
+    "test_bm25_rounded_ties_and_path_bytes (__main__.Rules.test_bm25_rounded_ties_and_path_bytes)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 186,
+   "column": 4,
+   "kind": "bm25-worst-matching-place",
+   "before": "second_best = min(",
+   "after": "second_best = max(",
+   "killed": true,
+   "tests": [
+    "test_bm25_search_words_candidates_and_best_matching_file (__main__.Rules.test_bm25_search_words_candidates_and_best_matching_file)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 36,
+   "column": 7,
+   "kind": "bm25-row-omitted",
+   "before": "(\"nothing-1\", \"nothing-2\", \"exists\", \"path\", \"search\", \"newest\", \"lot\", \"bm25\")",
+   "after": "(\"nothing-1\", \"nothing-2\", \"exists\", \"path\", \"search\", \"newest\", \"lot\")",
+   "killed": true,
+   "tests": [
+    "test_order_96_hashes_stable_and_full_commit (__main__.Rules.test_order_96_hashes_stable_and_full_commit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 198,
+   "column": 16,
+   "kind": "bm25-row-omitted",
+   "before": "(\"search\", \"newest\", \"lot\", \"bm25\")",
+   "after": "(\"search\", \"newest\", \"lot\")",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 350,
+   "column": 54,
+   "kind": "bm25-row-omitted",
+   "before": "(\"search\", \"newest\", \"lot\", \"bm25\")",
+   "after": "(\"search\", \"newest\", \"lot\")",
+   "killed": true,
+   "tests": [
+    "test_bm25_only_offer_is_pinned (__main__.Maker.test_bm25_only_offer_is_pinned)"
+   ],
+   "reason": ""
+  }
+ ]
+}
