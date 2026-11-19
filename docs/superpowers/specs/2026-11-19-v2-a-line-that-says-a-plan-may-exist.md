@@ -85,9 +85,13 @@ or skips it, with its reason written down:
 - **In pool N,** an item is accepted when the review finds no document that specifies the item's work.
   For each item: from the commit's message and change the reader writes down the work's subject and
   its distinctive terms (identifiers, routes, table and file names, the message's own nouns); searches
-  the path and the text of every Markdown file tracked at the first parent for each; reads every file a
-  search finds; and says "none found" or names the file. A file that specifies the work under another
-  name counts. An item with any doubt is skipped.
+  the path and the text of every Markdown file tracked at the first parent for each; reads, in every
+  file a search finds, the passages found and enough around them to tell whether the file specifies the
+  work, and the whole of any file that could be a plan, spec or design for it; and says "none found" or
+  names the file. A file that specifies the work under another name counts. An item with any doubt is
+  skipped. (The lead clarified "reads every file" to this after approval, on the selecting reader's
+  question: an ordinary word can find dozens of long files. The record says which files were read whole
+  and which by passage.)
 
 **The reader's record,** for every item walked: the terms; the exact queries, each with how it matched
 (whole word or substring, case kept or folded, path or text); the complete list of what each query
