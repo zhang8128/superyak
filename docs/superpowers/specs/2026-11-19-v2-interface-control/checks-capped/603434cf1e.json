@@ -1,0 +1,85 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_lessons_room::test_a_dangling_link_further_back_ends_the_chain_at_the_break",
+   "tests.test_lessons_room::test_a_paired_peer_follows_the_origins_replaced_room_and_reads_only_what_it_was_sent",
+   "tests.test_lessons_room::test_a_recorded_room_this_peer_no_longer_holds_gives_no_snapshot",
+   "tests.test_lessons_room::test_another_peer_records_the_room_by_full_id_from_a_paired_origin",
+   "tests.test_lessons_room::test_copies_collapse_to_the_earliest_and_each_author_keeps_32",
+   "tests.test_lessons_room::test_lessons_check_runs_the_doors_checks_without_posting",
+   "tests.test_lessons_room::test_lessons_ship_makes_a_keyless_ship_for_a_person_and_refuses_the_rest",
+   "tests.test_lessons_room::test_no_board_item_no_claim_and_no_brief_in_the_lessons_room",
+   "tests.test_lessons_room::test_no_moderator_in_the_lessons_room",
+   "tests.test_lessons_room::test_no_new_local_member_and_no_bridge",
+   "tests.test_lessons_room::test_no_record_no_chain_and_no_identity_no_lessons",
+   "tests.test_lessons_room::test_only_the_accepted_copys_author_retracts_never_a_refused_copys_poster",
+   "tests.test_lessons_room::test_retractions_count_from_the_author_or_the_owner_in_any_order",
+   "tests.test_lessons_room::test_station_lessons_room_refuses_a_room_with_a_brief_or_a_moderator",
+   "tests.test_lessons_room::test_station_lessons_room_refuses_what_isnt_only_andys",
+   "tests.test_lessons_room::test_station_lessons_room_shows_first_and_records_only_on_its_code",
+   "tests.test_lessons_room::test_the_backfill_carries_live_lessons_once_to_a_new_peer",
+   "tests.test_lessons_room::test_the_cap_retraction_for_good_and_a_repost",
+   "tests.test_lessons_room::test_the_chain_runs_oldest_first_and_follows_an_add_forward",
+   "tests.test_lessons_room::test_the_index_door_skips_the_station_non_members_strangers_names_and_wrong_ship_lines",
+   "tests.test_lessons_room::test_the_laying_peers_door_and_the_origins_reply_door",
+   "tests.test_lessons_room::test_the_origin_post_door_checks_every_lesson",
+   "tests.test_lessons_room::test_the_station_room_verb_shows_then_records"
+  ],
+  "seconds": 6.4
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_lessons_room::test_no_moderator_in_the_lessons_room": [
+    "failed",
+    "Failed: DID NOT RAISE Problem"
+   ],
+   "tests.test_lessons_room::test_no_new_local_member_and_no_bridge": [
+    "failed",
+    "Failed: DID NOT RAISE Problem"
+   ],
+   "tests.test_lessons_room::test_the_backfill_carries_live_lessons_once_to_a_new_peer": [
+    "failed",
+    "Failed: DID NOT RAISE Problem"
+   ]
+  },
+  "passed": [
+   "tests.test_lessons_room::test_a_dangling_link_further_back_ends_the_chain_at_the_break",
+   "tests.test_lessons_room::test_a_paired_peer_follows_the_origins_replaced_room_and_reads_only_what_it_was_sent",
+   "tests.test_lessons_room::test_a_recorded_room_this_peer_no_longer_holds_gives_no_snapshot",
+   "tests.test_lessons_room::test_another_peer_records_the_room_by_full_id_from_a_paired_origin",
+   "tests.test_lessons_room::test_copies_collapse_to_the_earliest_and_each_author_keeps_32",
+   "tests.test_lessons_room::test_lessons_check_runs_the_doors_checks_without_posting",
+   "tests.test_lessons_room::test_lessons_ship_makes_a_keyless_ship_for_a_person_and_refuses_the_rest",
+   "tests.test_lessons_room::test_no_board_item_no_claim_and_no_brief_in_the_lessons_room",
+   "tests.test_lessons_room::test_no_record_no_chain_and_no_identity_no_lessons",
+   "tests.test_lessons_room::test_only_the_accepted_copys_author_retracts_never_a_refused_copys_poster",
+   "tests.test_lessons_room::test_retractions_count_from_the_author_or_the_owner_in_any_order",
+   "tests.test_lessons_room::test_station_lessons_room_refuses_a_room_with_a_brief_or_a_moderator",
+   "tests.test_lessons_room::test_station_lessons_room_refuses_what_isnt_only_andys",
+   "tests.test_lessons_room::test_station_lessons_room_shows_first_and_records_only_on_its_code",
+   "tests.test_lessons_room::test_the_cap_retraction_for_good_and_a_repost",
+   "tests.test_lessons_room::test_the_chain_runs_oldest_first_and_follows_an_add_forward",
+   "tests.test_lessons_room::test_the_index_door_skips_the_station_non_members_strangers_names_and_wrong_ship_lines",
+   "tests.test_lessons_room::test_the_laying_peers_door_and_the_origins_reply_door",
+   "tests.test_lessons_room::test_the_origin_post_door_checks_every_lesson",
+   "tests.test_lessons_room::test_the_station_room_verb_shows_then_records"
+  ],
+  "seconds": 6.4
+ },
+ "commit": "603434cf1ef8cfb4449dd23acf8d007aa720f9cb",
+ "item": "603434cf1e",
+ "parent": "38ec2ca7efbb884b90731ed38b34aa7107b30dac"
+}

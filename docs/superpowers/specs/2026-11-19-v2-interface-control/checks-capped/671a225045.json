@@ -1,0 +1,79 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_federation_pull::test_a_lost_response_costs_one_duplicate",
+   "tests.test_federation_pull::test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock",
+   "tests.test_federation_pull::test_a_pull_returns_exactly_the_bytes_push_would_send_and_an_ack_delivers",
+   "tests.test_federation_pull::test_a_pull_returns_only_the_origins_rows",
+   "tests.test_federation_pull::test_a_refusal_sets_last_error_and_leaves_metadata_alone",
+   "tests.test_federation_pull::test_an_ack_naming_another_peers_row_changes_nothing",
+   "tests.test_federation_pull::test_limit_zero_only_acks",
+   "tests.test_federation_pull::test_only_a_verified_request_can_be_busy",
+   "tests.test_federation_pull::test_requests_that_fail_a_check_are_refused",
+   "tests.test_federation_pull::test_the_wrong_destination_is_refused_before_any_nonce_is_stored"
+  ],
+  "seconds": 3.8
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_federation_pull::test_a_lost_response_costs_one_duplicate": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_a_pull_returns_exactly_the_bytes_push_would_send_and_an_ack_delivers": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_a_pull_returns_only_the_origins_rows": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_a_refusal_sets_last_error_and_leaves_metadata_alone": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_an_ack_naming_another_peers_row_changes_nothing": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_limit_zero_only_acks": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_only_a_verified_request_can_be_busy": [
+    "failed",
+    "assert False"
+   ],
+   "tests.test_federation_pull::test_requests_that_fail_a_check_are_refused": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ],
+   "tests.test_federation_pull::test_the_wrong_destination_is_refused_before_any_nonce_is_stored": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'serve_pull'"
+   ]
+  },
+  "passed": [],
+  "seconds": 13.9
+ },
+ "commit": "671a2250458922f6be02aad8b13602ddd3b3a9ed",
+ "item": "671a225045",
+ "parent": "b3a94c9b65f11640034a578b6ae93bb1b1316348"
+}

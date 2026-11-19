@@ -1,0 +1,96 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_identity::test_a_pull_requests_signature_is_its_own",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[ 0123456789abcdef0123456789abcdef -0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123 4567 89AB CDEF 0123 4567 89ab cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123-4567-89ab-cdef-0123-4567-89ab-cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde\\u0663-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdef0-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdeg-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[123-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[None-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[typed10-None]",
+   "tests.test_identity::test_a_v1_card_is_byte_identical_to_todays",
+   "tests.test_identity::test_a_v2_card_means_pull_and_its_variants_are_refused",
+   "tests.test_identity::test_a_v2_cards_code_covers_its_key_and_participant",
+   "tests.test_identity::test_an_invalid_card_has_no_code",
+   "tests.test_identity::test_every_field_of_the_card_changes_the_code",
+   "tests.test_identity::test_identity_is_persistent_private_and_card_validated",
+   "tests.test_identity::test_parse_takes_an_explicit_limit",
+   "tests.test_identity::test_protocol_version_is_integer_not_boolean",
+   "tests.test_identity::test_signed_envelope_binds_every_field",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[[]]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":\"\\ud800\"}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":1,\"x\":2}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":NaN}]",
+   "tests.test_identity::test_the_code_is_shown_in_groups_of_four",
+   "tests.test_identity::test_the_pairing_code_is_32_hex_over_the_whole_canonical_card_in_any_key_order"
+  ],
+  "seconds": 0.9
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_identity::test_a_pull_requests_signature_is_its_own": [
+    "failed",
+    "ImportError: cannot import name 'verify_pull' from 'superyak_peer.identity' (/tmp/ifc-tree-9nw8k5zl/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_v2_card_means_pull_and_its_variants_are_refused": [
+    "failed",
+    "TypeError: PeerIdentity.card() got an unexpected keyword argument 'delivery'"
+   ],
+   "tests.test_identity::test_a_v2_cards_code_covers_its_key_and_participant": [
+    "failed",
+    "TypeError: PeerIdentity.card() got an unexpected keyword argument 'delivery'"
+   ],
+   "tests.test_identity::test_parse_takes_an_explicit_limit": [
+    "failed",
+    "TypeError: parse() got an unexpected keyword argument 'limit'"
+   ]
+  },
+  "passed": [
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[ 0123456789abcdef0123456789abcdef -0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123 4567 89AB CDEF 0123 4567 89ab cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123-4567-89ab-cdef-0123-4567-89ab-cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde\\u0663-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdef0-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdeg-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[123-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[None-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[typed10-None]",
+   "tests.test_identity::test_a_v1_card_is_byte_identical_to_todays",
+   "tests.test_identity::test_an_invalid_card_has_no_code",
+   "tests.test_identity::test_every_field_of_the_card_changes_the_code",
+   "tests.test_identity::test_identity_is_persistent_private_and_card_validated",
+   "tests.test_identity::test_protocol_version_is_integer_not_boolean",
+   "tests.test_identity::test_signed_envelope_binds_every_field",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[[]]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":\"\\ud800\"}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":1,\"x\":2}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":NaN}]",
+   "tests.test_identity::test_the_code_is_shown_in_groups_of_four",
+   "tests.test_identity::test_the_pairing_code_is_32_hex_over_the_whole_canonical_card_in_any_key_order"
+  ],
+  "seconds": 0.8
+ },
+ "commit": "c9ceb15bae8b5fd56751e009cdbbd8e47c476abe",
+ "item": "c9ceb15bae",
+ "parent": "773659dbb00e4d8563de1ca043d5cad8a584ffd3"
+}

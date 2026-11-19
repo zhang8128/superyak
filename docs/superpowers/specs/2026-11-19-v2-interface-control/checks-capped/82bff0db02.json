@@ -1,0 +1,80 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_door::test_door_bounds_request_bodies",
+   "tests.test_door::test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it",
+   "tests.test_door::test_door_creates_requests_and_reports_status",
+   "tests.test_door::test_door_serves_nothing_else_and_ignores_sessions",
+   "tests.test_listener::test_a_body_over_its_cap_is_refused[/federation/events-6291456]",
+   "tests.test_listener::test_a_body_over_its_cap_is_refused[/federation/pull-16384]",
+   "tests.test_listener::test_a_larger_content_length_is_refused_unread",
+   "tests.test_listener::test_a_pull_from_a_paired_pull_peer_is_served",
+   "tests.test_listener::test_a_push_from_a_paired_peer_is_received",
+   "tests.test_listener::test_a_refusal_answers_with_its_status_and_words",
+   "tests.test_listener::test_every_server_waits_only_a_moment_on_open_requests_when_stopped",
+   "tests.test_listener::test_federation_listen_refuses_before_it_serves",
+   "tests.test_listener::test_https_is_required_and_any_host_is_served",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/]",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/federation/events]",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/federation/pull]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/api/sync]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/federation/events/x]",
+   "tests.test_listener::test_only_its_two_routes_are_served[PUT-/federation/pull]",
+   "tests.test_listener::test_the_largest_release_pulls_through_the_real_listener_encoding[astral]",
+   "tests.test_listener::test_the_largest_release_pulls_through_the_real_listener_encoding[control]"
+  ],
+  "seconds": 8.1
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_door::test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it": [
+    "failed",
+    "AssertionError: assert [{'host': '12..._log': False}] == [{'host': '12...shutdown': 5}]"
+   ],
+   "tests.test_listener::test_every_server_waits_only_a_moment_on_open_requests_when_stopped": [
+    "failed",
+    "AttributeError: module 'superyak_peer.__main__' has no attribute 'SHUTDOWN_GRACE'"
+   ]
+  },
+  "passed": [
+   "tests.test_door::test_door_bounds_request_bodies",
+   "tests.test_door::test_door_creates_requests_and_reports_status",
+   "tests.test_door::test_door_serves_nothing_else_and_ignores_sessions",
+   "tests.test_listener::test_a_body_over_its_cap_is_refused[/federation/events-6291456]",
+   "tests.test_listener::test_a_body_over_its_cap_is_refused[/federation/pull-16384]",
+   "tests.test_listener::test_a_larger_content_length_is_refused_unread",
+   "tests.test_listener::test_a_pull_from_a_paired_pull_peer_is_served",
+   "tests.test_listener::test_a_push_from_a_paired_peer_is_received",
+   "tests.test_listener::test_a_refusal_answers_with_its_status_and_words",
+   "tests.test_listener::test_federation_listen_refuses_before_it_serves",
+   "tests.test_listener::test_https_is_required_and_any_host_is_served",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/]",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/federation/events]",
+   "tests.test_listener::test_only_its_two_routes_are_served[GET-/federation/pull]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/api/sync]",
+   "tests.test_listener::test_only_its_two_routes_are_served[POST-/federation/events/x]",
+   "tests.test_listener::test_only_its_two_routes_are_served[PUT-/federation/pull]",
+   "tests.test_listener::test_the_largest_release_pulls_through_the_real_listener_encoding[astral]",
+   "tests.test_listener::test_the_largest_release_pulls_through_the_real_listener_encoding[control]"
+  ],
+  "seconds": 8.1
+ },
+ "commit": "82bff0db02975df75f9850da3e448e70124a9a9a",
+ "item": "82bff0db02",
+ "parent": "0a108681000937107299ce25f570710f656444ca"
+}

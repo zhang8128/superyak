@@ -28,6 +28,8 @@ SRC = "peer/superyak_peer"
 CASES_SHA256 = "07e9d27b6a685761580da09016cc007fe75973d6d291a0d9f9b3ea8e73d81263"
 PYTHON = "/home/doctor/Projects/superyak/peer/.venv/bin/python"
 LIMIT = 1200
+CAP = ["/usr/bin/prlimit", "--as=%d" % (3 * 1024 ** 3), "--"]     # README, "A memory cap"
+WORKERS = 2
 STATUS_ORDER = ("passed", "skipped", "failed", "error")
 
 
@@ -115,7 +117,7 @@ def run_tests(tree, item):
         tests = [path[len("peer/"):] for path in item["tests"]]
         began = time.monotonic()
         try:
-            done = subprocess.run([PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", "-rfE",
+            done = subprocess.run(CAP + [PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", "-rfE",
                 "--junitxml=" + str(report), *tests], cwd=tree / "peer", env=env, capture_output=True, text=True,
                 timeout=LIMIT, start_new_session=True, stdin=subprocess.DEVNULL)
             exit_code, limit = done.returncode, False
@@ -161,7 +163,7 @@ def check(repo, cases_path, out, only):
     keys = sorted(items)
     if only:
         keys = [key for key in keys if any(key.startswith(prefix) for prefix in only)]
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for record in pool.map(lambda key: check_item(repo, key, items[key], out), keys):
             item = items[record["item"]]
             print("%s A %s B %s  parent %d/%d (want %d)  commit %d/%d  %ss+%ss" % (record["item"],
@@ -530,11 +532,123 @@ def run(repo, cases_path, out):
     items = load_cases(cases_path)["items"]
     if any((out / "run" / ("%s.json" % key)).exists() for key in items):
         raise SystemExit("the run was made already: it is run once")
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for record in pool.map(lambda key: run_item(repo, key, items[key], out), sorted(items)):
             print("%s C %s  names and values only %d  candidates %d (string-bound %d, signature %d)" % (
                 record["item"], "ok" if record["C"] else "NO %s" % record["C_lost"], len(record["names_only"]),
                 len(record["candidates"]), len(record["string_bound"]), len(record["signature"])), flush=True)
+
+
+# ---------------------------------------------------------------- the tables
+
+BARRIER = re.compile(r"ImportError|ModuleNotFoundError|AttributeError|NameError|has no attribute|cannot import name|"
+    r"unexpected keyword|got an unexpected|missing \d+ required|takes \d+ positional|fixture '[^']*' not found")
+FIRST_ROWS = ("nothing-1", "nothing-2", "exists", "path", "search", "bm25", "newest", "lot")
+SECOND_ROWS = ("nothing-1", "nothing-2", "may-1", "may-2")
+
+
+def how_it_fails(line):
+    """README, "Added before the run", 1: a given body, still a barrier, an assertion, other."""
+    if "NotImplementedError: interface control" in line:
+        return "a given body"
+    if line in ("not run", "") or BARRIER.search(line):
+        return "still a barrier"
+    if line.startswith(("AssertionError", "assert ")):
+        return "an assertion"
+    return "other"
+
+
+def read(cases_path, out):
+    cases = load_cases(cases_path)
+    items = cases["items"]
+    records = {key: json.loads((out / "run" / ("%s.json" % key)).read_text()) for key in sorted(items)}
+    made = {key: json.loads((out / "interfaces" / ("%s.json" % key)).read_text()) for key in sorted(items)}
+    kept = [key for key in sorted(items) if records[key]["C"]]
+    left_out = {key: records[key]["C_lost"] for key in sorted(items) if not records[key]["C"]}
+    group = lambda key: items[key]["pool"] or "A"
+    by_item = {}
+    for key in sorted(items):
+        record, item = records[key], items[key]
+        candidates = set(record["candidates"])
+        bound = set(record["string_bound"])
+        kinds = {}
+        for case in record["candidates"]:
+            kind = how_it_fails(record["first_line"].get(case, ""))
+            kinds[kind] = kinds.get(kind, 0) + 1
+        rows = {}
+        for name, held in ((n, cases["rows_second_pilot"].get("%s %s" % (key, n))) for n in SECOND_ROWS):
+            if held is not None:
+                rows["second " + name] = {"published": len(held), "names_only": len(set(held) & set(record["names_only"])),
+                    "candidates": len(set(held) & candidates), "not_string_bound": len(set(held) & (candidates - bound))}
+        for name, held in ((n, cases["rows_first_pilot"].get("%s %s" % (key, n))) for n in FIRST_ROWS):
+            if held is not None:
+                rows["first " + name] = {"published": len(held), "names_only": len(set(held) & set(record["names_only"])),
+                    "candidates": len(set(held) & candidates), "not_string_bound": len(set(held) & (candidates - bound))}
+        by_item[key] = {"part": item["part"], "pool": item["pool"], "C": record["C"], "C_lost": record["C_lost"],
+            "frozen": len(item["frozen"]), "on_parent": len(item["pass_on_the_parent"]),
+            "outside_parent": len(set(item["frozen"]) - set(item["pass_on_the_parent"])),
+            "given": len(made[key]["given"]), "names_only": len(record["names_only"]), "candidates": len(candidates),
+            "string_bound": len(bound), "not_string_bound": len(candidates - bound), "fails_by": kinds,
+            "signature": len(record["signature"]), "rows": rows}
+    sums = {}
+    for key in kept:
+        for row, held in by_item[key]["rows"].items():
+            pilot = row.split()[0]
+            cell = sums.setdefault((pilot, group(key) if pilot == "second" else "A"), {}).setdefault(row.split()[1],
+                {"items": 0, "outside_parent": 0, "candidates": 0, "not_string_bound": 0, "published": 0,
+                 "names_only": 0, "candidates_passed": 0, "not_string_bound_passed": 0})
+            cell["items"] += 1
+            cell["outside_parent"] += by_item[key]["outside_parent"]
+            cell["candidates"] += by_item[key]["candidates"]
+            cell["not_string_bound"] += by_item[key]["not_string_bound"]
+            cell["published"] += held["published"]
+            cell["names_only"] += held["names_only"]
+            cell["candidates_passed"] += held["candidates"]
+            cell["not_string_bound_passed"] += held["not_string_bound"]
+    result = {"cases_sha256": CASES_SHA256, "kept": kept, "left_out": left_out, "by_item": by_item,
+        "sums": {"%s %s" % pair: value for pair, value in sorted(sums.items())}}
+    (out / "read.json").write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
+    lines = ["# The interface control: the counts", "",
+        "Made by `interface_control.py read` from the run's files; nothing here is typed.", "",
+        "Items kept by check C: %d of %d." % (len(kept), len(items))]
+    for key, lost in left_out.items():
+        lines.append("- Left out by check C: %s, where these parent-passing cases stopped passing: %s" % (key,
+            ", ".join(lost)))
+    lines += ["", "## By item", "",
+        "| item | part, pool | frozen | pass on parent | outside the parent | names given | names and values only |"
+        " candidates | given body | still a barrier (signature) | assertion | other | string-bound | not string-bound |",
+        "| --- " * 14 + "|"]
+    for key, held in by_item.items():
+        kinds = held["fails_by"]
+        lines.append("| %s%s | %s %s | %d | %d | %d | %d | %d | %d | %d | %d (%d) | %d | %d | %d | %d |" % (key,
+            "" if held["C"] else " (left out)", held["part"], held["pool"] or "", held["frozen"], held["on_parent"],
+            held["outside_parent"], held["given"], held["names_only"], held["candidates"], kinds.get("a given body", 0),
+            kinds.get("still a barrier", 0), held["signature"], kinds.get("an assertion", 0), kinds.get("other", 0),
+            held["string_bound"], held["not_string_bound"]))
+    for pilot, names in (("second", SECOND_ROWS), ("first", FIRST_ROWS)):
+        lines += ["", "## The %s pilot's rows by item: passes on all cases outside the parent / names and values only"
+            " / candidates / candidates not string-bound" % pilot, "",
+            "| item | outside / candidates / not string-bound | " + " | ".join(names) + " |", "| --- " * (len(names) + 2) + "|"]
+        for key, held in by_item.items():
+            cells = [held["rows"].get("%s %s" % (pilot, name)) for name in names]
+            if not any(cells):
+                continue
+            lines.append("| %s | %d / %d / %d | " % (key, held["outside_parent"], held["candidates"],
+                held["not_string_bound"]) + " | ".join("-" if cell is None else "%d / %d / %d / %d" % (
+                cell["published"], cell["names_only"], cell["candidates"], cell["not_string_bound"]) for cell in cells)
+                + " |")
+    lines += ["", "## Summed over the kept items", "",
+        "| pilot, pool | row | items | outside the parent: cases, passed | names and values only, passed |"
+        " candidates: cases, passed | not string-bound: cases, passed |", "| --- " * 7 + "|"]
+    for (pilot, pool), rows in sorted(sums.items()):
+        for row in (SECOND_ROWS if pilot == "second" else FIRST_ROWS):
+            if row in rows:
+                cell = rows[row]
+                lines.append("| %s %s | %s | %d | %d, %d | %d | %d, %d | %d, %d |" % (pilot, pool, row, cell["items"],
+                    cell["outside_parent"], cell["published"], cell["names_only"], cell["candidates"],
+                    cell["candidates_passed"], cell["not_string_bound"], cell["not_string_bound_passed"]))
+    (out / "read.md").write_text("\n".join(lines) + "\n")
+    print("\n".join(lines))
 
 
 def main(argv):
@@ -554,6 +668,9 @@ def main(argv):
     three.add_argument("repo")
     three.add_argument("cases")
     three.add_argument("out")
+    four = sub.add_parser("read")
+    four.add_argument("cases")
+    four.add_argument("out")
     args = parser.parse_args(argv)
     if args.stage == "check":
         check(Path(args.repo).resolve(), args.cases, Path(args.out).resolve(),
@@ -563,6 +680,8 @@ def main(argv):
             [prefix for prefix in args.items.split(",") if prefix])
     if args.stage == "run":
         run(Path(args.repo).resolve(), args.cases, Path(args.out).resolve())
+    if args.stage == "read":
+        read(args.cases, Path(args.out).resolve())
     return 0
 
 

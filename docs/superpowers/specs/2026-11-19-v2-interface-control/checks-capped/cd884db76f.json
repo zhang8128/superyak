@@ -1,0 +1,119 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[ 0123456789abcdef0123456789abcdef -0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123 4567 89AB CDEF 0123 4567 89ab cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123-4567-89ab-cdef-0123-4567-89ab-cdef-0123456789abcdef0123456789abcdef]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde\\u0663-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdef0-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdeg-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[123-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[None-None]",
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[typed10-None]",
+   "tests.test_identity::test_an_invalid_card_has_no_code",
+   "tests.test_identity::test_every_field_of_the_card_changes_the_code",
+   "tests.test_identity::test_identity_is_persistent_private_and_card_validated",
+   "tests.test_identity::test_protocol_version_is_integer_not_boolean",
+   "tests.test_identity::test_signed_envelope_binds_every_field",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[[]]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":\"\\ud800\"}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":1,\"x\":2}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":NaN}]",
+   "tests.test_identity::test_the_code_is_shown_in_groups_of_four",
+   "tests.test_identity::test_the_pairing_code_is_32_hex_over_the_whole_canonical_card_in_any_key_order"
+  ],
+  "seconds": 0.8
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[ 0123456789abcdef0123456789abcdef -0123456789abcdef0123456789abcdef]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123 4567 89AB CDEF 0123 4567 89ab cdef-0123456789abcdef0123456789abcdef]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123-4567-89ab-cdef-0123-4567-89ab-cdef-0123456789abcdef0123456789abcdef]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcde\\u0663-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdef0-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[0123456789abcdef0123456789abcdeg-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[123-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[None-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_a_typed_code_is_normalised_or_refused[typed10-None]": [
+    "failed",
+    "ImportError: cannot import name 'typed_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_an_invalid_card_has_no_code": [
+    "failed",
+    "ImportError: cannot import name 'pairing_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_every_field_of_the_card_changes_the_code": [
+    "failed",
+    "ImportError: cannot import name 'pairing_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_the_code_is_shown_in_groups_of_four": [
+    "failed",
+    "ImportError: cannot import name 'show_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ],
+   "tests.test_identity::test_the_pairing_code_is_32_hex_over_the_whole_canonical_card_in_any_key_order": [
+    "failed",
+    "ImportError: cannot import name 'pairing_code' from 'superyak_peer.identity' (/tmp/ifc-tree-dbf1ezko/peer/superyak_peer/identity.py)"
+   ]
+  },
+  "passed": [
+   "tests.test_identity::test_identity_is_persistent_private_and_card_validated",
+   "tests.test_identity::test_protocol_version_is_integer_not_boolean",
+   "tests.test_identity::test_signed_envelope_binds_every_field",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[[]]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":\"\\ud800\"}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":1,\"x\":2}]",
+   "tests.test_identity::test_strict_json_rejects_ambiguous_inputs[{\"x\":NaN}]"
+  ],
+  "seconds": 0.8
+ },
+ "commit": "cd884db76fa73b2fa59a676716449393e587f87a",
+ "item": "cd884db76f",
+ "parent": "f81c3ccd43a9bb16ab2100782925d0de5aa0d51d"
+}

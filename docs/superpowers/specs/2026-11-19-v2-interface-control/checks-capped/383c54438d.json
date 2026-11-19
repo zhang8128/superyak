@@ -1,0 +1,75 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_access_requests::test_denied_request_never_yields_a_token",
+   "tests.test_access_requests::test_input_limits_and_rate_limit",
+   "tests.test_access_requests::test_only_admins_list_and_decide",
+   "tests.test_access_requests::test_pending_listing_for_trusted_local_worker",
+   "tests.test_access_requests::test_request_is_approved_by_admin_and_token_is_picked_up_once",
+   "tests.test_access_requests::test_requests_expire",
+   "tests.test_access_requests::test_wrong_secret_and_unknown_request_are_indistinguishable",
+   "tests.test_ships::test_bad_or_revoked_key_is_rejected",
+   "tests.test_ships::test_create_ship_claims_the_config_before_creating_the_ship",
+   "tests.test_ships::test_create_ship_cli_writes_a_private_station_config",
+   "tests.test_ships::test_create_ship_leaves_no_config_when_the_ship_cannot_be_created",
+   "tests.test_ships::test_existing_accounts_become_people_on_migration",
+   "tests.test_ships::test_owner_or_admin_revokes_a_ship",
+   "tests.test_ships::test_owners_see_their_ships_and_admins_see_all",
+   "tests.test_ships::test_ship_key_reaches_only_room_routes",
+   "tests.test_ships::test_ships_cannot_hold_account_roles_and_are_not_listed_as_accounts",
+   "tests.test_ships::test_station_notices_list_requests_and_docked_ships",
+   "tests.test_ships::test_station_ship_has_no_owner_and_cannot_sign_in"
+  ],
+  "seconds": 9.5
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_ships::test_owner_or_admin_revokes_a_ship": [
+    "failed",
+    "AssertionError: assert 404 == 403"
+   ],
+   "tests.test_ships::test_owners_see_their_ships_and_admins_see_all": [
+    "failed",
+    "TypeError: string indices must be integers, not 'str'"
+   ],
+   "tests.test_ships::test_station_notices_list_requests_and_docked_ships": [
+    "failed",
+    "SystemExit: 2"
+   ]
+  },
+  "passed": [
+   "tests.test_access_requests::test_denied_request_never_yields_a_token",
+   "tests.test_access_requests::test_input_limits_and_rate_limit",
+   "tests.test_access_requests::test_only_admins_list_and_decide",
+   "tests.test_access_requests::test_pending_listing_for_trusted_local_worker",
+   "tests.test_access_requests::test_request_is_approved_by_admin_and_token_is_picked_up_once",
+   "tests.test_access_requests::test_requests_expire",
+   "tests.test_access_requests::test_wrong_secret_and_unknown_request_are_indistinguishable",
+   "tests.test_ships::test_bad_or_revoked_key_is_rejected",
+   "tests.test_ships::test_create_ship_claims_the_config_before_creating_the_ship",
+   "tests.test_ships::test_create_ship_cli_writes_a_private_station_config",
+   "tests.test_ships::test_create_ship_leaves_no_config_when_the_ship_cannot_be_created",
+   "tests.test_ships::test_existing_accounts_become_people_on_migration",
+   "tests.test_ships::test_ship_key_reaches_only_room_routes",
+   "tests.test_ships::test_ships_cannot_hold_account_roles_and_are_not_listed_as_accounts",
+   "tests.test_ships::test_station_ship_has_no_owner_and_cannot_sign_in"
+  ],
+  "seconds": 9.7
+ },
+ "commit": "383c54438dd92fc86599b89190f9794e4768d3e4",
+ "item": "383c54438d",
+ "parent": "06c9a6c82e210aec684b2dc8092a0d55229afa32"
+}

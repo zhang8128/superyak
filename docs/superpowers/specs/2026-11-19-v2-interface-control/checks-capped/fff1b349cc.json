@@ -1,0 +1,171 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here",
+   "tests.test_owner_trust::test_a_card_whose_other_fields_differ",
+   "tests.test_owner_trust::test_a_contact_that_already_exists",
+   "tests.test_owner_trust::test_a_forged_card_from_a_public_card",
+   "tests.test_owner_trust::test_a_grant_needs_a_code_typed_for_that_contact",
+   "tests.test_owner_trust::test_a_grant_needs_the_admins_password_and_whole_days_1_to_90",
+   "tests.test_owner_trust::test_a_grant_reads_as_the_spec_says",
+   "tests.test_owner_trust::test_a_held_owner",
+   "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions",
+   "tests.test_owner_trust::test_a_second_grant_while_one_is_live_is_refused",
+   "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first",
+   "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host",
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed",
+   "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation",
+   "tests.test_owner_trust::test_an_assertion_signed_by_another_key_or_edited_is_refused",
+   "tests.test_owner_trust::test_an_assertion_verifies_under_its_peers_card",
+   "tests.test_owner_trust::test_an_expired_grant_cannot_come_back_beside_a_newer_one",
+   "tests.test_owner_trust::test_an_expired_or_long_or_future_assertion_is_refused",
+   "tests.test_owner_trust::test_an_expired_trust",
+   "tests.test_owner_trust::test_an_owner_on_another_peer",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1.5]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[True]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[nan]",
+   "tests.test_owner_trust::test_export_ship_follows_the_stored_mode_not_the_flag",
+   "tests.test_owner_trust::test_export_ship_never_makes_an_identity",
+   "tests.test_owner_trust::test_export_ship_refuses_a_peer_with_no_mode",
+   "tests.test_owner_trust::test_export_ship_refuses_a_person_and_an_ownerless_ship",
+   "tests.test_owner_trust::test_export_ship_writes_a_card_and_assertion_and_no_code",
+   "tests.test_owner_trust::test_live_trust_excludes_a_revoked_grant_and_ends_at_until",
+   "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide",
+   "tests.test_owner_trust::test_no_trust",
+   "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs",
+   "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code",
+   "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files",
+   "tests.test_owner_trust::test_renewing_extends_and_owner_trust_is_append_only",
+   "tests.test_owner_trust::test_renewing_needs_the_password_a_known_unrevoked_grant",
+   "tests.test_owner_trust::test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact",
+   "tests.test_owner_trust::test_the_cap",
+   "tests.test_owner_trust::test_the_schema_statements_each_run_alone",
+   "tests.test_owner_trust::test_times_are_checked_by_rule_not_by_luck",
+   "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one"
+  ],
+  "seconds": 20.7
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_card_whose_other_fields_differ": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_contact_that_already_exists": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_forged_card_from_a_public_card": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_held_owner": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_an_expired_trust": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_an_owner_on_another_peer": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_no_trust": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs": [
+    "failed",
+    "AttributeError: 'Federation' object has no attribute 'pair_trusted'"
+   ],
+   "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code": [
+    "failed",
+    "assert (2 == 1)"
+   ],
+   "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files": [
+    "failed",
+    "AssertionError: ((PosixPath('/tmp/ifc-home-isew8lmp/pytest-of-doctor/pytest-0/test_pair_trusted_cli_refuses_0/bad/missing.json'), Posi...erify-imprint', 'station-alert', 'station-alerts', 'door', 'federation-listen', 'create-ship', 'federate', 'serve')"
+   ],
+   "tests.test_owner_trust::test_the_cap": [
+    "failed",
+    "ImportError: cannot import name 'TRUST_CAP' from 'superyak_peer.federation' (/tmp/ifc-tree-824mh9kw/peer/superyak_peer/federation.py)"
+   ],
+   "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one": [
+    "failed",
+    "AssertionError: assert ['NoneType', 'NoneType'] == ['Problem', 'dict']"
+   ]
+  },
+  "passed": [
+   "tests.test_owner_trust::test_a_grant_needs_a_code_typed_for_that_contact",
+   "tests.test_owner_trust::test_a_grant_needs_the_admins_password_and_whole_days_1_to_90",
+   "tests.test_owner_trust::test_a_grant_reads_as_the_spec_says",
+   "tests.test_owner_trust::test_a_second_grant_while_one_is_live_is_refused",
+   "tests.test_owner_trust::test_an_assertion_signed_by_another_key_or_edited_is_refused",
+   "tests.test_owner_trust::test_an_assertion_verifies_under_its_peers_card",
+   "tests.test_owner_trust::test_an_expired_grant_cannot_come_back_beside_a_newer_one",
+   "tests.test_owner_trust::test_an_expired_or_long_or_future_assertion_is_refused",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1.5]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[True]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[nan]",
+   "tests.test_owner_trust::test_export_ship_follows_the_stored_mode_not_the_flag",
+   "tests.test_owner_trust::test_export_ship_never_makes_an_identity",
+   "tests.test_owner_trust::test_export_ship_refuses_a_peer_with_no_mode",
+   "tests.test_owner_trust::test_export_ship_refuses_a_person_and_an_ownerless_ship",
+   "tests.test_owner_trust::test_export_ship_writes_a_card_and_assertion_and_no_code",
+   "tests.test_owner_trust::test_live_trust_excludes_a_revoked_grant_and_ends_at_until",
+   "tests.test_owner_trust::test_renewing_extends_and_owner_trust_is_append_only",
+   "tests.test_owner_trust::test_renewing_needs_the_password_a_known_unrevoked_grant",
+   "tests.test_owner_trust::test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact",
+   "tests.test_owner_trust::test_the_schema_statements_each_run_alone",
+   "tests.test_owner_trust::test_times_are_checked_by_rule_not_by_luck"
+  ],
+  "seconds": 19.5
+ },
+ "commit": "fff1b349ccccd36d4cb9e78b54343c46e98c5265",
+ "item": "fff1b349cc",
+ "parent": "79aaa586027582f42ac4ff9afd6f4a3e2aff94f0"
+}

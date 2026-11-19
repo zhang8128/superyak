@@ -116,3 +116,30 @@ Helpers and fixtures are not read, so the string-bound count is a lower bound (S
   - the same among those that are not string-bound.
 
 Every count comes from the run's files by script, and none is typed.
+
+## Added before the run
+
+Serenity read the reading and three patches and said go, with two additions to what is printed (all hands
+18876231). Neither changes an interface or the run:
+
+1. **How each behaviour candidate fails on the parent plus its interface**, by the first line of its failure there:
+   - **a given body:** the line holds "NotImplementedError: interface control";
+   - **still a barrier:** the second pilot's report's first-line rule. The case was not collected, or the line holds
+     any of `ImportError`, `ModuleNotFoundError`, `AttributeError`, `NameError`, "has no attribute", "cannot import
+     name", "unexpected keyword", "got an unexpected", "missing N required", "takes N positional" or "fixture '...'
+     not found";
+   - **an assertion:** the line begins `AssertionError` or `assert `;
+   - **other.**
+
+   A barrier the interface does not remove, such as an attribute set in `__init__`, a new key, or a name the tests
+   reach without writing it, stays among the candidates. So the candidates are an upper bound, and this says by how
+   much.
+2. **The rows' passes by item**, as well as summed. A sum can be one item.
+
+Where check C leaves an item out, the cases that stopped passing are printed.
+
+**A memory cap, added by Tardis for this machine.** Serenity's census ran a Mac out of memory on a test that feeds an
+endless device to a read with no bound (all hands 5de57809). Two of these items' tests read `/dev/zero`, under the
+test's own 2 GiB cap, which holds on Linux. Tardis has 10 GB and runs other sessions. So every pytest run is started
+under `prlimit --as=3221225472` (3 GiB of address space, which its children inherit), two items at a time. A and B
+are run again under the cap. They must give exactly the same passes as before, or the run waits.

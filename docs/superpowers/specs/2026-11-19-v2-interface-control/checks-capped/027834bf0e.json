@@ -1,0 +1,351 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here",
+   "tests.test_owner_trust::test_a_card_whose_other_fields_differ",
+   "tests.test_owner_trust::test_a_contact_that_already_exists",
+   "tests.test_owner_trust::test_a_forged_card_from_a_public_card",
+   "tests.test_owner_trust::test_a_grant_needs_a_code_typed_for_that_contact",
+   "tests.test_owner_trust::test_a_grant_needs_the_admins_password_and_whole_days_1_to_90",
+   "tests.test_owner_trust::test_a_grant_reads_as_the_spec_says",
+   "tests.test_owner_trust::test_a_held_owner",
+   "tests.test_owner_trust::test_a_held_ship_does_not_come_back_under_a_trust_granted_before_its_revocation",
+   "tests.test_owner_trust::test_a_held_ship_does_not_come_back_under_another_owners_trust",
+   "tests.test_owner_trust::test_a_held_ship_repairs_only_under_a_later_trust_and_a_fresh_assertion",
+   "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions",
+   "tests.test_owner_trust::test_a_peer_unpaired_without_a_revocation_ends_its_trusts_when_it_pairs_again",
+   "tests.test_owner_trust::test_a_second_grant_while_one_is_live_is_refused",
+   "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first",
+   "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host",
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_is_stale",
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed",
+   "tests.test_owner_trust::test_a_typed_code_does_not_bring_back_a_ship_whose_trust_was_revoked",
+   "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation",
+   "tests.test_owner_trust::test_an_assertion_signed_by_another_key_or_edited_is_refused",
+   "tests.test_owner_trust::test_an_assertion_verifies_under_its_peers_card",
+   "tests.test_owner_trust::test_an_assertion_with_a_list_owner_is_refused_not_crashed",
+   "tests.test_owner_trust::test_an_expired_grant_cannot_come_back_beside_a_newer_one",
+   "tests.test_owner_trust::test_an_expired_or_future_assertion_through_pair_trusted",
+   "tests.test_owner_trust::test_an_expired_or_long_or_future_assertion_is_refused",
+   "tests.test_owner_trust::test_an_expired_trust",
+   "tests.test_owner_trust::test_an_owner_on_another_peer",
+   "tests.test_owner_trust::test_assertion_ids_and_names_must_be_text",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1.5]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[True]",
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[nan]",
+   "tests.test_owner_trust::test_export_ship_follows_the_stored_mode_not_the_flag",
+   "tests.test_owner_trust::test_export_ship_never_makes_an_identity",
+   "tests.test_owner_trust::test_export_ship_refuses_a_peer_with_no_mode",
+   "tests.test_owner_trust::test_export_ship_refuses_a_person_and_an_ownerless_ship",
+   "tests.test_owner_trust::test_export_ship_writes_a_card_and_assertion_and_no_code",
+   "tests.test_owner_trust::test_holding_the_owner_holds_its_ships_and_dates_it",
+   "tests.test_owner_trust::test_live_trust_excludes_a_revoked_grant_and_ends_at_until",
+   "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide",
+   "tests.test_owner_trust::test_no_trust",
+   "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs",
+   "tests.test_owner_trust::test_only_an_admin_revokes_and_only_a_known_trust",
+   "tests.test_owner_trust::test_pair_refuses_a_retired_peer_whatever_code_is_typed",
+   "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code",
+   "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files",
+   "tests.test_owner_trust::test_renewing_extends_and_owner_trust_is_append_only",
+   "tests.test_owner_trust::test_renewing_needs_the_password_a_known_unrevoked_grant",
+   "tests.test_owner_trust::test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact",
+   "tests.test_owner_trust::test_repairing_the_owners_peer_does_not_bring_the_trust_back",
+   "tests.test_owner_trust::test_revoking_holds_every_ship_and_withdraws_their_outbox",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[gone]",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[held after expiry]",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[held]",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[retired]",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[stale code]",
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[unpaired]",
+   "tests.test_owner_trust::test_the_cap",
+   "tests.test_owner_trust::test_the_cli_line_keeps_the_ships_name_after_a_long_owner_name",
+   "tests.test_owner_trust::test_the_schema_statements_each_run_alone",
+   "tests.test_owner_trust::test_times_are_checked_by_rule_not_by_luck",
+   "tests.test_owner_trust::test_trust_confirmations_are_indexed_for_the_cap_and_the_labels",
+   "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one"
+  ],
+  "seconds": 35.6
+ },
+ "at_parent": {
+  "collection_errors": [
+   "tests.test_owner_trust: collection failure"
+  ],
+  "exit": 2,
+  "limit": false,
+  "not_passing": {
+   "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_card_whose_other_fields_differ": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_contact_that_already_exists": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_forged_card_from_a_public_card": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_grant_needs_a_code_typed_for_that_contact": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_grant_needs_the_admins_password_and_whole_days_1_to_90": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_grant_reads_as_the_spec_says": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_held_owner": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_held_ship_does_not_come_back_under_a_trust_granted_before_its_revocation": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_held_ship_does_not_come_back_under_another_owners_trust": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_held_ship_repairs_only_under_a_later_trust_and_a_fresh_assertion": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_peer_unpaired_without_a_revocation_ends_its_trusts_when_it_pairs_again": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_second_grant_while_one_is_live_is_refused": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_is_stale": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_a_typed_code_does_not_bring_back_a_ship_whose_trust_was_revoked": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_assertion_signed_by_another_key_or_edited_is_refused": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_assertion_verifies_under_its_peers_card": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_assertion_with_a_list_owner_is_refused_not_crashed": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_expired_grant_cannot_come_back_beside_a_newer_one": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_expired_or_future_assertion_through_pair_trusted": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_expired_or_long_or_future_assertion_is_refused": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_expired_trust": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_an_owner_on_another_peer": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_assertion_ids_and_names_must_be_text": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1.5]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[1]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[True]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_assertion_times_must_be_whole_seconds[nan]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_export_ship_follows_the_stored_mode_not_the_flag": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_export_ship_never_makes_an_identity": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_export_ship_refuses_a_peer_with_no_mode": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_export_ship_refuses_a_person_and_an_ownerless_ship": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_export_ship_writes_a_card_and_assertion_and_no_code": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_holding_the_owner_holds_its_ships_and_dates_it": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_live_trust_excludes_a_revoked_grant_and_ends_at_until": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_no_trust": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_only_an_admin_revokes_and_only_a_known_trust": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_pair_refuses_a_retired_peer_whatever_code_is_typed": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_renewing_extends_and_owner_trust_is_append_only": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_renewing_needs_the_password_a_known_unrevoked_grant": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_repairing_the_owners_peer_does_not_bring_the_trust_back": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_revoking_holds_every_ship_and_withdraws_their_outbox": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[gone]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[held after expiry]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[held]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[retired]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[stale code]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships[unpaired]": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_the_cap": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_the_cli_line_keeps_the_ships_name_after_a_long_owner_name": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_the_schema_statements_each_run_alone": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_times_are_checked_by_rule_not_by_luck": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_trust_confirmations_are_indexed_for_the_cap_and_the_labels": [
+    "not run",
+    ""
+   ],
+   "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one": [
+    "not run",
+    ""
+   ]
+  },
+  "passed": [],
+  "seconds": 1.1
+ },
+ "commit": "027834bf0eb6ac9bccc250e9839141c8fdc6d766",
+ "item": "027834bf0e",
+ "parent": "1a5d9ac6749117fd0a5a4bd39d0bf179bb939223"
+}

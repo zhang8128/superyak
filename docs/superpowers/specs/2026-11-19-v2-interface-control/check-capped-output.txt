@@ -1,0 +1,25 @@
+0193bde842 A ok B ok  parent 0/2 (want 0)  commit 2/2  0.8s+1.0s
+027834bf0e A ok B ok  parent 0/64 (want 0)  commit 64/64  1.1s+35.6s
+1113f1dbb4 A ok B ok  parent 15/42 (want 15)  commit 42/42  14.0s+13.9s
+2ebc78e1d8 A ok B ok  parent 0/89 (want 0)  commit 89/89  1.0s+7.3s
+383c54438d A ok B ok  parent 15/18 (want 15)  commit 18/18  9.7s+9.5s
+3879e60983 A ok B ok  parent 15/74 (want 15)  commit 74/74  36.3s+43.0s
+3f349e89f0 A ok B ok  parent 0/95 (want 0)  commit 95/95  0.8s+1.2s
+426ad7fbd5 A ok B ok  parent 117/133 (want 117)  commit 133/133  32.0s+31.4s
+4971bdb360 A ok B ok  parent 0/20 (want 0)  commit 20/20  0.8s+11.7s
+603434cf1e A ok B ok  parent 20/23 (want 20)  commit 23/23  6.4s+6.4s
+671a225045 A ok B ok  parent 0/10 (want 0)  commit 10/10  13.9s+3.8s
+6ba4650f4d A ok B ok  parent 0/21 (want 0)  commit 21/21  1.2s+8.9s
+71a593d5a4 A ok B ok  parent 31/33 (want 31)  commit 33/33  2.0s+2.0s
+82bff0db02 A ok B ok  parent 20/22 (want 20)  commit 22/22  8.1s+8.1s
+906b3f734b A ok B ok  parent 33/35 (want 33)  commit 35/35  12.4s+15.7s
+9a3f21cfa8 A ok B ok  parent 3/8 (want 3)  commit 8/8  5.3s+5.3s
+b50b2c109c A ok B ok  parent 19/25 (want 19)  commit 25/25  1.0s+6.0s
+c42ee1f498 A ok B ok  parent 11/15 (want 11)  commit 15/15  7.6s+8.4s
+c9ceb15bae A ok B ok  parent 23/27 (want 23)  commit 27/27  0.8s+0.9s
+ca2d0d80ea A ok B ok  parent 9/14 (want 9)  commit 14/14  2.5s+2.4s
+cd884db76f A ok B ok  parent 7/22 (want 7)  commit 22/22  0.8s+0.8s
+d20c739bd0 A ok B ok  parent 32/34 (want 32)  commit 34/34  22.5s+23.1s
+edec7384ab A ok B ok  parent 6/7 (want 6)  commit 7/7  4.5s+4.5s
+fff1b349cc A ok B ok  parent 23/42 (want 23)  commit 42/42  19.5s+20.7s
+exit 0
