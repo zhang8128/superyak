@@ -1,0 +1,82 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_federation_pull::test_300_obsolete_rows_then_a_live_one_come_in_one_pull_once_and_its_own_rounds_never_get_409",
+  "tests.test_federation_pull::test_a_400_waits_60_s_and_keeps_the_acks_for_the_next_pull",
+  "tests.test_federation_pull::test_a_403_is_no_failure_its_words_are_kept_and_a_clock_warning_too",
+  "tests.test_federation_pull::test_a_404_waits_5_minutes_and_leaves_peer_delivery_untouched",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer0]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer1]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer2]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer3]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer4]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer5]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer6]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer7]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer8]",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer9]",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer0]",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer1]",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer2]",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer3]",
+  "tests.test_federation_pull::test_a_pin_mismatch_on_a_pull_is_a_peer_failure_that_says_certificate_differs",
+  "tests.test_federation_pull::test_a_push_backoff_doesnt_hold_back_a_pull_and_a_pull_resets_it",
+  "tests.test_federation_pull::test_an_envelope_from_another_origin_is_dropped_and_one_that_doesnt_parse_goes_to_receive",
+  "tests.test_federation_pull::test_busy_is_asked_again_after_5_s_with_a_new_nonce_and_a_second_busy_waits_60_s",
+  "tests.test_federation_pull::test_pull_once_receives_and_its_acks_deliver_the_rows",
+  "tests.test_federation_pull::test_replay_is_asked_again_at_once_once",
+  "tests.test_federation_pull::test_rounds_stop_at_10_and_the_next_pull_goes_at_once",
+  "tests.test_federation_pull::test_the_pull_backoff_is_capped_at_5_minutes",
+  "tests.test_federation_pull::test_unknown_remote_participant_comes_back_refused_and_the_next_row_arrives"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_federation_pull::test_300_obsolete_rows_then_a_live_one_come_in_one_pull_once_and_its_own_rounds_never_get_409": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_400_waits_60_s_and_keeps_the_acks_for_the_next_pull": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_403_is_no_failure_its_words_are_kept_and_a_clock_warning_too": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_404_waits_5_minutes_and_leaves_peer_delivery_untouched": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer0]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer1]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer2]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer3]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer4]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer5]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer6]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer7]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer8]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_failing_pull_is_a_peer_failure_with_its_own_backoff[answer9]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer0]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer1]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer2]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_peer_scoped_answer_to_an_envelope_is_neither_acked_nor_refused_and_the_rounds_stop[answer3]": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_pin_mismatch_on_a_pull_is_a_peer_failure_that_says_certificate_differs": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_push_backoff_doesnt_hold_back_a_pull_and_a_pull_resets_it": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_an_envelope_from_another_origin_is_dropped_and_one_that_doesnt_parse_goes_to_receive": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_busy_is_asked_again_after_5_s_with_a_new_nonce_and_a_second_busy_waits_60_s": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_pull_once_receives_and_its_acks_deliver_the_rows": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_replay_is_asked_again_at_once_once": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_rounds_stop_at_10_and_the_next_pull_goes_at_once": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_the_pull_backoff_is_capped_at_5_minutes": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_unknown_remote_participant_comes_back_refused_and_the_next_row_arrives": "NotImplementedError: interface control"
+ },
+ "item": "1113f1dbb4",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "5cb33b9ad7b82047990afa78afbb879e57e876a14193e3abf96c7cd2e6b2ff68",
+ "seconds": 14.3,
+ "signature": [],
+ "string_bound": {
+  "tests.test_federation_pull::test_300_obsolete_rows_then_a_live_one_come_in_one_pull_once_and_its_own_rounds_never_get_409": [
+   "rounds"
+  ],
+  "tests.test_federation_pull::test_an_envelope_from_another_origin_is_dropped_and_one_that_doesnt_parse_goes_to_receive": [
+   "unreadable"
+  ],
+  "tests.test_federation_pull::test_rounds_stop_at_10_and_the_next_pull_goes_at_once": [
+   "rounds"
+  ]
+ },
+ "unread": []
+}

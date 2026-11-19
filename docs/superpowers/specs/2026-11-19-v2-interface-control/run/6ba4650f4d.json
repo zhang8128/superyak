@@ -1,0 +1,55 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_lessons_adds::test_a_stale_confirm_writes_nothing",
+  "tests.test_lessons_adds::test_an_unlisted_peers_account_is_not_addable",
+  "tests.test_lessons_adds::test_confirm_records_exactly_what_was_shown_and_a_rerun_replaces_it",
+  "tests.test_lessons_adds::test_members_trust_made_held_and_removed_contacts_are_not_addable",
+  "tests.test_lessons_adds::test_the_confirm_code_changes_when_one_is_added_or_goes_stale",
+  "tests.test_lessons_adds::test_the_listing_names_each_addable_account",
+  "tests.test_lessons_adds::test_the_listing_shows_a_bidi_name_plainly"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_lessons_adds::test_a_stale_confirm_writes_nothing": "Failed: DID NOT RAISE Exception",
+  "tests.test_lessons_adds::test_an_unlisted_peers_account_is_not_addable": "KeyError: 'addable'",
+  "tests.test_lessons_adds::test_confirm_records_exactly_what_was_shown_and_a_rerun_replaces_it": "AssertionError: assert ([] == ['remote_e8f5...e7e6d414f6ef']",
+  "tests.test_lessons_adds::test_members_trust_made_held_and_removed_contacts_are_not_addable": "KeyError: 'addable'",
+  "tests.test_lessons_adds::test_the_confirm_code_changes_when_one_is_added_or_goes_stale": "KeyError: 'addable'",
+  "tests.test_lessons_adds::test_the_listing_names_each_addable_account": "KeyError: 'addable'",
+  "tests.test_lessons_adds::test_the_listing_shows_a_bidi_name_plainly": "assert ('\\u202e' not in 'Room 689bde...h CONFIRM=c.'"
+ },
+ "item": "6ba4650f4d",
+ "limit": false,
+ "names_only": [
+  "tests.test_lessons_adds::test_a_line_not_shown_is_not_recorded",
+  "tests.test_lessons_adds::test_no_line_for_an_unlisted_peer",
+  "tests.test_lessons_adds::test_no_line_off_the_origin",
+  "tests.test_lessons_adds::test_no_line_without_a_recorded_room",
+  "tests.test_lessons_adds::test_no_line_without_a_recorded_ship",
+  "tests.test_lessons_adds::test_owner_removed_skips_held_rows",
+  "tests.test_lessons_adds::test_pair_records_who_typed_and_whether_the_line_was_shown",
+  "tests.test_lessons_adds::test_record_change_takes_a_reason",
+  "tests.test_lessons_adds::test_restore_keeps_the_new_columns_and_table",
+  "tests.test_lessons_adds::test_restore_of_a_backup_from_before_the_build",
+  "tests.test_lessons_adds::test_the_line_flag_needs_the_peer_listed_in_pairs_own_transaction",
+  "tests.test_lessons_adds::test_the_line_for_a_listed_peer_is_the_exact_text",
+  "tests.test_lessons_adds::test_the_line_names_a_bidi_name_plainly",
+  "tests.test_lessons_adds::test_the_ship_is_the_recorded_ships_account_name"
+ ],
+ "patch_sha256": "0f559fa9155fcc3f2e5bba3dce3701831b14c69d0af417ec716ad2518571db0a",
+ "seconds": 9.2,
+ "signature": [],
+ "string_bound": {
+  "tests.test_lessons_adds::test_the_listing_names_each_addable_account": [
+   "addable by",
+   "user_short"
+  ],
+  "tests.test_lessons_adds::test_the_listing_shows_a_bidi_name_plainly": [
+   "user_short"
+  ]
+ },
+ "unread": []
+}

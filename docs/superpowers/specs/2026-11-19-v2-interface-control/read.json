@@ -1,0 +1,1721 @@
+{
+ "by_item": {
+  "0193bde842": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 2,
+   "fails_by": {
+    "a given body": 2
+   },
+   "frozen": 2,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 0,
+   "on_parent": 0,
+   "outside_parent": 2,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    }
+   },
+   "signature": 0,
+   "string_bound": 2
+  },
+  "027834bf0e": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 16,
+   "fails_by": {
+    "a given body": 12,
+    "an assertion": 3,
+    "still a barrier": 1
+   },
+   "frozen": 64,
+   "given": 2,
+   "names_only": 48,
+   "not_string_bound": 5,
+   "on_parent": 0,
+   "outside_parent": 64,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 13,
+     "names_only": 48,
+     "not_string_bound": 3,
+     "published": 61
+    },
+    "first exists": {
+     "candidates": 14,
+     "names_only": 48,
+     "not_string_bound": 4,
+     "published": 62
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 13,
+     "names_only": 48,
+     "not_string_bound": 3,
+     "published": 61
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 13,
+     "names_only": 48,
+     "not_string_bound": 3,
+     "published": 61
+    },
+    "second may-2": {
+     "candidates": 13,
+     "names_only": 48,
+     "not_string_bound": 3,
+     "published": 61
+    }
+   },
+   "signature": 1,
+   "string_bound": 11
+  },
+  "1113f1dbb4": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 27,
+   "fails_by": {
+    "a given body": 27
+   },
+   "frozen": 42,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 24,
+   "on_parent": 15,
+   "outside_parent": 27,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "first exists": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 2
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "first path": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second may-2": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    }
+   },
+   "signature": 0,
+   "string_bound": 3
+  },
+  "2ebc78e1d8": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 89,
+   "fails_by": {
+    "still a barrier": 89
+   },
+   "frozen": 89,
+   "given": 2,
+   "names_only": 0,
+   "not_string_bound": 89,
+   "on_parent": 0,
+   "outside_parent": 89,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 89,
+     "names_only": 0,
+     "not_string_bound": 89,
+     "published": 89
+    },
+    "second may-2": {
+     "candidates": 89,
+     "names_only": 0,
+     "not_string_bound": 89,
+     "published": 89
+    },
+    "second nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second nothing-2": {
+     "candidates": 89,
+     "names_only": 0,
+     "not_string_bound": 89,
+     "published": 89
+    }
+   },
+   "signature": 0,
+   "string_bound": 0
+  },
+  "383c54438d": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 3,
+   "fails_by": {
+    "an assertion": 1,
+    "other": 2
+   },
+   "frozen": 18,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 0,
+   "on_parent": 15,
+   "outside_parent": 3,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 3
+    },
+    "second may-2": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 3
+    },
+    "second nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    }
+   },
+   "signature": 0,
+   "string_bound": 3
+  },
+  "3879e60983": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 59,
+   "fails_by": {
+    "still a barrier": 59
+   },
+   "frozen": 74,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 59,
+   "on_parent": 15,
+   "outside_parent": 59,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 59,
+     "names_only": 0,
+     "not_string_bound": 59,
+     "published": 59
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 59,
+     "names_only": 0,
+     "not_string_bound": 59,
+     "published": 59
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 59,
+     "names_only": 0,
+     "not_string_bound": 59,
+     "published": 59
+    },
+    "second may-2": {
+     "candidates": 59,
+     "names_only": 0,
+     "not_string_bound": 59,
+     "published": 59
+    }
+   },
+   "signature": 59,
+   "string_bound": 0
+  },
+  "3f349e89f0": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 95,
+   "fails_by": {
+    "still a barrier": 95
+   },
+   "frozen": 95,
+   "given": 9,
+   "names_only": 0,
+   "not_string_bound": 77,
+   "on_parent": 0,
+   "outside_parent": 95,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 48,
+     "names_only": 0,
+     "not_string_bound": 43,
+     "published": 48
+    },
+    "first exists": {
+     "candidates": 48,
+     "names_only": 0,
+     "not_string_bound": 43,
+     "published": 48
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 48,
+     "names_only": 0,
+     "not_string_bound": 43,
+     "published": 48
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-2": {
+     "candidates": 48,
+     "names_only": 0,
+     "not_string_bound": 43,
+     "published": 48
+    }
+   },
+   "signature": 0,
+   "string_bound": 18
+  },
+  "426ad7fbd5": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 16,
+   "fails_by": {
+    "still a barrier": 16
+   },
+   "frozen": 133,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 16,
+   "on_parent": 117,
+   "outside_parent": 16,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 16,
+     "names_only": 0,
+     "not_string_bound": 16,
+     "published": 16
+    },
+    "second may-2": {
+     "candidates": 16,
+     "names_only": 0,
+     "not_string_bound": 16,
+     "published": 16
+    },
+    "second nothing-1": {
+     "candidates": 16,
+     "names_only": 0,
+     "not_string_bound": 16,
+     "published": 16
+    },
+    "second nothing-2": {
+     "candidates": 16,
+     "names_only": 0,
+     "not_string_bound": 16,
+     "published": 16
+    }
+   },
+   "signature": 16,
+   "string_bound": 0
+  },
+  "4971bdb360": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 7,
+   "fails_by": {
+    "an assertion": 4,
+    "other": 3
+   },
+   "frozen": 20,
+   "given": 1,
+   "names_only": 13,
+   "not_string_bound": 5,
+   "on_parent": 0,
+   "outside_parent": 20,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 7,
+     "names_only": 13,
+     "not_string_bound": 5,
+     "published": 20
+    },
+    "second may-2": {
+     "candidates": 7,
+     "names_only": 13,
+     "not_string_bound": 5,
+     "published": 20
+    },
+    "second nothing-1": {
+     "candidates": 7,
+     "names_only": 13,
+     "not_string_bound": 5,
+     "published": 20
+    },
+    "second nothing-2": {
+     "candidates": 7,
+     "names_only": 13,
+     "not_string_bound": 5,
+     "published": 20
+    }
+   },
+   "signature": 0,
+   "string_bound": 2
+  },
+  "603434cf1e": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 3,
+   "fails_by": {
+    "other": 3
+   },
+   "frozen": 23,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 2,
+   "on_parent": 20,
+   "outside_parent": 3,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second may-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second nothing-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second nothing-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    }
+   },
+   "signature": 0,
+   "string_bound": 1
+  },
+  "671a225045": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 10,
+   "fails_by": {
+    "a given body": 9,
+    "an assertion": 1
+   },
+   "frozen": 10,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 6,
+   "on_parent": 0,
+   "outside_parent": 10,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 7,
+     "names_only": 0,
+     "not_string_bound": 6,
+     "published": 7
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 6,
+     "names_only": 0,
+     "not_string_bound": 6,
+     "published": 6
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 6,
+     "names_only": 0,
+     "not_string_bound": 6,
+     "published": 6
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 7,
+     "names_only": 0,
+     "not_string_bound": 6,
+     "published": 7
+    },
+    "second may-2": {
+     "candidates": 6,
+     "names_only": 0,
+     "not_string_bound": 6,
+     "published": 6
+    }
+   },
+   "signature": 0,
+   "string_bound": 4
+  },
+  "6ba4650f4d": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 7,
+   "fails_by": {
+    "an assertion": 2,
+    "other": 5
+   },
+   "frozen": 21,
+   "given": 1,
+   "names_only": 14,
+   "not_string_bound": 5,
+   "on_parent": 0,
+   "outside_parent": 21,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 6,
+     "names_only": 14,
+     "not_string_bound": 4,
+     "published": 20
+    },
+    "second may-2": {
+     "candidates": 6,
+     "names_only": 14,
+     "not_string_bound": 4,
+     "published": 20
+    },
+    "second nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second nothing-2": {
+     "candidates": 0,
+     "names_only": 13,
+     "not_string_bound": 0,
+     "published": 13
+    }
+   },
+   "signature": 0,
+   "string_bound": 2
+  },
+  "71a593d5a4": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 2,
+   "fails_by": {
+    "a given body": 2
+   },
+   "frozen": 33,
+   "given": 2,
+   "names_only": 0,
+   "not_string_bound": 2,
+   "on_parent": 31,
+   "outside_parent": 2,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first exists": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second may-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    }
+   },
+   "signature": 0,
+   "string_bound": 0
+  },
+  "82bff0db02": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 2,
+   "fails_by": {
+    "an assertion": 2
+   },
+   "frozen": 22,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 0,
+   "on_parent": 20,
+   "outside_parent": 2,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 2
+    },
+    "second may-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 2
+    },
+    "second nothing-1": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 2
+    },
+    "second nothing-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 2
+    }
+   },
+   "signature": 0,
+   "string_bound": 2
+  },
+  "906b3f734b": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 2,
+   "fails_by": {
+    "an assertion": 2
+   },
+   "frozen": 35,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 2,
+   "on_parent": 33,
+   "outside_parent": 2,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    }
+   },
+   "signature": 0,
+   "string_bound": 0
+  },
+  "9a3f21cfa8": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 5,
+   "fails_by": {
+    "an assertion": 4,
+    "other": 1
+   },
+   "frozen": 8,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 2,
+   "on_parent": 3,
+   "outside_parent": 5,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 5
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 5
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 5
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 5
+    },
+    "second may-2": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 5
+    }
+   },
+   "signature": 0,
+   "string_bound": 3
+  },
+  "b50b2c109c": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 6,
+   "fails_by": {
+    "an assertion": 5,
+    "other": 1
+   },
+   "frozen": 25,
+   "given": 1,
+   "names_only": 0,
+   "not_string_bound": 2,
+   "on_parent": 19,
+   "outside_parent": 6,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 6,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 6
+    },
+    "second may-2": {
+     "candidates": 6,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 6
+    },
+    "second nothing-1": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 3
+    },
+    "second nothing-2": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 5
+    }
+   },
+   "signature": 0,
+   "string_bound": 4
+  },
+  "c42ee1f498": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 4,
+   "fails_by": {
+    "an assertion": 2,
+    "other": 2
+   },
+   "frozen": 15,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 3,
+   "on_parent": 11,
+   "outside_parent": 4,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 4,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 4
+    },
+    "second may-2": {
+     "candidates": 4,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 4
+    },
+    "second nothing-1": {
+     "candidates": 4,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 4
+    },
+    "second nothing-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    }
+   },
+   "signature": 0,
+   "string_bound": 1
+  },
+  "c9ceb15bae": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 4,
+   "fails_by": {
+    "still a barrier": 4
+   },
+   "frozen": 27,
+   "given": 2,
+   "names_only": 0,
+   "not_string_bound": 3,
+   "on_parent": 23,
+   "outside_parent": 4,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first exists": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first lot": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first newest": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first nothing-1": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first nothing-2": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "first path": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first search": {
+     "candidates": 2,
+     "names_only": 0,
+     "not_string_bound": 2,
+     "published": 2
+    },
+    "second may-1": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "second may-2": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    }
+   },
+   "signature": 4,
+   "string_bound": 1
+  },
+  "ca2d0d80ea": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 5,
+   "fails_by": {
+    "an assertion": 4,
+    "other": 1
+   },
+   "frozen": 14,
+   "given": 2,
+   "names_only": 0,
+   "not_string_bound": 0,
+   "on_parent": 9,
+   "outside_parent": 5,
+   "part": "B",
+   "pool": "P",
+   "rows": {
+    "second may-1": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 5
+    },
+    "second may-2": {
+     "candidates": 5,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 5
+    },
+    "second nothing-1": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 1
+    },
+    "second nothing-2": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 1
+    }
+   },
+   "signature": 0,
+   "string_bound": 5
+  },
+  "cd884db76f": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 15,
+   "fails_by": {
+    "a given body": 15
+   },
+   "frozen": 22,
+   "given": 3,
+   "names_only": 0,
+   "not_string_bound": 15,
+   "on_parent": 7,
+   "outside_parent": 15,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    },
+    "first exists": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    },
+    "first lot": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first newest": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "first path": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    },
+    "first search": {
+     "candidates": 3,
+     "names_only": 0,
+     "not_string_bound": 3,
+     "published": 3
+    },
+    "second may-1": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    },
+    "second may-2": {
+     "candidates": 15,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 15
+    }
+   },
+   "signature": 0,
+   "string_bound": 0
+  },
+  "d20c739bd0": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 2,
+   "fails_by": {
+    "still a barrier": 2
+   },
+   "frozen": 34,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 1,
+   "on_parent": 32,
+   "outside_parent": 2,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    }
+   },
+   "signature": 0,
+   "string_bound": 1
+  },
+  "edec7384ab": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 1,
+   "fails_by": {
+    "an assertion": 1
+   },
+   "frozen": 7,
+   "given": 0,
+   "names_only": 0,
+   "not_string_bound": 1,
+   "on_parent": 6,
+   "outside_parent": 1,
+   "part": "B",
+   "pool": "N",
+   "rows": {
+    "second may-1": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "second may-2": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "second nothing-1": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    },
+    "second nothing-2": {
+     "candidates": 1,
+     "names_only": 0,
+     "not_string_bound": 1,
+     "published": 1
+    }
+   },
+   "signature": 0,
+   "string_bound": 0
+  },
+  "fff1b349cc": {
+   "C": true,
+   "C_lost": [],
+   "candidates": 19,
+   "fails_by": {
+    "a given body": 16,
+    "an assertion": 3
+   },
+   "frozen": 42,
+   "given": 2,
+   "names_only": 0,
+   "not_string_bound": 17,
+   "on_parent": 23,
+   "outside_parent": 19,
+   "part": "A",
+   "pool": null,
+   "rows": {
+    "first bm25": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first exists": {
+     "candidates": 16,
+     "names_only": 0,
+     "not_string_bound": 15,
+     "published": 16
+    },
+    "first lot": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first newest": {
+     "candidates": 13,
+     "names_only": 0,
+     "not_string_bound": 12,
+     "published": 13
+    },
+    "first nothing-1": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first nothing-2": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "first path": {
+     "candidates": 12,
+     "names_only": 0,
+     "not_string_bound": 11,
+     "published": 12
+    },
+    "first search": {
+     "candidates": 0,
+     "names_only": 0,
+     "not_string_bound": 0,
+     "published": 0
+    },
+    "second may-1": {
+     "candidates": 13,
+     "names_only": 0,
+     "not_string_bound": 12,
+     "published": 13
+    },
+    "second may-2": {
+     "candidates": 14,
+     "names_only": 0,
+     "not_string_bound": 13,
+     "published": 14
+    }
+   },
+   "signature": 0,
+   "string_bound": 2
+  }
+ },
+ "cases_sha256": "07e9d27b6a685761580da09016cc007fe75973d6d291a0d9f9b3ea8e73d81263",
+ "kept": [
+  "0193bde842",
+  "027834bf0e",
+  "1113f1dbb4",
+  "2ebc78e1d8",
+  "383c54438d",
+  "3879e60983",
+  "3f349e89f0",
+  "426ad7fbd5",
+  "4971bdb360",
+  "603434cf1e",
+  "671a225045",
+  "6ba4650f4d",
+  "71a593d5a4",
+  "82bff0db02",
+  "906b3f734b",
+  "9a3f21cfa8",
+  "b50b2c109c",
+  "c42ee1f498",
+  "c9ceb15bae",
+  "ca2d0d80ea",
+  "cd884db76f",
+  "d20c739bd0",
+  "edec7384ab",
+  "fff1b349cc"
+ ],
+ "left_out": {},
+ "sums": {
+  "first A": {
+   "bm25": {
+    "candidates": 256,
+    "candidates_passed": 82,
+    "items": 12,
+    "names_only": 48,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 67,
+    "outside_parent": 304,
+    "published": 130
+   },
+   "exists": {
+    "candidates": 256,
+    "candidates_passed": 170,
+    "items": 12,
+    "names_only": 48,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 150,
+    "outside_parent": 304,
+    "published": 218
+   },
+   "lot": {
+    "candidates": 256,
+    "candidates_passed": 5,
+    "items": 12,
+    "names_only": 0,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 5,
+    "outside_parent": 304,
+    "published": 5
+   },
+   "newest": {
+    "candidates": 256,
+    "candidates_passed": 46,
+    "items": 12,
+    "names_only": 0,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 41,
+    "outside_parent": 304,
+    "published": 46
+   },
+   "nothing-1": {
+    "candidates": 256,
+    "candidates_passed": 3,
+    "items": 12,
+    "names_only": 0,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 3,
+    "outside_parent": 304,
+    "published": 3
+   },
+   "nothing-2": {
+    "candidates": 256,
+    "candidates_passed": 6,
+    "items": 12,
+    "names_only": 0,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 6,
+    "outside_parent": 304,
+    "published": 6
+   },
+   "path": {
+    "candidates": 256,
+    "candidates_passed": 165,
+    "items": 12,
+    "names_only": 48,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 146,
+    "outside_parent": 304,
+    "published": 213
+   },
+   "search": {
+    "candidates": 256,
+    "candidates_passed": 5,
+    "items": 12,
+    "names_only": 0,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 5,
+    "outside_parent": 304,
+    "published": 5
+   }
+  },
+  "second A": {
+   "may-1": {
+    "candidates": 256,
+    "candidates_passed": 119,
+    "items": 12,
+    "names_only": 48,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 104,
+    "outside_parent": 304,
+    "published": 167
+   },
+   "may-2": {
+    "candidates": 256,
+    "candidates_passed": 166,
+    "items": 12,
+    "names_only": 48,
+    "not_string_bound": 211,
+    "not_string_bound_passed": 147,
+    "outside_parent": 304,
+    "published": 214
+   }
+  },
+  "second N": {
+   "may-1": {
+    "candidates": 113,
+    "candidates_passed": 110,
+    "items": 6,
+    "names_only": 0,
+    "not_string_bound": 110,
+    "not_string_bound_passed": 108,
+    "outside_parent": 113,
+    "published": 110
+   },
+   "may-2": {
+    "candidates": 113,
+    "candidates_passed": 110,
+    "items": 6,
+    "names_only": 0,
+    "not_string_bound": 110,
+    "not_string_bound_passed": 108,
+    "outside_parent": 113,
+    "published": 110
+   },
+   "nothing-1": {
+    "candidates": 113,
+    "candidates_passed": 21,
+    "items": 6,
+    "names_only": 0,
+    "not_string_bound": 110,
+    "not_string_bound_passed": 19,
+    "outside_parent": 113,
+    "published": 21
+   },
+   "nothing-2": {
+    "candidates": 113,
+    "candidates_passed": 110,
+    "items": 6,
+    "names_only": 0,
+    "not_string_bound": 110,
+    "not_string_bound_passed": 108,
+    "outside_parent": 113,
+    "published": 110
+   }
+  },
+  "second P": {
+   "may-1": {
+    "candidates": 32,
+    "candidates_passed": 31,
+    "items": 6,
+    "names_only": 27,
+    "not_string_bound": 15,
+    "not_string_bound_passed": 14,
+    "outside_parent": 59,
+    "published": 58
+   },
+   "may-2": {
+    "candidates": 32,
+    "candidates_passed": 31,
+    "items": 6,
+    "names_only": 27,
+    "not_string_bound": 15,
+    "not_string_bound_passed": 14,
+    "outside_parent": 59,
+    "published": 58
+   },
+   "nothing-1": {
+    "candidates": 32,
+    "candidates_passed": 15,
+    "items": 6,
+    "names_only": 13,
+    "not_string_bound": 15,
+    "not_string_bound_passed": 9,
+    "outside_parent": 59,
+    "published": 28
+   },
+   "nothing-2": {
+    "candidates": 32,
+    "candidates_passed": 15,
+    "items": 6,
+    "names_only": 26,
+    "not_string_bound": 15,
+    "not_string_bound_passed": 8,
+    "outside_parent": 59,
+    "published": 41
+   }
+  }
+ }
+}

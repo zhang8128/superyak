@@ -1,0 +1,28 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_lessons_room::test_no_moderator_in_the_lessons_room",
+  "tests.test_lessons_room::test_no_new_local_member_and_no_bridge",
+  "tests.test_lessons_room::test_the_backfill_carries_live_lessons_once_to_a_new_peer"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_lessons_room::test_no_moderator_in_the_lessons_room": "Failed: DID NOT RAISE Problem",
+  "tests.test_lessons_room::test_no_new_local_member_and_no_bridge": "Failed: DID NOT RAISE Problem",
+  "tests.test_lessons_room::test_the_backfill_carries_live_lessons_once_to_a_new_peer": "Failed: DID NOT RAISE Problem"
+ },
+ "item": "603434cf1e",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "seconds": 6.5,
+ "signature": [],
+ "string_bound": {
+  "tests.test_lessons_room::test_the_backfill_carries_live_lessons_once_to_a_new_peer": [
+   "lessons_carried"
+  ]
+ },
+ "unread": []
+}

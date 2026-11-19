@@ -1,0 +1,43 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_alerts::test_a_cleaning_error_never_stops_the_alert_being_queued",
+  "tests.test_alerts::test_a_symlinked_alerts_directory_is_never_cleaned",
+  "tests.test_alerts::test_an_existing_wide_alerts_directory_is_tightened_to_0700",
+  "tests.test_alerts::test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks",
+  "tests.test_alerts::test_stopped_alerts_are_held_back_and_back_off_per_unit",
+  "tests.test_alerts::test_the_lock_fallback_queues_anyway"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_alerts::test_a_cleaning_error_never_stops_the_alert_being_queued": "AssertionError: assert 0 == 1",
+  "tests.test_alerts::test_a_symlinked_alerts_directory_is_never_cleaned": "AssertionError: assert False",
+  "tests.test_alerts::test_an_existing_wide_alerts_directory_is_tightened_to_0700": "AssertionError: assert 493 == 448",
+  "tests.test_alerts::test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/ifc-home-c2m0pnlb/pytest-of-doctor/pytest-0/test_rate_json_and_the_lock_ar0/alerts/rate.json'",
+  "tests.test_alerts::test_stopped_alerts_are_held_back_and_back_off_per_unit": "assert [True, True, ...e, True, True] == [True, False,... False, False]",
+  "tests.test_alerts::test_the_lock_fallback_queues_anyway": "assert (5 == 5 and 5 <= 0.00029895175248384476)"
+ },
+ "item": "b50b2c109c",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "d60ff04e76636ea8ae12a3479b465d081cc0a2d7bf89b760c6e33fecbe4819eb",
+ "seconds": 1.0,
+ "signature": [],
+ "string_bound": {
+  "tests.test_alerts::test_a_cleaning_error_never_stops_the_alert_being_queued": [
+   "could not clean"
+  ],
+  "tests.test_alerts::test_a_symlinked_alerts_directory_is_never_cleaned": [
+   "rate.json"
+  ],
+  "tests.test_alerts::test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks": [
+   "rate.json"
+  ],
+  "tests.test_alerts::test_the_lock_fallback_queues_anyway": [
+   "rate.json"
+  ]
+ },
+ "unread": []
+}

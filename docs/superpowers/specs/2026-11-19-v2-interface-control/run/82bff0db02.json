@@ -1,0 +1,29 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_door::test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it",
+  "tests.test_listener::test_every_server_waits_only_a_moment_on_open_requests_when_stopped"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_door::test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it": "AssertionError: assert [{'host': '12..._log': False}] == [{'host': '12...shutdown': 5}]",
+  "tests.test_listener::test_every_server_waits_only_a_moment_on_open_requests_when_stopped": "assert [None, None, None] == [5, 5, 5]"
+ },
+ "item": "82bff0db02",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "964e79266fefa3970a6da495c0f7171a62f80ff32c5e1d2d959d63b11301aeb1",
+ "seconds": 8.1,
+ "signature": [],
+ "string_bound": {
+  "tests.test_door::test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it": [
+   "timeout_graceful_shutdown"
+  ],
+  "tests.test_listener::test_every_server_waits_only_a_moment_on_open_requests_when_stopped": [
+   "timeout_graceful_shutdown"
+  ]
+ },
+ "unread": []
+}

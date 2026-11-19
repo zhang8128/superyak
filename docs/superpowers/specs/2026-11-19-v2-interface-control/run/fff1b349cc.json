@@ -1,0 +1,63 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here",
+  "tests.test_owner_trust::test_a_card_whose_other_fields_differ",
+  "tests.test_owner_trust::test_a_contact_that_already_exists",
+  "tests.test_owner_trust::test_a_forged_card_from_a_public_card",
+  "tests.test_owner_trust::test_a_held_owner",
+  "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions",
+  "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first",
+  "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host",
+  "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed",
+  "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation",
+  "tests.test_owner_trust::test_an_expired_trust",
+  "tests.test_owner_trust::test_an_owner_on_another_peer",
+  "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide",
+  "tests.test_owner_trust::test_no_trust",
+  "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs",
+  "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code",
+  "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files",
+  "tests.test_owner_trust::test_the_cap",
+  "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_owner_trust::test_a_card_of_a_peer_not_paired_here": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_card_whose_other_fields_differ": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_contact_that_already_exists": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_forged_card_from_a_public_card": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_held_owner": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_participant_that_differs_from_the_assertions": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_ships_name_may_repeat_on_another_host": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_a_trust_whose_owners_code_was_never_typed": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_an_assertion_issued_before_a_revocation": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_an_expired_trust": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_an_owner_on_another_peer": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_names_that_fail_ship_name_or_collide": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_no_trust": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_only_a_ship_with_an_owner_pairs": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_pair_trusted_cli_pairs_with_no_terminal_and_no_code": "assert (2 == 1)",
+  "tests.test_owner_trust::test_pair_trusted_cli_refuses_bad_files": "AssertionError: ((PosixPath('/tmp/ifc-home-8en0ieb3/pytest-of-doctor/pytest-0/test_pair_trusted_cli_refuses_0/bad/missing.json'), Posi...erify-imprint', 'station-alert', 'station-alerts', 'door', 'federation-listen', 'create-ship', 'federate', 'serve')",
+  "tests.test_owner_trust::test_the_cap": "NotImplementedError: interface control",
+  "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one": "AssertionError: assert ['NoneType', 'NoneType'] == ['Problem', 'dict']"
+ },
+ "item": "fff1b349cc",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "02070ddb8cd58d2ad2d75c5f57fc948c191ddbbbe2d88cbcd9ffb95c0ecf4574",
+ "seconds": 19.2,
+ "signature": [],
+ "string_bound": {
+  "tests.test_owner_trust::test_a_ship_pairs_and_shows_its_owner_first": [
+   "confirmed_by"
+  ],
+  "tests.test_owner_trust::test_two_pairings_at_the_cap_pair_one": [
+   "SELECT COUNT(*) FROM trust_confirmations WHERE grant_id=?"
+  ]
+ },
+ "unread": []
+}

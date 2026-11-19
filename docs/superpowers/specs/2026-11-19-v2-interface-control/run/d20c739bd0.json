@@ -1,0 +1,26 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_login::test_a_full_public_lane_refuses_without_hashing_or_counting_and_other_lanes_still_sign_in",
+  "tests.test_login::test_the_lanes_sizes"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_login::test_a_full_public_lane_refuses_without_hashing_or_counting_and_other_lanes_still_sign_in": "AttributeError: 'State' object has no attribute 'sign_in_lanes'",
+  "tests.test_login::test_the_lanes_sizes": "AttributeError: 'State' object has no attribute 'sign_in_lanes'"
+ },
+ "item": "d20c739bd0",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "seconds": 22.6,
+ "signature": [],
+ "string_bound": {
+  "tests.test_login::test_a_full_public_lane_refuses_without_hashing_or_counting_and_other_lanes_still_sign_in": [
+   "Too many sign-ins at once; try again shortly"
+  ]
+ },
+ "unread": []
+}

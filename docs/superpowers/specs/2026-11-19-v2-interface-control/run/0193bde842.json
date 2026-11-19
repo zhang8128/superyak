@@ -1,0 +1,30 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_federate::test_a_second_sync_process_exits_and_the_lock_is_private",
+  "tests.test_federate::test_the_lock_never_follows_a_link"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_federate::test_a_second_sync_process_exits_and_the_lock_is_private": "NotImplementedError: interface control",
+  "tests.test_federate::test_the_lock_never_follows_a_link": "NotImplementedError: interface control"
+ },
+ "item": "0193bde842",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "dc52e12fb4784b2bf8a9f69b450e94fcb6d3ee33242deb0d55967fe69432ecce",
+ "seconds": 0.8,
+ "signature": [],
+ "string_bound": {
+  "tests.test_federate::test_a_second_sync_process_exits_and_the_lock_is_private": [
+   "another process already syncs this directory",
+   "federation.lock"
+  ],
+  "tests.test_federate::test_the_lock_never_follows_a_link": [
+   "federation.lock"
+  ]
+ },
+ "unread": []
+}

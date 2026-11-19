@@ -1,0 +1,36 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_ships::test_owner_or_admin_revokes_a_ship",
+  "tests.test_ships::test_owners_see_their_ships_and_admins_see_all",
+  "tests.test_ships::test_station_notices_list_requests_and_docked_ships"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_ships::test_owner_or_admin_revokes_a_ship": "AssertionError: assert 404 == 403",
+  "tests.test_ships::test_owners_see_their_ships_and_admins_see_all": "TypeError: string indices must be integers, not 'str'",
+  "tests.test_ships::test_station_notices_list_requests_and_docked_ships": "SystemExit: 2"
+ },
+ "item": "383c54438d",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "782545b260cf799320cd05895e201b11854e05929f8d4a9084799cb0f2648269",
+ "seconds": 9.6,
+ "signature": [],
+ "string_bound": {
+  "tests.test_ships::test_owner_or_admin_revokes_a_ship": [
+   "active_keys"
+  ],
+  "tests.test_ships::test_owners_see_their_ships_and_admins_see_all": [
+   "active_keys",
+   "owner_name"
+  ],
+  "tests.test_ships::test_station_notices_list_requests_and_docked_ships": [
+   "docked",
+   "station-notices"
+  ]
+ },
+ "unread": []
+}

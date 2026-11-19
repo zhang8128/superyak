@@ -1,0 +1,44 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_backups::test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage",
+  "tests.test_backups::test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place",
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[live database damaged-12]",
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[low disk-10]",
+  "tests.test_backups::test_output_writes_one_checked_copy_and_never_overwrites"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_backups::test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage": "sqlite3.OperationalError: attempt to write a readonly database",
+  "tests.test_backups::test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place": "assert ('new copy is in place' in \"[Errno 13] Permission denied: '/tmp/ifc-home-4o1pyrm8/pytest-of-doctor/pytest-0/test_a_pruning_failure_exits_10/backups/station/peer-20261116T010000Z.sqlite3'\\n\")",
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[live database damaged-12]": "AssertionError: assert 11 == 12",
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[low disk-10]": "AssertionError: assert 0 == 10",
+  "tests.test_backups::test_output_writes_one_checked_copy_and_never_overwrites": "AssertionError: assert 2 == 0"
+ },
+ "item": "ca2d0d80ea",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "b03ad6d5fe085f678d00f33bcf8fec5004bd401cf870e8329e08d1d27c4aa5a0",
+ "seconds": 2.5,
+ "signature": [],
+ "string_bound": {
+  "tests.test_backups::test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage": [
+   "could not be copied for "
+  ],
+  "tests.test_backups::test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place": [
+   "new copy is in place"
+  ],
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[live database damaged-12]": [
+   "free_bytes"
+  ],
+  "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[low disk-10]": [
+   "free_bytes"
+  ],
+  "tests.test_backups::test_output_writes_one_checked_copy_and_never_overwrites": [
+   "--output"
+  ]
+ },
+ "unread": []
+}

@@ -1,0 +1,22 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_lessons_room::test_breadth_says_how_many_of_the_authors_commands_each_command_value_holds",
+  "tests.test_lessons_room::test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_the_doors_checks"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_lessons_room::test_breadth_says_how_many_of_the_authors_commands_each_command_value_holds": "AssertionError: assert ['Breadth aga...ash command.'] == ['Breadth aga...ash command.']",
+  "tests.test_lessons_room::test_lessons_check_reads_the_authors_commands_and_measures_breadth_before_the_doors_checks": "AssertionError: assert (True and False)"
+ },
+ "item": "906b3f734b",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "bfe0efb51150ea874897cc647cd6c67b6462fb9fa8724c260e4cea037e2d83e5",
+ "seconds": 12.7,
+ "signature": [],
+ "string_bound": {},
+ "unread": []
+}

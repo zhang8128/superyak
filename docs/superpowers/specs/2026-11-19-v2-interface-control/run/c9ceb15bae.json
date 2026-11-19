@@ -1,0 +1,35 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_identity::test_a_pull_requests_signature_is_its_own",
+  "tests.test_identity::test_a_v2_card_means_pull_and_its_variants_are_refused",
+  "tests.test_identity::test_a_v2_cards_code_covers_its_key_and_participant",
+  "tests.test_identity::test_parse_takes_an_explicit_limit"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_identity::test_a_pull_requests_signature_is_its_own": "TypeError: PeerIdentity.card() got an unexpected keyword argument 'delivery'",
+  "tests.test_identity::test_a_v2_card_means_pull_and_its_variants_are_refused": "TypeError: PeerIdentity.card() got an unexpected keyword argument 'delivery'",
+  "tests.test_identity::test_a_v2_cards_code_covers_its_key_and_participant": "TypeError: PeerIdentity.card() got an unexpected keyword argument 'delivery'",
+  "tests.test_identity::test_parse_takes_an_explicit_limit": "TypeError: parse() got an unexpected keyword argument 'limit'"
+ },
+ "item": "c9ceb15bae",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "594db8d559bf9a7c907065b3106ec9330082104c903dd91a279ef3004a87968a",
+ "seconds": 0.8,
+ "signature": [
+  "tests.test_identity::test_a_pull_requests_signature_is_its_own",
+  "tests.test_identity::test_a_v2_card_means_pull_and_its_variants_are_refused",
+  "tests.test_identity::test_a_v2_cards_code_covers_its_key_and_participant",
+  "tests.test_identity::test_parse_takes_an_explicit_limit"
+ ],
+ "string_bound": {
+  "tests.test_identity::test_a_pull_requests_signature_is_its_own": [
+   "nonce"
+  ]
+ },
+ "unread": []
+}

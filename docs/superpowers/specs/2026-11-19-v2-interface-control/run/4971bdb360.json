@@ -1,0 +1,54 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_deferrals::test_a_notice_never_answers_its_mention",
+  "tests.test_deferrals::test_a_post_without_reply_to_lists_the_rooms_deferred_mentions",
+  "tests.test_deferrals::test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode",
+  "tests.test_deferrals::test_notice_posted_stops_any_second_attempt",
+  "tests.test_deferrals::test_the_notice_is_posted_once_by_the_station_without_reply_to_or_an_at",
+  "tests.test_deferrals::test_the_notice_is_written_in_the_ticket_decisions_transaction",
+  "tests.test_deferrals::test_the_notice_text_is_exactly_the_template"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_deferrals::test_a_notice_never_answers_its_mention": "AssertionError: assert ('defer' == 'defer'",
+  "tests.test_deferrals::test_a_post_without_reply_to_lists_the_rooms_deferred_mentions": "KeyError: 'deferred_here'",
+  "tests.test_deferrals::test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode": "KeyError: 'on_watch'",
+  "tests.test_deferrals::test_notice_posted_stops_any_second_attempt": "AssertionError: assert ([] == []",
+  "tests.test_deferrals::test_the_notice_is_posted_once_by_the_station_without_reply_to_or_an_at": "assert (0 == 1)",
+  "tests.test_deferrals::test_the_notice_is_written_in_the_ticket_decisions_transaction": "AssertionError: assert (['defer', 'defer'] == ['defer', 'defer']",
+  "tests.test_deferrals::test_the_notice_text_is_exactly_the_template": "IndexError: list index out of range"
+ },
+ "item": "4971bdb360",
+ "limit": false,
+ "names_only": [
+  "tests.test_deferrals::test_a_deferral_ends_within_120_minutes_even_on_watch",
+  "tests.test_deferrals::test_a_session_reply_with_reply_to_answers_an_owner_mention",
+  "tests.test_deferrals::test_a_system_message_never_starts_a_run_or_counts_as_answered[claim]",
+  "tests.test_deferrals::test_a_system_message_never_starts_a_run_or_counts_as_answered[notice]",
+  "tests.test_deferrals::test_a_ticket_for_an_answered_mention_says_answered_and_writes_nothing",
+  "tests.test_deferrals::test_a_writable_watch_defers_and_another_ships_watch_does_not",
+  "tests.test_deferrals::test_an_old_client_sees_todays_unread_and_post_responses",
+  "tests.test_deferrals::test_an_old_watcher_never_sees_defer",
+  "tests.test_deferrals::test_an_owner_mention_never_defers",
+  "tests.test_deferrals::test_decisions_must_list_both_defer_and_answered",
+  "tests.test_deferrals::test_deferrals_write_no_ticket_and_a_late_run_gets_a_fresh_ticket",
+  "tests.test_deferrals::test_only_the_stations_own_deferral_row_marks_a_reask",
+  "tests.test_deferrals::test_the_ticket_checks_run_in_order"
+ ],
+ "patch_sha256": "eb5c425a66fa197e9235569c847bff98b7bbcc17e3989c5ef5fafbc6d709ebe3",
+ "seconds": 11.9,
+ "signature": [],
+ "string_bound": {
+  "tests.test_deferrals::test_a_post_without_reply_to_lists_the_rooms_deferred_mentions": [
+   "deferred_here"
+  ],
+  "tests.test_deferrals::test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode": [
+   "author_verified",
+   "would_be"
+  ]
+ },
+ "unread": []
+}

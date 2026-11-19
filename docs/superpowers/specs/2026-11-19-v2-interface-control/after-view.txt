@@ -1,0 +1,23 @@
+candidates by how they fail: {'a given body': 83, 'an assertion': 34, 'still a barrier': 266, 'other': 18} total 401
+  pool A {'a given body': 83, 'an assertion': 11, 'still a barrier': 161, 'other': 1} total 256
+  pool N {'still a barrier': 105, 'other': 3, 'an assertion': 5} total 113
+  pool P {'an assertion': 18, 'other': 14} total 32
+pilot pool row | items | past the barrier: cases, passed | of those not string-bound: cases, passed
+first A nothing-1 | 12 | 95, 0 | 71, 0
+first A nothing-2 | 12 | 95, 4 | 71, 4
+first A exists | 12 | 95, 59 | 71, 45
+first A path | 12 | 95, 54 | 71, 41
+first A search | 12 | 95, 3 | 71, 3
+first A bm25 | 12 | 95, 30 | 71, 21
+first A newest | 12 | 95, 43 | 71, 38
+first A lot | 12 | 95, 3 | 71, 3
+second A may-1 | 12 | 95, 56 | 71, 42
+second A may-2 | 12 | 95, 55 | 71, 42
+second N nothing-1 | 6 | 8, 5 | 5, 3
+second N nothing-2 | 6 | 8, 5 | 5, 3
+second N may-1 | 6 | 8, 5 | 5, 3
+second N may-2 | 6 | 8, 5 | 5, 3
+second P nothing-1 | 6 | 32, 15 | 15, 9
+second P nothing-2 | 6 | 32, 15 | 15, 8
+second P may-1 | 6 | 32, 31 | 15, 14
+second P may-2 | 6 | 32, 31 | 15, 14

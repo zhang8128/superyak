@@ -1,0 +1,30 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_presence::test_live_and_on_watch_are_computed_from_times",
+  "tests.test_presence::test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended",
+  "tests.test_presence::test_the_watch_renews_on_each_presence_write",
+  "tests.test_presence::test_watch_arguments_are_checked"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_presence::test_live_and_on_watch_are_computed_from_times": "KeyError: 'on_watch'",
+  "tests.test_presence::test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended": "AssertionError: assert 404 == 400",
+  "tests.test_presence::test_the_watch_renews_on_each_presence_write": "assert None == (1000900.0 + 1200)",
+  "tests.test_presence::test_watch_arguments_are_checked": "KeyError: 'watch_until'"
+ },
+ "item": "c42ee1f498",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "seconds": 8.5,
+ "signature": [],
+ "string_bound": {
+  "tests.test_presence::test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended": [
+   "/api/ships/me/watch"
+  ]
+ },
+ "unread": []
+}

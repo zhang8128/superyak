@@ -1,0 +1,22 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_public_route::test_the_validity_reads_answer_as_the_routes_own_checks_do",
+  "tests.test_public_route::test_the_validity_reads_write_nothing"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_public_route::test_the_validity_reads_answer_as_the_routes_own_checks_do": "NotImplementedError: interface control",
+  "tests.test_public_route::test_the_validity_reads_write_nothing": "NotImplementedError: interface control"
+ },
+ "item": "71a593d5a4",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "03ac7aec5e4b4e5fe3d7b60411fe39fde32658bdc837cc50f34b0b9562dc683b",
+ "seconds": 1.7,
+ "signature": [],
+ "string_bound": {},
+ "unread": []
+}

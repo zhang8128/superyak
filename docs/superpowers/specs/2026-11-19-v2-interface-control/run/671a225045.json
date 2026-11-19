@@ -1,0 +1,54 @@
+{
+ "C": true,
+ "C_lost": [],
+ "candidates": [
+  "tests.test_federation_pull::test_a_lost_response_costs_one_duplicate",
+  "tests.test_federation_pull::test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock",
+  "tests.test_federation_pull::test_a_pull_returns_exactly_the_bytes_push_would_send_and_an_ack_delivers",
+  "tests.test_federation_pull::test_a_pull_returns_only_the_origins_rows",
+  "tests.test_federation_pull::test_a_refusal_sets_last_error_and_leaves_metadata_alone",
+  "tests.test_federation_pull::test_an_ack_naming_another_peers_row_changes_nothing",
+  "tests.test_federation_pull::test_limit_zero_only_acks",
+  "tests.test_federation_pull::test_only_a_verified_request_can_be_busy",
+  "tests.test_federation_pull::test_requests_that_fail_a_check_are_refused",
+  "tests.test_federation_pull::test_the_wrong_destination_is_refused_before_any_nonce_is_stored"
+ ],
+ "collection_errors": [],
+ "exit": 1,
+ "first_line": {
+  "tests.test_federation_pull::test_a_lost_response_costs_one_duplicate": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_pull_returns_exactly_the_bytes_push_would_send_and_an_ack_delivers": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_pull_returns_only_the_origins_rows": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_a_refusal_sets_last_error_and_leaves_metadata_alone": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_an_ack_naming_another_peers_row_changes_nothing": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_limit_zero_only_acks": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_only_a_verified_request_can_be_busy": "assert False",
+  "tests.test_federation_pull::test_requests_that_fail_a_check_are_refused": "NotImplementedError: interface control",
+  "tests.test_federation_pull::test_the_wrong_destination_is_refused_before_any_nonce_is_stored": "NotImplementedError: interface control"
+ },
+ "item": "671a225045",
+ "limit": false,
+ "names_only": [],
+ "patch_sha256": "ce589c32accb4467443c7da83b25037e3b1909986a1bed9e22a3039ef1411905",
+ "seconds": 13.9,
+ "signature": [],
+ "string_bound": {
+  "tests.test_federation_pull::test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock": [
+   "Replay"
+  ],
+  "tests.test_federation_pull::test_only_a_verified_request_can_be_busy": [
+   "Busy"
+  ],
+  "tests.test_federation_pull::test_requests_that_fail_a_check_are_refused": [
+   "Clocks differ by more than 5 minutes",
+   "Invalid pull request",
+   "Not a pull peer",
+   "Replay"
+  ],
+  "tests.test_federation_pull::test_the_wrong_destination_is_refused_before_any_nonce_is_stored": [
+   "Not addressed to this peer"
+  ]
+ },
+ "unread": []
+}
