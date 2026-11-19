@@ -1,0 +1,154 @@
+{
+ "pool": "P",
+ "reader": "w124",
+ "repository_read": "<repo>",
+ "stopped": "nine accepted",
+ "stopped_n": 12,
+ "walked": [
+  {
+   "commit": "4971bdb3601cb479c84b63f72e9e178c712eba4f",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md"
+   ],
+   "gives": "Task 6 gives NOTICE_TEMPLATE, the 30-minute one-notice rule, safe_line(name, 40), and deferred response fields used by peer/tests/test_deferrals.py.",
+   "n": 1,
+   "plan_group": "ship-status-and-claims",
+   "plan_group_reason": "This file is the implementation plan for the ship-status-and-claims feature, including station notices and session tools.",
+   "reason": "Task 6 of this parent plan is the station-notice and deferred-session work implemented by this commit; its prescribed template, timing and response behavior are exercised by the changed tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "b50b2c109c77562c1b7acd843e11459c445a0106",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "gives": "Task 9 gives the 30-minute doubling windows capped at six hours, the six-give-ups-per-day backstop and LOCK_WAIT = 5 used by peer/tests/test_alerts.py.",
+   "n": 2,
+   "plan_group": "station-backups-alerts",
+   "plan_group_reason": "The plan treats backups, restore checks and service alerts as one coordinated piece of work; this item implements its alert-backoff task.",
+   "reason": "Task 9 of this parent plan specifies this commit's alert throttling and lock fallback, with the same fake-clock cases and lock-wait assertion used by its new tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "ca2d0d80ea9edd8bdb2315364ff561da14674d42",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "gives": "Task 3 gives free_bytes, the one-GiB reserve, RETRY_SECONDS = 60, exit codes 10/11/12 and non-overwriting --output behavior used by peer/tests/test_backups.py.",
+   "n": 3,
+   "plan_group": "station-backups-alerts",
+   "plan_group_reason": "This is another task of the same coordinated station-backup, restore and alerts plan as item 2.",
+   "reason": "The parent plan's Task 3 is this commit's low-disk, failed-check, hot-journal and --output work; it supplies the interfaces and expected outcomes in the changed tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "6ba4650f4d3b0e49cb792b256aa21815a01afd08",
+   "files_read": [
+    "docs/superpowers/plans/2026-11-03-lessons-room-adds.md"
+   ],
+   "gives": "Task 3 gives addable_contacts filtering, the public addable fields without code_digest, the addable-dependent confirmation hash and replacement of lessons_addable used by peer/tests/test_lessons_adds.py.",
+   "n": 4,
+   "plan_group": "lessons-room-adds",
+   "plan_group_reason": "The standalone lessons-room-adds plan coordinates listing, confirmation, adding, holds and grant limits; this item is its listing task.",
+   "reason": "Task 3 of the parent plan specifies this listing and confirmation change, including which accounts are addable and how confirmation records them; the changed tests check those exact rules.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "aaef9e76051ed4356bd226825836331cf9f9e291",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "gives": "Task 10 gives the seven-day/twenty-newest listing rule, the strictly-over-36-hour stale notice and its stable ID, and queue-display wording used by peer/tests/test_alerts.py and peer/tests/test_ship_agent.py.",
+   "n": 5,
+   "plan_group": "station-backups-alerts",
+   "plan_group_reason": "This listing task belongs to the same station backups, restore and service-alerts plan as items 2 and 3.",
+   "reason": "The parent plan's Task 10 directly specifies this commit's notice listing, stale-backup warning and alert-queue display, and includes the changed tests' boundary cases and expected text.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "762e72805b022aae1ae68b418ba6224c2e271c2e",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "gives": "Task 4 gives copy_off and the _device test seam, empty --copy-to behavior, exit 13 for refused destinations, and 0600/checksum/retention checks used by peer/tests/test_backups.py.",
+   "n": 6,
+   "plan_group": "station-backups-alerts",
+   "plan_group_reason": "The off-device copy is Task 4 of the same station backups, restore and alerts plan, rather than a separate plan group.",
+   "reason": "Task 4 of the parent plan is the off-device backup copy implemented here; it specifies the default-off switch, destination refusals, privacy, checksum and retention assertions found in the new tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "383c54438dd92fc86599b89190f9794e4768d3e4",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-03-ds9-station.md"
+   ],
+   "gives": "Task 4 gives the /api/ships visibility fields, owner/admin revocation with active_keys = 0, and ordered access-/docked- notice IDs and wording used by peer/tests/test_ships.py.",
+   "n": 7,
+   "plan_group": "ds9-station",
+   "plan_group_reason": "The Deep Space 9 station plan is one coordinated docking-and-agent build; its ship-management task is distinct from the later ship-status-and-claims plan.",
+   "reason": "Task 4 of the parent station plan directly covers ship listing, revocation and station notices; its route contracts and example assertions are implemented by this commit's changed tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "c42ee1f498415a74315cfd29ab956f7c3da4c3f9",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+    "docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md"
+   ],
+   "gives": "Task 3 and design S4 give POST /api/ships/me/watch, the default 20-minute lease, watch_until > now independent of liveness, and renewal that never revives ended or expired watches used by peer/tests/test_presence.py.",
+   "n": 8,
+   "plan_group": "ship-status-and-claims",
+   "plan_group_reason": "The plan explicitly cites this design spec and maps its requirements into tasks; both describe the same ship-status-and-claims work as item 1.",
+   "reason": "Task 3 of the parent plan and S4/R5/R6 of its design specify this watch-lease change, including the route, timing, validation and refusal rules exercised by the new presence tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "19c5bf02c356aa0664652a98c9992be565287d3e",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-work-board.md"
+   ],
+   "gives": "Task 5 gives _key_used across the replacement chain, limits of 100 open items, 10 posts per hour and 8 links, and duplicate-link added: false behavior used by peer/tests/test_room_board.py.",
+   "n": 9,
+   "plan_group": "work-board",
+   "plan_group_reason": "The work-board plan treats station, MCP tools, hook and web as stages of one feature; this item implements its station-side Task 5.",
+   "reason": "Task 5 of the parent work-board plan is this commit's permanent key uniqueness, board limits and duplicate-link behavior, and supplies the same refusal cases and boundary tests added here.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "95e52061b6c28cd8d2f223d922c6d1fb60178bf0",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-ship-room-briefs.md"
+   ],
+   "gives": "Task 4 gives save_ship_brief, PUT /api/ships/me/rooms/{key}/brief, ordered refusal text, addressed_names scanning and ten saves per rolling hour excluding carries used by peer/tests/test_ship_briefs.py.",
+   "n": 10,
+   "plan_group": "ship-room-briefs",
+   "plan_group_reason": "This standalone ship-written-room-briefs plan combines history, author attribution, ship editing and views as one feature, separate from ship status or room boards.",
+   "reason": "The parent plan's Task 4 specifies exactly this ship-only brief-writing route and its checks, rate limit and shared addressed-name scan; its planned examples match the new tests.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "521274677a6c23f3518e1d12725e84a264acc9b7",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "gives": "Task 2 gives COPY_NAME/TEMP_NAME, the newest-copy-per-14-days-and-8-ISO-weeks rule, the KEPT fixture, stale-temporary cleanup and backward-clock refusal used by peer/tests/test_backups.py.",
+   "n": 11,
+   "plan_group": "station-backups-alerts",
+   "plan_group_reason": "Retention is Task 2 of the same coordinated station backups, restore and alerts plan already represented in items 2, 3, 5 and 6.",
+   "reason": "Task 2 of the parent plan specifies this commit's retention and clock guard, including the same manually enumerated retained-copy list used by its new test.",
+   "verdict": "accepted"
+  },
+  {
+   "commit": "fcee532063ec101ef2369a0e56ca08620419f004",
+   "files_read": [
+    "docs/superpowers/plans/2026-10-14-work-board.md"
+   ],
+   "gives": "Task 2 gives board_link's five forms and shape constraints, no_at_name on raw text, live-key refusal before normalization, and NOT_HERE for foreign message IDs used by peer/tests/test_room_board.py.",
+   "n": 12,
+   "plan_group": "work-board",
+   "plan_group_reason": "This is Task 2 of the same staged work-board feature as item 9, not an independent plan merely because it implements earlier validation work.",
+   "reason": "The parent work-board plan's Task 2 directly specifies this link-validation and raw-text refusal change, including the five link forms, same-room message check and exact refusal cases used by the changed tests.",
+   "verdict": "accepted"
+  }
+ ]
+}
