@@ -322,6 +322,17 @@ def runtime_pins(items, out, worker, worker_secs, replay_secs, diagnostic_secs):
     return {"name": worker, "version": version, "model": "script" if family == "script" else model}, limits, programs, environment
 
 
+CONTROL_LIMITS = ("check_secs", "replay_secs", "diagnostic_secs", "lease_secs")
+CONTROL_RUNTIME = "controls-runtime.json"
+
+
+def control_runtime(limits, programs, environment):
+    """What a control's turns run under: the limits a control uses, the room's program and the environment. The
+    worker's pin and its own limit are left out, since no control uses them."""
+    return {"limits": {key: limits[key] for key in CONTROL_LIMITS}, "yak": dict(programs["yak"]),
+        "environment": dict(environment)}
+
+
 def make_plan(items, tasks, out, worker, census, worker_secs=None, replay_secs=1200, diagnostic_secs=300,
         expected=EXPECTED, expected_list_sha256="4b25d330"):
     items, tasks, out = Path(items).resolve(), Path(tasks).resolve(), Path(out).absolute()

@@ -41,6 +41,7 @@ pilot's design changes by it.
 ```
 <out>/candidates.json            made by `documents_plan2.py candidates`
 <out>/src/                       a bare repository: refs/documents/<item>/<row> and -wrong
+<out>/controls-runtime.json      what the controls ran under, written by the judge before the first control
 <out>/controls/<item>/           cases.json, parent.json or stopped.json (the judge)
 <out>/plan.json, plan.sha256     made by `documents_plan2.py make`, after the controls
 <out>/rows/<nnn>-<item>-<row>/   the runner, as in the first pilot
@@ -81,6 +82,12 @@ read (`v`, `seed`, `spec_sha256`, `list_sha256`, `worker`, `limits`, `programs`,
 Rows: a part A item has `may-1`, `may-2`; a part B item has `nothing-1`, `nothing-2`, `may-1`, `may-2`.
 A `may` row's paragraph is the line; a `nothing` row's is empty. The order's hash is the SHA-256 of the
 ASCII text `20261120:order:<commit>:<row>`.
+
+**`controls-runtime.json`** (added after the judge's read): `{"limits": {"check_secs", "replay_secs",
+"diagnostic_secs", "lease_secs"}, "yak": {"path", "sha256"}, "environment": {...}}`, by the first maker's
+`control_runtime`. The judge writes it before the first control and refuses a later run under another
+runtime, and controls found with no such record. `make` refuses unless it equals what the plan pins, and
+pins the file. The worker's pin and its own limit are left out: no control uses them.
 
 ## Task 1. The maker and the runner's check (`documents_plan2.py`)
 

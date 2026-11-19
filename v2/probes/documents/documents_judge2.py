@@ -115,6 +115,24 @@ def candidate_items(candidates):
     return held
 
 
+def hold_runtime(out, plan):
+    """The controls' runtime: written before the first control, compared on every later run. A changed room program,
+    environment or limit is refused, so that controls made under two runtimes are never mixed; controls found with
+    no such record are refused too, since what they ran under cannot be known. The maker compares the same record
+    with its own pins at `make` and pins the file."""
+    now = maker.control_runtime(plan["limits"], plan["programs"], plan["environment"])
+    path = out / maker.CONTROL_RUNTIME
+    if path.exists():
+        if pilot.load(path) != now:
+            raise Refused("the controls' runtime differs from %s: the room's program, the environment or a limit "
+                "changed" % maker.CONTROL_RUNTIME)
+        return
+    made = out / "controls"
+    if made.is_dir() and any(made.iterdir()):
+        raise Refused("controls exist with no %s: what they ran under is not recorded" % maker.CONTROL_RUNTIME)
+    pilot.write_json(path, now)
+
+
 def controls(out, items):
     out = Path(out).resolve()
     if (out / "plan.json").exists():
@@ -129,6 +147,7 @@ def controls(out, items):
             raise Refused("no plan yet: --items is needed")
         listed = first.check_items({"list_sha256": candidates["list_sha256"]}, items)
         plan = pinned_runtime(items, out)
+    hold_runtime(out, plan)
     (out / "controls").mkdir(exist_ok=True)
     for item in targets:
         first.control_item(out, plan, items, listed, item)
@@ -271,13 +290,15 @@ def pair(scores, rows, new):
 
 def item_reading(scores, new=False):
     """A part B item's n1, n2, b, rn, m1, m2, m, rm, d, its class with max(rn, rm), and whether its Nothing pair is at
-    its ceiling (both pass every case the share counts). A pair with a row unscored gives Nones."""
+    its ceiling: both rows pass every frozen case, whichever share this reading counts. A pair with a row unscored
+    gives Nones, and so does an item this reading leaves out (no case that does not pass on the parent)."""
     n1, n2, b, rn = pair(scores, NOTHING, new)
     m1, m2, m, rm = pair(scores, MAY, new)
     d = m - b if b is not None and m is not None else None
+    all1, all2, _, _ = pair(scores, NOTHING, False)
     return {"n1": n1, "n2": n2, "b": b, "rn": rn, "m1": m1, "m2": m2, "m": m, "rm": rm, "d": d,
         "class": first.classify(d, max(rn, rm)) if d is not None else None,
-        "ceiling": n1 == 1 and n2 == 1 if n1 is not None else None}
+        "ceiling": all1 == 1 and all2 == 1 if n1 is not None and all1 is not None else None}
 
 
 def mean(values):
@@ -343,15 +364,16 @@ def counts_beside(plan, scores):
     for pool, kinds in sorted(table.items()):
         for kind, held in sorted(kinds.items()):
             read = [score for score in held if score.get("walk_read") is True]
+            # With no walk read, what the walks name is not known: None, never a zero or an empty list.
             cell = {"turns": len(held), "walks_read": len(read),
-                "plans_paths": sorted({path for score in read for path in score["plans_named"]}),
-                "turns_naming_plans_paths": sum(1 for score in read if score["plans_named"]),
+                "plans_paths": sorted({path for score in read for path in score["plans_named"]}) if read else None,
+                "turns_naming_plans_paths": sum(1 for score in read if score["plans_named"]) if read else None,
                 "first_source_second": mean_of(score.get("first_source_second") for score in read),
                 "steps": mean_of(score.get("steps") for score in held),
                 "worker_seconds": mean_of(score.get("worker_seconds") for score in held),
                 "tokens": mean_of(score.get("tokens") for score in held)}
             if pool in ("A", "P"):
-                cell["names_matching"] = sum(1 for score in read if score.get("matching_named"))
+                cell["names_matching"] = sum(1 for score in read if score.get("matching_named")) if read else None
             out["%s %s" % (pool, kind)] = cell
     return out
 
@@ -404,11 +426,11 @@ def make_report(out):
         report["pools" + suffix] = plain(pools)
     part_a = [item for item in plan["items"] if item["part"] == "A"]
     # judge_row's matching_named is None or empty for a walk this judge could not read.
+    read_a = [score for item in part_a for score in scores.get(item["item"], {}).values()
+        if score.get("walk_read") is True]
     report["part_a"] = {"turns": sum(len(item["rows"]) for item in part_a),
-        "names_matching": sum(1 for item in part_a for score in scores.get(item["item"], {}).values()
-            if score.get("matching_named")),
-        "walks_read": sum(1 for item in part_a for score in scores.get(item["item"], {}).values()
-            if score.get("walk_read") is True),
+        "names_matching": sum(1 for score in read_a if score.get("matching_named")) if read_a else None,
+        "walks_read": len(read_a),
         "items": {item["item"]: {row: None if not first.usable(scores.get(item["item"], {}).get(row)) else
             {"passed": scores[item["item"]][row]["passed"], "of": scores[item["item"]][row]["of"]}
             for row in PART_ROWS["A"]} for item in part_a}}
@@ -423,6 +445,11 @@ def cell(value):
     if isinstance(value, float):
         return "%.3f" % value
     return str(value)
+
+
+def known(value):
+    """A count in a table: the number, or "not available" where no walk was read to count from."""
+    return NOT_AVAILABLE if value is None else str(value)
 
 
 def aggregate(value, on, what="items"):
@@ -479,13 +506,14 @@ def report_markdown(report):
         "| pool, rows | turns | walks read | names a matching file | turns naming a plans/specs/reviews path |"
         " distinct paths | first source second | steps | worker seconds | tokens |", "| --- " * 10 + "|"]
     for key, held in sorted(report["counts"].items()):
-        lines.append("| %s | %d | %d | %s | %d | %d | %s | %s | %s | %s |" % (key, held["turns"], held["walks_read"],
-            cell(held.get("names_matching")), held["turns_naming_plans_paths"], len(held["plans_paths"]),
+        lines.append("| %s | %d | %d | %s | %s | %s | %s | %s | %s | %s |" % (key, held["turns"], held["walks_read"],
+            known(held["names_matching"]) if "names_matching" in held else "-", known(held["turns_naming_plans_paths"]),
+            known(None if held["plans_paths"] is None else len(held["plans_paths"])),
             *(aggregate(number(held[name]["mean"]), held[name]["on"], "turns")
             for name in ("first_source_second", "steps", "worker_seconds", "tokens"))))
     part_a = report["part_a"]
     lines += ["", "## Part A, counts only", "",
-        "Turns whose walk names a matching file: %d of %d (walks read: %d)." % (part_a["names_matching"],
+        "Turns whose walk names a matching file: %s of %d (walks read: %d)." % (known(part_a["names_matching"]),
         part_a["turns"], part_a["walks_read"]), "", "| item | may-1 | may-2 |", "| --- | --- | --- |"]
     for item, held in sorted(part_a["items"].items()):
         lines.append("| %s | %s |" % (item, " | ".join("no score" if held[row] is None else "%d of %d" % (

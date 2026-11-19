@@ -120,12 +120,22 @@ class Fixture(fixtures.Fixture):
         return self.driver.candidates(self.items, self.selection, self.out, census=self.census,
             expected=None, expected_list_sha256=self.expected_hash)
 
+    def runtime(self):
+        """The controls' runtime, written where the judge writes it, as this fixture's make will pin it."""
+        with mock.patch.dict(os.environ, self.env):
+            _, limits, programs, environment = self.driver.first.runtime_pins(self.items, self.out,
+                "script:" + str(self.worker), None, 1200, 300)
+        held = self.driver.first.control_runtime(limits, programs, environment)
+        write_json(self.out / self.driver.first.CONTROL_RUNTIME, held)
+        return held
+
     def controls(self, candidates):
         for item in candidates["part_a"] + candidates["pool_p"] + candidates["pool_n"]:
             directory = self.out / "controls" / item["item"]
             write_json(directory / "cases.json", {"commit": item["commit"], "cases": ["one", "two"],
                 "counts": {"passed": 2, "failed": 0, "error": 0, "skipped": 0}})
             write_json(directory / "parent.json", {"commit": item["commit"], "passed": ["one"]})
+        self.runtime()
 
     def make(self):
         with mock.patch.dict(os.environ, self.env):
@@ -309,6 +319,59 @@ class Maker(Fixture):
             self.make()
 
 
+class ControlsRuntime(Fixture):
+    def ready(self):
+        candidate = self.candidates()
+        self.controls(candidate)
+        return candidate
+
+    def test_make_needs_the_record_of_what_the_controls_ran_under(self):
+        self.ready()
+        (self.out / self.driver.first.CONTROL_RUNTIME).unlink()
+        with self.assertRaisesRegex(self.driver.Refused, "not recorded"):
+            self.make()
+        self.assertFalse((self.out / "plan.json").exists())
+
+    def test_make_refuses_controls_that_ran_under_another_runtime(self):
+        self.ready()
+        path = self.out / self.driver.first.CONTROL_RUNTIME
+        good = json.loads(path.read_text())
+        for change in ("program", "environment", "limit"):
+            held = json.loads(json.dumps(good))
+            if change == "program":
+                held["yak"]["sha256"] = "0" * 64
+            elif change == "environment":
+                held["environment"]["PATH"] = held["environment"]["PATH"] + ":/elsewhere"
+            else:
+                held["limits"]["diagnostic_secs"] += 1
+            write_json(path, held)
+            with self.assertRaisesRegex(self.driver.Refused, "another runtime", msg=change):
+                self.make()
+            self.assertFalse((self.out / "plan.json").exists(), change)
+        write_json(path, good)
+        self.make()
+        self.assertTrue((self.out / "plan.json").exists())
+
+    def test_the_record_is_pinned_and_a_change_after_make_is_refused(self):
+        self.ready()
+        self.make()
+        plan = self.driver.first.load_plan(self.out)
+        path = (self.out / self.driver.first.CONTROL_RUNTIME).resolve()
+        self.assertIn(self.driver.first.pin_path(path), plan["inputs"])
+        held = json.loads(path.read_text())
+        held["limits"]["replay_secs"] += 1
+        write_json(path, held)
+        with self.assertRaisesRegex(self.driver.Refused, "input changed"):
+            self.driver.first.load_plan(self.out)
+
+    def test_the_runtime_leaves_out_the_workers_pin_and_limit(self):
+        got = self.driver.first.control_runtime({"worker_secs": 9, "check_secs": 1, "replay_secs": 2,
+            "diagnostic_secs": 3, "lease_secs": 4}, {"yak": {"path": "/y", "sha256": "s"}, "worker": {"path": "/w"}},
+            {"PATH": "/p"})
+        self.assertEqual(got, {"limits": {"check_secs": 1, "replay_secs": 2, "diagnostic_secs": 3, "lease_secs": 4},
+            "yak": {"path": "/y", "sha256": "s"}, "environment": {"PATH": "/p"}})
+
+
 class Message(unittest.TestCase):
     def test_exact_message_bytes_keep_trailer_and_strip_only_trailing_ascii_space(self):
         with __import__("tempfile").TemporaryDirectory() as folder:
@@ -376,7 +439,15 @@ class Guards(fixtures.Fixture):
         directory = self.out / "controls" / self.commit[:10]
         write_json(directory / "cases.json", {"commit": self.commit, "cases": ["one"]})
         write_json(directory / "parent.json", {"commit": self.commit, "passed": []})
+        self.runtime()
         return candidate
+
+    def runtime(self):
+        with mock.patch.dict(os.environ, self.env):
+            _, limits, programs, environment = self.driver.first.runtime_pins(self.items, self.out,
+                "script:" + str(self.worker), None, 1200, 300)
+        write_json(self.out / self.driver.first.CONTROL_RUNTIME,
+            self.driver.first.control_runtime(limits, programs, environment))
 
     def make_second(self):
         with mock.patch.dict(os.environ, self.env):
@@ -471,6 +542,7 @@ class Guards(fixtures.Fixture):
             directory = self.out / "controls" / self.commit[:10]
             write_json(directory / "cases.json", {"commit": self.commit, "cases": ["one"]})
             write_json(directory / "parent.json", {"commit": self.commit, "passed": []})
+            self.runtime()
             with mock.patch.dict(os.environ, self.env):
                 self.assertEqual(self.driver.main(["make", str(self.items), str(self.tasks), str(self.selection),
                     str(self.out), "--worker", "script:" + str(self.worker), "--census", str(self.census)]), 0)

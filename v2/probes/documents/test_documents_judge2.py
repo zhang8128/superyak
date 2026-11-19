@@ -69,6 +69,9 @@ class Plan2:
         raw = (json.dumps(self.plan, sort_keys=True, indent=1) + "\n").encode()
         (self.out / "plan.json").write_bytes(raw)
         (self.out / "plan.sha256").write_text(first.pilot.digest(raw) + "\n")
+        # A made plan always has the record of what its controls ran under: the maker requires it.
+        (self.out / first.maker.CONTROL_RUNTIME).write_text(json.dumps(first.maker.control_runtime(
+            self.plan["limits"], self.plan["programs"], self.plan["environment"])))
         for item in self.plan["items"]:
             controls = self.out / "controls" / item["item"]
             if controls.exists():
@@ -156,6 +159,22 @@ class Readings(unittest.TestCase):
         got = judge2.item_reading({"nothing-1": s(2), "nothing-2": s(2), "may-1": s(3), "may-2": s(0, scored=False)})
         self.assertEqual((got["m1"], got["m2"], got["m"], got["rm"], got["d"]), (None, None, None, None, None))
         self.assertEqual(got["b"], Fraction(2, 8))
+
+    def test_the_ceiling_is_over_all_frozen_cases_in_both_readings(self):
+        # The reader's input at 33dce6eb: both Nothing rows pass 4 of 8, and all 4 of the 4 that fail on the parent.
+        half = {row: s(4, 8, passed_new=4, of_new=4) for row in ("nothing-1", "nothing-2", "may-1", "may-2")}
+        self.assertIs(judge2.item_reading(half)["ceiling"], False)
+        self.assertIs(judge2.item_reading(half, new=True)["ceiling"], False)
+        self.assertEqual(judge2.item_reading(half, new=True)["n1"], 1)          # the new-case share is whole all the same
+        whole = {row: s(8, 8, passed_new=4, of_new=4) for row in half}
+        self.assertIs(judge2.item_reading(whole)["ceiling"], True)
+        self.assertIs(judge2.item_reading(whole, new=True)["ceiling"], True)
+        left_out = {row: s(8, 8, passed_new=0, of_new=0) for row in half}       # no case fails on the parent
+        self.assertIs(judge2.item_reading(left_out)["ceiling"], True)
+        self.assertIsNone(judge2.item_reading(left_out, new=True)["ceiling"])
+        one_only = {row: s(8, 8, passed_new=4, of_new=4) for row in half}
+        one_only["nothing-2"] = s(7, 8, passed_new=4, of_new=4)                 # whole on the new cases, not on all
+        self.assertIs(judge2.item_reading(one_only, new=True)["ceiling"], False)
 
     def test_the_ceiling(self):
         self.assertIs(reading_of(8, 8, 8, 8)["ceiling"], True)
@@ -486,10 +505,13 @@ class Controls(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    limits = {"worker_secs": 1200, "check_secs": 900, "replay_secs": 1200, "diagnostic_secs": 300, "lease_secs": 1800}
+    yak = {"path": "/y", "sha256": "a" * 64}
+
     def run_controls(self, items="items"):
         made = []
-        pins = mock.Mock(return_value=({"name": "script:/bin/sh"}, {"diagnostic_secs": 300}, {"yak": {"path": "/y"}},
-            {"PATH": "/p"}))
+        pins = mock.Mock(return_value=({"name": "script:/bin/sh"}, dict(self.limits), {"yak": dict(self.yak),
+            "worker": {"path": "/bin/sh"}}, {"PATH": "/p"}))
         listed = {"commits": []}
         with mock.patch.object(first, "control_item", lambda out, plan, items, held, item:
                 made.append((out, plan, items, held, item["item"]))), \
@@ -509,10 +531,76 @@ class Controls(unittest.TestCase):
                 {"n": 3, "commit": "4" * 40, "item": "4" * 10, "parent": "f" * 40}]}))
         made, pins, listed = self.run_controls()
         self.assertEqual([held[4] for held in made], ["1" * 10, "2" * 10, "3" * 10, "4" * 10])
-        self.assertEqual(made[0][:4], (self.out.resolve(), {"limits": {"diagnostic_secs": 300},
-            "programs": {"yak": {"path": "/y"}}, "environment": {"PATH": "/p"}}, "items", listed))
+        self.assertEqual(made[0][:4], (self.out.resolve(), {"limits": self.limits,
+            "programs": {"yak": self.yak, "worker": {"path": "/bin/sh"}}, "environment": {"PATH": "/p"}}, "items", listed))
         self.assertEqual(pins.call_args[0][2:], ("script:/bin/sh", None, 1200, 300))    # make_plan's defaults
         self.assertTrue((self.out / "controls").is_dir())
+        # What the controls ran under is written down: the limits a control uses, the room's program, the
+        # environment; not the worker's pin or its limit, which no control uses.
+        held = json.loads((self.out / first.maker.CONTROL_RUNTIME).read_text())
+        self.assertEqual(held, {"limits": {key: value for key, value in self.limits.items() if key != "worker_secs"},
+            "yak": self.yak, "environment": {"PATH": "/p"}})
+
+    def candidates_of_one(self):
+        (self.out / "candidates.json").write_text(json.dumps({"v": 2, "list_sha256": "L", "selection": {},
+            "part_a": [{"commit": "1" * 40, "item": "1" * 10, "parent": "f" * 40}], "pool_p": [], "pool_n": []}))
+
+    def test_the_runtime_is_written_before_the_first_control(self):
+        self.candidates_of_one()
+        seen = []
+        pins = mock.Mock(return_value=({}, dict(self.limits), {"yak": dict(self.yak)}, {"PATH": "/p"}))
+        with mock.patch.object(first, "control_item", lambda out, plan, items, held, item:
+                seen.append((out / first.maker.CONTROL_RUNTIME).exists())), \
+                mock.patch.object(first, "check_items", lambda plan, items: {"commits": []}), \
+                mock.patch.object(first.maker, "runtime_pins", pins):
+            self.assertEqual(judge2.controls(self.out, "items"), 0)
+        self.assertEqual(seen, [True])
+
+    def test_a_changed_runtime_is_refused_on_a_later_run_and_makes_no_control(self):
+        self.candidates_of_one()
+        self.run_controls()
+        for change in ("program", "environment", "limit"):
+            limits, yak, environment = dict(self.limits), dict(self.yak), {"PATH": "/p"}
+            if change == "program":
+                yak["sha256"] = "b" * 64
+            elif change == "environment":
+                environment["PATH"] = "/q"
+            else:
+                limits["replay_secs"] = 1201
+            made = []
+            pins = mock.Mock(return_value=({}, limits, {"yak": yak}, environment))
+            with mock.patch.object(first, "control_item", lambda *held: made.append(held)), \
+                    mock.patch.object(first, "check_items", lambda plan, items: {"commits": []}), \
+                    mock.patch.object(first.maker, "runtime_pins", pins):
+                with self.assertRaisesRegex(Refused, "runtime differs", msg=change):
+                    judge2.controls(self.out, "items")
+            self.assertEqual(made, [], change)
+        # The worker's own limit is no part of it: a control does not use it.
+        pins = mock.Mock(return_value=({}, dict(self.limits, worker_secs=5), {"yak": dict(self.yak)}, {"PATH": "/p"}))
+        with mock.patch.object(first, "control_item", lambda *held: None), \
+                mock.patch.object(first, "check_items", lambda plan, items: {"commits": []}), \
+                mock.patch.object(first.maker, "runtime_pins", pins):
+            self.assertEqual(judge2.controls(self.out, "items"), 0)
+
+    def test_controls_found_with_no_record_of_their_runtime_are_refused(self):
+        self.candidates_of_one()
+        (self.out / "controls" / ("1" * 10)).mkdir(parents=True)
+        made = []
+        pins = mock.Mock(return_value=({}, dict(self.limits), {"yak": dict(self.yak)}, {"PATH": "/p"}))
+        with mock.patch.object(first, "control_item", lambda *held: made.append(held)), \
+                mock.patch.object(first, "check_items", lambda plan, items: {"commits": []}), \
+                mock.patch.object(first.maker, "runtime_pins", pins):
+            with self.assertRaisesRegex(Refused, "not recorded"):
+                judge2.controls(self.out, "items")
+        self.assertEqual(made, [])
+        self.assertFalse((self.out / first.maker.CONTROL_RUNTIME).exists())
+        # An empty controls directory holds no control: the record is written and the controls are made.
+        (self.out / "controls" / ("1" * 10)).rmdir()
+        with mock.patch.object(first, "control_item", lambda *held: made.append(held)), \
+                mock.patch.object(first, "check_items", lambda plan, items: {"commits": []}), \
+                mock.patch.object(first.maker, "runtime_pins", pins):
+            self.assertEqual(judge2.controls(self.out, "items"), 0)
+        self.assertEqual(len(made), 1)
 
     def test_before_a_plan_items_are_needed_and_candidates_of_v2(self):
         (self.out / "candidates.json").write_text(json.dumps({"v": 2, "list_sha256": "L", "part_a": [], "pool_p": [],
@@ -533,6 +621,16 @@ class Controls(unittest.TestCase):
                 mock.patch.object(first, "check_items", lambda held, items: {"commits": []}):
             self.assertEqual(judge2.controls(plan.out, None), 0)
         self.assertEqual(made, [(plan.plan["limits"], plan.plan["items_dir"], item["item"]) for item in items])
+        # With a plan the runtime compared is the plan's own: a record of another program refuses, and makes none.
+        held = json.loads((plan.out / first.maker.CONTROL_RUNTIME).read_text())
+        held["yak"]["sha256"] = "c" * 64
+        (plan.out / first.maker.CONTROL_RUNTIME).write_text(json.dumps(held))
+        made.clear()
+        with mock.patch.object(first, "control_item", lambda *taken: made.append(taken)), \
+                mock.patch.object(first, "check_items", lambda held, items: {"commits": []}):
+            with self.assertRaisesRegex(Refused, "runtime differs"):
+                judge2.controls(plan.out, None)
+        self.assertEqual(made, [])
 
     def test_the_first_judges_controls_call_control_item_for_each_item(self):
         source = (HERE / "documents_judge.py").read_text(encoding="utf-8")
@@ -574,6 +672,11 @@ class Report(unittest.TestCase):
         self.assertEqual(report["counts"]["P may"]["plans_paths"], ["docs/plans/p1.md"])
         self.assertEqual(report["counts"]["N may"]["tokens"], {"mean": None, "on": 0})
         self.assertEqual(report["counts"]["N may"]["walks_read"], 0)
+        # No walk of pool N was read: what its walks name is not known, and is not said to be nothing.
+        for kind in ("N may", "N nothing"):
+            self.assertIsNone(report["counts"][kind]["turns_naming_plans_paths"], kind)
+            self.assertIsNone(report["counts"][kind]["plans_paths"], kind)
+        self.assertEqual(report["counts"]["P nothing"]["plans_paths"], [])        # read, and naming none: a real zero
         self.assertEqual(report["counts"]["N may"]["worker_seconds"], {"mean": 10.0, "on": 2})
         self.assertEqual(report["counts"]["N may"]["steps"], {"mean": 5, "on": 2})
         self.assertEqual(report["counts"]["P may"]["steps"], {"mean": 3, "on": 4})
@@ -597,6 +700,23 @@ class Report(unittest.TestCase):
         self.assertNotIn("no plan exists", text.replace(judge2.NONE_FOUND_SENTENCE, ""))
         self.assertNotIn("could show no gain", text)
         text.encode("ascii")
+        # The table's rows for pool N, whose walks were not read, say so in the three counts of what walks name.
+        rows = {line.split(" | ")[0].lstrip("| "): line for line in text.splitlines() if line.startswith("| ")}
+        self.assertEqual(rows["N may"].split(" | ")[3:6], ["-", "not available", "not available"])
+        self.assertEqual(rows["P nothing"].split(" | ")[3:6], ["0", "0", "0"])
+        self.assertEqual(rows["P may"].split(" | ")[3:6], ["1", "2", "1"])
+
+    def test_part_a_with_no_walk_read_does_not_say_none_named(self):
+        a = plan_item(0, "A")
+        plan = Plan2(self.temporary.name, [a])
+        plan.score(a, "may-1", 2, walk_read=False, matching_named=None, plans_named=None)
+        plan.score(a, "may-2", 2, walk_read=False, matching_named=None, plans_named=None)
+        report = judge2.write_report(plan.out)
+        self.assertEqual((report["part_a"]["names_matching"], report["part_a"]["walks_read"]), (None, 0))
+        self.assertIsNone(report["counts"]["A may"]["names_matching"])
+        text = (plan.out / "report.md").read_text()
+        self.assertIn("Turns whose walk names a matching file: not available of 2 (walks read: 0).", text)
+        self.assertIn("| A may | 2 | 0 | not available | not available | not available |", text)
 
     def test_suspended_and_part_b_not_run_in_the_report(self):
         p1, n1 = plan_item(1, "B", "P", "g1"), plan_item(3, "B", "N")

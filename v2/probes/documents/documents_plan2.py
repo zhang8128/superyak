@@ -191,8 +191,15 @@ def make_plan(items, tasks, selection, out, worker, census, expected=first.EXPEC
     n, walked_n = walk_pool(candidate["pool_n"], controls, "N")
     part_b_run = len(p) == len(n) == 6
     worker_pin, limits, programs, environment = first.runtime_pins(items, out, worker, None, 1200, 300)
+    # The controls were made before this plan: what they ran under must be what the plan pins.
+    runtime = out / first.CONTROL_RUNTIME
+    if not runtime.exists():
+        raise Refused("no %s: what the controls ran under is not recorded" % first.CONTROL_RUNTIME)
+    if pilot.load(runtime) != first.control_runtime(limits, programs, environment):
+        raise Refused("the controls ran under another runtime than this plan pins (%s): the room's program, the "
+            "environment or a limit differs" % first.CONTROL_RUNTIME)
     paths = list(HERE.glob("*.py")) + list(HERE.glob("*.sh")) + [Path(pilot.__file__), SPEC, Path(census),
-        items / "list/items.json", tasks / "FROZEN.sha256", out / "candidates.json"]
+        items / "list/items.json", tasks / "FROZEN.sha256", out / "candidates.json", runtime]
     paths += [selection / name for name in SELECTION.values()] + [Path(pin["path"]) for pin in programs.values()]
     frozen = {}
     for line in (tasks / "FROZEN.sha256").read_text(encoding="ascii").splitlines():
