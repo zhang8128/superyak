@@ -73,8 +73,17 @@ OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed", "export-failed")
 # Every outcome a judged row can have with no score, in one place; the report names each that occurred.
 UNSCORED = ("clock-failed", "export-failed", "report-refused", "not-applied", "diagnostic-limit",
     "diagnostic-clock-failed", "diagnostic-no-hand-in", "diagnostic-no-status", "replay-limit", "replay-clock-failed")
-BM25_SENTENCE = ("The bm25 row was added to the plan after its places were seen and before any turn; it is not a row "
-    "of the rule.")
+BM25_SENTENCE = ("The bm25 row (a second search) was chosen after four orderings were compared on these same twelve "
+    "items, after its places were seen and before any turn; it is not a row of the rule.")
+FORGE_SENTENCE = ("Every score is read from a report written inside the jail by a run the turn's own code is part of, "
+    "and could be forged by it.")
+REPLAY_SENTENCE = ("The room's verdict by replay is one more observation beside a score; it does not vouch for the score.")
+BM25_LABEL = "bm25 (selected after retrieval counts)"
+
+
+def label(row):
+    """A condition's name in a table of the report: bm25 always carries how it was chosen."""
+    return BM25_LABEL if row == "bm25" else row
 MAX_OBSTACLES = 20
 LINE_CHARS = 400
 STATUS_ORDER = ("passed", "skipped", "failed", "error")
@@ -157,7 +166,8 @@ def read_junit(data):
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ReportRefused("the JUnit report is not UTF-8: %s" % error) from None
-    if not text.strip():
+    if not text.strip(" \t\r\n"):
+        # Empty, or XML's own white space alone. Any other character goes on to be refused or parsed.
         return {"cases": {}, "collection_errors": []}
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text):
         # XML allows none of these; pytest escapes them. A NUL also lets the parser take UTF-16 or UTF-32 from the
@@ -334,6 +344,17 @@ def turn_outcome(directory, base):
     return kind, commit, passed if type(passed) is bool else None
 
 
+def turn_timed_out(directory):
+    """Whether the room stopped the run's one turn at its limit, whatever the turn had committed by then. A row's
+    turn may hand in at its limit and be scored; a turn of the judge's own (a diagnostic, a replay) may not."""
+    try:
+        turns = json.loads((Path(directory) / "turns.json").read_bytes())
+    except (OSError, ValueError):
+        return False
+    return (isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
+        and isinstance(turns[0].get("measured"), dict) and turns[0]["measured"].get("ended") == "timed_out")
+
+
 def committed(repo, commit, name):
     """A file the turn committed, or None where it committed none. Refused unless it is a regular file of at most
     MAX_REPORT bytes; the size is read before the contents are captured."""
@@ -377,8 +398,9 @@ def diagnostic(directory, items, commit, patch, plan, base):
     if not isinstance(status, dict):
         raise ReportRefused("jail-status.json is not an object")
     report = committed(turn / "repo", turn_commit, "jail-junit.xml") or b""
-    return {"turn": kind, "applied": status.get("apply_exit") == 0, "limit": status.get("limit") is True,
-        "report": read_junit(report)}
+    # The limit is the tests' own (the status says so) or the room's on the whole turn; what was counted is kept.
+    return {"turn": kind, "applied": status.get("apply_exit") == 0,
+        "limit": status.get("limit") is True or turn_timed_out(turn), "report": read_junit(report)}
 
 
 def replay(directory, items, commit, patch, plan, base):
@@ -391,6 +413,8 @@ def replay(directory, items, commit, patch, plan, base):
     (worker / "worker.sh").chmod(0o755)
     jail_turn(Path(directory) / "turn", items, commit, worker, plan, plan["limits"]["replay_secs"])
     kind, _, verdict = turn_outcome(Path(directory) / "turn", base)
+    if kind == "handed-in" and turn_timed_out(Path(directory) / "turn"):
+        return "limit", None            # stopped at its limit after it committed: no verdict is taken from it
     return kind, verdict
 
 
@@ -442,7 +466,13 @@ def controls(out, items):
         entry = pilot.item_from(listed, item["commit"])
         repo = Path(items).resolve() / "repo"
         patch = source_patch(repo, entry["base"], entry["reference"])
-        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan, entry["base"])
+        try:
+            ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan, entry["base"])
+        except ReportRefused as error:
+            pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
+                "reason": "the reference's report was refused: %s" % error})
+            print("%s: stopped: the reference's report was refused: %s" % (item["item"], error))
+            continue
         passed = sorted(case for case, (status, _) in ran["report"]["cases"].items() if status == "passed")
         counts = {status: sum(1 for held, _ in ran["report"]["cases"].values() if held == status)
             for status in ("passed", "failed", "error", "skipped")}
@@ -466,7 +496,13 @@ def controls(out, items):
             pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": stop})
             print("%s: stopped: %s" % (item["item"], stop))
             continue
-        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan, entry["base"])
+        try:
+            parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan, entry["base"])
+        except ReportRefused as error:
+            pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
+                "reason": "the parent's report was refused: %s" % error})
+            print("%s: stopped: the parent's report was refused: %s" % (item["item"], error))
+            continue
         if parent["limit"] or parent["turn"] != "handed-in":
             pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason":
                 "the parent's run reached its limit" if parent["limit"] else "the parent's turn ended %s" % parent["turn"]})
@@ -698,8 +734,9 @@ def plan_summaries(plan, readings, keep=lambda item: True):
     """The by-plan table, its tally of plans, the equally weighted figure and what each figure stands on (plans and
     items), over the plan's items that `keep` keeps."""
     table, figures = by_plan({"items": [item for item in plan["items"] if keep(item)]}, readings)
-    tallied = {row: {"higher": sum(1 for group in table.values() if group["conditions"].get(row, {}).get("class")
-        == "higher"), "on": sum(1 for group in table.values() if row in group["conditions"])} for row in OFFERING}
+    tallied = {row: dict({held: sum(1 for group in table.values() if group["conditions"].get(row, {}).get("class")
+        == held) for held in ("higher", "lower", "within")}, on=sum(1 for group in table.values()
+        if row in group["conditions"])) for row in OFFERING}
     on = {row: {"plans": len(table) if figures[row] is not None else 0, "items": sum(group["conditions"][row]["on"]
         for group in table.values()) if figures[row] is not None else 0} for row in OFFERING}
     return {"plans": table, "plans_tally": tallied, "figures": figures, "figures_on": on}
@@ -849,12 +886,13 @@ def report_markdown(report):
         "Rows with no score, by outcome: %s." % counted((outcome, rows["unscored"][outcome]) for outcome in UNSCORED
         if outcome in rows["unscored"]), "",
         "Rows the room ended at their limit, by condition: %s." % ", ".join("%s %d" % (row, rows["at_limit"][row])
-        for row in ROWS), "", BM25_SENTENCE, ""]
+        for row in ROWS), "", "## Read this before the tables", "", "- " + BM25_SENTENCE, "- " + FORGE_SENTENCE,
+        "- " + REPLAY_SENTENCE, ""]
     for item, reason in sorted(report["controls_stopped"].items()):
         lines.append("Controls stopped at %s: %s" % (item, reason))
     for suffix, title in SHARES:
         lines += ["", "## Each item (%s)" % title, "",
-            "| item | plan | parent | of | of_new | n1 | n2 | b | r | " + " | ".join("%s d (class)" % row
+            "| item | plan | parent | of | of_new | n1 | n2 | b | r | " + " | ".join("%s d (class)" % label(row)
             for row in OFFERING) + " |", "| --- " * (9 + len(OFFERING)) + "|"]
         for item, held in report["items" + suffix].items():
             parent = report["parent"].get(item)
@@ -874,21 +912,23 @@ def report_markdown(report):
             " without the probed: higher | lower | within | on |", "| --- " * 9 + "|"]
         for row in OFFERING:
             a, w = report["tally" + suffix][row], report["tally_without_probed" + suffix][row]
-            lines.append("| %s | %d | %d | %d | %d | %d | %d | %d | %d |" % (row, a["higher"], a["lower"],
+            lines.append("| %s | %d | %d | %d | %d | %d | %d | %d | %d |" % (label(row), a["higher"], a["lower"],
                 a["within"], a["on"], w["higher"], w["lower"], w["within"], w["on"]))
         for part, named in (("", "By plan"), ("_without_probed", "By plan, without the probed item")):
             key = part + suffix
             lines += ["", "## %s (%s)" % (named, title), "", "| plan | items | " + " | ".join(
-                "%s D, R (class)" % row for row in OFFERING) + " |", "| --- " * (2 + len(OFFERING)) + "|"]
+                "%s D, R (class)" % label(row) for row in OFFERING) + " |", "| --- " * (2 + len(OFFERING)) + "|"]
             for group, held in report["plans" + key].items():
                 lines.append("| %s | %s | %s |" % (group, ", ".join(held["items"]), " | ".join(
                     "%s, %s (%s; on %d)" % (cell(held["conditions"][row]["D"]), cell(held["conditions"][row]["R"]),
                     held["conditions"][row]["class"], held["conditions"][row]["on"]) if row in held["conditions"]
                     else "not read" for row in OFFERING)))
-            lines += ["", "Every plan weighing the same: " + "; ".join("%s %s (%d plans, %d items)" % (row,
+            lines += ["", "Every plan weighing the same: " + "; ".join("%s %s (%d plans, %d items)" % (label(row),
                 cell(report["figures" + key][row]), report["figures_on" + key][row]["plans"],
-                report["figures_on" + key][row]["items"]) for row in OFFERING) + ". Plans higher: " + "; ".join(
-                "%s %d of %d" % (row, report["plans_tally" + key][row]["higher"], report["plans_tally" + key][row]["on"])
+                report["figures_on" + key][row]["items"]) for row in OFFERING) + ". Plans higher, lower, "
+                "within, of those read: " + "; ".join("%s %d, %d, %d of %d" % (label(row),
+                report["plans_tally" + key][row]["higher"], report["plans_tally" + key][row]["lower"],
+                report["plans_tally" + key][row]["within"], report["plans_tally" + key][row]["on"])
                 for row in OFFERING) + "."]
     lines += ["", "## The rule for where to spend next", "",
         "The rule reads the shares of all frozen cases at the rows %s; bm25 is not among them." % ", ".join(RULE_ROWS), ""]
@@ -896,7 +936,7 @@ def report_markdown(report):
     lines.append("**%s**." % rule["decision"].capitalize() + ("" if not rule["missing"] else
         " The rule is not applied: these rows it needs have no score: %s." % ", ".join(rule["missing"])))
     lines += ["", "## Places counted before any turn", "", BM25_SENTENCE, "",
-        "| item | search: best place | tied | bm25: best place | tied | newest plans: best place |",
+        "| item | search: best place | tied | %s: best place | tied | newest plans: best place |" % BM25_LABEL,
         "| --- | --- | --- | --- | --- | --- |"]
     for item, held in report["places"].items():
         lines.append("| %s | %s | %s | %s | %s | %s |" % (item, cell(held["search"]), cell(held["search_tied"]),

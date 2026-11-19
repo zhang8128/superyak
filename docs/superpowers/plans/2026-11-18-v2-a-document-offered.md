@@ -95,9 +95,10 @@ to `<out>/plan.sha256` and checked by `load_plan`):
 - The outcome is read from the room's export of the turn, not from the clock's exit code: the real room
   ends a finished turn that handed in nothing with exit 1 and records the base's own commit for it.
 - A recorded commit other than the base makes the row `handed-in`, even when the room ended the turn at
-  its limit. A commit equal to the base, or a finished turn with none, is `no-hand-in`. `limit` is a
-  turn ended at its limit with no commit. `at_limit` is true whenever the room ended the turn at its
-  limit, and the report counts those rows by condition.
+  its limit. A commit equal to the base is `no-hand-in`, unless the turn ended `timed_out`: then it is
+  `limit`. (The real room records the base's own commit for a turn that handed in nothing, finished or
+  stopped at its limit.) A turn with no commit is read the same way by how it ended. `at_limit` is true
+  whenever the room ended the turn at its limit, and the report counts those rows by condition.
 - `export-failed`: the room's export of the turn failed. What it printed is kept, and the judge asks
   for the export once more before scoring. A failed export of the walk leaves the outcome as it is.
 - `clock-failed`: anything else, a clock that ended with no turn among them.
@@ -112,10 +113,16 @@ base with no change.
 int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int, "unfrozen": int,
 "collection_errors": [str], "first_obstacles": [str], "room_passed": bool or null, "matching_named":
 {"<path>": {"step": int, "seconds": float}}, "offered_named": [str], "of_new": int, "passed_new":
-int, "at_limit": bool, "exported_again": bool}`, and `"reason": str` on a row with no score. `of_new`
+int, "at_limit": bool, "exported_again": {"turns": int, "walks": int}}`, and `"reason": str` on a row
+whose report was refused. `of_new`
 is how many frozen cases do not pass on the parent, and `passed_new` how many of those pass under the
-change. The walk's two members are null when the walk could not be exported. `exported_again` says the
-judge asked the room for the turn's export once more because the runner's had failed.
+change. The walk's two members are null when the walk could not be exported. `exported_again` holds
+the exit code of each export the judge asked the room for once more, because the runner's had failed;
+it is empty when none was. Only the export that failed is asked for again.
+
+**A turn of the judge's own that the room stops at its limit** (a diagnostic, a replay) gives no score,
+whatever it had committed by then; a diagnostic's counts are kept beside the row. A row's own turn may
+hand in at its limit and be scored.
 
 **The outcomes with no score,** one constant in the judge: `clock-failed`, `export-failed`,
 `report-refused`, `not-applied`, `diagnostic-limit`, `diagnostic-clock-failed`, `diagnostic-no-hand-in`,
@@ -138,7 +145,8 @@ count, and enters no sum.
 - **The paragraphs' bytes,** as built and read: for `exists`, the spec's sentence; for `path`, the
   spec's sentence with the path in backticks and a full stop after it; for the three-path rows, the
   spec's sentence ending in a colon, then one line for each path, `- ` and the path in backticks, in
-  the order the search, the newest plans or the lot gives them. No line after the last.
+  the order the search, the newest plans, the lot or the second search (`bm25`) gives them. No line
+  after the last.
 - **The search, the newest plans and the lot** exactly as the spec's section 4 fixes them. Port the
   search from `plan-search.py` (its first row). The lot's and the order's hashes are over ASCII text
   with the whole commit id.

@@ -123,6 +123,15 @@ class Scoring(unittest.TestCase):
         data = b'<testsuite><testcase classname="c" name="t"><skipped message="s"/><failure message="f"/></testcase></testsuite>'
         self.assertEqual(judge.read_junit(data)["cases"]["c::t"], ("failed", "f"))
 
+    def test_only_xml_white_space_makes_a_report_empty(self):
+        # The reader's input at 06ee50fa: a report of one forbidden character was read as empty and scored.
+        for empty in (b"", b" ", b"\t\r\n  \n"):
+            self.assertEqual(judge.read_junit(empty), {"cases": {}, "collection_errors": []}, empty)
+        for refused in (b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\x1f", b" \x0b\n", b"\x00",
+                "\u00a0".encode("utf-8"), "\u2028".encode("utf-8"), b"\x85".decode("latin-1").encode("utf-8"), b"x"):
+            with self.assertRaises(judge.ReportRefused, msg=refused):
+                judge.read_junit(refused)
+
     def test_an_empty_report_has_no_cases_and_a_doctype_is_refused(self):
         self.assertEqual(judge.read_junit(b"  \n"), {"cases": {}, "collection_errors": []})
         with self.assertRaises(Refused):
@@ -181,6 +190,26 @@ class RoomAnswers(unittest.TestCase):
             self.assertEqual(judge.turn_outcome(temporary, base), ("handed-in", c, None))
             path.write_text(json.dumps([{"commit": None, "passed": None, "measured": {"ended": "timed_out"}}]))
             self.assertEqual(judge.turn_outcome(temporary, base), ("limit", None, None))
+            # As the real room records a turn stopped at its limit with nothing handed in: its base as the commit.
+            path.write_text(json.dumps([{"commit": base, "passed": False, "measured": {"ended": "timed_out"}}]))
+            self.assertEqual(judge.turn_outcome(temporary, base), ("limit", None, None))
+            self.assertEqual(judge.read_turns(path, base), ("limit", None, True))
+            self.assertIs(judge.turn_timed_out(temporary), True)
+            # The mark is kept apart from the outcome: a commit made before the limit is still a hand-in here, and
+            # the judge's own stages gate on the mark (the reader's input at 06ee50fa).
+            path.write_text(json.dumps([{"commit": c, "passed": True, "measured": {"ended": "timed_out"}}]))
+            self.assertEqual(judge.turn_outcome(temporary, base), ("handed-in", c, True))
+            self.assertIs(judge.turn_timed_out(temporary), True)
+            for held in ([{"commit": c, "passed": True, "measured": {"ended": "exited"}}],
+                    [{"commit": c, "passed": True, "measured": "timed_out"}], [{"commit": c, "passed": True}],
+                    [{"commit": c, "measured": {"ended": "timed_out"}}] * 2, [None], {"measured": {"ended": "timed_out"}}):
+                path.write_text(json.dumps(held))
+                self.assertIs(judge.turn_timed_out(temporary), False, held)
+            path.write_text("not json")
+            self.assertIs(judge.turn_timed_out(temporary), False)
+            path.unlink()
+            self.assertIs(judge.turn_timed_out(temporary), False)
+            path.write_text(json.dumps([{"commit": None, "passed": None, "measured": {"ended": "timed_out"}}]))
             path.write_text(json.dumps([{"commit": None, "passed": True, "measured": {"ended": "exited"}}]))
             self.assertEqual(judge.turn_outcome(temporary, base), ("no-hand-in", None, None))
             # As the real room records a turn that handed in nothing: its base as the commit, clock exit 1.
@@ -998,6 +1027,24 @@ class Report(unittest.TestCase):
                 if (line.startswith("| a1b2") or line.startswith("| 1111")) and " of 4 |" in line:
                     self.assertEqual(line.count("|"), 16, line)
             self.assertEqual(text.count(judge.BM25_SENTENCE), 2)
+            # What the spec's section 7 requires before the tables, each once, and before the first table.
+            first_table = text.index("\n| ")
+            for sentence in (judge.BM25_SENTENCE, judge.FORGE_SENTENCE, judge.REPLAY_SENTENCE):
+                self.assertIn("four orderings", judge.BM25_SENTENCE)
+                self.assertLess(text.index("- " + sentence), first_table, sentence)
+            self.assertEqual((text.count(judge.FORGE_SENTENCE), text.count(judge.REPLAY_SENTENCE)), (1, 1))
+            # In every table the second search carries how it was chosen; no other row does.
+            self.assertEqual((judge.label("bm25"), judge.label("search")), ("bm25 (selected after retrieval counts)", "search"))
+            for line in text.splitlines():
+                if line.startswith("| bm25"):
+                    self.assertTrue(line.startswith("| %s |" % judge.BM25_LABEL), line)
+            self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("| %s |" % judge.BM25_LABEL)), 2)
+            for head in (line for line in text.splitlines() if line.startswith("| item | plan |") or line.startswith("| plan |")):
+                self.assertIn("%s d (class)" % judge.BM25_LABEL if head.startswith("| item") else "%s D, R (class)"
+                    % judge.BM25_LABEL, head)
+            self.assertIn("| item | search: best place | tied | %s: best place |" % judge.BM25_LABEL, text)
+            self.assertIn("Plans higher, lower, within, of those read: ", text)
+            self.assertIn("; %s " % judge.BM25_LABEL, text)
             self.assertIn("| %s | 3 | 0 | 2 | 1 | 1 |" % ITEM, text)
             self.assertEqual(json.loads((plan.out / "report.json").read_text())["rows"]["recorded"], 6)
             self.assertIn("by condition: nothing-1 0, nothing-2 0, exists 0, path 0, search 0, newest 0, lot 1, bm25 1.",
@@ -1191,6 +1238,33 @@ class Controls(unittest.TestCase):
         controls = self.plan.out / "controls" / ITEM
         self.assertFalse((controls / "parent.json").exists())
         return json.loads((controls / "stopped.json").read_text())["reason"]
+
+    def refusing(self, nth):
+        """read_junit as it is, but its nth call in a run of controls refuses the report (1: the reference's, 2: the
+        parent's)."""
+        original, calls = judge.read_junit, []
+
+        def read(data):
+            calls.append(data)
+            if len(calls) == nth:
+                raise judge.ReportRefused("the JUnit report declares a DOCTYPE or an entity")
+            return original(data)
+        return mock.patch.object(judge, "read_junit", read)
+
+    def test_a_refused_report_in_a_control_stops_the_item_with_its_reason(self):
+        for nth, whose, turns in ((1, "reference", 1), (2, "parent", 3)):
+            jail = StandInJail([("tests.test_a", "t1", "passed", "")], [("tests.test_a", "t1", "passed", "")])
+            with self.refusing(nth):
+                self.assertEqual(self.run_controls(jail), 0)
+            controls = self.plan.out / "controls" / ITEM
+            self.assertEqual(json.loads((controls / "stopped.json").read_text()), {"commit":
+                self.plan.plan["items"][0]["commit"], "reason": "the %s's report was refused: the JUnit report "
+                "declares a DOCTYPE or an entity" % whose})
+            self.assertFalse((controls / "parent.json").exists())
+            self.assertEqual(len(jail.calls), turns)
+            with self.assertRaises(judge.runner.Refused):          # the runner starts no turn of a stopped item
+                judge.runner.controls_ready(self.plan.out, self.plan.plan["items"][0])
+            shutil.rmtree(controls)
 
     def test_a_reference_with_no_passing_case_stops_the_item(self):
         reason = self.stopped(StandInJail([("tests.test_a", "t1", "failed", "x")], []))
@@ -1425,6 +1499,40 @@ class PinnedRuntime(unittest.TestCase):
                 self.assertEqual(judge.replay(Path(temporary) / "r", "items", "c" * 40, b"", plan, "b" * 40), ("limit", None))
             self.assertEqual(seen, [(plan, 7 + 120), (plan, 11)])
 
+    def test_a_judges_turn_stopped_at_its_limit_after_it_committed_is_at_its_limit(self):
+        # The reader's input at 06ee50fa: a commit, a status that says no limit, a passing case, ended timed_out.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = Plan(temporary).plan
+            held = {"jail-status.json": json.dumps({"apply_exit": 0, "tests_exit": 0, "limit": False}).encode(),
+                "jail-junit.xml": junit([("tests.test_a", "t1", "passed", "")])}
+            for ended, limit, replayed in (("timed_out", True, ("limit", None)), ("exited", False, ("handed-in", True))):
+                def turn(directory, items, commit, worker_dir, plan_, secs, ended=ended):
+                    Path(directory).mkdir(parents=True)
+                    (Path(directory) / "turns.json").write_text(json.dumps([{"commit": "c" * 40, "passed": True,
+                        "measured": {"ended": ended}}]))
+                with mock.patch.object(judge, "jail_turn", turn), \
+                        mock.patch.object(judge, "committed", lambda repo, commit, name: held.get(name)):
+                    ran = judge.diagnostic(Path(temporary) / ("d-" + ended), "items", "c" * 40, b"", plan, "b" * 40)
+                    self.assertEqual((ran["turn"], ran["applied"], ran["limit"]), ("handed-in", True, limit), ended)
+                    # What was counted before the limit is kept beside the row.
+                    self.assertEqual(ran["report"]["cases"], {"tests.test_a::t1": ("passed", "")})
+                    self.assertEqual(judge.replay(Path(temporary) / ("r-" + ended), "items", "c" * 40, b"", plan,
+                        "b" * 40), replayed, ended)
+
+    def test_a_judges_turn_at_its_limit_as_the_real_room_records_it(self):
+        # The base's own commit and ended timed_out: the runner's classifier says limit (7062a4aa), each stage too.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = Plan(temporary).plan
+
+            def turn(directory, items, commit, worker_dir, held, secs):
+                Path(directory).mkdir(parents=True)
+                (Path(directory) / "turns.json").write_text(json.dumps([{"commit": "b" * 40, "passed": False,
+                    "measured": {"ended": "timed_out"}}]))
+            with mock.patch.object(judge, "jail_turn", turn):
+                ran = judge.diagnostic(Path(temporary) / "d", "items", "c" * 40, b"", plan, "b" * 40)
+                self.assertEqual(ran, {"turn": "limit", "applied": None, "limit": True, "report": judge.NO_REPORT})
+                self.assertEqual(judge.replay(Path(temporary) / "r", "items", "c" * 40, b"", plan, "b" * 40), ("limit", None))
+
     def test_a_judges_turn_that_records_its_base_handed_in_nothing(self):
         with tempfile.TemporaryDirectory() as temporary:
             plan = Plan(temporary).plan
@@ -1465,8 +1573,14 @@ class WithoutTheProbed(unittest.TestCase):
         self.assertEqual(every["figures_on"]["search"], {"plans": 3, "items": 4})
         self.assertEqual(without["figures_on"]["search"], {"plans": 2, "items": 2})
         self.assertEqual(every["figures_on"]["path"], {"plans": 0, "items": 0})
-        self.assertEqual(every["plans_tally"]["search"], {"higher": 1, "on": 3})
-        self.assertEqual(without["plans_tally"]["search"], {"higher": 1, "on": 2})
+        # p is within (D 0, R 0), q higher, r lower; without the probed, p is a alone and higher.
+        self.assertEqual(every["plans_tally"]["search"], {"higher": 1, "lower": 1, "within": 1, "on": 3})
+        self.assertEqual(without["plans_tally"]["search"], {"higher": 1, "lower": 1, "within": 0, "on": 2})
+        self.assertEqual(every["plans_tally"]["path"], {"higher": 0, "lower": 0, "within": 0, "on": 0})
+        for held in (every, without):
+            for row in judge.OFFERING:
+                counts = held["plans_tally"][row]
+                self.assertEqual(counts["higher"] + counts["lower"] + counts["within"], counts["on"], row)
         readings["d"] = reading(1)
         self.assertEqual(judge.plan_summaries(plan, readings, lambda item: not item["probed_before"])["figures"]["search"],
             Fraction(1))
