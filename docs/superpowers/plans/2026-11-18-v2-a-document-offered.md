@@ -114,6 +114,10 @@ int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int,
 - **The task file a turn sees:** the task, a blank line, the fixed sentence, and for a row with a
   paragraph a blank line and the paragraph. The seven task files of an item are equal, byte for byte,
   up to the paragraph: the maker checks it and refuses otherwise.
+- **The paragraphs' bytes,** as built and read: for `exists`, the spec's sentence; for `path`, the
+  spec's sentence with the path in backticks and a full stop after it; for the three-path rows, the
+  spec's sentence ending in a colon, then one line for each path, `- ` and the path in backticks, in
+  the order the search, the newest plans or the lot gives them. No line after the last.
 - **The search, the newest plans and the lot** exactly as the spec's section 4 fixes them. Port the
   search from `plan-search.py` (its first row). The lot's and the order's hashes are over ASCII text
   with the whole commit id.
