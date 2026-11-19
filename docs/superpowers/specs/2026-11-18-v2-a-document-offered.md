@@ -1,9 +1,11 @@
 # v2: a document offered. A pilot of the design's second arm
 
-Serenity, 2026-11-18 (UTC). Revision 3. A fresh reader read revision 1 (approve with named changes,
-seven) and a second fresh reader read revision 2 (approve with named changes, four); all are made here
-and listed at the end. Not built. It changes no code of the room: the pilot is run by scripts over the
-room as it is. Before any model turn it has two more reads to pass: the twelve tasks, and the build.
+Serenity, 2026-11-19 (UTC). Revision 4. A fresh reader read revision 1 (approve with named changes,
+seven) and a second fresh reader read revision 2 (approve with named changes, four); revision 3 made
+them. Since then the twelve tasks were written, read and frozen, and the three scripts were built and
+read. Revision 4 takes in what those reads and the lead's runs on the real room found, and adds one row.
+Every change is listed at the end. It changes no code of the room: the pilot is run by scripts over the
+room as it is. Before any model turn this revision has one read to pass.
 
 ## 1. What it is, and what it is not
 
@@ -47,9 +49,24 @@ been seen, one of them among the twelve:
 
 1. The item's reference passed the room's jail in the census of 2026-11-18.
 2. A file under a `plans` or `specs` folder, tracked at the commit's first parent, holds as a whole word
-   a name the commit adds under the source directory: eight letters or more, with an underscore inside
-   it, absent from the parent's source, and held by five Markdown files or fewer.
+   a name the commit adds under the source directory: eight characters or more, with an underscore
+   inside it, absent from the parent's source, and held by five Markdown files or fewer.
 3. No such file has a line that begins a test function (`def test_`).
+
+**The rule as the maker reads it,** written out so that the twelve can be rebuilt:
+
+- **A name the commit adds** is taken from an added line of the commit's change under the source
+  directory: the name after `def`, `async def` or `class`; or a name in capitals (a capital, then three
+  or more capitals, digits or underscores) that the line assigns at its very start.
+- **It counts** when it has eight characters or more, has an underscore that is neither its first nor
+  its last character, does not begin with two underscores, and is not a whole word anywhere in the
+  parent's files under the source directory.
+- **A file holds it** when the name is there as a whole word. A name held by more than five Markdown
+  files at the parent counts nothing.
+- **The third rule:** no matching file has a line that, after any spaces, begins `def test_`.
+
+The maker rebuilds the forty and the twelve from the census's 188 lines and refuses any other result,
+and refuses an item list whose sha256 does not begin 4b25d330.
 
 Forty items meet the first two rules and twelve meet all three: 9a3f21cf, 71a593d5, d20c739b, cd884db7,
 c9ceb15b, 671a2250, 1113f1db, 0193bde8, fff1b349, 027834bf, 3879e609, 3f349e89. By the list's parts seven
@@ -89,7 +106,7 @@ given without it.
 Each item's task is written in a user's words: what is wanted and why. A commit's message is written
 after the work by those who did it, in the plan's vocabulary; a search by it placed the matching file
 first at ten of these twelve items. That is why the task is not the commit's message. What a search does
-with a task in a user's words has not been measured.
+with these tasks is counted in section 4.
 
 **What a task must hold and must not, fixed for each item before it is written:**
 
@@ -102,15 +119,28 @@ with a task in a user's words has not been measured.
 - **The plan's own words:** the task does not hold the plan's file name, the plan's title line, or any
   task number. Ordinary words that happen to be in a title are allowed.
 
-**How the twelve are made.**
+**How the twelve were made.**
 
-1. The lead writes each item's two lists and its task. The task states every required fact and no
-   withheld fact, and nothing else.
-2. A fresh reader of the other family checks each list against the commit and each task against its
+1. A worker of the lead's team wrote each item's two lists and its task from the commit and its
+   reference, opening no plan or spec. The task states every required fact and no withheld fact, and
+   nothing else. Each required fact names the words of the task that state it and the tests that
+   check it.
+2. Fresh readers of the other family checked each list against the commit and each task against its
    lists: is a required fact missing or added; is a withheld fact given; would a person who reads only
-   the task know what is wanted?
-3. Its changes are made, and the lists and the task's exact bytes are frozen with their hashes.
-4. Only then is any search run on a task. A task is never rewritten after its search's result is seen.
+   the task know what is wanted? Two read the first writing and said do not freeze. It was repaired.
+   Two read the repair: seven tasks fit, five had named changes. Those were made, and one more reader
+   read the five: freeze with named changes, which were made.
+3. The lists and the tasks' exact bytes are frozen: `v2/probes/documents/tasks/FROZEN.sha256` holds
+   the hash of each of the twenty-four files. The tasks are 203 to 887 words.
+4. Only then was a search run on a task. A task is not rewritten after its search's result is seen.
+
+**A bare word.** A withheld name that is also an ordinary word (a request, a code, a problem) may
+stand in a task only where the item's list gives that word a line of its own with the reason. A
+reader checked each such line.
+
+**What the last reader said of the longest task** (3f349e89, 887 words), which states one limit after
+another: the limits are what the item's tests check and what a person can ask for; they do not give
+the nesting, the keys, the spellings, or what a call returns and raises. The item stays.
 
 A task file is the task's paragraphs, then one fixed sentence ("Make this change in the code under
 `peer/superyak_peer`. Add tests for it if you like."), then the condition's paragraph if it has one.
@@ -123,8 +153,8 @@ among the objects the sandbox holds.
 ## 4. The conditions
 
 The only difference between conditions is one paragraph at the end of the task file. That is proved for
-every item before any turn: the seven bases have one parent and one tree but for the task file, and the
-seven task files are byte for byte the same up to that paragraph.
+every item before any turn: the eight bases have one parent and one tree but for the task file, and the
+eight task files are byte for byte the same up to that paragraph.
 
 | Condition | The paragraph | What it is here |
 | --- | --- | --- |
@@ -132,6 +162,7 @@ seven task files are byte for byte the same up to that paragraph.
 | A plan exists | "There is a plan for this work in the repository." | An existence cue. It changes what the turn may look for; it does not measure what the worker knows |
 | The plan's path | "The plan for this work is in the repository at" and the direct path | A targeted positive control. It is not the most a document could do: a turn may ignore it, and another document may add to it |
 | Three by search | "These documents in the repository may bear on this work:" and three paths | The three Markdown files placed first by the task's words |
+| Three by a second search | The same sentence and three paths | The three Markdown files a second ordering by the task's words places first. Added in revision 4, after its places were seen and before any turn. No part of the rule of section 7 |
 | Three newest plans | The same sentence and three paths | The three files under a `plans` folder whose names come last in byte order. A practical baseline with a strong advantage in time: here a plan is committed just before its work |
 | Three nonmatching by lot | The same sentence and three paths | Three files drawn by lot from those under `plans` and `specs` folders that are not matching files of the item |
 
@@ -156,16 +187,35 @@ seven task files are byte for byte the same up to that paragraph.
   does not depend on the task, and is counted already: they hold a matching file within three at all
   twelve. If the search holds one within three at fewer than four items, its condition is run all the
   same and is read as an offer with low recall of matching files.
+- **The count, on the frozen tasks (2026-11-19, no model).** In the order of section 2's list, the
+  search places the best matching file at 28, 19, 50, 23, 18, 5, 4, 25, 33, 25, 12 and 7: **within
+  its three at none of the twelve,** within ten at three. The newest plans hold one first at ten
+  items and within three at all twelve. No draw of the lot is a matching file. So, as the bullet
+  above said before the count, Three by search is run all the same. What it shows is of three files
+  that share words with the task and are not a matching file. The search's rule is not changed.
+- **A second search, added after that count: the row `bm25`.** Same candidates, same words, same
+  query, and the same words left out for being in more than half the files. For a file, `tf` is how
+  many times a word occurs in it, `L` how many words it holds counting every occurrence, `avg` the
+  mean of `L` over the candidates, `N` the number of candidates and `df` the number that hold the
+  word. A file's score is the sum, over the query's words in sorted order, of
+  `log(1 + (N - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * L / avg))`, with the
+  natural logarithm, rounded to nine decimal places. Highest first; ties by the path's bytes.
+- **What that row is and is not.** The lead counted four orderings on the frozen tasks outside the
+  maker: the search above, this one, this one over plans and specs only, and the search's count
+  divided by the file's own count of different words. They hold a matching file within three at 0,
+  9, 9 and 3 of the twelve. This one was taken as the usual form of such a search, after seeing
+  those counts and before any turn. Its nine of twelve is a count on the twelve items it was chosen
+  on, not an estimate for other tasks. The maker's own places for it are written in the plan.
 - A document is offered by its path alone. Nothing of its text is put in the task.
 
 ## 5. The turns
 
-Twelve items by seven rows: 84 turns.
+Twelve items by eight rows: 96 turns.
 
-- **Order.** One order over all 84 rows, not item by item: each row gets the SHA-256, in hexadecimal, of
+- **Order.** One order over all 96 rows, not item by item: each row gets the SHA-256, in hexadecimal, of
   the ASCII text `<seed>:order:<commit>:<row's name>`, with the seed above and the row's name one of
-  `nothing-1`, `nothing-2`, `exists`, `path`, `search`, `newest`, `lot`; rows run in ascending order of
-  that hash. The order is written into the plan before the first turn.
+  `nothing-1`, `nothing-2`, `exists`, `path`, `search`, `newest`, `lot`, `bm25`; rows run in ascending
+  order of that hash. The order is written into the plan before the first turn.
 - **Pinned in the plan with their hashes:** the worker program, its version and the model's name, as the
   earlier probes used; the room's program; every script of the pilot; every task file; every base; the
   check; every offered and every matching document's blob.
@@ -175,9 +225,16 @@ Twelve items by seven rows: 84 turns.
   the parent. Its verdict says nothing of the work.
 - Turns run one at a time, with nothing else heavy on the machine. For each turn the plan's record keeps
   when it began and ended, the machine's load at both, and how it ended.
-- **Every scheduled row is kept.** A turn that the room ends without a hand-in, or at its limit, is kept
-  and reported as that. Nothing is run a second time. A run that is interrupted is taken up at the first
-  row with no record, and no row is ever run twice.
+- **Every scheduled row is kept.** A row's record says how its turn ended: handed in; no hand-in; at
+  its limit with no hand-in; the room's clock failed; the room's export of the turn failed. A turn can
+  reach its limit and still hand in, so "at its limit" is also kept as a mark of its own beside the
+  outcome. A row with a record is never run again.
+- **An interrupted run** is taken up at the first row with no record. If that row had been begun, what
+  it left is set aside whole and the row is run once more from a new room. The record counts those
+  earlier attempts and says of each whether its turn had started and whether its clock had ended. The
+  report gives them by condition. So a row has one record, and may have had a turn that left none.
+- **No turn before the controls.** The runner starts no turn until every item has its frozen cases and
+  its parent's count (section 6), and none while a control has written that it stopped.
 
 ## 6. What is read from each turn
 
@@ -188,19 +245,41 @@ its cases from the candidate's own constants, so the number of cases can change 
 
 - **The frozen cases.** For each item, before any turn, the item's reference is run in the jail and the
   identifier of every case of the item's test files that passes there is written down. Those cases, and
-  only those, are the item's denominator.
+  only those, are the item's denominator. The controls and the replay run on the item list's own base
+  for the item, which holds no task file.
 - **A turn's score** is how many of the frozen cases pass under the turn's change, of that number. Beside
   it, for the frozen cases: passed, failed, in error, skipped, and not run (not collected, or not reached
   before a limit). Cases the turn's run collects that are not frozen cases are counted apart and are not
   in the score. Collection errors are kept in their own words.
 - **The parent, with no change:** the frozen cases run once on the base as it is. That count is given
-  for every item, so that tests which pass with no work at all are seen. One item's test file holds 23
-  test functions before the item adds two.
+  for every item, so that tests which pass with no work at all are seen.
+- **Counted on the real room with the first build (2026-11-19):** 453 frozen cases over the twelve
+  items; 149 pass on the parent with no change and 304 do not. At three items most pass with no work
+  (31 of 33, 32 of 34, 23 of 27, each more than four in five). At four items none does. The pilot's own controls are run again
+  with the plan and are the record.
+- **So a second count stands beside every score:** how many of the frozen cases that do not pass on
+  the parent pass under the turn's change, of how many. Where most cases pass with no work, the share
+  of all cases has little room to move, and this count shows what moved.
+- **The test run's report is read outside the jail, so it is bounded.** It must be an ordinary file the
+  turn committed, of 8 MiB or less, in UTF-8, with no document type or entity declaration and no
+  character XML forbids. A report that is refused gives its row no score, with the reason; it does
+  not stop the judging of other rows.
+- **A score can be forged, and this pilot does not defend against it.** The cases run inside the jail in
+  the same process as the turn's code, which could write the report itself. No task asks for that and
+  the worker is not told how it is judged. The room's own verdict by replay stands beside every score.
 - **Outcomes that are not a judged change,** each kept as its own outcome and scored as the parent with
   no change: no hand-in; a hand-in that changes nothing under the source directory.
-- **Rows with no score.** A turn's change that does not apply on its own base, or a diagnostic that
-  reaches its limit, has no score: the row is kept, with its outcome named and whatever was counted
-  before it stopped given beside it, and it enters no sum. A diagnostic that reaches its limit is not
+- **Rows with no score.** The row is kept, with its outcome named, the frozen cases as its "of how
+  many" and whatever was counted before it stopped given beside it, and it enters no sum. These are
+  all of them:
+  - the turn's change does not apply on its own base;
+  - the room's clock failed at the turn, or its export of the turn failed and failed again when the
+    judge asked for it once more;
+  - the diagnostic reached its limit, its clock failed, it handed in nothing, or it wrote no status;
+  - the replay reached its limit or its clock failed (the diagnostic's counts are kept beside it);
+  - the test run's report was refused.
+
+  The report names each that occurred, with its count. A diagnostic that reaches its limit is not
   thereby the instrument's fault; why it did is not decided here.
 - **What a row with no score does to the reading of section 7.** If either Nothing row of an item has
   no score, that item has no baseline and no gap, and no condition is read at it. If an offering row has
@@ -214,7 +293,7 @@ its cases from the candidate's own constants, so the number of cases can change 
   change.
 - **From the walk:** whether a step names a matching file, at which step and second, and which offered
   files it names. A walk holds the paths a step names and no command or output, so "named" is all that
-  is said.
+  is said. A walk that could not be exported is unknown, and is never counted as naming nothing.
 - **A control for every item before its turns:** the item's reference through the replay and the
   diagnostic, in directories named as the pilot's are, which must pass every frozen case. A turn's code
   runs only inside the jail.
@@ -233,6 +312,11 @@ much repeated turns vary.
 
 For each offering condition: how many of the twelve items are higher, lower and within the gap, and the
 same without 027834bf.
+
+**The second reading.** Every tally here and by plan is given again with `b`, `r` and `d` taken on the
+share of the cases that do not pass on the parent. An item with no such case is left out of that
+reading, and each table says how many items it stands on. The rule below is read on the share of all
+frozen cases, as revision 3 fixed it before the parent's counts were seen.
 
 **By plan.** For each of the six plans and each offering condition, over that plan's items: `D` is the
 mean of the items' `d` and `R` the mean of the items' `r`. The condition is **higher at the plan** when
@@ -255,17 +339,22 @@ The plan's path and A plan exists are read beside these as what they are, a posi
 existence cue. Whatever they show is reported; no conclusion about the hypothesis is fixed here on
 either alone.
 
+**Three by a second search is no part of the rule.** It is given in every table beside the others. It
+was added after its places were seen, so nothing above is decided by it, and a row of it with no score
+does not suspend the rule.
+
 ## 8. What is built
 
-No change to the room. Scripts beside the earlier probes' in `v2/probes/`, each with tests:
+No change to the room. Scripts in `v2/probes/documents/`, each with tests, built to the plan
+`docs/superpowers/plans/2026-11-18-v2-a-document-offered.md`:
 
 1. **A maker of the pilot's plan:** the items by the rule, the frozen lists and tasks, the paragraph of
    each row, the direct path and the matching files, the search's and the newest plans' places, the
    lot's draws, the order, the frozen cases, and every pin of section 5, in one file with its hash.
    Every later stage refuses a plan whose hash or inputs have changed.
 2. **A runner:** one row at a time in the frozen order, each in a room of its own, in directories named
-   without a commit's whole id, keeping each row's record and taking up an interrupted run without
-   running a row twice.
+   without a commit's whole id, keeping each row's record and taking up an interrupted run as section 5
+   says.
 3. **A judge:** the controls, the replay, the diagnostic over the frozen cases, the walk's reading, and
    the report's tables of section 7.
 
@@ -273,21 +362,28 @@ The earlier probes' scripts did these by hand and are the starting point.
 
 **Tests.** Unit tests, and one test of the whole path against the real room and its jail with a script
 named for the worker and no model, run by the lead before any reader sees the build. Between them they
-must show: all seven rows of an item scheduled and run once each; each row's paragraph exactly as
+must show: all eight rows of an item scheduled and each recorded once; each row's paragraph exactly as
 section 4 gives it; a result where some frozen cases pass and some fail; a test file that cannot be
 collected, scored as not run; a turn with no hand-in and one stopped at its limit, kept and scored as
-section 6 says; an interrupted run taken up with no row run twice; and a plan refused after one of its
+section 6 says; an interrupted run taken up as section 5 says; and a plan refused after one of its
 inputs is changed.
 
 ## 9. What it costs
 
-84 turns at about three minutes: over four hours of one machine, with nothing else heavy on it. The
-judging is about 220 script turns in the jail with no model, over an hour.
+96 turns. The earlier probes' turns took about three minutes each; the worker's limit is 1,200
+seconds. So about five hours of one machine with nothing else heavy on it, and more if turns run
+long. The judging is about 250 script turns in the jail with no model, over an hour.
 
 ## 10. What this narrows, said before any turn
 
 - One repository, one component, one worker program and model, macOS. Twelve items of six plans, each
   offering condition once and Nothing twice.
+- The search of section 4 holds a matching file within its three at none of the twelve. Its row shows
+  what three files that share the task's words do; it shows nothing of a search that finds the plan.
+- The second search was chosen after seeing where four orderings place the matching file at these
+  twelve items. Its row is an added look, not a prepared one.
+- At three items more than four in five of the frozen cases pass with no work. The share of all
+  cases can hardly move there; the count over the cases that do not pass on the parent is beside it.
 - The outcome is conformance to the reference's tests: names, calls and wordings as well as behaviour.
   Where a plan gives those, that is a fair thing to ask of a turn that was shown the plan; it is not a
   judgement of behaviour.
@@ -295,8 +391,11 @@ judging is about 220 script turns in the jail with no model, over an hour.
   new names. Nothing is said of work with no such document.
 - Forty items meet the first two rules; the 28 left out have a test-function definition in a matching
   document. The twelve kept still have plans with test names, assertions and test instructions in them.
-- The tasks are the lead's words, bound by the lists of section 3 and one reader. A person's own words
-  may be further from the plan's, or nearer. A task is written from the finished work.
+- The tasks are a model worker's words, bound by the lists of section 3 and five readers over three
+  rounds. A person's own words may be further from the plan's, or nearer. A task is written from the
+  finished work, and states every limit its tests check, which a person asking might not.
+- A score is read from a report the turn's own run writes inside the jail. It is bounded and it is not
+  proof against a change made to forge it.
 - An offer is a paragraph in the task file, with one sentence of suggestion. What the room's own offer
   block would do with documents is not tried.
 - The newest plans hold the matching plan here because of how this repository's work is kept: spec,
@@ -329,3 +428,24 @@ and not yet enough, and one made otherwise and mostly enough. What it named is m
 | The by-plan rule written out (`D`, `R`), the equally weighted figure, the lot's threshold in items, and when the rule and the twelve were chosen | Sections 2 and 7 |
 | The commit in both hashes is the whole id in lower case; every limit and every script pinned | Sections 4 and 5 |
 | "Each offering condition once and Nothing twice" | Section 10 |
+
+## What changed in revision 4, and why
+
+Since revision 3 the tasks were written and read, the scripts were built and read, and the lead ran
+the maker and the controls on the real room. The readers are workers of the lead's team, each fresh
+and of the other family than what it read.
+
+| The change | From | Where |
+| --- | --- | --- |
+| The items' rule written as the maker reads it; the forty, the twelve and the list's hash asserted | The reader of the maker and runner | Section 2 |
+| How the tasks were made in fact; bare words; the frozen hashes; the longest task kept | Five readers of the tasks, three rounds | Section 3 |
+| The search's places on the frozen tasks: within three at none of twelve | The lead's run of the maker | Sections 4 and 10 |
+| An eighth row, a second search, outside the rule; 96 turns | The lead, after that count and before any turn | Sections 4, 5, 7, 9 and 10 |
+| How a turn ended, with "at its limit" as its own mark; a failed clock and a failed export | The builder and the reader of the runner; the reader of the judge | Sections 5 and 6 |
+| "No row is ever run twice" withdrawn: a row interrupted before its record is run once more, and its earlier attempts are counted | The builder of the runner | Section 5 |
+| No turn before the controls | The builder of the runner | Section 5 |
+| The controls and the replay on the item list's own base | The builder of the judge | Section 6 |
+| A second count over the cases that do not pass on the parent, and a second reading of every tally | The lead's run of the controls | Sections 6 and 7 |
+| The report read outside the jail is bounded; a refused report is a row with no score; a score can be forged | The reader of the judge | Sections 6 and 10 |
+| Every outcome with no score listed | The builder of the judge | Section 6 |
+| A walk that could not be exported is unknown | The builder of the runner | Section 6 |
