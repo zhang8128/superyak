@@ -14,8 +14,9 @@ For `docs/superpowers/specs/2026-11-19-v2-a-line-that-says-a-plan-may-exist.md`,
   replaced by a placeholder. No verdict, reason, subject, term or query is changed. Pool N's record has
   27 such strings; pool P's has none.
 - A record may hold more than the form below asks (pool N's has the reader's notes on method and on how
-  each file was read), and pool N's names the last place walked `last_n` where the form says
-  `stopped_n`. Both are the reader's and are left as written.
+  each file was read); that is the reader's and is left as written. Pool N's names the last place
+  walked `last_n`, because the form was unclear when it was written; the lead added `stopped_n` with
+  the same number beside it, and the note says so.
 
 ## A reader's record
 

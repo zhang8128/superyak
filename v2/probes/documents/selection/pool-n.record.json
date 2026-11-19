@@ -5,7 +5,7 @@
   "walked": 34
  },
  "last_n": 34,
- "lead_note": "The lead replaced 27 path strings that its private-word scan flags with the placeholder \"(a path the lead's scan withholds)\": 18 in hit lists and lists of files read, 9 as keys of a per-file reading mode. No verdict, reason, subject, term or query was changed. The reader's own file has sha256 a7a65df545fe80b5c01434111f1ee4327bb72129fa87f64e98cd62dd5024c68e.",
+ "lead_note": "The lead replaced 27 path strings that its private-word scan flags with the placeholder \"(a path the lead's scan withholds)\": 18 in hit lists and lists of files read, 9 as keys of a per-file reading mode. No verdict, reason, subject, term or query was changed. The reader's own file has sha256 a7a65df545fe80b5c01434111f1ee4327bb72129fa87f64e98cd62dd5024c68e. The lead also added `stopped_n`, equal to the reader's own `last_n`, which is the name the record's form gives that number; `last_n` is left as written.",
  "method": "For each commit, searched every tracked first-parent Markdown pathname and text using Python str.casefold() literal substring matching. Hits are complete path lists. Read matching passages with surrounding document context, reading the own-work design fully where stated. Inspected the tracked plan/spec/review filename inventory for alternate subject names and nearby dates. No first-pilot outcome evidence was used for verdicts.",
  "pool": "N",
  "reader": "w125",
@@ -18,6 +18,7 @@
  ],
  "stop_detail": "Stopped immediately after item 34 supplied the ninth acceptance; items 35 through 43 were not reviewed.",
  "stopped": "nine accepted",
+ "stopped_n": 34,
  "walked": [
   {
    "commit": "3595cceef26ffaed458c9efaf9b37a1bf629945a",
