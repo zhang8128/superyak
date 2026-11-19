@@ -1,0 +1,103 @@
+commits 188; (a) add a counted name: 101; (b) of those, no Markdown file holds one: 54
+by part, (a): {'history': 31, 'left-out-by-rule-5': 41, 'pilot': 3, 'scored': 26} (b): {'history': 11, 'left-out-by-rule-5': 29, 'scored': 14}
+383c5443 history names 3 md 1 
+41cc7585 history names 1 md 0 NONE
+afd40845 history names 1 md 0 NONE
+edec7384 history names 1 md 0 NONE
+5374c2d3 history names 2 md 1 
+2ba95699 history names 1 md 0 NONE
+c42ee1f4 history names 2 md 2 
+7c4ac566 history names 1 md 0 NONE
+4971bdb3 history names 2 md 1 
+a894d0d0 history names 2 md 0 NONE
+e31dec19 history names 1 md 0 NONE
+a7c9d526 history names 6 md 0 NONE
+95e52061 history names 12 md 1 
+52127467 history names 6 md 1 
+c99020e1 history names 1 md 2 
+ca2d0d80 history names 4 md 1 
+762e7280 history names 1 md 1 
+18587bf3 history names 16 md 1 
+aa78e57c history names 1 md 0 NONE
+b50b2c10 history names 2 md 1 
+9803aede history names 2 md 0 NONE
+aaef9e76 history names 4 md 1 
+fcee5320 history names 6 md 1 
+b40d6db5 history names 1 md 1 
+19c5bf02 history names 4 md 1 
+829ccc75 history names 1 md 0 NONE
+9ee2c940 history names 9 md 1 
+5cf7b32d history names 17 md 1 
+1f9804d5 history names 7 md 1 
+9358357f history names 6 md 1 
+0e5fb1af history names 1 md 1 
+3d8775bc pilot names 3 md 4 
+01c46a2d pilot names 14 md 4 
+d9860589 left-out-by-rule-5 names 1 md 1 
+a0c94043 pilot names 3 md 1 
+65fc994f scored names 4 md 1 
+003e87b7 scored names 3 md 0 NONE
+bb8ae833 scored names 6 md 0 NONE
+9a3f21cf scored names 2 md 1 
+37a887d3 left-out-by-rule-5 names 2 md 0 NONE
+71a593d5 scored names 2 md 2 
+63311dbe left-out-by-rule-5 names 2 md 0 NONE
+d20c739b scored names 1 md 1 
+6f57b4cb left-out-by-rule-5 names 3 md 0 NONE
+c7aee496 scored names 1 md 0 NONE
+d0ed1fe9 scored names 1 md 0 NONE
+d7c8869c scored names 3 md 0 NONE
+603434cf left-out-by-rule-5 names 2 md 0 NONE
+fa9692db left-out-by-rule-5 names 4 md 0 NONE
+2123687e left-out-by-rule-5 names 2 md 2 
+5b0c8376 left-out-by-rule-5 names 1 md 0 NONE
+cd884db7 scored names 3 md 2 
+6ceb5cb8 scored names 1 md 0 NONE
+b64e2e93 scored names 8 md 2 
+eb1678ac left-out-by-rule-5 names 1 md 0 NONE
+d0e0bd92 left-out-by-rule-5 names 1 md 0 NONE
+fc31ec6f left-out-by-rule-5 names 1 md 0 NONE
+fde213d5 scored names 2 md 0 NONE
+c9ceb15b left-out-by-rule-5 names 4 md 1 
+df8b4b99 scored names 6 md 4 
+b3a94c9b scored names 3 md 0 NONE
+671a2250 scored names 6 md 2 
+1113f1db left-out-by-rule-5 names 5 md 5 
+0193bde8 scored names 1 md 1 
+c7512189 left-out-by-rule-5 names 1 md 0 NONE
+172166e4 left-out-by-rule-5 names 1 md 0 NONE
+08f3bf92 scored names 1 md 0 NONE
+706fdf59 left-out-by-rule-5 names 1 md 0 NONE
+b92f080d scored names 1 md 0 NONE
+a7005fc3 left-out-by-rule-5 names 6 md 1 
+433b6db1 left-out-by-rule-5 names 1 md 0 NONE
+77d0e6f1 left-out-by-rule-5 names 1 md 0 NONE
+82bff0db scored names 1 md 0 NONE
+ab88cd56 scored names 6 md 0 NONE
+09598bd0 left-out-by-rule-5 names 1 md 0 NONE
+1cc56441 left-out-by-rule-5 names 1 md 0 NONE
+b204eff0 left-out-by-rule-5 names 1 md 0 NONE
+5a1ed02e left-out-by-rule-5 names 3 md 0 NONE
+d2a21c5e scored names 1 md 0 NONE
+fff1b349 left-out-by-rule-5 names 6 md 1 
+1a5d9ac6 left-out-by-rule-5 names 3 md 0 NONE
+027834bf left-out-by-rule-5 names 7 md 1 
+7c6cda37 left-out-by-rule-5 names 1 md 0 NONE
+3879e609 left-out-by-rule-5 names 3 md 1 
+dd32b715 left-out-by-rule-5 names 1 md 0 NONE
+6f125e61 left-out-by-rule-5 names 1 md 0 NONE
+009be272 left-out-by-rule-5 names 1 md 0 NONE
+6ba4650f scored names 1 md 1 
+3595ccee left-out-by-rule-5 names 1 md 0 NONE
+367ae42b left-out-by-rule-5 names 4 md 1 
+3f349e89 scored names 14 md 1 
+2972d794 scored names 5 md 1 
+a086df5a left-out-by-rule-5 names 6 md 1 
+ee1152b2 left-out-by-rule-5 names 5 md 1 
+db547f22 left-out-by-rule-5 names 8 md 2 
+648f5b89 scored names 2 md 0 NONE
+426ad7fb left-out-by-rule-5 names 2 md 0 NONE
+2ebc78e1 left-out-by-rule-5 names 1 md 0 NONE
+361bbffd left-out-by-rule-5 names 1 md 0 NONE
+fc8a61cb left-out-by-rule-5 names 2 md 0 NONE
+906b3f73 left-out-by-rule-5 names 1 md 0 NONE
