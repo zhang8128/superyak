@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -187,6 +188,44 @@ class TurnEnd(unittest.TestCase):
         for verdict in ("passed unverified", "abandoned"):
             self.assertEqual(self.end(log(ended(SINGLE, verdict=verdict)))[2], "refused: single repository")
 
+    def test_every_state_the_room_can_write_is_a_verdict_and_a_recheck(self):
+        # yak's state_name, word for word: a state this list lacks would make a real ended line no evidence.
+        for state in ("draft", "open", "leased", "checking", "passed verified", "passed unverified", "failed",
+                "blocked", "abandoned"):
+            with self.subTest(state=state):
+                self.assertEqual(self.end(log(ended(SINGLE, verdict=state))),
+                    ("refused", None, "refused: single repository"))
+                self.assertEqual(self.end(log(ended("the turn committed nothing") + "; rechecked: " + state)),
+                    ("no-hand-in", None, "committed nothing"))
+
+    def test_a_recheck_is_the_rooms_last_words_and_no_part_of_the_reason(self):
+        self.assertEqual(self.end(log(ended(SINGLE) + "; rechecked: failed")),
+            ("refused", None, "refused: single repository"))
+        for state in ("passed verified", "passed unverified", "failed"):
+            self.assertEqual(self.end(log(ended("the turn committed nothing") + "; rechecked: " + state)),
+                ("no-hand-in", None, "committed nothing"), state)
+        # The event with a recheck and no reason is this turn's event all the same: one event, no reason.
+        self.assertEqual(self.end(log(ended(None) + "; rechecked: failed")), ("no-hand-in", None, None))
+        # At its limit, with every part the clock can write.
+        self.assertEqual(self.end(log(ended(SINGLE, timed_out=True) + "; rechecked: failed"),
+            exported(ended_as="timed_out")), ("limit", None, "refused: single repository"))
+        # Words after a reason that are not a recheck in the room's own states stay part of the reason.
+        self.assertEqual(self.end(log(ended(SINGLE) + "; rechecked: fluffy")),
+            ("refused", None, "refused: single repository"))
+        self.assertEqual(self.end(log(ended("the turn committed nothing") + "; rechecked: fluffy")),
+            ("no-hand-in", None, "other"))
+        self.assertEqual(self.end(log(ended("the turn committed nothing") + "; rechecked: failed again")),
+            ("no-hand-in", None, "other"))
+
+    def test_a_lease_beyond_the_rooms_count_is_never_turned_into_text(self):
+        today = ("no-hand-in", None, None)
+        top = 0xFFFFFFFF
+        self.assertEqual(self.end(log(ended(SINGLE, lease=str(top))), exported(lease=top)),
+            ("refused", None, "refused: single repository"))
+        self.assertEqual(self.end(log(ended(SINGLE, lease=str(top + 1))), exported(lease=top + 1)), today)
+        # Python refuses to write a number of this size as text; the naming must not ask it to.
+        self.assertEqual(self.end(log(ended(SINGLE)), exported(lease=10 ** 5000)), today)
+
     def test_what_is_not_this_turns_ended_event_is_not_evidence(self):
         today = ("no-hand-in", None, None)
         for clock in ("", "\n", log(),
@@ -200,12 +239,16 @@ class TurnEnd(unittest.TestCase):
                 log(" " + ended(SINGLE)),
                 log(ended(SINGLE, verdict="Failed")),
                 log(ended(SINGLE, verdict="a b c")),
+                log(ended(SINGLE, verdict="fluffy bunny")),           # two lower-case words that are no state
+                log(ended(SINGLE, verdict="passed")),
                 log("14:03:27 problem with %s: no new commit: %s" % (ITEM_ID, SINGLE)),
                 log("14:03:27 not checked: no new commit: " + SINGLE),
                 log("14:03:27 worker said: " + ended(SINGLE)),
                 log("no new commit: " + SINGLE),
                 log(ended(None)),                                     # the event, with no reason given
                 log(ended(SINGLE), ended(SINGLE)),                    # two: neither is taken
+                log(ended(SINGLE), ended(None) + "; rechecked: failed"),      # the second has a recheck, no reason
+                log(ended(SINGLE), ended(SINGLE) + "; rechecked: failed"),
                 log(ended(SINGLE), ended("the turn committed nothing"))):
             with self.subTest(clock=clock):
                 self.assertEqual(self.end(clock), today)
@@ -220,7 +263,7 @@ class TurnEnd(unittest.TestCase):
         # Two events of which only one is this turn's: that one is taken. A line that only begins as this turn's
         # event (its commit runs on) is not one.
         for other in (ended(SINGLE, lease="2"), ended("the turn committed nothing", commit=BASE + "0"),
-                ended(commit=BASE) + "; rechecked: failed"):
+                ended(SINGLE, lease="2") + "; rechecked: failed"):
             self.assertEqual(self.end(log(ended(SINGLE), other)), ("refused", None, "refused: single repository"), other)
 
     def test_an_export_that_failed_or_is_not_one_turn_beside_a_refusal(self):
@@ -280,6 +323,31 @@ class TurnEnd(unittest.TestCase):
             directory = Path(folder) / "a-directory"
             directory.mkdir()
             self.assertEqual(self.runner.read_clock(directory), "")
+
+    def test_the_codex_stand_in_answers_a_version_question_and_changes_nothing(self):
+        """The maker asks a model worker's program for its version in its own working directory."""
+        stand_in = Path(__file__).resolve().parent / "stand-ins" / "refused" / "codex"
+        with tempfile.TemporaryDirectory() as held:
+            top = Path(held)
+            (top / "peer" / "superyak_peer").mkdir(parents=True)
+            source = top / "peer" / "superyak_peer" / "a.py"
+            source.write_text("x = 1\n")
+            # Its input is a pipe nobody writes to or closes: a stand-in that read it would never end.
+            asked = subprocess.Popen(["sh", str(stand_in), "--version"], cwd=top, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.assertEqual(asked.wait(timeout=20), 0)
+                self.assertEqual(asked.stdout.read(), b"codex-stand-in 1\n")
+            finally:
+                asked.kill()
+                asked.stdin.close(); asked.stdout.close(); asked.stderr.close()
+            self.assertEqual(source.read_text(), "x = 1\n")
+            self.assertEqual(sorted(p.name for p in top.iterdir()), ["peer"])
+            # The control: asked for a turn, the same program does change the file and leave the directory.
+            turn = subprocess.run(["sh", str(stand_in), "exec"], cwd=top, input=b"a prompt", capture_output=True, timeout=20)
+            self.assertEqual(turn.returncode, 0)
+            self.assertNotEqual(source.read_text(), "x = 1\n")
+            self.assertTrue((top / "scratch-repository" / ".git").is_dir())
 
     def test_outcome_is_turn_end_with_no_clock_output(self):
         for turns in (exported(), exported(ended_as="timed_out"), exported("c" * 40), None, [], exported() * 2):

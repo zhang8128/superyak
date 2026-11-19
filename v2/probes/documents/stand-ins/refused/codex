@@ -3,6 +3,13 @@
 # that the room's own commit runs. Run by the room in the clone's top, it reads its prompt, prints the least of a
 # Codex event stream, appends one comment line to a source file, commits nothing, leaves a directory named .git
 # in a new subfolder, and exits 0. See README.md.
+# The maker asks a worker's program for its version, in its own working directory: answer and touch nothing.
+case "${1:-}" in
+    --version)
+        printf '%s\n' 'codex-stand-in 1'
+        exit 0
+        ;;
+esac
 cat > /dev/null
 printf '%s\n' '{"thread_id":"stand-in","type":"thread.started"}' '{"type":"turn.started"}'
 file=

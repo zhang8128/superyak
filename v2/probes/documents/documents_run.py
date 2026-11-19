@@ -52,11 +52,17 @@ def planned_environment(plan):
 NO_COMMIT = ("committed nothing", "refused: single repository", "refused: gitlinks", "refused: other", "other")
 # In the place of the parsed turns.json, when the room's export of the turn did not exit 0.
 EXPORT_FAILED = object()
+# An item's state, in the words yak's state_name writes: an ended line's verdict, and the state after a recheck.
+STATE = "(?:draft|open|leased|checking|passed verified|passed unverified|failed|blocked|abandoned)"
 # The clock's line for a turn's end, as clock.log holds it: the runner's time stamp, then the clock's own words
-# (yak's event_line): `ended <item> lease <n>: <verdict>, commit <40 hex>`, `; timed out` when the clock says so, and
-# `; no new commit: <reason>` when the turn handed in its base. ASCII digits only.
-ENDED = re.compile(r"[0-9]{2}:[0-9]{2}:[0-9]{2} ended (\S+) lease ([0-9]+): [a-z]+(?: [a-z]+)?, "
-    r"commit ([0-9a-f]{40})(?:; timed out)?(?:; no new commit: (.*))?")
+# (yak's event_line): `ended <item> lease <n>: <state>, commit <40 hex>`, `; timed out` when the clock says so,
+# `; no new commit: <reason>` when the turn handed in its base, and `; rechecked: <state>` when the hand-in was
+# checked again. ASCII digits only. The recheck is the room's last words, so a reason whose own text ends in them is
+# read without them: a reason is named by how it begins, or by being the room's one sentence for nothing committed.
+ENDED = re.compile(r"[0-9]{2}:[0-9]{2}:[0-9]{2} ended (\S+) lease ([0-9]+): " + STATE + r", commit ([0-9a-f]{40})"
+    r"(?:; timed out)?(?:; no new commit: (.*?))?(?:; rechecked: " + STATE + r")?")
+# The room counts leases in 32 bits. A larger number in an export is not the room's, and is never turned into text.
+MAX_LEASE = 0xFFFFFFFF
 
 
 def no_commit_of(reason):
@@ -75,7 +81,7 @@ def no_commit_of(reason):
 def clock_reason(clock, item, lease, commit):
     """no_commit from the clock's captured output: the one ended event of this item, lease and commit, named; None
     when there is no such event, more than one, or one with no reason. Any other line is not evidence."""
-    if not isinstance(clock, str) or type(lease) is not int:
+    if not isinstance(clock, str) or type(lease) is not int or lease > MAX_LEASE:
         return None
     found = []
     for line in clock.split("\n"):
