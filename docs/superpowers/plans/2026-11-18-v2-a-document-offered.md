@@ -1,10 +1,10 @@
 # A document offered: the build
 
 > For the workers who build it. The spec is `docs/superpowers/specs/2026-11-18-v2-a-document-offered.md`
-> (revision 3). This plan fixes the files, the names and what passes between the parts. Where the spec
+> (revision 4). This plan fixes the files, the names and what passes between the parts. Where the spec
 > and this plan differ, the spec holds and you say so.
 
-**Goal:** scripts that make the pilot's frozen plan, run its 84 rows one at a time, and judge them, with
+**Goal:** scripts that make the pilot's frozen plan, run its 96 rows one at a time, and judge them, with
 no change to the room.
 
 **Shape:** three programs over one directory. The maker writes `plan.json` and the bases. The runner
@@ -44,7 +44,6 @@ inputs have changed.
 | `v2/probes/documents/documents_judge.py` | Task 3 | The controls, the judge and the report |
 | `v2/probes/documents/documents.sh` | Task 1 | `sh documents.sh <stage> ...`, one line per stage |
 | `v2/probes/documents/test_documents_plan.py`, `test_documents_run.py`, `test_documents_judge.py` | With each | Unit tests, with stand-ins |
-| `v2/probes/documents/test_documents_real.py` | Task 4 | The whole path against the real room and jail, no model |
 | `v2/probes/documents/tasks/<item>.facts.md`, `<item>.task.md` | Another worker | The twelve tasks; input to the maker |
 
 ## The plan's directory, which is the interface
@@ -61,7 +60,7 @@ inputs have changed.
 ```
 
 `<nnn>` is the row's place in the order, three digits from 001. `<item>` is the commit's first ten
-characters. `<row>` is one of `nothing-1`, `nothing-2`, `exists`, `path`, `search`, `newest`, `lot`.
+characters. `<row>` is one of `nothing-1`, `nothing-2`, `exists`, `path`, `search`, `newest`, `lot`, `bm25`.
 
 **`plan.json`** (every key present; `sort_keys`, indent 1, a final newline; its own SHA-256 is written
 to `<out>/plan.sha256` and checked by `load_plan`):
@@ -70,7 +69,8 @@ to `<out>/plan.sha256` and checked by `load_plan`):
 {"v": 1, "seed": 20261118,
  "spec_sha256": str, "list_sha256": str,
  "worker": {"name": str, "version": str, "model": str},
- "limits": {"worker_secs": int, "check_secs": int, "replay_secs": int, "diagnostic_secs": int},
+ "limits": {"worker_secs": int, "check_secs": int, "replay_secs": int, "diagnostic_secs": int, "lease_secs": int},
+ "programs": {...}, "environment": {...},      the room's program and the environment every stage runs it in
  "inputs": {"<path from the repository's root>": "<sha256>", ...},   every script here and each it imports, and the room's program
  "items": [{"commit": str(40), "item": str(10), "parent": str(40), "probed_before": bool,
             "plan_group": str,            the direct path; items with one direct path are one plan
@@ -80,16 +80,28 @@ to `<out>/plan.sha256` and checked by `load_plan`):
             "search": {"three": [str], "best_place": int, "tied": int},
             "newest": {"three": [str], "best_place": int},
             "lot": {"three": [str]},
+            "bm25": {"three": [str], "best_place": int, "tied": int},     the second search of the spec's section 4
             "documents": {"<path>": "<blob>", ...},       every matching and every offered file, at the parent
             "rows": {"<row>": {"paragraph": str, "base": str(40), "wrong": str(40), "task_file_sha256": str}}}],
  "order": [{"n": int, "commit": str(40), "item": str(10), "row": str, "hash": str(64), "directory": str}]}
 ```
 
 **`record.json`** (the runner, one per row): `{"n", "commit", "row", "began", "ended", "load_before",
-"load_after", "clock_exit": int, "outcome": "handed-in" | "no-hand-in" | "limit" | "clock-failed",
-"at_limit": bool, "turn_commit": str or null}`. A recorded commit makes the row `handed-in` even when the
-room ended the turn at its limit; `limit` is a turn ended at its limit with no commit; `at_limit` is true
-whenever the room ended the turn at its limit, and the report counts those rows by condition.
+"load_after", "clock_exit": int, "turns_exit": int, "walks_exit": int, "outcome": "handed-in" |
+"no-hand-in" | "limit" | "clock-failed" | "export-failed", "at_limit": bool, "turn_commit": str or null,
+"earlier_attempts": int, "attempts": [{"directory", "started": bool, "clock_exited": bool}],
+"interrupted_attempts": int}`.
+
+- The outcome is read from the room's export of the turn, not from the clock's exit code: the real room
+  ends a finished turn that handed in nothing with exit 1 and records the base's own commit for it.
+- A recorded commit other than the base makes the row `handed-in`, even when the room ended the turn at
+  its limit. A commit equal to the base, or a finished turn with none, is `no-hand-in`. `limit` is a
+  turn ended at its limit with no commit. `at_limit` is true whenever the room ended the turn at its
+  limit, and the report counts those rows by condition.
+- `export-failed`: the room's export of the turn failed. What it printed is kept, and the judge asks
+  for the export once more before scoring. A failed export of the walk leaves the outcome as it is.
+- `clock-failed`: anything else, a clock that ended with no turn among them.
+- `interrupted_attempts` counts the earlier attempts that had started and whose clock had not ended.
 
 **`cases.json`** (the judge, one per item): `{"commit", "cases": [str], "counts": {"passed", "failed",
 "error", "skipped"}}`, where `cases` are the identifiers of the item's tests that pass on the reference
@@ -99,7 +111,9 @@ base with no change.
 **`score.json`** (the judge, one per row): `{"n", "commit", "row", "outcome", "scored": bool, "of":
 int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int, "unfrozen": int,
 "collection_errors": [str], "first_obstacles": [str], "room_passed": bool or null, "matching_named":
-{"<path>": {"step": int, "seconds": float}}, "offered_named": [str]}`.
+{"<path>": {"step": int, "seconds": float}}, "offered_named": [str], "of_new": int, "passed_new":
+int}`. `of_new` is how many frozen cases do not pass on the parent, and `passed_new` how many of those
+pass under the change. The walk's two members are null when the walk could not be exported.
 
 ## Task 1. The maker (`documents_plan.py`)
 
@@ -112,7 +126,7 @@ int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int,
 - **Matching files and the direct path** by the spec's rule. **Tasks**: for each item the two files
   must exist; the task file's bytes are the task; the query is the task's bytes.
 - **The task file a turn sees:** the task, a blank line, the fixed sentence, and for a row with a
-  paragraph a blank line and the paragraph. The seven task files of an item are equal, byte for byte,
+  paragraph a blank line and the paragraph. The eight task files of an item are equal, byte for byte,
   up to the paragraph: the maker checks it and refuses otherwise.
 - **The paragraphs' bytes,** as built and read: for `exists`, the spec's sentence; for `path`, the
   spec's sentence with the path in backticks and a full stop after it; for the three-path rows, the
@@ -123,15 +137,15 @@ int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int,
   with the whole commit id.
 - **Bases:** for each item and row, a commit on the item's true parent with the task file and the
   probe's small check file laid over, in `<out>/src`, as `describe-probe.py`'s `make` does. The maker
-  proves each item's seven bases share the parent and differ in the task file alone.
+  proves each item's eight bases share the parent and differ in the task file alone.
 - **Pins:** `inputs`, `worker`, `limits`, `spec_sha256`, `list_sha256`, `documents`.
 - **`load_plan(out)`**, used by all three programs: reads `plan.json`, checks `plan.sha256`, rehashes
   every input, and raises `Refused` naming the first that changed.
 
 **Tests** (stand-ins; a small git repository made in the test): the twelve ids; a thirteenth item with a
-test function in its plan is left out; the seven task files' equality up to the paragraph; each row's
+test function in its plan is left out; the eight task files' equality up to the paragraph; each row's
 paragraph as the spec words it; the lot draws three without replacement and never a matching file; the
-order is the 84 hashes ascending and stable; two items sharing ten characters are refused; a changed
+order is the 96 hashes ascending and stable; two items sharing ten characters are refused; a changed
 input, task or plan file is refused by `load_plan`; no directory name holds 32 hexadecimal characters.
 A mutant for every condition and number you add, in a scratch copy after a control that passes.
 
@@ -151,8 +165,13 @@ directory holds no `record.json`, one at a time, up to `N`.
   `commit` the item's whole id, its `cases` not empty) and `controls/<item>/parent.json` (its `commit`
   the item's whole id). Without them it refuses, names the item and what is missing, and runs no later
   row. No flag turns this off.
-- `outcome`: `handed-in` when the room recorded a commit for the turn; `limit` when the room ended the
-  turn at its limit; `no-hand-in` when it finished with no commit; `clock-failed` otherwise.
+- `outcome`: as `record.json` above gives it.
+- **Who wrote the item.** The room never gives an item to a worker of the family that wrote it (the
+  text before the first colon of a worker's name). The runner adds each row's item as written by
+  `script:probe`, or by `claude:probe` when the worker is itself a script. Found on the real room: with
+  a script worker and `script:probe`, every clock ended in two seconds with no turn.
+- **The lock outlives a killed runner.** The clock holds the runner's lock while it lives, so a second
+  runner is refused until the turn it would collide with has ended.
 
 **Tests** (a stand-in for the room, as `test_pass.py` does it; read how its stand-in takes its
 answers): the order is followed; `--rows` stops; an interrupted row is moved aside and run once more
@@ -200,22 +219,21 @@ input is refused before any row.
 by-plan rule on a plan of one and of four; the rule suspended when a Nothing row has no score; the
 report's counts equal the records'. A mutant for every comparison and number.
 
-## Task 4. The whole path, real (`test_documents_real.py`)
+## Task 4. The whole path, real: the lead's runs
 
-Skipped unless `YAK_DOCUMENTS_REAL=1` and the room's program is given as the earlier real tests take
-it. With a script named for the worker and no model, over two small items made in the test from the
-real item-maker's shapes: the maker, all fourteen rows through the real room and jail, the controls,
-the judge and the report. It must show every row run once, a row whose script hands in nothing, a row
-whose script hands in a change that fails some frozen cases and passes others, a test file that cannot
-be collected scored as not run, an interrupted row taken up, and a changed input refused. The lead runs
-it on the host before any reader sees the build.
+Not a tracked test file. The lead runs the whole path on the real room and jail with a stand-in script
+in the worker's place and no model, over the real twelve items, and keeps each command and what it
+printed: the maker, the controls, rows through the runner, the judge and the report. The runs must show
+a row whose script hands in nothing, a row ended at its limit, a row whose change passes some frozen
+cases and fails others, an interrupted row taken up, and a changed input refused. What they found is
+written in the pilot's report. The first such run found the family rule of Task 2.
 
 ## Who builds what
 
 - **One builder: Tasks 1 and 2.** **Another: Task 3.** Each works on a branch from this plan's commit.
   Task 3's builder writes against the plan's directory as fixed above and makes its own fixtures; it
   does not wait for Task 1's code.
-- **Task 4** follows when the three are joined, by the builder of Tasks 1 and 2.
+- **Task 4** is the lead's, once the three are joined.
 - Each builder's work is read by a fresh reader of the other family before it is joined.
 
 ## Where a builder is most likely to go wrong
