@@ -32,6 +32,11 @@ the 453 cases. What a Nothing turn's change does as work was not judged. So the 
 side by side, the naming of a matching file (1 of 24 turns against 11 of 12 items) and the frozen cases
 passed, and it does not say how the one brings the other.
 
+**And the tasks were made to withhold every name.** At the one item probed before this pilot, turns
+whose task was the commit's own message passed 55 and 54 of its 64 cases with nothing added. Here, with
+a task that gives no name, the two Nothing rows pass 0 of 64. The gap this pilot shows is of tasks that
+do not carry the interface.
+
 ## What was run
 
 - **Items:** the twelve of the spec's section 2, of six plans.
@@ -197,6 +202,12 @@ cue, with no conclusion fixed on either in advance. What the rows show, as count
   give names, calls, exact assertions and test instructions; a turn that follows one writes what those
   tests look for. A Nothing turn's change passed the room's small check in all 24 rows, which says
   only that it changed something under the source directory. Whether it does the work was not judged.
+- **Not what a task that carries the names would show.** At 027834bf, turns of the earlier probes whose
+  task was the commit's own message passed 55 and 54 of 64 with nothing added, and 61 with the plan's
+  path (`docs/reports/2026-11-17-v2-the-whole-stack-tested.md`, its second and fourth probes). Here the
+  two Nothing rows pass 0 of 64 and the path's row 61. With a task that carried the names the gap at
+  that item was 6 or 7 cases; with one that withholds them it is 61. One item, one or two turns a cell
+  in each. The writer added this point after the report's read; no reader has checked it.
 - **Not about work that has no plan.** Every item was chosen because a plan exists, found by the
   finished reference's new names. What a sentence saying "there is a plan" does where there is none, or
   what a standing instruction to look for one costs there, was not tried.
