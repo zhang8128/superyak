@@ -1,0 +1,18 @@
+--- a/peer/superyak_peer/federation.py
++++ b/peer/superyak_peer/federation.py
+@@ -8,6 +8,8 @@
+ from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
+                        pairing_code, show_code, typed_code)
+ from .common import Problem, require, uid, encode, text, linked_room_ok
++# The interface control: imports the commit adds that a given part needs.
++import time
+ 
+ class Obsolete(Exception):
+     pass
+@@ -705,3 +707,6 @@
+         key = uid()
+         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
+         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})
++
++    def pull_once(self, card, *, send=None, sleep=time.sleep):
++        raise NotImplementedError("interface control")

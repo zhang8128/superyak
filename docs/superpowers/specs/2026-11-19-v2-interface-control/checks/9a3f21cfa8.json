@@ -1,0 +1,61 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_chat_paging::test_bad_parameters_are_400",
+   "tests.test_chat_paging::test_before_at_start_after_windows",
+   "tests.test_chat_paging::test_empty_room_pages",
+   "tests.test_chat_paging::test_limit_alone_returns_the_newest",
+   "tests.test_chat_paging::test_local_and_peer_with_the_same_created_keep_todays_order",
+   "tests.test_chat_paging::test_no_parameters_is_byte_identical",
+   "tests.test_chat_paging::test_system_author_is_room_wide",
+   "tests.test_chat_paging::test_unknown_start_is_404_and_a_non_member_learns_nothing"
+  ],
+  "seconds": 6.3
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_chat_paging::test_bad_parameters_are_400": [
+    "failed",
+    "AssertionError: limit=0"
+   ],
+   "tests.test_chat_paging::test_before_at_start_after_windows": [
+    "failed",
+    "AssertionError: assert ['4791dba9b48...2207a90', ...] == ['9c95a3019c5...6cd50d7ca0a9']"
+   ],
+   "tests.test_chat_paging::test_empty_room_pages": [
+    "failed",
+    "KeyError: 'total'"
+   ],
+   "tests.test_chat_paging::test_limit_alone_returns_the_newest": [
+    "failed",
+    "AssertionError: assert ['6f99c44677b...e2cf528', ...] == ['67125774ec8...524f4ce', ...]"
+   ],
+   "tests.test_chat_paging::test_unknown_start_is_404_and_a_non_member_learns_nothing": [
+    "failed",
+    "AssertionError: assert 200 == 404"
+   ]
+  },
+  "passed": [
+   "tests.test_chat_paging::test_local_and_peer_with_the_same_created_keep_todays_order",
+   "tests.test_chat_paging::test_no_parameters_is_byte_identical",
+   "tests.test_chat_paging::test_system_author_is_room_wide"
+  ],
+  "seconds": 6.2
+ },
+ "commit": "9a3f21cfa80fd38e03e909db6283d60c8bb8449f",
+ "item": "9a3f21cfa8",
+ "parent": "ed3f92f37945a1cbbfba07f9b1cb80515e94e922"
+}

@@ -1,0 +1,18 @@
+{
+ "added": [
+  "__main__.py SHUTDOWN_GRACE"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/__main__.py"
+ ],
+ "given": [
+  "__main__.py SHUTDOWN_GRACE"
+ ],
+ "imports": {
+  "superyak_peer.__main__": "ok"
+ },
+ "item": "82bff0db02",
+ "patch_sha256": "964e79266fefa3970a6da495c0f7171a62f80ff32c5e1d2d959d63b11301aeb1"
+}

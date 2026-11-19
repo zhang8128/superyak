@@ -1,0 +1,12 @@
+{
+ "added": [
+  "app.py SignInLane",
+  "auth.py Auth.device_is_valid"
+ ],
+ "applied": true,
+ "files": [],
+ "given": [],
+ "imports": {},
+ "item": "d20c739bd0",
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

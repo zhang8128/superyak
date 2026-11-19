@@ -1,0 +1,22 @@
+{
+ "added": [
+  "identity.py CARD_KEYS",
+  "identity.py PULL_KEYS",
+  "identity.py PeerIdentity.sign_pull",
+  "identity.py verify_pull"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/identity.py"
+ ],
+ "given": [
+  "identity.py PeerIdentity.sign_pull",
+  "identity.py verify_pull"
+ ],
+ "imports": {
+  "superyak_peer.identity": "ok"
+ },
+ "item": "c9ceb15bae",
+ "patch_sha256": "594db8d559bf9a7c907065b3106ec9330082104c903dd91a279ef3004a87968a"
+}

@@ -1,0 +1,12 @@
+{
+ "added": [
+  "lessons.py Lessons._carry_lessons",
+  "lessons.py Lessons._lessons_add_gate"
+ ],
+ "applied": true,
+ "files": [],
+ "given": [],
+ "imports": {},
+ "item": "603434cf1e",
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

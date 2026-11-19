@@ -1,0 +1,23 @@
+{
+ "added": [
+  "federation.py Federation._prepare_in",
+  "federation.py Federation._serve_pull",
+  "federation.py Federation._walk_row",
+  "federation.py Federation.serve_pull",
+  "identity.py PULL_BUDGET",
+  "identity.py pull_shape_ok"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/federation.py"
+ ],
+ "given": [
+  "federation.py Federation.serve_pull"
+ ],
+ "imports": {
+  "superyak_peer.federation": "ok"
+ },
+ "item": "671a225045",
+ "patch_sha256": "ce589c32accb4467443c7da83b25037e3b1909986a1bed9e22a3039ef1411905"
+}

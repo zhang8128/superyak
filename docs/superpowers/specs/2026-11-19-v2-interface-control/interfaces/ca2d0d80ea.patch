@@ -1,0 +1,13 @@
+--- a/peer/superyak_peer/backups.py
++++ b/peer/superyak_peer/backups.py
+@@ -210,3 +210,10 @@
+         return final
+     finally:
+         os.umask(old_umask)
++
++
++# The interface control: names the commit adds, with no bodies.
++RETRY_SECONDS = 60
++
++def free_bytes(path):
++    raise NotImplementedError("interface control")

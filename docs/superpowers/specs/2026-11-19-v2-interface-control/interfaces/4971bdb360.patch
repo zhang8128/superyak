@@ -1,0 +1,10 @@
+--- a/peer/superyak_peer/tickets.py
++++ b/peer/superyak_peer/tickets.py
+@@ -135,3 +135,7 @@
+                                                'ON messages.id=message_kinds.message_id WHERE messages.room_id=?', (room_id,))}
+         return {r['id']: {'kind': kinds[r['id']]} if r['id'] in kinds else runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
+                 for r in db.execute('SELECT id,author_id FROM messages WHERE room_id=?', (room_id,))}
++
++
++# The interface control: names the commit adds, with no bodies.
++NOTICE_TEMPLATE = NotImplemented

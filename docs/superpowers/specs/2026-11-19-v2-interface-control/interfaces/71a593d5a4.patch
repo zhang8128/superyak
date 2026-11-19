@@ -1,0 +1,18 @@
+--- a/peer/superyak_peer/auth.py
++++ b/peer/superyak_peer/auth.py
+@@ -221,3 +221,6 @@
+             user = self._create_user(db, username, name, password)
+             db.execute('UPDATE invitations SET used=1 WHERE token_hash=?', (token_hash(token),))
+             return user
++
++    def session_is_valid(self, token):
++        raise NotImplementedError("interface control")
+--- a/peer/superyak_peer/ships.py
++++ b/peer/superyak_peer/ships.py
+@@ -434,3 +434,6 @@
+                             JOIN users AS ships ON ships.id=dockings.ship_id JOIN users AS owners ON owners.id=dockings.owner_id
+                             WHERE dockings.status IN ('confirmed','collected') ORDER BY dockings.created""")]
+             return notices
++
++    def ship_key_is_valid(self, key):
++        raise NotImplementedError("interface control")

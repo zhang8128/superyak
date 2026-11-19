@@ -1,0 +1,39 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_federate::test_a_second_sync_process_exits_and_the_lock_is_private",
+   "tests.test_federate::test_the_lock_never_follows_a_link"
+  ],
+  "seconds": 1.2
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_federate::test_a_second_sync_process_exits_and_the_lock_is_private": [
+    "failed",
+    "ImportError: cannot import name 'federation_lock' from 'superyak_peer.dispatch' (/tmp/ifc-tree-zzhsfpjf/peer/superyak_peer/dispatch.py)"
+   ],
+   "tests.test_federate::test_the_lock_never_follows_a_link": [
+    "failed",
+    "ImportError: cannot import name 'federation_lock' from 'superyak_peer.dispatch' (/tmp/ifc-tree-zzhsfpjf/peer/superyak_peer/dispatch.py)"
+   ]
+  },
+  "passed": [],
+  "seconds": 0.9
+ },
+ "commit": "0193bde842be1849f4e94fe86639630cb174f717",
+ "item": "0193bde842",
+ "parent": "1113f1dbb44b0da57990a45629cd1ee0fcc271cf"
+}

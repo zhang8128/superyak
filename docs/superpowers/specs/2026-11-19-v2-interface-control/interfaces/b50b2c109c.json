@@ -1,0 +1,24 @@
+{
+ "added": [
+  "alerts.py GIVE_UPS_PER_DAY",
+  "alerts.py LOCK_WAIT",
+  "alerts.py _hold",
+  "alerts.py _lock",
+  "alerts.py _number",
+  "alerts.py _rates",
+  "alerts.py _state"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/alerts.py"
+ ],
+ "given": [
+  "alerts.py LOCK_WAIT"
+ ],
+ "imports": {
+  "superyak_peer.alerts": "ok"
+ },
+ "item": "b50b2c109c",
+ "patch_sha256": "d60ff04e76636ea8ae12a3479b465d081cc0a2d7bf89b760c6e33fecbe4819eb"
+}

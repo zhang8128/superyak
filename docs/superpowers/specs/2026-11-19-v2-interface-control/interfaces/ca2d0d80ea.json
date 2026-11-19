@@ -1,0 +1,22 @@
+{
+ "added": [
+  "backups.py MIN_FREE",
+  "backups.py RETRY_SECONDS",
+  "backups.py _write_output",
+  "backups.py free_bytes"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/backups.py"
+ ],
+ "given": [
+  "backups.py RETRY_SECONDS",
+  "backups.py free_bytes"
+ ],
+ "imports": {
+  "superyak_peer.backups": "ok"
+ },
+ "item": "ca2d0d80ea",
+ "patch_sha256": "b03ad6d5fe085f678d00f33bcf8fec5004bd401cf870e8329e08d1d27c4aa5a0"
+}

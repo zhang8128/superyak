@@ -1,0 +1,14 @@
+{
+ "added": [
+  "app.py paging",
+  "chats.py Chats._message_order",
+  "chats.py Chats._page",
+  "chats.py Chats._room_seq"
+ ],
+ "applied": true,
+ "files": [],
+ "given": [],
+ "imports": {},
+ "item": "9a3f21cfa8",
+ "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

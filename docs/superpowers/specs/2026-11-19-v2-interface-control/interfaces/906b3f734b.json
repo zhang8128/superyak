@@ -1,0 +1,18 @@
+{
+ "added": [
+  "lessons.py COMMANDS_BYTES"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/lessons.py"
+ ],
+ "given": [
+  "lessons.py COMMANDS_BYTES"
+ ],
+ "imports": {
+  "superyak_peer.lessons": "ok"
+ },
+ "item": "906b3f734b",
+ "patch_sha256": "bfe0efb51150ea874897cc647cd6c67b6462fb9fa8724c260e4cea037e2d83e5"
+}

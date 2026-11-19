@@ -1,0 +1,98 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_alerts::test_a_cleaning_error_never_stops_the_alert_being_queued",
+   "tests.test_alerts::test_a_crash_queues_one_alert_and_a_clean_stop_queues_none",
+   "tests.test_alerts::test_a_notifier_that_cannot_write_its_queue_exits_0",
+   "tests.test_alerts::test_a_symlinked_alerts_directory_is_never_cleaned",
+   "tests.test_alerts::test_alert_lines_hold_no_log_lines_mentions_or_unchecked_values",
+   "tests.test_alerts::test_an_existing_wide_alerts_directory_is_tightened_to_0700",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-1-see the log]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-10-not enough disk space]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-11-the copy failed its check; tomorrow's run tries again]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-12-the live database may be damaged: don't restart or deploy before reading docs/station-restore.md]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-13-the copy off the Pi failed]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-oom-kill-KILL-it was killed (KILL)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-signal-KILL-it was killed (KILL)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-timeout--it ran past its time limit]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-core-dump-SEGV-it was killed (SEGV)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-1-see the log]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-20-there is no backup to test]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-21-the newest copy failed its check]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-22-the restored station did not start]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-23-the restored station is missing data]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-24-the restore's reconcile step failed]",
+   "tests.test_alerts::test_monitor_kinds",
+   "tests.test_alerts::test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks",
+   "tests.test_alerts::test_stopped_alerts_are_held_back_and_back_off_per_unit",
+   "tests.test_alerts::test_the_lock_fallback_queues_anyway"
+  ],
+  "seconds": 6.2
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_alerts::test_a_cleaning_error_never_stops_the_alert_being_queued": [
+    "failed",
+    "AssertionError: assert 0 == 1"
+   ],
+   "tests.test_alerts::test_a_symlinked_alerts_directory_is_never_cleaned": [
+    "failed",
+    "AssertionError: assert False"
+   ],
+   "tests.test_alerts::test_an_existing_wide_alerts_directory_is_tightened_to_0700": [
+    "failed",
+    "AssertionError: assert 493 == 448"
+   ],
+   "tests.test_alerts::test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks": [
+    "failed",
+    "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/ifc-home-9jt3c7p6/pytest-of-doctor/pytest-0/test_rate_json_and_the_lock_ar0/alerts/rate.json'"
+   ],
+   "tests.test_alerts::test_stopped_alerts_are_held_back_and_back_off_per_unit": [
+    "failed",
+    "assert [True, True, ...e, True, True] == [True, False,... False, False]"
+   ],
+   "tests.test_alerts::test_the_lock_fallback_queues_anyway": [
+    "failed",
+    "AttributeError: module 'superyak_peer.alerts' has no attribute 'LOCK_WAIT'"
+   ]
+  },
+  "passed": [
+   "tests.test_alerts::test_a_crash_queues_one_alert_and_a_clean_stop_queues_none",
+   "tests.test_alerts::test_a_notifier_that_cannot_write_its_queue_exits_0",
+   "tests.test_alerts::test_alert_lines_hold_no_log_lines_mentions_or_unchecked_values",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-1-see the log]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-10-not enough disk space]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-11-the copy failed its check; tomorrow's run tries again]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-12-the live database may be damaged: don't restart or deploy before reading docs/station-restore.md]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-exit-code-13-the copy off the Pi failed]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-oom-kill-KILL-it was killed (KILL)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-signal-KILL-it was killed (KILL)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-backup.service-timeout--it ran past its time limit]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-core-dump-SEGV-it was killed (SEGV)]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-1-see the log]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-20-there is no backup to test]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-21-the newest copy failed its check]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-22-the restored station did not start]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-23-the restored station is missing data]",
+   "tests.test_alerts::test_failed_backup_and_restore_runs_name_their_reason[superyak-restore-test.service-exit-code-24-the restore's reconcile step failed]",
+   "tests.test_alerts::test_monitor_kinds"
+  ],
+  "seconds": 1.2
+ },
+ "commit": "b50b2c109c77562c1b7acd843e11459c445a0106",
+ "item": "b50b2c109c",
+ "parent": "113a7e977ca95e6a7bcc614e09ed67b2c6883022"
+}

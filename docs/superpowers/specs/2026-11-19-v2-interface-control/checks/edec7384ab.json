@@ -1,0 +1,47 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_mentions::test_a_plain_mention_beside_a_quoted_one_still_counts",
+   "tests.test_mentions::test_capitalized_and_punctuated_mentions_count",
+   "tests.test_mentions::test_mentions_of_room_members_are_recorded_in_order",
+   "tests.test_mentions::test_names_in_code_quotes_or_quoted_lines_do_not_mention",
+   "tests.test_mentions::test_non_members_are_not_mentioned_and_removed_ships_stop_seeing_mentions",
+   "tests.test_mentions::test_room_details_list_members_with_kind",
+   "tests.test_mentions::test_ships_post_at_most_thirty_messages_a_minute_and_retries_do_not_count"
+  ],
+  "seconds": 5.5
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_mentions::test_names_in_code_quotes_or_quoted_lines_do_not_mention": [
+    "failed",
+    "AssertionError: assert [{'seq': 1, '...ot me.', ...}] == []"
+   ]
+  },
+  "passed": [
+   "tests.test_mentions::test_a_plain_mention_beside_a_quoted_one_still_counts",
+   "tests.test_mentions::test_capitalized_and_punctuated_mentions_count",
+   "tests.test_mentions::test_mentions_of_room_members_are_recorded_in_order",
+   "tests.test_mentions::test_non_members_are_not_mentioned_and_removed_ships_stop_seeing_mentions",
+   "tests.test_mentions::test_room_details_list_members_with_kind",
+   "tests.test_mentions::test_ships_post_at_most_thirty_messages_a_minute_and_retries_do_not_count"
+  ],
+  "seconds": 5.6
+ },
+ "commit": "edec7384ab19b9bd6766929a0cd6d62548073662",
+ "item": "edec7384ab",
+ "parent": "697182d64c07a4deee1cb051fdc29cd7b9c1863c"
+}

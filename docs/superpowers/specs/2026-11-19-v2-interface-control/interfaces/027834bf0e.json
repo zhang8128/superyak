@@ -1,0 +1,29 @@
+{
+ "added": [
+  "federation.py ALREADY",
+  "federation.py RETIRED",
+  "federation.py _held_ship_may_return",
+  "owner_trust.py LATEST",
+  "owner_trust.py OwnerTrust.revoke_owner_trust",
+  "owner_trust.py REVOKED",
+  "owner_trust.py UNHELD_SHIPS",
+  "owner_trust.py _owner_failed",
+  "owner_trust.py hold_contact",
+  "owner_trust.py latest_grant",
+  "owner_trust.py settle_owner_trust"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/owner_trust.py"
+ ],
+ "given": [
+  "owner_trust.py OwnerTrust.revoke_owner_trust",
+  "owner_trust.py settle_owner_trust"
+ ],
+ "imports": {
+  "superyak_peer.owner_trust": "ok"
+ },
+ "item": "027834bf0e",
+ "patch_sha256": "e277a01904895ebae5486acc6fe6bc9ec05cd35b7a71fd70e9f1833da6ce045d"
+}

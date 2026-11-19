@@ -1,0 +1,37 @@
+--- a/peer/superyak_peer/identity.py
++++ b/peer/superyak_peer/identity.py
+@@ -217,6 +217,12 @@
+         value['signature'] = base64.b64encode(self.key.sign(canonical(value))).decode()
+         return value
+ 
++    def sign_crossing(self, request):
++        raise NotImplementedError("interface control")
++
++    def sign_crossing_answer(self, answer):
++        raise NotImplementedError("interface control")
++
+ def verify_envelope(raw, card, destination):
+     value = parse(raw)
+     try:
+@@ -344,3 +350,21 @@
+         return True
+     except Exception:  # noqa: BLE001 - a verifier answers False and never raises
+         return False
++
++
++# The interface control: names the commit adds, with no bodies.
++RESERVED_KINDS = NotImplemented
++CROSSING_KEYS = NotImplemented
++CROSSING_ANSWER_KEYS = NotImplemented
++
++def crossing_shape_ok(request):
++    raise NotImplementedError("interface control")
++
++def verify_crossing(card, request):
++    raise NotImplementedError("interface control")
++
++def crossing_digest(signed):
++    raise NotImplementedError("interface control")
++
++def verify_crossing_answer(card, answer, *, me, digest, nonce, kind):
++    raise NotImplementedError("interface control")

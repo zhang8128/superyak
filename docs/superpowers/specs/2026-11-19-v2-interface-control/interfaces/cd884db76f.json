@@ -1,0 +1,22 @@
+{
+ "added": [
+  "identity.py pairing_code",
+  "identity.py show_code",
+  "identity.py typed_code"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/identity.py"
+ ],
+ "given": [
+  "identity.py pairing_code",
+  "identity.py show_code",
+  "identity.py typed_code"
+ ],
+ "imports": {
+  "superyak_peer.identity": "ok"
+ },
+ "item": "cd884db76f",
+ "patch_sha256": "0aaf69b2bf5fb034089472fd6a58bc38aa8ed076d65424a8098cfdeff4b12fb7"
+}

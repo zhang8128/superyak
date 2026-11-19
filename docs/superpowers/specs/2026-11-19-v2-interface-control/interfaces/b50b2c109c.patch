@@ -1,0 +1,10 @@
+--- a/peer/superyak_peer/alerts.py
++++ b/peer/superyak_peer/alerts.py
+@@ -169,3 +169,7 @@
+     except OSError as error:
+         print(f'station-alert: could not queue the alert for {unit}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
+         return None
++
++
++# The interface control: names the commit adds, with no bodies.
++LOCK_WAIT = 5

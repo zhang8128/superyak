@@ -1,0 +1,19 @@
+{
+ "added": [
+  "lessons.py addable_contacts",
+  "lessons.py listable"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/lessons.py"
+ ],
+ "given": [
+  "lessons.py listable"
+ ],
+ "imports": {
+  "superyak_peer.lessons": "ok"
+ },
+ "item": "6ba4650f4d",
+ "patch_sha256": "0f559fa9155fcc3f2e5bba3dce3701831b14c69d0af417ec716ad2518571db0a"
+}

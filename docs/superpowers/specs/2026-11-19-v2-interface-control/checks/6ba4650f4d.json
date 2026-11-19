@@ -1,0 +1,136 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_lessons_adds::test_a_line_not_shown_is_not_recorded",
+   "tests.test_lessons_adds::test_a_stale_confirm_writes_nothing",
+   "tests.test_lessons_adds::test_an_unlisted_peers_account_is_not_addable",
+   "tests.test_lessons_adds::test_confirm_records_exactly_what_was_shown_and_a_rerun_replaces_it",
+   "tests.test_lessons_adds::test_members_trust_made_held_and_removed_contacts_are_not_addable",
+   "tests.test_lessons_adds::test_no_line_for_an_unlisted_peer",
+   "tests.test_lessons_adds::test_no_line_off_the_origin",
+   "tests.test_lessons_adds::test_no_line_without_a_recorded_room",
+   "tests.test_lessons_adds::test_no_line_without_a_recorded_ship",
+   "tests.test_lessons_adds::test_owner_removed_skips_held_rows",
+   "tests.test_lessons_adds::test_pair_records_who_typed_and_whether_the_line_was_shown",
+   "tests.test_lessons_adds::test_record_change_takes_a_reason",
+   "tests.test_lessons_adds::test_restore_keeps_the_new_columns_and_table",
+   "tests.test_lessons_adds::test_restore_of_a_backup_from_before_the_build",
+   "tests.test_lessons_adds::test_the_confirm_code_changes_when_one_is_added_or_goes_stale",
+   "tests.test_lessons_adds::test_the_line_flag_needs_the_peer_listed_in_pairs_own_transaction",
+   "tests.test_lessons_adds::test_the_line_for_a_listed_peer_is_the_exact_text",
+   "tests.test_lessons_adds::test_the_line_names_a_bidi_name_plainly",
+   "tests.test_lessons_adds::test_the_listing_names_each_addable_account",
+   "tests.test_lessons_adds::test_the_listing_shows_a_bidi_name_plainly",
+   "tests.test_lessons_adds::test_the_ship_is_the_recorded_ships_account_name"
+  ],
+  "seconds": 12.8
+ },
+ "at_parent": {
+  "collection_errors": [
+   "tests.test_lessons_adds: collection failure"
+  ],
+  "exit": 2,
+  "limit": false,
+  "not_passing": {
+   "tests.test_lessons_adds::test_a_line_not_shown_is_not_recorded": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_a_stale_confirm_writes_nothing": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_an_unlisted_peers_account_is_not_addable": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_confirm_records_exactly_what_was_shown_and_a_rerun_replaces_it": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_members_trust_made_held_and_removed_contacts_are_not_addable": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_no_line_for_an_unlisted_peer": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_no_line_off_the_origin": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_no_line_without_a_recorded_room": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_no_line_without_a_recorded_ship": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_owner_removed_skips_held_rows": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_pair_records_who_typed_and_whether_the_line_was_shown": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_record_change_takes_a_reason": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_restore_keeps_the_new_columns_and_table": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_restore_of_a_backup_from_before_the_build": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_confirm_code_changes_when_one_is_added_or_goes_stale": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_line_flag_needs_the_peer_listed_in_pairs_own_transaction": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_line_for_a_listed_peer_is_the_exact_text": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_line_names_a_bidi_name_plainly": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_listing_names_each_addable_account": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_listing_shows_a_bidi_name_plainly": [
+    "not run",
+    ""
+   ],
+   "tests.test_lessons_adds::test_the_ship_is_the_recorded_ships_account_name": [
+    "not run",
+    ""
+   ]
+  },
+  "passed": [],
+  "seconds": 1.9
+ },
+ "commit": "6ba4650f4d3b0e49cb792b256aa21815a01afd08",
+ "item": "6ba4650f4d",
+ "parent": "173f7b884b97a9a45ccd15b16702d90319a252f6"
+}

@@ -1,0 +1,22 @@
+--- a/peer/superyak_peer/identity.py
++++ b/peer/superyak_peer/identity.py
+@@ -173,6 +173,9 @@
+         value['signature'] = base64.b64encode(self.key.sign(canonical(value))).decode()
+         return value
+ 
++    def sign_pull(self, request):
++        raise NotImplementedError("interface control")
++
+ def verify_envelope(raw, card, destination):
+     value = parse(raw)
+     try:
+@@ -213,3 +216,9 @@
+         return True
+     except Exception:  # noqa: BLE001 - a verifier answers False and never raises (G3)
+         return False
++
++
++# The interface control: names the commit adds, with no bodies.
++
++def verify_pull(card, request):
++    raise NotImplementedError("interface control")

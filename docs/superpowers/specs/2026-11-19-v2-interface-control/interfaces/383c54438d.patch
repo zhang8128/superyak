@@ -1,0 +1,9 @@
+--- a/peer/superyak_peer/ships.py
++++ b/peer/superyak_peer/ships.py
+@@ -172,3 +172,6 @@
+         return [{'seq': r['seq'], 'message_id': r['message_id'], 'room_id': r['room_id'], 'body': r['body'], 'created': r['created'],
+                  'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']}}
+                 for r in rows]
++
++    def ships(self, actor):
++        raise NotImplementedError("interface control")

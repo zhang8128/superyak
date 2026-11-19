@@ -1,0 +1,476 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_public_body_cap::test_a_body_at_the_cap_reaches_its_route_whole",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-OPTIONS]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-OPTIONS]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-OPTIONS]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-OPTIONS]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-OPTIONS]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-GET]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-HEAD]",
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-OPTIONS]",
+   "tests.test_public_body_cap::test_a_path_no_route_takes_keeps_the_6_mb_bound_and_doesnt_fall_over",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/api/invitations/redeem-8192]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/api/login-8192]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/authorize/decision-8192]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/authorize/signin-8192]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/mcp-65536]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/register-8192]",
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/token-8192]",
+   "tests.test_public_body_cap::test_a_route_with_no_cap_of_its_own_still_reads_its_body",
+   "tests.test_public_body_cap::test_a_sign_in_at_its_cap_is_still_judged_as_a_sign_in",
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/invitations/redeem%0A]",
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/invitations/redeem]",
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/login%0A]",
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/login]",
+   "tests.test_public_body_cap::test_a_small_body_costs_no_route_scan_and_a_large_one_costs_one",
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/API/LOGIN]",
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/api/login//]",
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/api/login/]",
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/register/]",
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/token/]",
+   "tests.test_public_body_cap::test_an_oauth_write_on_a_near_miss_of_its_path_still_needs_the_same_origin",
+   "tests.test_public_body_cap::test_any_other_route_keeps_the_6_mb_bound",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/api/invitations/redeem-padded_json-headers6-8192-Request too large]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/api/login-padded_json-headers5-8192-Request too large]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/authorize/decision-padded_json-headers3-8192-invalid_request]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/authorize/signin-padded_json-headers2-8192-invalid_request]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/mcp-padded_json-headers4-65536-Request too large]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/register-padded_json-headers0-8192-invalid_client_metadata]",
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/token-padded_form-headers1-8192-invalid_request]",
+   "tests.test_public_body_cap::test_every_public_route_that_takes_a_body_has_a_cap_so_one_added_later_cant_skip_it",
+   "tests.test_public_body_cap::test_one_rule_finds_the_route_for_the_cap_and_the_guard",
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/api/invitations/redeem\\n-8192]",
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/api/login\\n-8192]",
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/mcp\\n-65536]",
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/register\\n-8192]",
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/token\\n-8192]",
+   "tests.test_public_body_cap::test_the_cap_holds_for_a_method_the_route_refuses",
+   "tests.test_public_body_cap::test_the_first_partial_match_decides_as_it_does_for_the_router",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-HEAD-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-HEAD-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-authorization-server-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-authorization-server-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource/mcp-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource/mcp-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/api/health-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/api/health-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-HEAD-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-HEAD-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/authorize-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/authorize-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/mcp-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/mcp-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-HEAD-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-HEAD-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/k-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/k-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/l/files/k-GET-stranger]",
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/l/files/k-GET-tailnet]",
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/invitations/redeem]",
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/login\\n]",
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/login]",
+   "tests.test_public_body_cap::test_the_sign_in_cap_is_8_kb"
+  ],
+  "seconds": 8.5
+ },
+ "at_parent": {
+  "collection_errors": [
+   "tests.test_public_body_cap: collection failure"
+  ],
+  "exit": 2,
+  "limit": false,
+  "not_passing": {
+   "tests.test_public_body_cap::test_a_body_at_the_cap_reaches_its_route_whole": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/health-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/api/rooms/x/messages-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/mcp-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/not/a/route-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-GET]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-HEAD]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_bodyless_method_reads_nothing_at_all_and_its_route_sees_no_body[/register-OPTIONS]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_path_no_route_takes_keeps_the_6_mb_bound_and_doesnt_fall_over": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/api/invitations/redeem-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/api/login-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/authorize/decision-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/authorize/signin-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/mcp-65536]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/register-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_public_route_never_buffers_past_its_cap_and_gets_to_answer_for_itself[/token-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_route_with_no_cap_of_its_own_still_reads_its_body": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_sign_in_at_its_cap_is_still_judged_as_a_sign_in": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/invitations/redeem%0A]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/invitations/redeem]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/login%0A]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_sign_in_route_refuses_past_its_cap_before_it_parses[/api/login]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_small_body_costs_no_route_scan_and_a_large_one_costs_one": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/API/LOGIN]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/api/login//]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/api/login/]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/register/]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_a_stranger_cant_slip_past_the_table_on_a_near_miss_of_a_path[/token/]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_an_oauth_write_on_a_near_miss_of_its_path_still_needs_the_same_origin": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_any_other_route_keeps_the_6_mb_bound": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/api/invitations/redeem-padded_json-headers6-8192-Request too large]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/api/login-padded_json-headers5-8192-Request too large]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/authorize/decision-padded_json-headers3-8192-invalid_request]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/authorize/signin-padded_json-headers2-8192-invalid_request]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/mcp-padded_json-headers4-65536-Request too large]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/register-padded_json-headers0-8192-invalid_client_metadata]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_each_routes_own_cap_is_the_tables_at_its_edge[/token-padded_form-headers1-8192-invalid_request]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_every_public_route_that_takes_a_body_has_a_cap_so_one_added_later_cant_skip_it": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_one_rule_finds_the_route_for_the_cap_and_the_guard": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/api/invitations/redeem\\n-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/api/login\\n-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/mcp\\n-65536]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/register\\n-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_follows_what_the_router_dispatches_not_the_paths_text[/token\\n-8192]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_cap_holds_for_a_method_the_route_refuses": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_first_partial_match_decides_as_it_does_for_the_router": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-HEAD-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/-HEAD-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-authorization-server-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-authorization-server-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource/mcp-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/.well-known/oauth-protected-resource/mcp-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/api/health-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/api/health-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-HEAD-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/assets/app.js-HEAD-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/authorize-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/authorize-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/mcp-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/mcp-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-HEAD-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/-HEAD-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/k-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/k-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/l/files/k-GET-stranger]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_reads_no_body_on_any_public_get[/public/layers/l/files/k-GET-tailnet]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/invitations/redeem]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/login\\n]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_real_app_stops_reading_a_strangers_body_at_the_cap[/api/login]": [
+    "not run",
+    ""
+   ],
+   "tests.test_public_body_cap::test_the_sign_in_cap_is_8_kb": [
+    "not run",
+    ""
+   ]
+  },
+  "passed": [],
+  "seconds": 1.2
+ },
+ "commit": "2ebc78e1d8d117459fd41e3bfd5f83cb85f286ac",
+ "item": "2ebc78e1d8",
+ "parent": "057f579ea03ac9a3cb0a73ff5f6d25e0887a7e69"
+}

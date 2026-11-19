@@ -1,0 +1,9 @@
+--- a/peer/superyak_peer/federation.py
++++ b/peer/superyak_peer/federation.py
+@@ -587,3 +587,6 @@
+         key = uid()
+         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
+         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})
++
++    def serve_pull(self, raw):
++        raise NotImplementedError("interface control")

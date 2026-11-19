@@ -1,0 +1,20 @@
+{
+ "added": [
+  "app.py BODYLESS_METHODS",
+  "app.py dispatched"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/app.py"
+ ],
+ "given": [
+  "app.py BODYLESS_METHODS",
+  "app.py dispatched"
+ ],
+ "imports": {
+  "superyak_peer.app": "ok"
+ },
+ "item": "2ebc78e1d8",
+ "patch_sha256": "095463db770d327b8ba9795eba8868c62ad0a38bf9fa6a28828a1d02efdfe74f"
+}

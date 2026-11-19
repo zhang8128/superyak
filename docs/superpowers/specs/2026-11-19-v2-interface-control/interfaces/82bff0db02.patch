@@ -1,0 +1,10 @@
+--- a/peer/superyak_peer/__main__.py
++++ b/peer/superyak_peer/__main__.py
+@@ -954,3 +954,7 @@
+ 
+ if __name__ == '__main__':
+     main()
++
++
++# The interface control: names the commit adds, with no bodies.
++SHUTDOWN_GRACE = 5

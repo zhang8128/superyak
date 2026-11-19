@@ -1,0 +1,13 @@
+--- a/peer/superyak_peer/federation.py
++++ b/peer/superyak_peer/federation.py
+@@ -906,3 +906,10 @@
+         key = uid()
+         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
+         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})
++
++    def pair_trusted(self, actor, card, assertion):
++        raise NotImplementedError("interface control")
++
++
++# The interface control: names the commit adds, with no bodies.
++TRUST_CAP = 200

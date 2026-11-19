@@ -1,0 +1,21 @@
+{
+ "added": [
+  "owner_trust.py EXPECT_MAX",
+  "owner_trust.py EXPECT_SHAPE",
+  "owner_trust.py _expect",
+  "owner_trust.py trust_window"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/owner_trust.py"
+ ],
+ "given": [
+  "owner_trust.py trust_window"
+ ],
+ "imports": {
+  "superyak_peer.owner_trust": "ok"
+ },
+ "item": "3879e60983",
+ "patch_sha256": "3e745610fb12fff4c8868f0d5582a5a70c0b719c027a5f5dd757fd03f2b99d5f"
+}

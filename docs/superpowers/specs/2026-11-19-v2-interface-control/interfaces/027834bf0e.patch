@@ -1,0 +1,15 @@
+--- a/peer/superyak_peer/owner_trust.py
++++ b/peer/superyak_peer/owner_trust.py
+@@ -149,3 +149,12 @@
+             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at) '
+                        "VALUES (?,'renew',?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now))
+         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
++
++    def revoke_owner_trust(self, actor, grant_id):
++        raise NotImplementedError("interface control")
++
++
++# The interface control: names the commit adds, with no bodies.
++
++def settle_owner_trust(db, now):
++    raise NotImplementedError("interface control")

@@ -1,0 +1,12 @@
+--- a/peer/superyak_peer/dispatch.py
++++ b/peer/superyak_peer/dispatch.py
+@@ -33,3 +33,9 @@
+             fcntl.flock(local.fd, fcntl.LOCK_UN)
+             os.close(local.fd)
+         lock.release()
++
++
++# The interface control: names the commit adds, with no bodies.
++
++def federation_lock(data_dir):
++    raise NotImplementedError("interface control")

@@ -1,0 +1,25 @@
+{
+ "added": [
+  "__main__.py pair_trusted_command",
+  "federation.py Federation._pair_trusted",
+  "federation.py Federation.pair_trusted",
+  "federation.py NOT_A_TRUSTED_SHIP",
+  "federation.py TRUST_CAP",
+  "federation.py _AtCap",
+  "federation.py _name_taken"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/federation.py"
+ ],
+ "given": [
+  "federation.py Federation.pair_trusted",
+  "federation.py TRUST_CAP"
+ ],
+ "imports": {
+  "superyak_peer.federation": "ok"
+ },
+ "item": "fff1b349cc",
+ "patch_sha256": "02070ddb8cd58d2ad2d75c5f57fc948c191ddbbbe2d88cbcd9ffb95c0ecf4574"
+}

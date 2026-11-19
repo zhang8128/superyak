@@ -1,0 +1,10 @@
+--- a/peer/superyak_peer/lessons.py
++++ b/peer/superyak_peer/lessons.py
+@@ -2310,3 +2310,7 @@
+ if __name__ == '__main__':
+     from superyak_peer.lessons import main as _main
+     _main()
++
++
++# The interface control: names the commit adds, with no bodies.
++COMMANDS_BYTES = 32 * 2**20

@@ -1,0 +1,43 @@
+{
+ "added": [
+  "identity.py ANSWERS",
+  "identity.py CROSSING_ANSWER_KEYS",
+  "identity.py CROSSING_DEADLINE",
+  "identity.py CROSSING_KEYS",
+  "identity.py FRAME_COMMON",
+  "identity.py FRAME_KEYS",
+  "identity.py PARTICIPANT_ID",
+  "identity.py PeerIdentity.sign_crossing",
+  "identity.py PeerIdentity.sign_crossing_answer",
+  "identity.py RESERVED_KINDS",
+  "identity.py UUID_FORM",
+  "identity.py _sized",
+  "identity.py _verified",
+  "identity.py crossing_digest",
+  "identity.py crossing_frame_ok",
+  "identity.py crossing_shape_ok",
+  "identity.py verify_crossing",
+  "identity.py verify_crossing_answer"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/identity.py"
+ ],
+ "given": [
+  "identity.py CROSSING_ANSWER_KEYS",
+  "identity.py CROSSING_KEYS",
+  "identity.py PeerIdentity.sign_crossing",
+  "identity.py PeerIdentity.sign_crossing_answer",
+  "identity.py RESERVED_KINDS",
+  "identity.py crossing_digest",
+  "identity.py crossing_shape_ok",
+  "identity.py verify_crossing",
+  "identity.py verify_crossing_answer"
+ ],
+ "imports": {
+  "superyak_peer.identity": "ok"
+ },
+ "item": "3f349e89f0",
+ "patch_sha256": "7431200467a7c1f8535e16dc0fca7a6439acd06fd77062f6f2c97e8ee34d6e29"
+}

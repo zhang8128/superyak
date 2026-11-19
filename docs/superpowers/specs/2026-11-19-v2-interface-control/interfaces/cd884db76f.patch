@@ -1,0 +1,18 @@
+--- a/peer/superyak_peer/identity.py
++++ b/peer/superyak_peer/identity.py
+@@ -198,3 +198,15 @@
+         return True
+     except Exception:  # noqa: BLE001 - a verifier answers False and never raises (G3)
+         return False
++
++
++# The interface control: names the commit adds, with no bodies.
++
++def pairing_code(card):
++    raise NotImplementedError("interface control")
++
++def show_code(code):
++    raise NotImplementedError("interface control")
++
++def typed_code(typed):
++    raise NotImplementedError("interface control")

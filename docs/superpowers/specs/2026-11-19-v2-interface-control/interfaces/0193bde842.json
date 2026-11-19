@@ -1,0 +1,18 @@
+{
+ "added": [
+  "dispatch.py federation_lock"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/dispatch.py"
+ ],
+ "given": [
+  "dispatch.py federation_lock"
+ ],
+ "imports": {
+  "superyak_peer.dispatch": "ok"
+ },
+ "item": "0193bde842",
+ "patch_sha256": "dc52e12fb4784b2bf8a9f69b450e94fcb6d3ee33242deb0d55967fe69432ecce"
+}

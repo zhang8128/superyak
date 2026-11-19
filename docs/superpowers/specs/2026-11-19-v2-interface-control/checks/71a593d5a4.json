@@ -1,0 +1,102 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[None]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client0]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client1]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client2]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client4]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client5]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[0]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[?1]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[anything]",
+   "tests.test_public_route::test_classification_behind_the_proxy_serve_trusts",
+   "tests.test_public_route::test_every_test_client_runs_as_tailnet_unless_told_otherwise",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[10.0.0.2-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.127.255.254-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.128.0.1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.63.255.255-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.64.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.70.202.124-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[127.0.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[127.8.9.10-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[192.168.1.10-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[2001:db8::1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[203.0.113.5-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:100.70.202.124-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:127.0.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:203.0.113.5-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e0::1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e0:ab12::42-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e1::1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fe80::1-True]",
+   "tests.test_public_route::test_the_validity_reads_answer_as_the_routes_own_checks_do",
+   "tests.test_public_route::test_the_validity_reads_write_nothing"
+  ],
+  "seconds": 2.4
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_public_route::test_the_validity_reads_answer_as_the_routes_own_checks_do": [
+    "failed",
+    "AttributeError: 'Store' object has no attribute 'session_is_valid'"
+   ],
+   "tests.test_public_route::test_the_validity_reads_write_nothing": [
+    "failed",
+    "AttributeError: 'Store' object has no attribute 'ship_key_is_valid'"
+   ]
+  },
+  "passed": [
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[None]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client0]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client1]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client2]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client4]",
+   "tests.test_public_route::test_a_client_that_is_not_an_ip_address_is_never_tailnet[client5]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[0]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[?1]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[]",
+   "tests.test_public_route::test_a_funnel_header_with_any_value_makes_a_tailnet_request_public[anything]",
+   "tests.test_public_route::test_classification_behind_the_proxy_serve_trusts",
+   "tests.test_public_route::test_every_test_client_runs_as_tailnet_unless_told_otherwise",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[10.0.0.2-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.127.255.254-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.128.0.1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.63.255.255-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.64.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[100.70.202.124-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[127.0.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[127.8.9.10-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[192.168.1.10-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[2001:db8::1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[203.0.113.5-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:100.70.202.124-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:127.0.0.1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[::ffff:203.0.113.5-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e0::1-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e0:ab12::42-False]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fd7a:115c:a1e1::1-True]",
+   "tests.test_public_route::test_loopback_and_tailnet_addresses_are_tailnet_and_every_other_address_is_public[fe80::1-True]"
+  ],
+  "seconds": 2.4
+ },
+ "commit": "71a593d5a417ae2c16e0207341bb9594aca1a889",
+ "item": "71a593d5a4",
+ "parent": "27e2aeb45228490d775462b5b8f7a67911fb6a0e"
+}

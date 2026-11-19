@@ -1,0 +1,72 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_presence::test_a_refused_key_writes_no_presence",
+   "tests.test_presence::test_calls_racing_inside_the_window_write_once",
+   "tests.test_presence::test_live_and_on_watch_are_computed_from_times",
+   "tests.test_presence::test_live_is_computed_from_times",
+   "tests.test_presence::test_no_prompt_path_or_branch_reaches_the_table",
+   "tests.test_presence::test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended",
+   "tests.test_presence::test_parse_presence_reads_only_well_formed_headers",
+   "tests.test_presence::test_presence_is_written_for_the_authenticated_ship_only",
+   "tests.test_presence::test_presence_stores_no_text_paths_or_raw_mode",
+   "tests.test_presence::test_presence_writes_are_coalesced_inside_the_key_check",
+   "tests.test_presence::test_rows_are_pruned_after_a_day_and_capped_at_100",
+   "tests.test_presence::test_the_directory_shows_each_caller_what_s7_allows",
+   "tests.test_presence::test_the_watch_renews_on_each_presence_write",
+   "tests.test_presence::test_watch_arguments_are_checked",
+   "tests.test_presence::test_without_the_headers_nothing_changes"
+  ],
+  "seconds": 11.1
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_presence::test_live_and_on_watch_are_computed_from_times": [
+    "failed",
+    "KeyError: 'on_watch'"
+   ],
+   "tests.test_presence::test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended": [
+    "failed",
+    "AssertionError: assert 404 == 400"
+   ],
+   "tests.test_presence::test_the_watch_renews_on_each_presence_write": [
+    "failed",
+    "assert None == (1000900.0 + 1200)"
+   ],
+   "tests.test_presence::test_watch_arguments_are_checked": [
+    "failed",
+    "KeyError: 'watch_until'"
+   ]
+  },
+  "passed": [
+   "tests.test_presence::test_a_refused_key_writes_no_presence",
+   "tests.test_presence::test_calls_racing_inside_the_window_write_once",
+   "tests.test_presence::test_live_is_computed_from_times",
+   "tests.test_presence::test_no_prompt_path_or_branch_reaches_the_table",
+   "tests.test_presence::test_parse_presence_reads_only_well_formed_headers",
+   "tests.test_presence::test_presence_is_written_for_the_authenticated_ship_only",
+   "tests.test_presence::test_presence_stores_no_text_paths_or_raw_mode",
+   "tests.test_presence::test_presence_writes_are_coalesced_inside_the_key_check",
+   "tests.test_presence::test_rows_are_pruned_after_a_day_and_capped_at_100",
+   "tests.test_presence::test_the_directory_shows_each_caller_what_s7_allows",
+   "tests.test_presence::test_without_the_headers_nothing_changes"
+  ],
+  "seconds": 10.3
+ },
+ "commit": "c42ee1f498415a74315cfd29ab956f7c3da4c3f9",
+ "item": "c42ee1f498",
+ "parent": "a5ac34b6986d9c90d5f68c06c48a0d0fcd2ff1ca"
+}

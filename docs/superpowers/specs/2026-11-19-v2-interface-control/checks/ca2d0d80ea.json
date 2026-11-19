@@ -1,0 +1,73 @@
+{
+ "A": true,
+ "A_differs": {
+  "extra": [],
+  "missing": []
+ },
+ "B": true,
+ "at_commit": {
+  "collection_errors": [],
+  "exit": 0,
+  "limit": false,
+  "not_passing": {},
+  "passed": [
+   "tests.test_backups::test_a_failed_integrity_check_leaves_nothing_behind",
+   "tests.test_backups::test_a_hand_made_rotation_folder_is_tightened_to_0700",
+   "tests.test_backups::test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage",
+   "tests.test_backups::test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place",
+   "tests.test_backups::test_backup_copies_committed_data_from_a_read_only_connection",
+   "tests.test_backups::test_copies_are_private_checked_and_appear_whole",
+   "tests.test_backups::test_each_layer_of_privacy_holds_without_the_umask",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[None-0]",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[copy fails its check-11]",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[live database damaged-12]",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[low disk-10]",
+   "tests.test_backups::test_output_writes_one_checked_copy_and_never_overwrites",
+   "tests.test_backups::test_retention_keeps_14_days_and_8_weeks_and_nothing_else",
+   "tests.test_backups::test_retention_weeks_cross_the_year_by_iso_year_and_week"
+  ],
+  "seconds": 3.2
+ },
+ "at_parent": {
+  "collection_errors": [],
+  "exit": 1,
+  "limit": false,
+  "not_passing": {
+   "tests.test_backups::test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage": [
+    "failed",
+    "sqlite3.OperationalError: attempt to write a readonly database"
+   ],
+   "tests.test_backups::test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place": [
+    "failed",
+    "assert ('new copy is in place' in \"[Errno 13] Permission denied: '/tmp/ifc-home-eeyis0pv/pytest-of-doctor/pytest-0/test_a_pruning_failure_exits_10/backups/station/peer-20261116T010000Z.sqlite3'\\n\")"
+   ],
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[live database damaged-12]": [
+    "failed",
+    "AssertionError: assert 11 == 12"
+   ],
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[low disk-10]": [
+    "failed",
+    "AttributeError: <module 'superyak_peer.backups' from '/tmp/ifc-tree-3m0kl_b3/peer/superyak_peer/backups.py'> has no attribute 'free_bytes'"
+   ],
+   "tests.test_backups::test_output_writes_one_checked_copy_and_never_overwrites": [
+    "failed",
+    "AssertionError: assert 2 == 0"
+   ]
+  },
+  "passed": [
+   "tests.test_backups::test_a_failed_integrity_check_leaves_nothing_behind",
+   "tests.test_backups::test_a_hand_made_rotation_folder_is_tightened_to_0700",
+   "tests.test_backups::test_backup_copies_committed_data_from_a_read_only_connection",
+   "tests.test_backups::test_copies_are_private_checked_and_appear_whole",
+   "tests.test_backups::test_each_layer_of_privacy_holds_without_the_umask",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[None-0]",
+   "tests.test_backups::test_failures_keep_old_copies_and_exit_with_their_code[copy fails its check-11]",
+   "tests.test_backups::test_retention_keeps_14_days_and_8_weeks_and_nothing_else",
+   "tests.test_backups::test_retention_weeks_cross_the_year_by_iso_year_and_week"
+  ],
+  "seconds": 3.3
+ },
+ "commit": "ca2d0d80ea9edd8bdb2315364ff561da14674d42",
+ "item": "ca2d0d80ea",
+ "parent": "b8aec9ab7f3fa2a05172f1ba98631a72952d0411"
+}

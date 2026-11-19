@@ -1,0 +1,13 @@
+--- a/peer/superyak_peer/app.py
++++ b/peer/superyak_peer/app.py
+@@ -969,3 +969,10 @@
+         return store.mentions(member(request)['id'], after, limit)
+ 
+     return app
++
++
++# The interface control: names the commit adds, with no bodies.
++BODYLESS_METHODS = NotImplemented
++
++def dispatched(router, scope):
++    raise NotImplementedError("interface control")

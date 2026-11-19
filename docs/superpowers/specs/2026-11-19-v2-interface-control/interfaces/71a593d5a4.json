@@ -1,0 +1,22 @@
+{
+ "added": [
+  "auth.py Auth.session_is_valid",
+  "ships.py Ships.ship_key_is_valid"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/auth.py",
+  "peer/superyak_peer/ships.py"
+ ],
+ "given": [
+  "auth.py Auth.session_is_valid",
+  "ships.py Ships.ship_key_is_valid"
+ ],
+ "imports": {
+  "superyak_peer.auth": "ok",
+  "superyak_peer.ships": "ok"
+ },
+ "item": "71a593d5a4",
+ "patch_sha256": "03ac7aec5e4b4e5fe3d7b60411fe39fde32658bdc837cc50f34b0b9562dc683b"
+}

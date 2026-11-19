@@ -1,0 +1,19 @@
+{
+ "added": [
+  "tickets.py NOTICE_TEMPLATE",
+  "tickets.py Tickets._post_notice"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/tickets.py"
+ ],
+ "given": [
+  "tickets.py NOTICE_TEMPLATE"
+ ],
+ "imports": {
+  "superyak_peer.tickets": "ok"
+ },
+ "item": "4971bdb360",
+ "patch_sha256": "eb5c425a66fa197e9235569c847bff98b7bbcc17e3989c5ef5fafbc6d709ebe3"
+}

@@ -1,0 +1,20 @@
+{
+ "added": [
+  "ships.py Ships.revoke_ship",
+  "ships.py Ships.ships",
+  "ships.py Ships.station_notices"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/ships.py"
+ ],
+ "given": [
+  "ships.py Ships.ships"
+ ],
+ "imports": {
+  "superyak_peer.ships": "ok"
+ },
+ "item": "383c54438d",
+ "patch_sha256": "782545b260cf799320cd05895e201b11854e05929f8d4a9084799cb0f2648269"
+}

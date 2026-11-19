@@ -1,0 +1,23 @@
+{
+ "added": [
+  "federation.py CLOCKS_DIFFER",
+  "federation.py Federation._pull_answer",
+  "federation.py Federation._take_pulled",
+  "federation.py Federation.pull_once",
+  "federation.py log",
+  "transport.py pull_answer_ok"
+ ],
+ "applied": true,
+ "apply_error": "",
+ "files": [
+  "peer/superyak_peer/federation.py"
+ ],
+ "given": [
+  "federation.py Federation.pull_once"
+ ],
+ "imports": {
+  "superyak_peer.federation": "ok"
+ },
+ "item": "1113f1dbb4",
+ "patch_sha256": "5cb33b9ad7b82047990afa78afbb879e57e876a14193e3abf96c7cd2e6b2ff68"
+}
