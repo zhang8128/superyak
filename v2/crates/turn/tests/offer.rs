@@ -84,6 +84,43 @@ fn a_block_stands_after_the_checks_command_and_before_the_rules_and_changes_noth
     }
 }
 
+/// The two sentences every turn reads about a second repository (spec 2026-11-19, a refused hand-in).
+const NESTED: [&str; 2] = [
+    "Keep any extra repository, clone or worktree, including one made by tests, outside this clone; use TMPDIR for \
+     scratch work.",
+    "When the room commits for you, it refuses nested .git entries or submodule entries in the index, and \
+     uncommitted changes are lost.",
+];
+
+/// Where the item's own line begins.
+const ITEM_LINE: &str = "\nThe item: ";
+
+/// Each sentence is in every prompt once, at the end of the room's opening paragraph: before the item's line, with
+/// a block or without one, and with a turn's own line or without one.
+#[test]
+fn the_sentences_about_a_second_repository_are_read_once_before_the_item() {
+    let (title, check) = ("Make the greeting say bye", "grep -q bye a.txt");
+    for turn in [None, Some("a0123456789ab")] {
+        let plain = prompt(turn, title, check);
+        assert_eq!(plain, prompt_with(turn, None, title, check));
+        let mut prompts = vec![plain];
+        for arm in [Arm::Route, Arm::Shuffled] {
+            prompts.push(prompt_with(turn, Some(&block(arm, ODD)), title, check));
+        }
+        for text in &prompts {
+            let item = text.find(ITEM_LINE).expect("the item's line");
+            assert_eq!(text.matches(ITEM_LINE).count(), 1, "{text}");
+            for sentence in NESTED {
+                assert_eq!(text.matches(sentence).count(), 1, "{sentence}");
+                assert!(text.find(sentence).unwrap() < item, "{sentence}");
+            }
+            // The two end the paragraph, one after the other, in the order given.
+            let both = format!("{} {}\n", NESTED[0], NESTED[1]);
+            assert!(text[..item].ends_with(&both), "{text}");
+        }
+    }
+}
+
 /// A tracked file whose name reads as an instruction is in the prompt only inside the block, after its opening
 /// sentence.
 #[test]

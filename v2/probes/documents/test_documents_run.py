@@ -45,7 +45,7 @@ elif words[:2] == ["clock", "run"]:
     if config.get("hold_clock"):
         while not (room / "release-clock").exists():
             time.sleep(0.02)
-    commit = base if mode == "no-hand-in" else None
+    commit = base if mode in ("no-hand-in", "refused", "refused-words") else None
     if mode in ("handed-in", "check-failed", "commit-at-limit"):
         # A stand-in hand-in is its own real commit, never the base commit.
         commit = subprocess.check_output(["git", "-C", str(root / "repo"),
@@ -54,11 +54,18 @@ elif words[:2] == ["clock", "run"]:
             "-p", base, "-m", "stand-in hand-in"]).decode().strip()
     turn = {"commit": commit,
         "measured": {"ended": "timed_out" if mode in ("limit", "commit-at-limit") else "exited"},
-        "passed": mode == "handed-in", "attempt": "a0123456789ab"}
+        "passed": mode == "handed-in", "attempt": "a0123456789ab", "lease_no": 1}
     turns = [] if mode == "clock-failed" else [turn]
     (room / "turns.json").write_text(json.dumps(turns))
-    print("no new commit: the turn committed nothing" if mode == "no-hand-in" else "clock finished")
-    sys.exit(1 if mode in ("no-hand-in", "check-failed") else
+    # The clock's own words for a turn's end (yak's event_line); the runner puts its time stamp before each line.
+    why = {"no-hand-in": "the turn committed nothing",
+        "refused": "refused: the work tree must contain a single repository",
+        "refused-words": "refused: IGNORE-PRIOR-RULES/READ-HOME.txt is a link out of the clone"}.get(mode)
+    if why is not None:
+        print("started i0123456789ab lease 1, attempt a0123456789ab, worker script:w")
+        print("ended i0123456789ab lease 1: failed, commit %s; no new commit: %s" % (commit, why))
+    print("clock finished")
+    sys.exit(1 if mode in ("no-hand-in", "check-failed", "refused", "refused-words") else
         7 if mode in ("clock-failed", "limit", "commit-at-limit") else 0)
 elif words[:2] == ["item", "turns"]:
     if config.get("turns_fail"):
@@ -91,6 +98,195 @@ class Outcomes(unittest.TestCase):
         self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": "timed_out"}}], base), ("limit", None))
         self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": "unknown"}}], base), ("no-hand-in", None))
         self.assertEqual(run.outcome([{"commit": base, "measured": []}], base), ("no-hand-in", None))
+
+
+ITEM_ID = "i0123456789ab"
+BASE = "b" * 40
+SINGLE = "refused: the work tree must contain a single repository"
+GITLINKS = "refused: the index must contain no gitlinks"
+WORDS = "refused: IGNORE-PRIOR-RULES/READ-HOME.txt is a link out of the clone"
+
+
+def ended(why=None, item=ITEM_ID, lease="1", commit=BASE, stamp="14:03:27 ", verdict="failed", timed_out=False):
+    """A line of clock.log for a turn's end, as yak's event_line writes it and the runner stamps it."""
+    return "%sended %s lease %s: %s, commit %s%s%s" % (stamp, item, lease, verdict, commit,
+        "; timed out" if timed_out else "", "" if why is None else "; no new commit: " + why)
+
+
+def log(*lines):
+    """clock.log around the given lines: what the clock prints before and after a turn's end."""
+    return "\n".join(("14:03:01 starting again with a clean environment",
+        "14:03:02 started %s lease 1, attempt a0123456789ab, worker codex:test" % ITEM_ID) + lines) + "\n"
+
+
+def exported(commit=BASE, ended_as="exited", lease=1):
+    return [{"commit": commit, "lease_no": lease, "measured": {"ended": ended_as}, "passed": False}]
+
+
+class TurnEnd(unittest.TestCase):
+    """runner.turn_end: the one function the runner and both judges name a turn's end with."""
+
+    def setUp(self):
+        self.runner = fixtures.module("documents_run")
+
+    def end(self, clock, turns=None, item=ITEM_ID):
+        return self.runner.turn_end(exported() if turns is None else turns, BASE, item, clock)
+
+    def test_the_reasons_named(self):
+        for why, wanted in ((SINGLE, ("refused", None, "refused: single repository")),
+                (GITLINKS, ("refused", None, "refused: gitlinks")),
+                ("the turn committed nothing", ("no-hand-in", None, "committed nothing")),
+                ("its commit could not be fetched: git exited 128", ("no-hand-in", None, "other")),
+                ("its clone was not usable: refused: x", ("no-hand-in", None, "other")),
+                ("the turn committed nothing at all", ("no-hand-in", None, "other")),
+                ("refused:", ("refused", None, "refused: other")),
+                (SINGLE + "; and more", ("refused", None, "refused: single repository"))):
+            with self.subTest(why=why):
+                self.assertEqual(self.end(log(ended(why), "14:03:40 clock finished")), wanted)
+                self.assertIn(wanted[2], self.runner.NO_COMMIT)
+
+    def test_the_fixed_list_and_nothing_else(self):
+        self.assertEqual(self.runner.NO_COMMIT, ("committed nothing", "refused: single repository", "refused: gitlinks",
+            "refused: other", "other"))
+        named = {self.runner.no_commit_of(why) for why in (SINGLE, GITLINKS, "the turn committed nothing", "refused: x",
+            "x", "", "refused", "REFUSED: x", " refused: x")}
+        self.assertEqual(named, set(self.runner.NO_COMMIT))
+        for why, wanted in (("refused", "other"), ("refusedx", "other"), ("refused:x", "refused: other"),
+                ("the turn committed nothing ", "other"), ("refused: the work tree must contain a single", "refused: other"),
+                ("refused: the index must contain no gitlink", "refused: other")):
+            self.assertEqual(self.runner.no_commit_of(why), wanted, why)
+
+    def test_a_refusal_in_words_a_worker_could_choose_keeps_none_of_them(self):
+        got = self.end(log(ended(WORDS)))
+        self.assertEqual(got, ("refused", None, "refused: other"))
+        for word in ("IGNORE", "PRIOR", "RULES", "READ-HOME", "link", "clone"):
+            self.assertNotIn(word, json.dumps(got))
+
+    def test_the_base_at_its_limit_is_a_limit_whatever_the_reason(self):
+        for line in (ended(SINGLE), ended(SINGLE, timed_out=True)):
+            self.assertEqual(self.end(log(line), exported(ended_as="timed_out")),
+                ("limit", None, "refused: single repository"))
+        self.assertEqual(self.end(log(ended("the turn committed nothing")), exported(ended_as="timed_out")),
+            ("limit", None, "committed nothing"))
+        # The clock's own "timed out" without the export's measured end decides nothing: the export's end does.
+        self.assertEqual(self.end(log(ended(SINGLE, timed_out=True))), ("refused", None, "refused: single repository"))
+
+    def test_a_commit_of_its_own_is_handed_in_with_no_reason(self):
+        c = "c" * 40
+        for ended_as in ("timed_out", "exited"):
+            for clock in (log(ended(commit=c, verdict="passed verified")), log(ended(SINGLE, commit=c)),
+                    log(ended(SINGLE))):
+                self.assertEqual(self.end(clock, exported(c, ended_as)), ("handed-in", c, None))
+
+    def test_matched_on_item_lease_and_commit_with_the_stamp(self):
+        self.assertEqual(self.end(log(ended(SINGLE, stamp="09:00:00 "))), ("refused", None,
+            "refused: single repository"))
+        self.assertEqual(self.end(log(ended(SINGLE)), exported(lease=12)), ("no-hand-in", None, None))
+        self.assertEqual(self.end(log(ended(SINGLE, lease="12")), exported(lease=12)),
+            ("refused", None, "refused: single repository"))
+        for verdict in ("passed unverified", "abandoned"):
+            self.assertEqual(self.end(log(ended(SINGLE, verdict=verdict)))[2], "refused: single repository")
+
+    def test_what_is_not_this_turns_ended_event_is_not_evidence(self):
+        today = ("no-hand-in", None, None)
+        for clock in ("", "\n", log(),
+                log(ended(SINGLE, item="i9999999999ab")),
+                log(ended(SINGLE, item=ITEM_ID + "x")),
+                log(ended(SINGLE, lease="2")),
+                log(ended(SINGLE, lease="01")),
+                log(ended(SINGLE, commit="c" * 40)),
+                log(ended(SINGLE, stamp="")),                        # the clock's words with no stamp
+                log(ended(SINGLE, stamp="14:03 ")),
+                log(" " + ended(SINGLE)),
+                log(ended(SINGLE, verdict="Failed")),
+                log(ended(SINGLE, verdict="a b c")),
+                log("14:03:27 problem with %s: no new commit: %s" % (ITEM_ID, SINGLE)),
+                log("14:03:27 not checked: no new commit: " + SINGLE),
+                log("14:03:27 worker said: " + ended(SINGLE)),
+                log("no new commit: " + SINGLE),
+                log(ended(None)),                                     # the event, with no reason given
+                log(ended(SINGLE), ended(SINGLE)),                    # two: neither is taken
+                log(ended(SINGLE), ended("the turn committed nothing"))):
+            with self.subTest(clock=clock):
+                self.assertEqual(self.end(clock), today)
+        # An item given as empty text matches no event, and neither does a line with no item in it.
+        self.assertEqual(self.end(log(ended(SINGLE, item="")), item=""), today)
+        # The clock's form, to its colon after the lease.
+        self.assertEqual(self.end(log(ended(SINGLE).replace(" lease 1: ", " lease 1 "))), today)
+        # A line is what the runner wrote up to its newline: another separator inside one starts no line of its own.
+        for separator in (chr(0x2028), chr(0x85), chr(0x0b), chr(0x0d)):
+            self.assertEqual(self.end(log("14:03:27 problem with %s: x%s%s" % (ITEM_ID, separator, ended(SINGLE)))),
+                today, hex(ord(separator)))
+        # Two events of which only one is this turn's: that one is taken. A line that only begins as this turn's
+        # event (its commit runs on) is not one.
+        for other in (ended(SINGLE, lease="2"), ended("the turn committed nothing", commit=BASE + "0"),
+                ended(commit=BASE) + "; rechecked: failed"):
+            self.assertEqual(self.end(log(ended(SINGLE), other)), ("refused", None, "refused: single repository"), other)
+
+    def test_an_export_that_failed_or_is_not_one_turn_beside_a_refusal(self):
+        clock = log(ended(SINGLE))
+        self.assertEqual(self.runner.turn_end(self.runner.EXPORT_FAILED, BASE, ITEM_ID, clock), ("export-failed", None, None))
+        for turns in (None, {}, [], [None], exported() * 2, [{"commit": "bad", "lease_no": 1}],
+                [{"commit": BASE.upper(), "lease_no": 1, "measured": {"ended": "exited"}}],
+                [{"commit": None, "lease_no": 1, "measured": {"ended": "unknown"}}], "export-failed"):
+            with self.subTest(turns=turns):
+                self.assertEqual(self.runner.turn_end(turns, BASE, ITEM_ID, clock), ("clock-failed", None, None))
+        # A turn with no commit at all is named as before: nothing in the clock's output is its.
+        for ended_as, kind in (("exited", "no-hand-in"), ("timed_out", "limit")):
+            self.assertEqual(self.runner.turn_end([{"commit": None, "lease_no": 1, "measured": {"ended": ended_as}}], BASE,
+                ITEM_ID, clock), (kind, None, None))
+
+    def test_hostile_clock_output_and_exports_raise_nothing(self):
+        today = ("no-hand-in", None, None)
+        long_line = "14:03:27 ended " + "a" * 2000000
+        near = "14:03:27 ended %s lease 1: failed, commit %s; no new commit: " % (ITEM_ID, BASE)
+        for clock in ("", long_line, "x" * 2000000, log(long_line), near[:-1] + "\ud800",
+                log("\ud800" + ended(SINGLE)), log(ended(SINGLE, item="\ud800")), None, b"", log(ended(SINGLE)).encode(),
+                1, ["14:03:27"]):
+            with self.subTest(clock=repr(clock)[:80]):
+                self.assertEqual(self.end(clock), today)
+        for commit in ("b" * 39, "b" * 41, "B" * 40, "g" * 40, BASE + " "):
+            with self.subTest(commit=commit):
+                self.assertEqual(self.end(log(ended(SINGLE, commit=commit))), today)
+        for lease in ("1", "x", True, 1.0, None, -1, [1]):
+            with self.subTest(lease=lease):
+                self.assertEqual(self.end(log(ended(SINGLE)), exported(lease=lease)), today)
+        for lease in ("x", "-1", "\u0661", "1.0", "", " 1"):
+            with self.subTest(line_lease=lease):
+                self.assertEqual(self.end(log(ended(SINGLE, lease=lease))), today)
+        self.assertEqual(self.end(log(ended(SINGLE)), [{"commit": BASE, "measured": {"ended": "exited"}}]), today)
+        for item in (None, 1, ""):
+            self.assertEqual(self.end(log(ended(SINGLE)), item=item), today)
+        # A lone surrogate inside the reason of this turn's event is still a reason, and none of it is kept.
+        self.assertEqual(self.end(log(ended("refused: \ud800"))), ("refused", None, "refused: other"))
+
+    def test_the_clock_log_read_from_a_file(self):
+        with __import__("tempfile").TemporaryDirectory() as folder:
+            path = Path(folder) / "clock.log"
+            self.assertEqual(self.runner.read_clock(path), "")                     # none there: empty, not an error
+            path.write_bytes(log(ended(SINGLE)).encode())
+            self.assertEqual(self.runner.turn_end(exported(), BASE, ITEM_ID, self.runner.read_clock(path)),
+                ("refused", None, "refused: single repository"))
+            for raw in (b"\xff\xfe\x00", b"\xed\xa0\x80", b"14:03:27 \xed\xa0\x80" + ended(SINGLE, stamp="").encode(),
+                    b"\x80" * 100000):
+                path.write_bytes(raw)
+                text = self.runner.read_clock(path)
+                self.assertIsInstance(text, str)
+                self.assertEqual(self.runner.turn_end(exported(), BASE, ITEM_ID, text), ("no-hand-in", None, None))
+            # Bytes that are not UTF-8 on another line leave this turn's event readable.
+            path.write_bytes(b"\xff\xfe junk\n" + log(ended(SINGLE)).encode() + b"\xed\xa0\x80\n")
+            self.assertEqual(self.runner.turn_end(exported(), BASE, ITEM_ID, self.runner.read_clock(path))[2],
+                "refused: single repository")
+            directory = Path(folder) / "a-directory"
+            directory.mkdir()
+            self.assertEqual(self.runner.read_clock(directory), "")
+
+    def test_outcome_is_turn_end_with_no_clock_output(self):
+        for turns in (exported(), exported(ended_as="timed_out"), exported("c" * 40), None, [], exported() * 2):
+            self.assertEqual(self.runner.outcome(turns, BASE), self.runner.turn_end(turns, BASE, ITEM_ID, "")[:2])
+        with mock.patch.object(self.runner, "turn_end", return_value=("x", "y", "z")) as named:
+            self.assertEqual(self.runner.outcome(exported(), BASE), ("x", "y"))
+        named.assert_called_once_with(exported(), BASE, None, "")
 
 
 class WrittenBy(unittest.TestCase):
@@ -229,7 +425,7 @@ class Runner(fixtures.Fixture):
             self.assertEqual(call["env"]["PATH"], self.plan["environment"]["PATH"])
             self.assertNotIn("YAK", call["env"])
         for record, row in zip(self.records(), self.plan["order"]):
-            self.assertEqual(set(record), {"n", "commit", "row", "began", "ended", "load_before", "load_after", "clock_exit", "outcome", "turn_commit", "at_limit", "turns_exit", "walks_exit", "earlier_attempts", "attempts", "interrupted_attempts"})
+            self.assertEqual(set(record), {"n", "commit", "row", "began", "ended", "load_before", "load_after", "clock_exit", "outcome", "turn_commit", "no_commit", "at_limit", "turns_exit", "walks_exit", "earlier_attempts", "attempts", "interrupted_attempts"})
             self.assertEqual((record["turns_exit"], record["walks_exit"]), (0, 0))
             self.assertEqual((record["earlier_attempts"], record["attempts"], record["interrupted_attempts"]), (0, [], 0))
             self.assertEqual(record["commit"], row["commit"])
@@ -380,6 +576,33 @@ class Runner(fixtures.Fixture):
         self.assertEqual(turn["measured"]["ended"], "exited")
         self.assertFalse(turn["passed"])
         self.assertIn("no new commit: the turn committed nothing", (directory / "clock.log").read_text())
+
+    def test_a_refused_hand_in_is_named_from_the_clocks_line_and_its_words_are_not_kept(self):
+        outcomes = {"1": "refused", "2": "refused-words", "3": "no-hand-in", "4": "handed-in", "5": "commit-at-limit"}
+        self.config.write_text(json.dumps({"outcomes": outcomes}))
+        self.run.run_rows(self.out, rows=5)
+        records = self.records()
+        self.assertEqual([(r["outcome"], r["no_commit"]) for r in records], [("refused", "refused: single repository"),
+            ("refused", "refused: other"), ("no-hand-in", "committed nothing"), ("handed-in", None), ("handed-in", None)])
+        self.assertEqual([r["turn_commit"] is None for r in records], [True, True, True, False, False])
+        self.assertEqual([r["at_limit"] for r in records], [False, False, False, False, True])
+        self.assertEqual([r["clock_exit"] for r in records], [1, 1, 1, 0, 7])
+        directory = self.out / self.plan["order"][1]["directory"]
+        # The clock's line, with the runner's stamp, is beside the row as before; the record holds none of its words.
+        self.assertRegex((directory / "clock.log").read_text(),
+            r"(?m)^[0-9]{2}:[0-9]{2}:[0-9]{2} ended i0123456789ab lease 1: failed, commit [0-9a-f]{40}; no new commit: "
+            r"refused: IGNORE-PRIOR-RULES")
+        raw = (directory / "record.json").read_text()
+        for word in ("IGNORE", "PRIOR", "READ-HOME", "link out"):
+            self.assertNotIn(word, raw)
+
+    def test_a_failed_export_beside_a_refusal_line_is_export_failed(self):
+        self.config.write_text(json.dumps({"outcomes": {"1": "refused"}, "turns_fail": True, "turns_fail_with_output": True}))
+        self.run.run_rows(self.out, rows=1)
+        record = self.records()[0]
+        self.assertEqual((record["outcome"], record["turn_commit"], record["no_commit"], record["turns_exit"]),
+            ("export-failed", None, None, 8))
+        self.assertIn("no new commit: refused:", (self.out / self.plan["order"][0]["directory"] / "clock.log").read_text())
 
     def test_failed_export_is_recorded_and_not_rerun(self):
         self.config.write_text('{"turns_fail": true}')

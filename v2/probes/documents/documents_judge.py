@@ -69,10 +69,12 @@ NOTHING = ("nothing-1", "nothing-2")
 OFFERING = ("exists", "path", "search", "newest", "lot", "bm25")
 THREES = ("search", "newest", "lot", "bm25")             # the rows that offer three files from the plan's item
 RULE_ROWS = ("nothing-1", "nothing-2", "search", "newest", "lot")
-OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed", "export-failed")
-# Every outcome a judged row can have with no score, in one place; the report names each that occurred.
+OUTCOMES = ("handed-in", "no-hand-in", "limit", "clock-failed", "export-failed", "refused")
+# Every outcome a judged row can have with no score, in one place; the report names each that occurred. A hand-in the
+# room refused has none, for plans pinned after the refused hand-in's spec: what was lost cannot be assessed.
 UNSCORED = ("clock-failed", "export-failed", "report-refused", "not-applied", "diagnostic-limit",
-    "diagnostic-clock-failed", "diagnostic-no-hand-in", "diagnostic-no-status", "replay-limit", "replay-clock-failed")
+    "diagnostic-clock-failed", "diagnostic-no-hand-in", "diagnostic-no-status", "replay-limit", "replay-clock-failed",
+    "refused")
 BM25_SENTENCE = ("The bm25 row (a second search) was chosen after four orderings were compared on these same twelve "
     "items, after its places were seen and before any turn; it is not a row of the rule.")
 FORGE_SENTENCE = ("Every score is read from a report written inside the jail by a run the turn's own code is part of, "
@@ -538,30 +540,36 @@ def new_cases(directory, frozen):
 
 # ---------------------------------------------------------------- judge
 
-def read_turns(path, base):
-    """(outcome, turn_commit, at_limit) from an `item turns --json` export, decided as the runner's run_turn decides
-    them from its own export: runner.outcome(turns, base), and at_limit when the one turn ended timed_out."""
+def read_turns(path, base, item, clock):
+    """(outcome, turn_commit, at_limit, no_commit) from an `item turns --json` export, decided as the runner's run_turn
+    decides them from its own export: runner.turn_end(turns, base, item, clock), with the row's item and the clock's
+    output the row captured, and at_limit when the one turn ended timed_out."""
     try:
         turns = json.loads(Path(path).read_bytes())
     except (OSError, ValueError):
         turns = None
-    kind, commit = runner.outcome(turns, base)
+    kind, commit, no_commit = runner.turn_end(turns, base, item, clock)
     at_limit = (isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
         and isinstance(turns[0].get("measured"), dict) and turns[0]["measured"].get("ended") == "timed_out")
-    return kind, commit, at_limit
+    return kind, commit, at_limit, no_commit
+
+
+def recorded_item(out, order):
+    """The room's id of a row's item: the second word of the row's item.txt, whose first is the row's commit."""
+    words = (row_dir(out, order) / "item.txt").read_text(encoding="utf-8").split()
+    if len(words) < 2 or words[0] != order["commit"]:
+        raise Refused("%s: item.txt does not name the row's commit and the room's item" % order["directory"])
+    return words[1]
 
 
 def export_again(out, plan, order, judged, what):
     """The room's own export (`item turns` or `item walks`, with --json) run again from the row's room/, with the
     plan's pinned program and environment, as the runner's export ran it; written under the judged row. The item's id
     is the second word of the row's item.txt. Returns the export's exit code."""
-    recorded = row_dir(out, order)
-    words = (recorded / "item.txt").read_text(encoding="utf-8").split()
-    if len(words) < 2 or words[0] != order["commit"]:
-        raise Refused("%s: item.txt does not name the row's commit and the room's item" % order["directory"])
+    item = recorded_item(out, order)
     name = {"turns": "turns.json", "walks": "walks.jsonl"}[what]
-    return runner.export(plan["programs"]["yak"]["path"], dict(plan["environment"]), recorded / "room", words[1],
-        what, Path(judged) / name, Path(judged) / (what + ".err"))
+    return runner.export(plan["programs"]["yak"]["path"], dict(plan["environment"]), row_dir(out, order) / "room",
+        item, what, Path(judged) / name, Path(judged) / (what + ".err"))
 
 
 def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None, listed=None, run_export=None):
@@ -593,11 +601,20 @@ def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None, lis
         raise Refused("%s: handed in with no turn_commit" % order["directory"])
     if kind != "handed-in" and commit:
         raise Refused("%s: %s, yet turn_commit is %s" % (order["directory"], kind, commit))
+    # A record made before a refusal could be named has no no_commit: it is null, and its outcome stands. A value
+    # that is not one of the room's own reasons is never shown: it could hold a worker's words.
+    no_commit = record.get("no_commit")
+    if no_commit is not None and no_commit not in runner.NO_COMMIT:
+        raise Refused("%s: record.json's no_commit is not one of the room's own reasons" % order["directory"])
+    if kind == "refused" and (no_commit is None or not no_commit.startswith("refused")):
+        raise Refused("%s: refused, yet no_commit is %r" % (order["directory"], no_commit))
     again, walks = {}, recorded / "walks.jsonl"
     if kind == "export-failed":
         again["turns"] = run_export(out, plan, order, judged, "turns")
         if again["turns"] == 0:
-            kind, commit, at_limit = read_turns(judged / "turns.json", item["rows"][order["row"]]["base"])
+            # Named as the runner names a row: with the row's item and the clock's output it captured at the turn.
+            kind, commit, at_limit, no_commit = read_turns(judged / "turns.json", item["rows"][order["row"]]["base"],
+                recorded_item(out, order), runner.read_clock(recorded / "clock.log"))
     if record["walks_exit"] != 0:
         again["walks"] = run_export(out, plan, order, judged, "walks")
         walks = judged / "walks.jsonl" if again["walks"] == 0 else None
@@ -605,7 +622,7 @@ def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None, lis
     frozen = pilot.load(controls_dir / "cases.json")["cases"]
     new = new_cases(controls_dir, frozen)
     score = {"n": order["n"], "commit": order["commit"], "row": order["row"], "room_passed": None,
-        "at_limit": at_limit, "exported_again": again}
+        "at_limit": at_limit, "no_commit": no_commit, "exported_again": again}
     # A walk that could not be read names nothing: its fields are null, not empty.
     matching, offered = read_walk(walks, item, order["row"]) if walks is not None else (None, None)
     score.update(matching_named=matching, offered_named=offered)
@@ -615,7 +632,8 @@ def judge_row(out, items, plan, order, run_diagnostic=None, run_replay=None, lis
             raise Refused("%s: outcome %s %s a score" % (order["directory"], outcome, "with" if scored else "without"))
         score.update(counted, outcome=outcome, scored=scored, **more)
         return score
-    if kind in ("clock-failed", "export-failed"):
+    # A refused hand-in is not scored as its parent: the worker changed something, and what it changed was lost.
+    if kind in ("clock-failed", "export-failed", "refused"):
         return done(score_cases(frozen, NO_REPORT, new), kind, False)
     if not commit:
         return done(parent_score(controls_dir, frozen, new), kind, True)
