@@ -161,10 +161,20 @@ input is refused before any row.
 
 - **`controls`**, for each item, in the jail, by a script in the worker's place (port
   `replay-explain.py`; the script worker commits a file the judge reads from the turn's repository):
-  the reference's change on the item's `nothing-1` base, the item's tests run with a JUnit report, and
-  `cases.json` written from it; then the same with no change, and `parent.json`. A reference with no
-  passing case, or one whose room verdict by replay is not a pass, stops the judge for that item and is
-  reported.
+  the reference's change on the item list's own base (the parent with the item's held-back tests and
+  its check laid over; the pilot's bases do not hold those tests), the item's tests run with a JUnit
+  report, and `cases.json` written from it; then the same with no change, and `parent.json`. A turn's
+  change is replayed and diagnosed on that same base: what it changed under the source directory,
+  taken as a diff in the row's own repository from the row's base to the turn's commit. A reference
+  with no passing case, or one whose room verdict by replay is not a pass, stops the judge for that
+  item and is reported.
+- **A clock that failed** (a control's, a replay's, a diagnostic's or a row's) gives a row with no score:
+  `scored: false`, `of` still the count of frozen cases. The spending rule is then suspended, as for any
+  missing row.
+- **The report read on the host** is a turn's output: it is bounded in size, must be a regular file of
+  the commit in UTF-8, and is refused if it declares a document type or an entity. A turn's code runs
+  in the test runner's own process and could forge it; the room's verdict by replay stands beside the
+  score for that reason.
 - **`judge`**, for each recorded row not yet judged: when `outcome` is `handed-in` and the turn changed
   something under `peer/superyak_peer`, the replay (port `describe-replay.py`) for the room's verdict
   and the diagnostic for the cases; `score.json` by the spec's section 6. `no-hand-in`, `limit` with no
