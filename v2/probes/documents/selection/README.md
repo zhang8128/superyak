@@ -20,7 +20,8 @@ One JSON object, sorted keys, indent 1, a final newline:
  "reader": the reader's worker name,
  "repository_read": "the item list's repository",
  "walked": [ one entry for each item walked, in the order's own order, none left out ],
- "stopped": "nine accepted" | "the pool ended" | "time", with the place `n` of the last item walked}
+ "stopped": "nine accepted" | "the pool ended" | "time",
+ "stopped_n": int, the place `n` of the last item walked}
 ```
 
 An entry of `walked`, for either pool:
@@ -30,7 +31,10 @@ An entry of `walked`, for either pool:
  "reason": one or two sentences in the reader's words}
 ```
 
-A pool P entry adds:
+"Nine accepted" counts at most two accepted items of one plan group in pool P.
+
+A pool P entry adds these and no terms or queries, since the reader reads the matching files the order
+gives:
 
 ```
  "files_read": [paths read at the item's first parent],
