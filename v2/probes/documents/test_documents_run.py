@@ -89,6 +89,19 @@ class Outcomes(unittest.TestCase):
             self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": ended}}], base), ("no-hand-in", None))
 
 
+class WrittenBy(unittest.TestCase):
+    def test_an_item_is_never_written_by_its_workers_family(self):
+        # The real room's take() skips an item whose writer has the worker's family: found on the real room, where
+        # every row of a script worker ended with no turn. No stand-in here knows that rule.
+        run = fixtures.module("documents_run")
+        self.assertEqual(run.written_by("script:/some/worker.sh"), "claude:probe")
+        self.assertEqual(run.written_by("codex:gpt-6.1-sol"), "script:probe")
+        self.assertEqual(run.written_by("claude:opus"), "script:probe")
+        self.assertEqual(run.written_by("scripted:x"), "script:probe")
+        for worker in ("script:/some/worker.sh", "codex:gpt-6.1-sol", "claude:opus", "script", "scripted:x"):
+            self.assertNotEqual(run.written_by(worker).split(":", 1)[0], worker.split(":", 1)[0])
+
+
 class Archives(unittest.TestCase):
     def test_distinct_archive_names_and_bounded_loop(self):
         run = fixtures.module("documents_run")

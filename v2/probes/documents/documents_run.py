@@ -67,6 +67,12 @@ def outcome(turns, base):
     return "clock-failed", None
 
 
+def written_by(worker):
+    """Who a row's item is said to be written by. The room never gives an item to a worker of the family that
+    wrote it (the text before the first colon), so a script worker's item is written by another family."""
+    return "claude:probe" if worker.split(":", 1)[0] == "script" else "script:probe"
+
+
 def archive_interrupted(out, directory):
     if directory.exists():
         interrupted = Path(out) / "rows/interrupted"
@@ -136,7 +142,8 @@ def run_turn(out, plan, row, item, lock_fd):
     pilot.command([yak, "--room", room, "init"], env=environment)
     identity = pilot.command([yak, "--room", room, "item", "add", "--title", maker.TITLE,
         "--repo", repo, "--base", base["base"], "--check", maker.CHECK_COMMAND, "--file", maker.CHECK_FILE,
-        "--wrong", base["wrong"], "--origin", "observed", "--by", "script:probe"], env=environment).decode().strip()
+        "--wrong", base["wrong"], "--origin", "observed", "--by", written_by(plan["worker"]["name"])],
+        env=environment).decode().strip()
     (directory / "item.txt").write_text("%s %s %s\n" % (row["commit"], identity, plan["worker"]["name"]), encoding="utf-8")
     argv = [yak, "--room", str(room), "clock", "run", "--once-through", "--daily-turns", "1", "--concurrent", "1",
         "--turn-secs", str(plan["limits"]["worker_secs"]), "--lease-secs", str(plan["limits"]["lease_secs"]),
