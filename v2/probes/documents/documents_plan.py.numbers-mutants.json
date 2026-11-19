@@ -1,0 +1,153 @@
+{
+ "file": "documents_plan.py",
+ "source_sha256": "bc1840759186d6068f63e84f5d710b3bc2dd2df103ec76cd560a948174cd3c75",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_plan.py",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 17 tests in 97.904s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 47,
+   "kind": "embedded-argument-number",
+   "before": "\"docs/superpowers/specs/2026-11-18-v2-a-document-offered.md\"",
+   "after": "'docs/superpowers/specs/2026-11-19-v2-a-document-offered.md'",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 197,
+   "kind": "argument-or-mode-number",
+   "before": "\"1\"",
+   "after": "'2'",
+   "killed": false,
+   "tests": [],
+   "reason": "These nonempty Git environment flags remain enabled when their numeric text changes."
+  },
+  {
+   "line": 198,
+   "kind": "argument-or-mode-number",
+   "before": "\"1\"",
+   "after": "'2'",
+   "killed": false,
+   "tests": [],
+   "reason": "These nonempty Git environment flags remain enabled when their numeric text changes."
+  },
+  {
+   "line": 65,
+   "kind": "argument-or-mode-number",
+   "before": "\"0\"",
+   "after": "'1'",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 224,
+   "kind": "embedded-argument-number",
+   "before": "\"100644,%s,PROBE-UNRELATED.txt\"",
+   "after": "'100755,%s,PROBE-UNRELATED.txt'",
+   "killed": false,
+   "tests": [],
+   "reason": "The tests inspect file content and parents, but do not require an exact executable bit on task/check/wrong files."
+  },
+  {
+   "line": 192,
+   "kind": "embedded-argument-number",
+   "before": "\"rows/%03d-%s-%s\"",
+   "after": "'rows/%04d-%s-%s'",
+   "killed": true,
+   "tests": [
+    "test_order_84_hashes_stable_and_full_commit (__main__.Rules.test_order_84_hashes_stable_and_full_commit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 220,
+   "kind": "embedded-argument-number",
+   "before": "\"100644,%s,%s\"",
+   "after": "'100755,%s,%s'",
+   "killed": false,
+   "tests": [],
+   "reason": "The tests inspect file content and parents, but do not require an exact executable bit on task/check/wrong files."
+  },
+  {
+   "line": 76,
+   "kind": "argument-or-mode-number",
+   "before": "b\"100644\"",
+   "after": "b'100645'",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 76,
+   "kind": "argument-or-mode-number",
+   "before": "b\"100755\"",
+   "after": "b'100756'",
+   "killed": false,
+   "tests": [],
+   "reason": "No executable-file tree entry is supplied."
+  },
+  {
+   "line": 133,
+   "kind": "embedded-argument-number",
+   "before": "\"^1\"",
+   "after": "'^2'",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 340,
+   "kind": "embedded-argument-number",
+   "before": "\"^1\"",
+   "after": "'^2'",
+   "killed": true,
+   "tests": [
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": ""
+  }
+ ]
+}

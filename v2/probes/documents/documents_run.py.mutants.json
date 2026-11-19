@@ -1,0 +1,1003 @@
+{
+ "file": "documents_run.py",
+ "source_sha256": "5854a21a04d79e8aa50d28a9948e3aaa8275acc82c2272dd587cdf7ec70472b2",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_run.py",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 12 tests in 36.706s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 211,
+   "kind": "condition",
+   "before": "__name__ == \"__main__\"",
+   "after": "not (__name__ == \"__main__\")",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)",
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)",
+    "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+    "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+    "test_kept_out_objects_are_checked_before_room (__main__.Runner.test_kept_out_objects_are_checked_before_room)",
+    "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "condition",
+   "before": "not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict)",
+   "after": "not (not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 56,
+   "kind": "condition",
+   "before": "isinstance(commit, str) and re.fullmatch(r\"[0-9a-f]{40}\", commit)",
+   "after": "not (isinstance(commit, str) and re.fullmatch(r\"[0-9a-f]{40}\", commit))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 60,
+   "kind": "condition",
+   "before": "commit is not None",
+   "after": "not (commit is not None)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 62,
+   "kind": "condition",
+   "before": "ended == \"timed_out\"",
+   "after": "not (ended == \"timed_out\")",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 64,
+   "kind": "condition",
+   "before": "ended == \"exited\" and clock_exit == 0",
+   "after": "not (ended == \"exited\" and clock_exit == 0)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 70,
+   "kind": "condition",
+   "before": "directory.exists()",
+   "after": "not (directory.exists())",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 137,
+   "kind": "condition",
+   "before": "not plan[\"worker\"][\"name\"].startswith(\"script:\")",
+   "after": "not (not plan[\"worker\"][\"name\"].startswith(\"script:\"))",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 178,
+   "kind": "condition",
+   "before": "rows is not None and (type(rows) is not int or rows < 0)",
+   "after": "not (rows is not None and (type(rows) is not int or rows < 0))",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"31c3b7fd637bff52efc7d3ad64010aedf50906ab\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"31c3b7fd637bff52efc7d3ad64010aedf50906ab\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+     "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+     "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+     "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+     "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+     "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+     "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"5c670e8927524850783c90a155b67eb656ef9305\", \"cases\": []}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"5c670e8927524850783c90a155b67eb656ef9305\", \"cases\": \"case\"}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+     "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+     "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+    ]
+   }
+  },
+  {
+   "line": 211,
+   "kind": "comparison",
+   "before": "__name__ == \"__main__\"",
+   "after": "not (__name__ == \"__main__\")",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)",
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)",
+    "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+    "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+    "test_kept_out_objects_are_checked_before_room (__main__.Runner.test_kept_out_objects_are_checked_before_room)",
+    "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "boolean",
+   "before": "not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict)",
+   "after": "((not isinstance(turns, list)) and (len(turns) != 1) and (not isinstance(turns[0], dict)))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 56,
+   "kind": "boolean",
+   "before": "isinstance(commit, str) and re.fullmatch(r\"[0-9a-f]{40}\", commit)",
+   "after": "((isinstance(commit, str)) or (re.fullmatch(r\"[0-9a-f]{40}\", commit)))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 58,
+   "kind": "boolean",
+   "before": "turn.get(\"measured\") or {}",
+   "after": "((turn.get(\"measured\")) and ({}))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 59,
+   "kind": "condition",
+   "before": "isinstance(measured, dict)",
+   "after": "not (isinstance(measured, dict))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 60,
+   "kind": "comparison",
+   "before": "commit is not None",
+   "after": "not (commit is not None)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 62,
+   "kind": "comparison",
+   "before": "ended == \"timed_out\"",
+   "after": "not (ended == \"timed_out\")",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 64,
+   "kind": "boolean",
+   "before": "ended == \"exited\" and clock_exit == 0",
+   "after": "((ended == \"exited\") or (clock_exit == 0))",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 75,
+   "kind": "condition",
+   "before": "saved.exists()",
+   "after": "not (saved.exists())",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 96,
+   "kind": "condition",
+   "before": "not isinstance(held, dict) or held.get(\"commit\") != item[\"commit\"]",
+   "after": "not (not isinstance(held, dict) or held.get(\"commit\") != item[\"commit\"])",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "condition",
+   "before": "name == \"cases.json\" and (not isinstance(held.get(\"cases\"), list) or not held[\"cases\"])",
+   "after": "not (name == \"cases.json\" and (not isinstance(held.get(\"cases\"), list) or not held[\"cases\"]))",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 118,
+   "kind": "condition",
+   "before": "actual != expected",
+   "after": "not (actual != expected)",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+    "test_kept_out_objects_are_checked_before_room (__main__.Runner.test_kept_out_objects_are_checked_before_room)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 137,
+   "kind": "negation",
+   "before": "not plan[\"worker\"][\"name\"].startswith(\"script:\")",
+   "after": "plan[\"worker\"][\"name\"].startswith(\"script:\")",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 167,
+   "kind": "boolean",
+   "before": "isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)\n        and isinstance(turns[0].get(\"measured\"), dict) and turns[0][\"measured\"].get(\"ended\") == \"timed_out\"",
+   "after": "((isinstance(turns, list)) or (len(turns) == 1) or (isinstance(turns[0], dict)) or (isinstance(turns[0].get(\"measured\"), dict)) or (turns[0][\"measured\"].get(\"ended\") == \"timed_out\"))",
+   "killed": true,
+   "tests": [
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 178,
+   "kind": "boolean",
+   "before": "rows is not None and (type(rows) is not int or rows < 0)",
+   "after": "((rows is not None) or (type(rows) is not int or rows < 0))",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"d08c33eec6cd6513393e16e4bb20e141326bd1b2\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"d08c33eec6cd6513393e16e4bb20e141326bd1b2\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+     "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+     "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+     "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+     "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+     "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+     "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"5c670e8927524850783c90a155b67eb656ef9305\", \"cases\": []}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"5c670e8927524850783c90a155b67eb656ef9305\", \"cases\": \"case\"}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+     "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+    ]
+   }
+  },
+  {
+   "line": 52,
+   "kind": "negation",
+   "before": "not isinstance(turns, list)",
+   "after": "isinstance(turns, list)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "comparison",
+   "before": "len(turns) != 1",
+   "after": "not (len(turns) != 1)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "negation",
+   "before": "not isinstance(turns[0], dict)",
+   "after": "isinstance(turns[0], dict)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 54,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 64,
+   "kind": "comparison",
+   "before": "ended == \"exited\"",
+   "after": "not (ended == \"exited\")",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 64,
+   "kind": "comparison",
+   "before": "clock_exit == 0",
+   "after": "not (clock_exit == 0)",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 73,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 96,
+   "kind": "boolean",
+   "before": "not isinstance(held, dict) or held.get(\"commit\") != item[\"commit\"]",
+   "after": "((not isinstance(held, dict)) and (held.get(\"commit\") != item[\"commit\"]))",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"2a40692c55ffb4f6f50ba0d60b290e0b0b1212ac\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"2a40692c55ffb4f6f50ba0d60b290e0b0b1212ac\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "boolean",
+   "before": "name == \"cases.json\" and (not isinstance(held.get(\"cases\"), list) or not held[\"cases\"])",
+   "after": "((name == \"cases.json\") or (not isinstance(held.get(\"cases\"), list) or not held[\"cases\"]))",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 118,
+   "kind": "comparison",
+   "before": "actual != expected",
+   "after": "not (actual != expected)",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+    "test_kept_out_objects_are_checked_before_room (__main__.Runner.test_kept_out_objects_are_checked_before_room)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 143,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 167,
+   "kind": "comparison",
+   "before": "len(turns) == 1",
+   "after": "not (len(turns) == 1)",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "comparison",
+   "before": "turns[0][\"measured\"].get(\"ended\") == \"timed_out\"",
+   "after": "not (turns[0][\"measured\"].get(\"ended\") == \"timed_out\")",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 178,
+   "kind": "comparison",
+   "before": "rows is not None",
+   "after": "not (rows is not None)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+    "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+     "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+     "test_lock_and_changed_input_before_any_row (__main__.Runner.test_lock_and_changed_input_before_any_row)"
+    ]
+   }
+  },
+  {
+   "line": 178,
+   "kind": "boolean",
+   "before": "type(rows) is not int or rows < 0",
+   "after": "((type(rows) is not int) and (rows < 0))",
+   "killed": true,
+   "tests": [
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)"
+    ]
+   }
+  },
+  {
+   "line": 184,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"60402a4b4b49110bef55785932329a1d365e8ff5\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"60402a4b4b49110bef55785932329a1d365e8ff5\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 186,
+   "kind": "condition",
+   "before": "rows is not None and completed >= rows",
+   "after": "not (rows is not None and completed >= rows)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"951a178be90c3ee09711599a714e249e0d09526b\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"951a178be90c3ee09711599a714e249e0d09526b\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 188,
+   "kind": "condition",
+   "before": "(out / row[\"directory\"] / \"record.json\").exists()",
+   "after": "not ((out / row[\"directory\"] / \"record.json\").exists())",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"2e26a72a3077726b12034a31c28e7a65dedf2e57\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"2e26a72a3077726b12034a31c28e7a65dedf2e57\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 205,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 56,
+   "kind": "embedded-number",
+   "before": "r\"[0-9a-f]{40}\"",
+   "after": "'[0-9a-f]{39}'",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 64,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 76,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_distinct_archive_names_and_bounded_loop (__main__.Archives.test_distinct_archive_names_and_bounded_loop)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 96,
+   "kind": "negation",
+   "before": "not isinstance(held, dict)",
+   "after": "isinstance(held, dict)",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 96,
+   "kind": "comparison",
+   "before": "held.get(\"commit\") != item[\"commit\"]",
+   "after": "not (held.get(\"commit\") != item[\"commit\"])",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "comparison",
+   "before": "name == \"cases.json\"",
+   "after": "not (name == \"cases.json\")",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "boolean",
+   "before": "not isinstance(held.get(\"cases\"), list) or not held[\"cases\"]",
+   "after": "((not isinstance(held.get(\"cases\"), list)) and (not held[\"cases\"]))",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"21864a511d1bf9e2c23102149c8046dec31ef091\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"21864a511d1bf9e2c23102149c8046dec31ef091\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 167,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 178,
+   "kind": "comparison",
+   "before": "type(rows) is not int",
+   "after": "not (type(rows) is not int)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"fe0644c07eee0b387c7efe8ae197fd91ddafab2d\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"fe0644c07eee0b387c7efe8ae197fd91ddafab2d\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+     "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+     "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+     "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+     "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+     "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+     "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"ca5985b063b835cff1b0e1a43e292aee7715b935\", \"cases\": []}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"ca5985b063b835cff1b0e1a43e292aee7715b935\", \"cases\": \"case\"}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+    ]
+   }
+  },
+  {
+   "line": 178,
+   "kind": "comparison",
+   "before": "rows < 0",
+   "after": "not (rows < 0)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"df5cf668cfbc170dd329900d39cc1c4a00a9c375\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"df5cf668cfbc170dd329900d39cc1c4a00a9c375\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": "",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+     "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+     "test_failed_export_is_recorded_and_not_rerun (__main__.Runner.test_failed_export_is_recorded_and_not_rerun)",
+     "test_failure_to_start_clock_is_recorded (__main__.Runner.test_failure_to_start_clock_is_recorded)",
+     "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+     "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+     "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"ca5985b063b835cff1b0e1a43e292aee7715b935\", \"cases\": []}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"ca5985b063b835cff1b0e1a43e292aee7715b935\", \"cases\": \"case\"}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+     "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+     "test_invalid_row_cap_and_malformed_turn (__main__.Runner.test_invalid_row_cap_and_malformed_turn)"
+    ]
+   }
+  },
+  {
+   "line": 186,
+   "kind": "boolean",
+   "before": "rows is not None and completed >= rows",
+   "after": "((rows is not None) or (completed >= rows))",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"d23b3f72c91a654b43236f2fcc02fb27a157da01\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"d23b3f72c91a654b43236f2fcc02fb27a157da01\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 193,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 208,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": true,
+   "tests": [
+    "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "negation",
+   "before": "not isinstance(held.get(\"cases\"), list)",
+   "after": "isinstance(held.get(\"cases\"), list)",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"448b3484b52af362c07f8d255e0aaae04311f7f6\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 98,
+   "kind": "negation",
+   "before": "not held[\"cases\"]",
+   "after": "held[\"cases\"]",
+   "killed": true,
+   "tests": [
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"eb3808543ec923831c41a38e754c07d0643b236f\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"eb3808543ec923831c41a38e754c07d0643b236f\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 167,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 178,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": false,
+   "tests": [],
+   "reason": "Killed on recheck after strengthening the covering fixture; see recheck evidence.",
+   "recheck": {
+    "file": "documents_run.py.recheck-mutants.json",
+    "killed": true,
+    "tests": [
+     "test_interrupted_row_is_preserved_and_retried_once (__main__.Runner.test_interrupted_row_is_preserved_and_retried_once)",
+     "test_cli_zero_rows_and_refusal (__main__.Runner.test_cli_zero_rows_and_refusal)"
+    ]
+   }
+  },
+  {
+   "line": 186,
+   "kind": "comparison",
+   "before": "rows is not None",
+   "after": "not (rows is not None)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 186,
+   "kind": "comparison",
+   "before": "completed >= rows",
+   "after": "not (completed >= rows)",
+   "killed": true,
+   "tests": [
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'[')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"cases\": [\"case\"]}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"b6a5afa525a4ef3c039fc9d45805b6e9a79f4626\", \"cases\": []}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='cases.json', content=b'{\"commit\": \"b6a5afa525a4ef3c039fc9d45805b6e9a79f4626\", \"cases\": \"case\"}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=None)",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'{}')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row) (name='parent.json', content=b'[]')",
+    "test_controls_gate_precedes_any_row (__main__.Runner.test_controls_gate_precedes_any_row)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 52,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_all_record_shapes (__main__.Outcomes.test_all_record_shapes)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  },
+  {
+   "line": 168,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": true,
+   "tests": [
+    "test_every_outcome_and_commit_at_limit (__main__.Runner.test_every_outcome_and_commit_at_limit)",
+    "test_order_row_limit_recorded_rows_and_clock_contract (__main__.Runner.test_order_row_limit_recorded_rows_and_clock_contract)"
+   ],
+   "reason": ""
+  }
+ ]
+}
