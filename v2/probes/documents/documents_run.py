@@ -52,12 +52,14 @@ def outcome(turns, base):
         return "clock-failed", None
     turn = turns[0]
     commit = turn.get("commit")
-    if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
-        if commit == base:
-            return "no-hand-in", None
-        return "handed-in", commit
     measured = turn.get("measured") or {}
     ended = measured.get("ended") if isinstance(measured, dict) else None
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
+        if commit == base:
+            # The real room records the base's own commit for a turn that handed in nothing, whether it finished
+            # or was stopped at its limit; only how it ended tells the two apart.
+            return ("limit" if ended == "timed_out" else "no-hand-in"), None
+        return "handed-in", commit
     if commit is not None:
         return "clock-failed", None
     if ended == "timed_out":

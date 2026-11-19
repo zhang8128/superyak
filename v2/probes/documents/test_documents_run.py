@@ -86,7 +86,11 @@ class Outcomes(unittest.TestCase):
         self.assertEqual(run.outcome([{"commit": None, "measured": []}], base), ("clock-failed", None))
         for ended in ("timed_out", "exited"):
             self.assertEqual(run.outcome([{"commit": "a" * 40, "measured": {"ended": ended}}], base), ("handed-in", "a" * 40))
-            self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": ended}}], base), ("no-hand-in", None))
+        # As the real room records them: the base's own commit for a turn that handed in nothing, with how it ended.
+        self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": "exited"}}], base), ("no-hand-in", None))
+        self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": "timed_out"}}], base), ("limit", None))
+        self.assertEqual(run.outcome([{"commit": base, "measured": {"ended": "unknown"}}], base), ("no-hand-in", None))
+        self.assertEqual(run.outcome([{"commit": base, "measured": []}], base), ("no-hand-in", None))
 
 
 class WrittenBy(unittest.TestCase):
