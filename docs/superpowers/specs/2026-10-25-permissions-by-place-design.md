@@ -1747,19 +1747,21 @@ for each name in its config (`engram/lighthouse_daemon.py:506-518`), including o
 - **Before the raise, no house carries the id** (2026-11-18, Tardis; the projection digest section 2 review's
   follow-up, `docs/superpowers/reviews/2026-11-03-projection-digest-section2-review.md:162-165`; its fresh review,
   `docs/superpowers/reviews/2026-11-19-gate-restore-reads-closed-review.md`). A ledger whose gate was never raised
-  writes its id into no house (migration 029 can still write `unreadable`, which names no ledger). So a house that
+  writes its id into no house, except during its first raise (migration 029 can still write `unreadable`, which
+  names no ledger). So a house that
   carries this ledger's id while `gate_raised` is not set comes from one of these:
   1. **An older ledger:** a copy restored, or rebuilt (`rebuild` keeps `ledger_id`, `engram/permission_ledger.py:2163`),
      from before the first raise. It has lost every act after it, revocations and denies included.
   2. **A first raise under way, or cut short:** the act marks each house before its log row commits (`_make` before
      `_append`, `engram/permission_ledger.py:1819-1821`, and in the same order at `:1919-1921` and `:1940-1942` for a
      signed proposal). So every first raise passes through this state, for up to 5 s per busy house plus the append's
-     own wait (up to 3 × max(12 s, 350 ms per MB)); a raise stopped there, or one whose marking failed at a later
+     own wait (up to 3 × max(12 s, 350 ms per MB), each try after another writer's commit first running the full
+     check outside the lock, 20.6-22.1 s at the reference ledger); a raise stopped there, or one whose marking failed at a later
      house, stays in it.
   3. **A home that ran `gate off` on a never-raised ledger under R50 as first written,** which wrote this ledger's id
      into a house that carried another mark. Nothing was restored, and the home was `off`.
 
-  A store forked from such a house copies its mark (`cli.py fork`). Closed is the safe reading in every case. It is a
+  A store forked from such a house copies its mark (`engram/cli.py:51-63`). Closed is the safe reading in every case. It is a
   false one in path 3 and during path 2's window, accepted there because a reader can't tell them from path 1. No home
   known today is in path 3: Serenity found no ledger on the Mac (all hands fdbb4496), and the Pi's and Tardis's gates
   are raised (2134709b). A home in it reads closed once this is deployed, until its owner runs `gate off` again.
@@ -1769,7 +1771,7 @@ for each name in its config (`engram/lighthouse_daemon.py:506-518`), including o
   the gate was raised; unmarked under a never-raised `off`. For rows written from this change on, the body's `meta`
   tells the two apart, since it sets `gate_raised` whenever the act marks; a never-raised `off` row written before it
   lists houses it marked (Serenity's read, all hands fdbb4496). The new clause of rule 2 reads the houses each reader
-  serves, as its other clauses do: after a restore, a house made then carries no mark, so a reader that serves only
+  serves, as rule 2's other house clauses do (the no-ledger clause reads every house): after a restore, a house made then carries no mark, so a reader that serves only
   that house reads `off`, while `share`, `permit` and the `remember` guard read the published house and still refuse.
   A never-raised `gate off` racing a first raise can remove marks the raise has just written, which reads closed (no
   id while raised).
@@ -1789,8 +1791,8 @@ over the published house.
 So a ledger deleted by mistake, or a house made again after the raise, never reads `off` while any house still
 carries the id. A house that reads closed for want of the id, such as one restored from before the raise, is marked
 by running `engram-permissions gate <current mode>` again, with the yes. A house that carries this ledger's id while
-the gate was never raised reads closed until its owner acts, at the terminal with the yes. The cause text says a house
-carries this ledger's id but this ledger was never raised, and names each path with its move: after a first raise cut
+the gate was never raised reads closed until its owner acts, at the terminal with the yes. The cause text is one sentence, that a house carries this ledger's id but this ledger was never raised, and points
+to `engram-permissions gate`, whose plan before the yes names each path with its move: after a first raise cut
 short, raise again; for a home that was `off`, `gate off`, which removes the marks; for an older ledger, first put
 back the newest copy, or make the lost acts again (revocations, denies, shortened and narrowed records), as R48 does
 for a lost tail, before raising, since raising the older copy puts its revoked allows back in force; and `gate off`
