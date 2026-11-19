@@ -450,6 +450,70 @@ def move_aside(directory):
     directory.rename(aside / ("%s-%d" % (directory.name, k)))
 
 
+def control_item(out, plan, items, listed, item):
+    """One item's controls (controls/<item>/): cases.json and parent.json, or stopped.json with its reason. An item
+    whose parent.json or stopped.json exists is not made again. `out` is resolved; `plan` gives the limits, the room's
+    program and its environment; `listed` is the item list (check_items)."""
+    directory = out / "controls" / item["item"]
+    if (directory / "parent.json").exists() or (directory / "stopped.json").exists():
+        return
+    if directory.exists():
+        move_aside(directory)
+    directory.mkdir()
+    entry = pilot.item_from(listed, item["commit"])
+    repo = Path(items).resolve() / "repo"
+    patch = source_patch(repo, entry["base"], entry["reference"])
+    try:
+        ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan, entry["base"])
+    except ReportRefused as error:
+        pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
+            "reason": "the reference's report was refused: %s" % error})
+        print("%s: stopped: the reference's report was refused: %s" % (item["item"], error))
+        return
+    passed = sorted(case for case, (status, _) in ran["report"]["cases"].items() if status == "passed")
+    counts = {status: sum(1 for held, _ in ran["report"]["cases"].values() if held == status)
+        for status in ("passed", "failed", "error", "skipped")}
+    stop = None
+    if ran["limit"]:
+        stop = "the reference's diagnostic reached its limit"
+    elif ran["turn"] != "handed-in":
+        stop = "the reference's diagnostic turn ended %s" % ran["turn"]
+    elif not ran["applied"]:
+        stop = "the reference's diagnostic did not apply"
+    elif not passed:
+        stop = "no case passes on the reference (%s)" % json.dumps(counts, sort_keys=True)
+    else:
+        pilot.write_json(directory / "cases.json", {"commit": item["commit"], "cases": passed, "counts": counts})
+        kind, verdict = replay(directory / "reference" / "replay", items, item["commit"], patch, plan, entry["base"])
+        if kind in ("limit", "clock-failed"):
+            stop = "the reference's replay turn ended %s" % kind
+        elif verdict is not True:
+            stop = "the room's verdict on the reference by replay is %s" % json.dumps(verdict)
+    if stop is not None:
+        pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": stop})
+        print("%s: stopped: %s" % (item["item"], stop))
+        return
+    try:
+        parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan, entry["base"])
+    except ReportRefused as error:
+        pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
+            "reason": "the parent's report was refused: %s" % error})
+        print("%s: stopped: the parent's report was refused: %s" % (item["item"], error))
+        return
+    if parent["limit"] or parent["turn"] != "handed-in":
+        pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason":
+            "the parent's run reached its limit" if parent["limit"] else "the parent's turn ended %s" % parent["turn"]})
+        return
+    frozen = set(passed)
+    (directory / "parent" / "junit.json").write_text(json.dumps({"cases": {key: list(value) for key, value in
+        parent["report"]["cases"].items()}, "collection_errors": parent["report"]["collection_errors"]},
+        sort_keys=True), encoding="utf-8")
+    pilot.write_json(directory / "parent.json", {"commit": item["commit"], "passed": sorted(case for case, (status, _)
+        in parent["report"]["cases"].items() if status == "passed" and case in frozen)})
+    print("%s: %d frozen cases, %d pass on the parent" % (item["item"], len(passed),
+        len(pilot.load(directory / "parent.json")["passed"])))
+
+
 def controls(out, items):
     out = Path(out).resolve()
     plan = load_judged_plan(out)
@@ -457,64 +521,7 @@ def controls(out, items):
     listed = check_items(plan, items)
     (out / "controls").mkdir(exist_ok=True)
     for item in plan["items"]:
-        directory = out / "controls" / item["item"]
-        if (directory / "parent.json").exists() or (directory / "stopped.json").exists():
-            continue
-        if directory.exists():
-            move_aside(directory)
-        directory.mkdir()
-        entry = pilot.item_from(listed, item["commit"])
-        repo = Path(items).resolve() / "repo"
-        patch = source_patch(repo, entry["base"], entry["reference"])
-        try:
-            ran = diagnostic(directory / "reference" / "diagnostic", items, item["commit"], patch, plan, entry["base"])
-        except ReportRefused as error:
-            pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
-                "reason": "the reference's report was refused: %s" % error})
-            print("%s: stopped: the reference's report was refused: %s" % (item["item"], error))
-            continue
-        passed = sorted(case for case, (status, _) in ran["report"]["cases"].items() if status == "passed")
-        counts = {status: sum(1 for held, _ in ran["report"]["cases"].values() if held == status)
-            for status in ("passed", "failed", "error", "skipped")}
-        stop = None
-        if ran["limit"]:
-            stop = "the reference's diagnostic reached its limit"
-        elif ran["turn"] != "handed-in":
-            stop = "the reference's diagnostic turn ended %s" % ran["turn"]
-        elif not ran["applied"]:
-            stop = "the reference's diagnostic did not apply"
-        elif not passed:
-            stop = "no case passes on the reference (%s)" % json.dumps(counts, sort_keys=True)
-        else:
-            pilot.write_json(directory / "cases.json", {"commit": item["commit"], "cases": passed, "counts": counts})
-            kind, verdict = replay(directory / "reference" / "replay", items, item["commit"], patch, plan, entry["base"])
-            if kind in ("limit", "clock-failed"):
-                stop = "the reference's replay turn ended %s" % kind
-            elif verdict is not True:
-                stop = "the room's verdict on the reference by replay is %s" % json.dumps(verdict)
-        if stop is not None:
-            pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason": stop})
-            print("%s: stopped: %s" % (item["item"], stop))
-            continue
-        try:
-            parent = diagnostic(directory / "parent" / "diagnostic", items, item["commit"], b"", plan, entry["base"])
-        except ReportRefused as error:
-            pilot.write_json(directory / "stopped.json", {"commit": item["commit"],
-                "reason": "the parent's report was refused: %s" % error})
-            print("%s: stopped: the parent's report was refused: %s" % (item["item"], error))
-            continue
-        if parent["limit"] or parent["turn"] != "handed-in":
-            pilot.write_json(directory / "stopped.json", {"commit": item["commit"], "reason":
-                "the parent's run reached its limit" if parent["limit"] else "the parent's turn ended %s" % parent["turn"]})
-            continue
-        frozen = set(passed)
-        (directory / "parent" / "junit.json").write_text(json.dumps({"cases": {key: list(value) for key, value in
-            parent["report"]["cases"].items()}, "collection_errors": parent["report"]["collection_errors"]},
-            sort_keys=True), encoding="utf-8")
-        pilot.write_json(directory / "parent.json", {"commit": item["commit"], "passed": sorted(case for case, (status, _)
-            in parent["report"]["cases"].items() if status == "passed" and case in frozen)})
-        print("%s: %d frozen cases, %d pass on the parent" % (item["item"], len(passed),
-            len(pilot.load(directory / "parent.json")["passed"])))
+        control_item(out, plan, items, listed, item)
     return 0
 
 
