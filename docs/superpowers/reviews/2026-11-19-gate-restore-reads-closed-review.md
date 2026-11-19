@@ -250,3 +250,147 @@ verified key that changed in between.
   daemon_gate,edges}`: 143 passed and 2 failed, both `test_item6...` params.
 - On `patched/`, I also ran all 37 test files that touch the ledger or the gate (828 tests): 826 passed and 2 failed,
   the same two `test_item6...` params, in 925 s. Unpatched, `orig/` passes those two and the recheck file (7 passed).
+
+## Re-check of the third draft (add4dd15)
+
+
+Reviewer: the same fresh reviewer, on Tardis, 2026-11-18. I only read files and ran probes. I edited, committed and
+posted nothing, I left the main checkout and `~/.engram/` alone, and every fixture was in scratch. The code is
+unchanged since 33d940ac, so the earlier probes and the 828-test run still hold. I ran one new probe,
+`probe_off_cut.py`, on the patched copy.
+
+## Verdict: APPROVE WITH CHANGES
+
+The draft resolves M1, S1 to S5 and N1, N3, N4, N6 and N7. N2 and N5 are partly resolved. One change is left before
+approval: the plan's own lists of what changes under `off` are stale (R1). It is a mechanical text change, and once it
+goes in as written the draft is approved with no further reading. The nits are optional.
+
+## The thirteen findings
+
+| # | Resolved? | Notes |
+|---|---|---|
+| M1 | Yes | R50's row and Task 26 (plan :3404-3405) now say that under a never-raised `off` the plan lists each house that carries a mark and that the yes removes it. They name `gate_plan_lines`, the words test and `test_item6`. What's left is in R3. |
+| S1 | Yes | Spec :1769-1771 limits the meta tell to rows written from this change on and says what an earlier row means. The plan names the docstring revision, and R50's stale sentence is gone. "It sets `gate_raised` whenever the act marks" matches `_make_gate` (:3131-3133). |
+| S2 | Yes | Rule 2's clause (:1785) reads "while this ledger was never raised (one of the paths above)". :1762-1763 says closed is false in path 3 and during path 2's window. The cause text names each path and its move (:1792-1797). |
+| S3 | Yes | For an older ledger: put back the newest copy, or make the lost acts again, before raising. The draft says why, and cites R48. I checked that it can be done: no `engram-permissions` act refuses under a closed gate (`effective_gate` appears in `permission_cli.py` only at :258 and :929, both in the sweep). |
+| S4 | Yes | Spec :1756-1758 names the window and accepts closed for it. The bound it gives is the one I wrote, and mine was incomplete (R2). |
+| S5 | Yes | R50's reason and cost columns are revised: they cover the read-only house, `gate shadow` still working, and the refusal at a later house naming the houses it changed. |
+| N1 | Yes | "writes its id into no house", with 029's `unreadable` named. The new sentence still contradicts paths 2 and 3 (R4). |
+| N2 | Partly | The proposal-path lines (:1919-1921, :1940-1942) and the failure at a later house are in. An append that fails after the marks is not covered (R5). |
+| N3 | Yes | Path 1 now covers a rebuild, and the citation is right (`permission_ledger.py:2163`). |
+| N4 | Yes, accepted as stated | I agree with the choice (see below). One wording nit (R6). |
+| N5 | Partly | P 12.3 now names the deploy effect and why no known home is in path 3. The plan's lists of what changes under `off` don't (R1). |
+| N6 | Yes | "under `shadow` and `enforce`, and under `off` once the gate was raised", in R50's row and spec :1768-1769. |
+| N7 | Yes | The race is named (:1774-1775). |
+
+## The two choices
+
+- **N4: reading the houses each reader serves, accepted rather than widened.** I agree.
+  - **The cost of widening.** Every reader would read every house's `meta` at every request: the daemon at every
+    frame, and each engram server on every lane note. It would also need rule 1's cap of 64, past which a raised home
+    would read closed for having many houses. Every raised home would pay that, to catch a narrow case.
+  - **The case it would catch.** A house made after a restore. 029 gives it no mark because the ledger says it was
+    never raised, so its server's `off` matches what the ledger holds.
+  - **The owner still notices.** What the owner meets still reads closed, because `share`, `permit` and the keep guard
+    read the published house (`server.py:2212`, `:2497`, `:2635`), and the raise marked it.
+  - **What is left.** The house's own lane notes and genome sync run as `off`. That house's genome copies get no
+    subjects, as under any `off`. That's acceptable.
+- **S4: closed during every first raise's window, accepted rather than reordered.** I agree.
+  - **Reordering doesn't remove the window.** If the log row commits first, then until the marks are written each
+    house carries no id while the gate is raised. That reads closed under the existing clause, for the same length of
+    time.
+  - **It breaks what `houses` means.** The row would have to be written before the marks, so it would list the houses
+    the act means to mark. A marking that failed at a later house would leave a committed row naming houses it never
+    marked, against R17 and `test_the_log_body_of_the_first_raise_records_the_mode_and_the_houses_it_marked`.
+  - **Its one merit.** The new clause's causes would shrink to paths 1 and 3. That doesn't outweigh a log that
+    records intent instead of fact.
+  - **The windows aren't new.** A cut-short act was always visible to readers, as "no id while raised" or as this
+    state.
+
+## Remaining items
+
+### R1. Should-fix: the plan's lists of what changes under `off` still describe R50 as first written
+
+These three places say "the gate act re-marks every house that carries `unreadable` or another ledger's id, so
+`gate off` opens it (R50)":
+
+- the plan's overview, :20-21;
+- the "Nothing live" constraints, :52-53;
+- gate G2, :3984.
+
+That is no longer what a never-raised `off` does: it removes the mark. None of the three lists the new closed reading,
+yet each sets out to list every change a home with a ledger sees under `off`. G2 says "they behave as today except for
+changes that only refuse or narrow", and the new clause is such a change. It reads closed in a path-3 home on deploy,
+and for the length of every first raise.
+
+**Fix:** in all three, say that the act re-marks under a raised gate and removes marks under a never-raised `off`.
+Add that a house carrying the ledger's id under a never-raised ledger reads closed (P 12.3, "Before the raise").
+
+### R2. Nit: the window's bound counts only the lock waits, and my S4 figure was the same
+
+Each of the append's three tries first runs `_base_key()` outside the lock (`permission_ledger.py:1281-1296`). On a
+memo miss, which is the case after another writer's unverified commit, that is a full check. The section 2 review
+measured it at 20.6-22.1 s at the reference shape (`2026-11-03-projection-digest-section2-review.md:145`).
+
+**Fix:** say "plus the append's own waits for the lock (up to 3 × max(12 s, 350 ms per MB)) and, on a retry, a full
+check".
+
+### R3. Nit: two words of M1's fix
+
+- **"The sign of an older copy."** R50's row and Task 26 call a house carrying this ledger's own id "the sign of an
+  older copy". That was my wording in M1, and it's the single-cause claim S2 removed from the spec. Say "the sign of
+  one of P 12.3's three paths".
+- **Task 27 still says "mark".** Task 27's Step 3 (plan :3563-3565) still says the gate prints "every house of
+  `houses(ENGRAM_HOME)` it will mark", and Task 26 says it prints "as Task 27's `gate` prints". `gate_plan_lines` is
+  shared, so the build will get this right anyway, but the text should match.
+
+### R4. Nit: the opening sentence of the new bullet contradicts its own paths
+
+Spec :1749-1750 says "A ledger whose gate was never raised writes its id into no house". Path 2, just below it, is a
+never-raised ledger writing its id during its first raise, and path 3 is the old code doing so.
+
+**Fix:** "after this change, a ledger never raised writes its id into no house except during its first raise (path
+2)".
+
+### R5. Nit: an append that fails after the houses changed (N2's remainder)
+
+R50's cost now covers a marking that fails at a later house. It doesn't cover `_append` failing after every house has
+already changed. That happens with `LedgerBusy`'s "nothing was written, so try again" (`permission_ledger.py:1547-1548`),
+with a cut tail, or with a stop between the two steps:
+
+- **After a first raise:** the houses stay marked and the home reads closed.
+- **After a never-raised `off`:** the probe `probe_off_cut.py` restored an older ledger, so the home read closed. Then
+  `gate off`'s log write failed after the marks were removed. The home read `off`, and the log held no gate row.
+
+The owner said yes to that state. But the message says nothing changed while the gate moved from closed to `off`.
+
+**Fix:** have the build's refusal say the houses were changed and what the gate reads now.
+
+### R6. Nit: "as its other clauses do" (:1772)
+
+Rule 2's first clause, "no ledger file but some house carries the id", reads every house, not the served ones.
+
+**Fix:** say "as its other clauses about houses do, when there is a ledger".
+
+### R7. Nit: the cause text is long, and is read in many places
+
+- **Where it shows.** The daemon logs it once per request (`lighthouse_daemon.py:993-998`). `share`, `permit` and
+  `LaneNoteError` return it. `test_permissions_gate.py:83` is named for causes being "a short sentence".
+- **The length.** Naming all three paths with their moves is several sentences.
+- **Fix, optional:** the cause states the fact in one sentence and names `engram-permissions gate`. That command's plan
+  already sets apart the houses carrying this id and can carry the paths and their moves.
+
+### R8. Nit: cite the fork
+
+Spec :1762's "(`cli.py fork`)" could be `engram/cli.py:51-63`, to match the spec's other citations.
+
+## Checked and right
+
+- **The review the spec cites** exists at the cited path with my verdict whole.
+- **Rebuild:** `rebuild` keeps `ledger_id` (:2163).
+- **The signed-proposal paths** run in the same order (:1919-1921, :1940-1942).
+- **The fork:** it copies the mark. `stamp_fork` deletes only the identity keys (`store_identity.py:212`).
+- **The keep guard** reads the published house (`server.py:2212`).
+- **Houses are WAL** (`storage.py:141`), so the "5 s per busy house" is the write lock's wait.
+- **The R50 row's test list** names the words test and `test_item6`, the only tests the patched run failed.
+- **No other text** in the spec or plan states the never-raised behaviour, apart from R1's three places.
