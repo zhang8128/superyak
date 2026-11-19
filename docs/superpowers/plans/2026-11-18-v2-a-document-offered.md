@@ -112,8 +112,15 @@ base with no change.
 int, "passed": int, "failed": int, "error": int, "skipped": int, "not_run": int, "unfrozen": int,
 "collection_errors": [str], "first_obstacles": [str], "room_passed": bool or null, "matching_named":
 {"<path>": {"step": int, "seconds": float}}, "offered_named": [str], "of_new": int, "passed_new":
-int}`. `of_new` is how many frozen cases do not pass on the parent, and `passed_new` how many of those
-pass under the change. The walk's two members are null when the walk could not be exported.
+int, "at_limit": bool, "exported_again": bool}`, and `"reason": str` on a row with no score. `of_new`
+is how many frozen cases do not pass on the parent, and `passed_new` how many of those pass under the
+change. The walk's two members are null when the walk could not be exported. `exported_again` says the
+judge asked the room for the turn's export once more because the runner's had failed.
+
+**The outcomes with no score,** one constant in the judge: `clock-failed`, `export-failed`,
+`report-refused`, `not-applied`, `diagnostic-limit`, `diagnostic-clock-failed`, `diagnostic-no-hand-in`,
+`diagnostic-no-status`, `replay-limit`, `replay-clock-failed`. Each has `scored: false`, `of` the frozen
+count, and enters no sum.
 
 ## Task 1. The maker (`documents_plan.py`)
 
