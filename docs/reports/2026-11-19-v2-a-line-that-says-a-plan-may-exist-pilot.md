@@ -3,9 +3,9 @@
 Serenity, 2026-11-19 (UTC). The pilot of
 `docs/superpowers/specs/2026-11-19-v2-a-line-that-says-a-plan-may-exist.md` (revision 3): its turns ran from
 2026-11-19 12:22:41 UTC to 2026-11-19 15:11:48 UTC, and its judging from 15:11:48 to 15:52:37 UTC the same
-day. Read by a fresh reader of the other model family (w129): approve with named changes, eight, made as
-named. The section "An added look" and its line in "In short" were written after that read and are not yet
-read.
+day. Read twice by fresh readers of the other model family. The first (w129) approved with eight named
+changes. The second (w131) checked those and read the section added after the first read, and approved with
+named changes: two of the eight to finish and four in the added section. All are made as named.
 
 ## In short
 
@@ -34,9 +34,10 @@ It was tried where a plan is known and where a selecting reader's review found n
 - **What it cost there.** In pool N a turn under the line took 126.5 seconds of the worker's time against
   97.3 with nothing: more at 6 of 6 items, 29.2 seconds a turn in the mean, with 3.2 more steps and 9,438
   more tokens. In pool P the line's turns were shorter at 5 of 6 items.
-- **How much of the score is names, an added look after the scores:** of the cases that do not pass on the
-  parent, 43 of 59 in pool P fail there for want of a name, and 295 of 304 at the first pilot's items. On
-  pool P's 16 others the line's two runs pass 16 and 16 and nothing's 8 and 7.
+- **An added look, chosen after scoring; it changes no class and no rule.** Sorted by the first line of a
+  case's failure on the parent, 43 of pool P's 59 cases that do not pass there, and 295 of 304 at the first
+  pilot's items, are in an interface or collection bin. On pool P's 16 others the line's two runs pass 16
+  and 16 and nothing's 8 and 7. The sorting does not separate naming from behaviour.
 - **One hand-in was refused by the room:** a Nothing row at a pool N item. By the spec it is scored as its
   parent. That one row raises pool N's mean difference from 0.000 to 0.083. The rule reads the same with it
   and without it.
@@ -192,8 +193,8 @@ is 0.584; pool N's is 0.083 with 0 lower. In all, of pool P's 59 such cases noth
 
 The first pilot's eight rows at its twelve items, read from its own `rows.json`, and the line's two runs at
 the same items. One run a cell in the first pilot; two here. No class and no rule. The first pilot's row
-"the second search" was chosen there after four orderings had been compared on these twelve items; it was an
-added look in that pilot too.
+"the second search" was chosen there after the four orderings' retrieval counts had been compared on these
+twelve items; it was an added look in that pilot too.
 
 | item | cases | nothing 1 | nothing 2 | a plan exists | the path | three by search | the second search | three newest plans | three by lot | the line 1 | the line 2 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -382,24 +383,28 @@ records:
 
 ## An added look, chosen after the scores were read: how the cases fail on the parent
 
-Both pilots' reports say the score is agreement with the reference's tests, names included. This look asks
-how much of it is names. It was not in the spec, it was chosen after the scores were read, and it changes no
-class and no rule.
+Both pilots' reports say the score is agreement with the reference's tests, names included. This look sorts
+the cases by how they first fail on the parent. It was not in the spec, it was chosen after the scores were
+read, and it changes no class and no rule.
 
-Each frozen case that does not pass on the parent is put in one of three kinds by how it failed there, read
-from the parent's own run in the item's controls:
+Each frozen case that does not pass on the parent is put in one of three bins by a rule on the first line of
+its failure there, read from the parent's own run in the item's controls:
 
-- **missing name:** it failed there for want of a name (an import, an attribute, a fixture, a call's
-  arguments), or it was never collected because its file could not be imported;
-- **assertion:** it ran there and failed on an assertion;
-- **other:** it failed there in any other way (a missing key, say).
+- **interface or collection:** the case was not collected on the parent, or that first line matches any of
+  `ImportError`, `ModuleNotFoundError`, `AttributeError`, `NameError`, "has no attribute", "cannot import
+  name", "unexpected keyword", "got an unexpected", "missing N required", "takes N positional" or "fixture
+  '...' not found";
+- **assertion:** otherwise, the case failed there and that line begins `AssertionError` or `assert `;
+- **other:** anything else (a `KeyError`, say).
 
-A case of the first kind can pass only under a change that uses the reference's names. A case of the other
-two ran on the parent's names. It may still need a new name further on, so these are candidates for a check
+The bins are what that rule gives and no more. A case in the first bin met a barrier of interface or
+collection first; what it would test once that barrier is gone is not known from this. A case in the other
+two did not match the rule's first bin. It may still need a new name further on, and some in "other" fail on
+a missing key, which can be a matter of naming too. So the second and third bins are candidates for a check
 of behaviour and not proof of one. Each row's cases were read from the report its judging committed, and
 every row's total equals the judge's score, in both pilots.
 
-| item | pool | assertion: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | other: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | missing name: cases | nothing 1 | nothing 2 | the line 1 | the line 2 |
+| item | pool | assertion: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | other: cases | nothing 1 | nothing 2 | the line 1 | the line 2 | interface or collection: cases | nothing 1 | nothing 2 | the line 1 | the line 2 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2ebc78e1 | N | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 89 | 0 | 89 | 89 | 89 |
 | 426ad7fb | N | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 | 16 | 16 | 16 |
@@ -416,10 +421,10 @@ every row's total equals the judge's score, in both pilots.
 | **pool P** | P | 10 | 6 | 5 | 10 | 10 | 6 | 2 | 2 | 6 | 6 | 43 | 20 | 34 | 42 | 42 |
 | **pool N** | N | 4 | 2 | 2 | 2 | 2 | 3 | 2 | 2 | 2 | 2 | 106 | 17 | 106 | 106 | 106 |
 
-- **Pool P:** of 59 cases not passing on the parent, 43 want a name. On the 16 others, nothing's two runs
-  pass 8 and 7 and the line's two 16 and 16.
-- **Pool N:** of 113, 106 want a name, 89 of them at one item. On the 7 others every row passes 4; the two
-  at 906b3f73 pass in no row.
+- **Pool P:** of 59 cases not passing on the parent, 43 are in the interface or collection bin. On the 16
+  others, nothing's two runs pass 8 and 7 and the line's two 16 and 16.
+- **Pool N:** of 113, 106 are in that bin, 89 of them at one item. On the 7 others every row passes 4; the
+  two at 906b3f73 pass in no row.
 
 The first pilot's twelve items, its eight rows and the line's two, summed over the items:
 
@@ -427,17 +432,18 @@ The first pilot's twelve items, its eight rows and the line's two, summed over t
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | assertion | 8 | 0 | 0 | 7 | 6 | 0 | 0 | 5 | 0 | 5 | 6 |
 | other | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 1 |
-| missing name | 295 | 3 | 6 | 210 | 206 | 5 | 130 | 40 | 5 | 161 | 207 |
+| interface or collection | 295 | 3 | 6 | 210 | 206 | 5 | 130 | 40 | 5 | 161 | 207 |
 
-- **Of the 304 cases not passing on the parent there, 295 want a name.** What the first pilot's score
-  measured was almost wholly whether a change used the reference's names.
+- **295 of the 304 cases not passing on the parent there are in the interface or collection bin under this
+  first-line rule.** This does not separate naming compatibility from behaviour. The 149 cases that pass on
+  the parent, of that pilot's 453, are in no bin.
 - On the 9 others: nothing 0 and 0; "There is a plan" 8; the line 6 and 7.
 - **A case that passes on the parent stops passing** in 2 of this pilot's 72 rows (both at b50b2c10, one
   Nothing row and one under the line) and in 5 of the first pilot's 96.
 
 As counts, and no more: in pool P the rows under the line, whose walks all name the plan, also pass more of
-the cases that ran on the parent's names. The numbers are small, the sorting was made after the fact, and a
-case's kind is read from the first line of its failure on the parent.
+the cases outside the interface or collection bin; in pool N the four kinds of row pass the same number of
+them. The numbers are small and the sorting was made after the fact.
 
 ## What this is not
 
@@ -494,10 +500,11 @@ case's kind is read from the first line of its failure on the parent.
   user's words was not run in part B; what the line adds beside one is not known.
 - **Tell every turn the one-repository rule, and carry the room's sentence in the record,** before the next
   turns are run.
-- **Build the next trial on cases that ran on the parent's names.** The added look found them inside the
-  tests already frozen: few at these items, and where they are the line's rows passed more of them. A count
-  with no model over every item whose reference passes the jail would say how many such cases there are; a
-  trial scored on them would be nearer to a check of behaviour than either pilot.
+- **Count, with no model, the cases outside the interface or collection bin at every item whose reference
+  passes the jail, and read their tests.** In pool P the line's rows passed more of them (16 and 16 of 16
+  against 8 and 7); in pool N every kind of row passed the same 4 of 7. They are candidates only: their
+  whole tests would have to be read for the names and wordings they still depend on before a trial's
+  endpoint is chosen from them.
 
 ## Where the numbers come from
 
@@ -516,5 +523,6 @@ Beside this report, in `2026-11-19-v2-a-line-that-says-a-plan-may-exist-pilot/`:
   "What the line cost" uses, read from its turn records.
 
 Every table above was made from the judge's data by script and none was typed; the numbers in the sentences
-are filled from those files. The first pilot's columns are read from its own `rows.json`. The rooms, the
-turns' repositories and the walks are kept on the machine that ran the pilot.
+are filled from those files. The first pilot's score columns are read from its own `rows.json`; its worker
+seconds are in `first-pilot-worker-seconds.json`, copied from its turn records. The rooms, the turns'
+repositories and the walks are kept on the machine that ran the pilot.

@@ -1,6 +1,6 @@
 {
  "counts": {
-  "N_missing_name_at_its_largest_item": 89,
+  "N_interface_or_collection_at_its_largest_item": 89,
   "every_row_total_equals_the_judges_score": {
    "first": true,
    "second": true
@@ -24,7 +24,7 @@
     "path": 6,
     "search": 0
    },
-   "missing name": {
+   "interface or collection": {
     "bm25": 130,
     "cases": 295,
     "exists": 210,
@@ -51,7 +51,7 @@
     "search": 0
    }
   },
-  "part_a_without_a_missing_name": {
+  "part_a_outside_that_bin": {
    "bm25": 0,
    "cases": 9,
    "exists": 8,
@@ -73,7 +73,7 @@
      "nothing-1": 2,
      "nothing-2": 2
     },
-    "missing name": {
+    "interface or collection": {
      "cases": 106,
      "may-1": 106,
      "may-2": 106,
@@ -96,7 +96,7 @@
      "nothing-1": 6,
      "nothing-2": 5
     },
-    "missing name": {
+    "interface or collection": {
      "cases": 43,
      "may-1": 42,
      "may-2": 42,
@@ -112,7 +112,7 @@
     }
    }
   },
-  "part_b_without_a_missing_name": {
+  "part_b_outside_that_bin": {
    "N": {
     "cases": 7,
     "may-1": 4,
@@ -128,6 +128,11 @@
     "nothing-2": 7
    }
   },
+  "passing_on_the_parent": {
+   "N": 196,
+   "P": 54,
+   "part_a": 149
+  },
   "rows_where_a_case_passing_on_the_parent_no_longer_passes": {
    "first": 5,
    "first_rows": 96,
@@ -141,84 +146,84 @@
    "0193bde842": {
     "assertion": 0,
     "frozen": 2,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "027834bf0e": {
     "assertion": 0,
     "frozen": 64,
-    "missing name": 64,
+    "interface or collection": 64,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "1113f1dbb4": {
     "assertion": 0,
     "frozen": 42,
-    "missing name": 27,
+    "interface or collection": 27,
     "other": 0,
     "pass_on_the_parent": 15
    },
    "3879e60983": {
     "assertion": 0,
     "frozen": 74,
-    "missing name": 59,
+    "interface or collection": 59,
     "other": 0,
     "pass_on_the_parent": 15
    },
    "3f349e89f0": {
     "assertion": 0,
     "frozen": 95,
-    "missing name": 95,
+    "interface or collection": 95,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "671a225045": {
     "assertion": 1,
     "frozen": 10,
-    "missing name": 9,
+    "interface or collection": 9,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "71a593d5a4": {
     "assertion": 0,
     "frozen": 33,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 31
    },
    "9a3f21cfa8": {
     "assertion": 4,
     "frozen": 8,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 1,
     "pass_on_the_parent": 3
    },
    "c9ceb15bae": {
     "assertion": 0,
     "frozen": 27,
-    "missing name": 4,
+    "interface or collection": 4,
     "other": 0,
     "pass_on_the_parent": 23
    },
    "cd884db76f": {
     "assertion": 0,
     "frozen": 22,
-    "missing name": 15,
+    "interface or collection": 15,
     "other": 0,
     "pass_on_the_parent": 7
    },
    "d20c739bd0": {
     "assertion": 0,
     "frozen": 34,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 32
    },
    "fff1b349cc": {
     "assertion": 3,
     "frozen": 42,
-    "missing name": 16,
+    "interface or collection": 16,
     "other": 0,
     "pass_on_the_parent": 23
    }
@@ -227,8 +232,8 @@
   "rows": [
    {
     "assertion": 0,
+    "interface or collection": 1,
     "item": "1113f1dbb4",
-    "missing name": 1,
     "n": 1,
     "of": 42,
     "other": 0,
@@ -238,8 +243,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 2,
     "of": 2,
     "other": 0,
@@ -249,8 +254,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 62,
     "item": "027834bf0e",
-    "missing name": 62,
     "n": 3,
     "of": 64,
     "other": 0,
@@ -260,8 +265,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "027834bf0e",
-    "missing name": 0,
     "n": 4,
     "of": 64,
     "other": 0,
@@ -271,8 +276,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "fff1b349cc",
-    "missing name": 0,
     "n": 5,
     "of": 42,
     "other": 0,
@@ -282,8 +287,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "71a593d5a4",
-    "missing name": 0,
     "n": 6,
     "of": 33,
     "other": 0,
@@ -293,8 +298,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 7,
     "of": 2,
     "other": 0,
@@ -304,8 +309,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 7,
     "item": "671a225045",
-    "missing name": 7,
     "n": 8,
     "of": 10,
     "other": 0,
@@ -315,8 +320,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "027834bf0e",
-    "missing name": 0,
     "n": 9,
     "of": 64,
     "other": 0,
@@ -326,8 +331,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 6,
     "item": "671a225045",
-    "missing name": 6,
     "n": 10,
     "of": 10,
     "other": 0,
@@ -337,8 +342,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 11,
     "of": 74,
     "other": 0,
@@ -348,8 +353,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 12,
     "of": 2,
     "other": 0,
@@ -359,8 +364,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 13,
     "of": 34,
     "other": 0,
@@ -370,8 +375,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 14,
     "of": 34,
     "other": 0,
@@ -381,8 +386,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 15,
     "of": 2,
     "other": 0,
@@ -392,8 +397,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 16,
     "of": 22,
     "other": 0,
@@ -403,8 +408,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "fff1b349cc",
-    "missing name": 0,
     "n": 17,
     "of": 42,
     "other": 0,
@@ -414,8 +419,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 18,
     "of": 2,
     "other": 0,
@@ -425,8 +430,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "c9ceb15bae",
-    "missing name": 2,
     "n": 19,
     "of": 27,
     "other": 0,
@@ -436,8 +441,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "cd884db76f",
-    "missing name": 3,
     "n": 20,
     "of": 22,
     "other": 0,
@@ -447,8 +452,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 6,
     "item": "671a225045",
-    "missing name": 6,
     "n": 21,
     "of": 10,
     "other": 0,
@@ -458,8 +463,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 22,
     "of": 27,
     "other": 0,
@@ -469,8 +474,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "cd884db76f",
-    "missing name": 0,
     "n": 23,
     "of": 22,
     "other": 0,
@@ -480,8 +485,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 24,
     "of": 95,
     "other": 0,
@@ -491,8 +496,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 25,
     "of": 34,
     "other": 0,
@@ -502,8 +507,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "1113f1dbb4",
-    "missing name": 2,
     "n": 26,
     "of": 42,
     "other": 0,
@@ -513,8 +518,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "71a593d5a4",
-    "missing name": 0,
     "n": 27,
     "of": 33,
     "other": 0,
@@ -524,8 +529,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "1113f1dbb4",
-    "missing name": 0,
     "n": 28,
     "of": 42,
     "other": 0,
@@ -535,8 +540,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 29,
     "of": 8,
     "other": 1,
@@ -546,8 +551,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 30,
     "of": 2,
     "other": 0,
@@ -557,8 +562,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 31,
     "of": 95,
     "other": 0,
@@ -568,8 +573,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 32,
     "of": 27,
     "other": 0,
@@ -579,8 +584,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 33,
     "of": 74,
     "other": 0,
@@ -590,8 +595,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 34,
     "of": 34,
     "other": 0,
@@ -601,8 +606,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "fff1b349cc",
-    "missing name": 0,
     "n": 35,
     "of": 42,
     "other": 0,
@@ -612,8 +617,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 48,
     "item": "3f349e89f0",
-    "missing name": 48,
     "n": 36,
     "of": 95,
     "other": 0,
@@ -623,8 +628,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "71a593d5a4",
-    "missing name": 0,
     "n": 37,
     "of": 33,
     "other": 0,
@@ -634,8 +639,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "c9ceb15bae",
-    "missing name": 2,
     "n": 38,
     "of": 27,
     "other": 0,
@@ -645,8 +650,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 39,
     "of": 95,
     "other": 0,
@@ -656,8 +661,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 1,
     "item": "1113f1dbb4",
-    "missing name": 1,
     "n": 40,
     "of": 42,
     "other": 0,
@@ -667,8 +672,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 41,
     "of": 34,
     "other": 0,
@@ -678,8 +683,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 42,
     "of": 95,
     "other": 0,
@@ -689,8 +694,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "1113f1dbb4",
-    "missing name": 0,
     "n": 43,
     "of": 42,
     "other": 0,
@@ -700,8 +705,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "1113f1dbb4",
-    "missing name": 2,
     "n": 44,
     "of": 42,
     "other": 0,
@@ -711,8 +716,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "fff1b349cc",
-    "missing name": 0,
     "n": 45,
     "of": 42,
     "other": 0,
@@ -722,8 +727,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 59,
     "item": "3879e60983",
-    "missing name": 59,
     "n": 46,
     "of": 74,
     "other": 0,
@@ -733,8 +738,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 47,
     "of": 8,
     "other": 1,
@@ -744,8 +749,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "fff1b349cc",
-    "missing name": 0,
     "n": 48,
     "of": 42,
     "other": 0,
@@ -755,8 +760,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "1113f1dbb4",
-    "missing name": 0,
     "n": 49,
     "of": 42,
     "other": 0,
@@ -766,8 +771,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 50,
     "of": 2,
     "other": 0,
@@ -777,8 +782,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 51,
     "of": 8,
     "other": 0,
@@ -788,8 +793,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 59,
     "item": "3879e60983",
-    "missing name": 59,
     "n": 52,
     "of": 74,
     "other": 0,
@@ -799,8 +804,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 53,
     "of": 33,
     "other": 0,
@@ -810,8 +815,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 12,
     "item": "fff1b349cc",
-    "missing name": 12,
     "n": 54,
     "of": 42,
     "other": 0,
@@ -821,8 +826,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 55,
     "of": 27,
     "other": 0,
@@ -832,8 +837,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "027834bf0e",
-    "missing name": 0,
     "n": 56,
     "of": 64,
     "other": 0,
@@ -843,8 +848,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 61,
     "item": "027834bf0e",
-    "missing name": 61,
     "n": 57,
     "of": 64,
     "other": 0,
@@ -854,8 +859,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "c9ceb15bae",
-    "missing name": 2,
     "n": 58,
     "of": 27,
     "other": 0,
@@ -865,8 +870,8 @@
    },
    {
     "assertion": 2,
+    "interface or collection": 10,
     "item": "fff1b349cc",
-    "missing name": 10,
     "n": 59,
     "of": 42,
     "other": 0,
@@ -876,8 +881,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 48,
     "item": "3f349e89f0",
-    "missing name": 48,
     "n": 60,
     "of": 95,
     "other": 0,
@@ -887,8 +892,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "671a225045",
-    "missing name": 0,
     "n": 61,
     "of": 10,
     "other": 0,
@@ -898,8 +903,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 62,
     "of": 34,
     "other": 0,
@@ -909,8 +914,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "027834bf0e",
-    "missing name": 0,
     "n": 63,
     "of": 64,
     "other": 0,
@@ -920,8 +925,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 64,
     "of": 22,
     "other": 0,
@@ -931,8 +936,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 1,
     "item": "1113f1dbb4",
-    "missing name": 1,
     "n": 65,
     "of": 42,
     "other": 0,
@@ -942,8 +947,8 @@
    },
    {
     "assertion": 3,
+    "interface or collection": 13,
     "item": "fff1b349cc",
-    "missing name": 13,
     "n": 66,
     "of": 42,
     "other": 0,
@@ -953,8 +958,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "671a225045",
-    "missing name": 0,
     "n": 67,
     "of": 10,
     "other": 0,
@@ -964,8 +969,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 68,
     "of": 27,
     "other": 0,
@@ -975,8 +980,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 69,
     "of": 74,
     "other": 0,
@@ -986,8 +991,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 70,
     "of": 8,
     "other": 0,
@@ -997,8 +1002,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 71,
     "of": 8,
     "other": 0,
@@ -1008,8 +1013,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 72,
     "of": 8,
     "other": 1,
@@ -1019,8 +1024,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 73,
     "of": 33,
     "other": 0,
@@ -1030,8 +1035,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "cd884db76f",
-    "missing name": 3,
     "n": 74,
     "of": 22,
     "other": 0,
@@ -1041,8 +1046,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "671a225045",
-    "missing name": 0,
     "n": 75,
     "of": 10,
     "other": 0,
@@ -1052,8 +1057,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 76,
     "of": 22,
     "other": 0,
@@ -1063,8 +1068,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 77,
     "of": 22,
     "other": 0,
@@ -1074,8 +1079,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "71a593d5a4",
-    "missing name": 0,
     "n": 78,
     "of": 33,
     "other": 0,
@@ -1085,8 +1090,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 61,
     "item": "027834bf0e",
-    "missing name": 61,
     "n": 79,
     "of": 64,
     "other": 0,
@@ -1096,8 +1101,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 80,
     "of": 27,
     "other": 0,
@@ -1107,8 +1112,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 81,
     "of": 95,
     "other": 0,
@@ -1118,8 +1123,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "671a225045",
-    "missing name": 0,
     "n": 82,
     "of": 10,
     "other": 0,
@@ -1129,8 +1134,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 83,
     "of": 33,
     "other": 0,
@@ -1140,8 +1145,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 84,
     "of": 8,
     "other": 0,
@@ -1151,8 +1156,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "cd884db76f",
-    "missing name": 3,
     "n": 85,
     "of": 22,
     "other": 0,
@@ -1162,8 +1167,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 48,
     "item": "3f349e89f0",
-    "missing name": 48,
     "n": 86,
     "of": 95,
     "other": 0,
@@ -1173,8 +1178,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 87,
     "of": 74,
     "other": 0,
@@ -1184,8 +1189,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 88,
     "of": 8,
     "other": 0,
@@ -1195,8 +1200,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 89,
     "of": 34,
     "other": 0,
@@ -1206,8 +1211,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 90,
     "of": 34,
     "other": 0,
@@ -1217,8 +1222,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "027834bf0e",
-    "missing name": 0,
     "n": 91,
     "of": 64,
     "other": 0,
@@ -1228,8 +1233,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 92,
     "of": 33,
     "other": 0,
@@ -1239,8 +1244,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 93,
     "of": 74,
     "other": 0,
@@ -1250,8 +1255,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 94,
     "of": 2,
     "other": 0,
@@ -1261,8 +1266,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "671a225045",
-    "missing name": 0,
     "n": 95,
     "of": 10,
     "other": 0,
@@ -1272,8 +1277,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3879e60983",
-    "missing name": 0,
     "n": 96,
     "of": 74,
     "other": 0,
@@ -1293,7 +1298,7 @@
     "assert (2 == 1)",
     "assert False"
    ],
-   "missing name": [
+   "interface or collection": [
     "AttributeError: 'Federation' object has no attribute 'pair_trusted'",
     "AttributeError: 'Federation' object has no attribute 'pull_once'",
     "AttributeError: 'Federation' object has no attribute 'serve_pull'",
@@ -1319,168 +1324,168 @@
    "0193bde842": {
     "assertion": 0,
     "frozen": 2,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "027834bf0e": {
     "assertion": 0,
     "frozen": 64,
-    "missing name": 64,
+    "interface or collection": 64,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "1113f1dbb4": {
     "assertion": 0,
     "frozen": 42,
-    "missing name": 27,
+    "interface or collection": 27,
     "other": 0,
     "pass_on_the_parent": 15
    },
    "2ebc78e1d8": {
     "assertion": 0,
     "frozen": 89,
-    "missing name": 89,
+    "interface or collection": 89,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "383c54438d": {
     "assertion": 1,
     "frozen": 18,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 2,
     "pass_on_the_parent": 15
    },
    "3879e60983": {
     "assertion": 0,
     "frozen": 74,
-    "missing name": 59,
+    "interface or collection": 59,
     "other": 0,
     "pass_on_the_parent": 15
    },
    "3f349e89f0": {
     "assertion": 0,
     "frozen": 95,
-    "missing name": 95,
+    "interface or collection": 95,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "426ad7fbd5": {
     "assertion": 0,
     "frozen": 133,
-    "missing name": 16,
+    "interface or collection": 16,
     "other": 0,
     "pass_on_the_parent": 117
    },
    "4971bdb360": {
     "assertion": 0,
     "frozen": 20,
-    "missing name": 20,
+    "interface or collection": 20,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "603434cf1e": {
     "assertion": 0,
     "frozen": 23,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 3,
     "pass_on_the_parent": 20
    },
    "671a225045": {
     "assertion": 1,
     "frozen": 10,
-    "missing name": 9,
+    "interface or collection": 9,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "6ba4650f4d": {
     "assertion": 0,
     "frozen": 21,
-    "missing name": 21,
+    "interface or collection": 21,
     "other": 0,
     "pass_on_the_parent": 0
    },
    "71a593d5a4": {
     "assertion": 0,
     "frozen": 33,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 31
    },
    "82bff0db02": {
     "assertion": 1,
     "frozen": 22,
-    "missing name": 1,
+    "interface or collection": 1,
     "other": 0,
     "pass_on_the_parent": 20
    },
    "906b3f734b": {
     "assertion": 2,
     "frozen": 35,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 0,
     "pass_on_the_parent": 33
    },
    "9a3f21cfa8": {
     "assertion": 4,
     "frozen": 8,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 1,
     "pass_on_the_parent": 3
    },
    "b50b2c109c": {
     "assertion": 4,
     "frozen": 25,
-    "missing name": 1,
+    "interface or collection": 1,
     "other": 1,
     "pass_on_the_parent": 19
    },
    "c42ee1f498": {
     "assertion": 2,
     "frozen": 15,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 2,
     "pass_on_the_parent": 11
    },
    "c9ceb15bae": {
     "assertion": 0,
     "frozen": 27,
-    "missing name": 4,
+    "interface or collection": 4,
     "other": 0,
     "pass_on_the_parent": 23
    },
    "ca2d0d80ea": {
     "assertion": 3,
     "frozen": 14,
-    "missing name": 1,
+    "interface or collection": 1,
     "other": 1,
     "pass_on_the_parent": 9
    },
    "cd884db76f": {
     "assertion": 0,
     "frozen": 22,
-    "missing name": 15,
+    "interface or collection": 15,
     "other": 0,
     "pass_on_the_parent": 7
    },
    "d20c739bd0": {
     "assertion": 0,
     "frozen": 34,
-    "missing name": 2,
+    "interface or collection": 2,
     "other": 0,
     "pass_on_the_parent": 32
    },
    "edec7384ab": {
     "assertion": 1,
     "frozen": 7,
-    "missing name": 0,
+    "interface or collection": 0,
     "other": 0,
     "pass_on_the_parent": 6
    },
    "fff1b349cc": {
     "assertion": 3,
     "frozen": 42,
-    "missing name": 16,
+    "interface or collection": 16,
     "other": 0,
     "pass_on_the_parent": 23
    }
@@ -1489,8 +1494,8 @@
   "rows": [
    {
     "assertion": 4,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 1,
     "of": 8,
     "other": 1,
@@ -1500,8 +1505,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "edec7384ab",
-    "missing name": 0,
     "n": 2,
     "of": 7,
     "other": 0,
@@ -1511,8 +1516,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 13,
     "item": "6ba4650f4d",
-    "missing name": 13,
     "n": 3,
     "of": 21,
     "other": 0,
@@ -1522,8 +1527,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 16,
     "item": "426ad7fbd5",
-    "missing name": 16,
     "n": 4,
     "of": 133,
     "other": 0,
@@ -1533,8 +1538,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 5,
     "of": 27,
     "other": 0,
@@ -1544,8 +1549,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 1,
     "item": "82bff0db02",
-    "missing name": 1,
     "n": 6,
     "of": 22,
     "other": 0,
@@ -1555,8 +1560,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "906b3f734b",
-    "missing name": 0,
     "n": 7,
     "of": 35,
     "other": 0,
@@ -1566,8 +1571,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 3,
     "item": "c9ceb15bae",
-    "missing name": 3,
     "n": 8,
     "of": 27,
     "other": 0,
@@ -1577,8 +1582,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 9,
     "of": 33,
     "other": 0,
@@ -1588,8 +1593,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "906b3f734b",
-    "missing name": 0,
     "n": 10,
     "of": 35,
     "other": 0,
@@ -1599,8 +1604,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 48,
     "item": "3f349e89f0",
-    "missing name": 48,
     "n": 11,
     "of": 95,
     "other": 0,
@@ -1610,8 +1615,8 @@
    },
    {
     "assertion": 3,
+    "interface or collection": 0,
     "item": "b50b2c109c",
-    "missing name": 0,
     "n": 12,
     "of": 25,
     "other": 0,
@@ -1621,8 +1626,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 1,
     "item": "b50b2c109c",
-    "missing name": 1,
     "n": 13,
     "of": 25,
     "other": 1,
@@ -1632,8 +1637,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 12,
     "item": "fff1b349cc",
-    "missing name": 12,
     "n": 14,
     "of": 42,
     "other": 0,
@@ -1643,8 +1648,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "383c54438d",
-    "missing name": 0,
     "n": 15,
     "of": 18,
     "other": 2,
@@ -1654,8 +1659,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 7,
     "item": "671a225045",
-    "missing name": 7,
     "n": 16,
     "of": 10,
     "other": 0,
@@ -1665,8 +1670,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 16,
     "item": "426ad7fbd5",
-    "missing name": 16,
     "n": 17,
     "of": 133,
     "other": 0,
@@ -1676,8 +1681,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 61,
     "item": "027834bf0e",
-    "missing name": 61,
     "n": 18,
     "of": 64,
     "other": 0,
@@ -1687,8 +1692,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 6,
     "item": "671a225045",
-    "missing name": 6,
     "n": 19,
     "of": 10,
     "other": 0,
@@ -1698,8 +1703,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 1,
     "item": "82bff0db02",
-    "missing name": 1,
     "n": 20,
     "of": 22,
     "other": 0,
@@ -1709,8 +1714,8 @@
    },
    {
     "assertion": 2,
+    "interface or collection": 0,
     "item": "c42ee1f498",
-    "missing name": 0,
     "n": 21,
     "of": 15,
     "other": 2,
@@ -1720,8 +1725,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 61,
     "item": "027834bf0e",
-    "missing name": 61,
     "n": 22,
     "of": 64,
     "other": 0,
@@ -1731,8 +1736,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "603434cf1e",
-    "missing name": 0,
     "n": 23,
     "of": 23,
     "other": 2,
@@ -1742,8 +1747,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 24,
     "of": 34,
     "other": 0,
@@ -1753,8 +1758,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 1,
     "item": "82bff0db02",
-    "missing name": 1,
     "n": 25,
     "of": 22,
     "other": 0,
@@ -1764,8 +1769,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 89,
     "item": "2ebc78e1d8",
-    "missing name": 89,
     "n": 26,
     "of": 89,
     "other": 0,
@@ -1775,8 +1780,8 @@
    },
    {
     "assertion": 3,
+    "interface or collection": 1,
     "item": "ca2d0d80ea",
-    "missing name": 1,
     "n": 27,
     "of": 14,
     "other": 1,
@@ -1786,8 +1791,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "6ba4650f4d",
-    "missing name": 20,
     "n": 28,
     "of": 21,
     "other": 0,
@@ -1797,8 +1802,8 @@
    },
    {
     "assertion": 3,
+    "interface or collection": 1,
     "item": "ca2d0d80ea",
-    "missing name": 1,
     "n": 29,
     "of": 14,
     "other": 1,
@@ -1808,8 +1813,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "ca2d0d80ea",
-    "missing name": 0,
     "n": 30,
     "of": 14,
     "other": 0,
@@ -1819,8 +1824,8 @@
    },
    {
     "assertion": 3,
+    "interface or collection": 1,
     "item": "b50b2c109c",
-    "missing name": 1,
     "n": 31,
     "of": 25,
     "other": 1,
@@ -1830,8 +1835,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 0,
     "item": "9a3f21cfa8",
-    "missing name": 0,
     "n": 32,
     "of": 8,
     "other": 1,
@@ -1841,8 +1846,8 @@
    },
    {
     "assertion": 2,
+    "interface or collection": 12,
     "item": "fff1b349cc",
-    "missing name": 12,
     "n": 33,
     "of": 42,
     "other": 0,
@@ -1852,8 +1857,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "603434cf1e",
-    "missing name": 0,
     "n": 34,
     "of": 23,
     "other": 2,
@@ -1863,8 +1868,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "edec7384ab",
-    "missing name": 0,
     "n": 35,
     "of": 7,
     "other": 0,
@@ -1874,8 +1879,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 16,
     "item": "426ad7fbd5",
-    "missing name": 16,
     "n": 36,
     "of": 133,
     "other": 0,
@@ -1885,8 +1890,8 @@
    },
    {
     "assertion": 2,
+    "interface or collection": 0,
     "item": "c42ee1f498",
-    "missing name": 0,
     "n": 37,
     "of": 15,
     "other": 2,
@@ -1896,8 +1901,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 38,
     "of": 2,
     "other": 0,
@@ -1907,8 +1912,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "6ba4650f4d",
-    "missing name": 0,
     "n": 39,
     "of": 21,
     "other": 0,
@@ -1918,8 +1923,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "4971bdb360",
-    "missing name": 20,
     "n": 40,
     "of": 20,
     "other": 0,
@@ -1929,8 +1934,8 @@
    },
    {
     "assertion": 4,
+    "interface or collection": 1,
     "item": "b50b2c109c",
-    "missing name": 1,
     "n": 41,
     "of": 25,
     "other": 1,
@@ -1940,8 +1945,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 89,
     "item": "2ebc78e1d8",
-    "missing name": 89,
     "n": 42,
     "of": 89,
     "other": 0,
@@ -1951,8 +1956,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "383c54438d",
-    "missing name": 0,
     "n": 43,
     "of": 18,
     "other": 2,
@@ -1962,8 +1967,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "6ba4650f4d",
-    "missing name": 20,
     "n": 44,
     "of": 21,
     "other": 0,
@@ -1973,8 +1978,8 @@
    },
    {
     "assertion": 2,
+    "interface or collection": 0,
     "item": "c42ee1f498",
-    "missing name": 0,
     "n": 45,
     "of": 15,
     "other": 2,
@@ -1984,8 +1989,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "3f349e89f0",
-    "missing name": 0,
     "n": 46,
     "of": 95,
     "other": 0,
@@ -1995,8 +2000,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 59,
     "item": "3879e60983",
-    "missing name": 59,
     "n": 47,
     "of": 74,
     "other": 0,
@@ -2006,8 +2011,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "1113f1dbb4",
-    "missing name": 2,
     "n": 48,
     "of": 42,
     "other": 0,
@@ -2017,8 +2022,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 1,
     "item": "1113f1dbb4",
-    "missing name": 1,
     "n": 49,
     "of": 42,
     "other": 0,
@@ -2028,8 +2033,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 50,
     "of": 22,
     "other": 0,
@@ -2039,8 +2044,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 1,
     "item": "82bff0db02",
-    "missing name": 1,
     "n": 51,
     "of": 22,
     "other": 0,
@@ -2050,8 +2055,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "4971bdb360",
-    "missing name": 20,
     "n": 52,
     "of": 20,
     "other": 0,
@@ -2061,8 +2066,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "906b3f734b",
-    "missing name": 0,
     "n": 53,
     "of": 35,
     "other": 0,
@@ -2072,8 +2077,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "ca2d0d80ea",
-    "missing name": 0,
     "n": 54,
     "of": 14,
     "other": 0,
@@ -2083,8 +2088,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "4971bdb360",
-    "missing name": 20,
     "n": 55,
     "of": 20,
     "other": 0,
@@ -2094,8 +2099,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "2ebc78e1d8",
-    "missing name": 0,
     "n": 56,
     "of": 89,
     "other": 0,
@@ -2105,8 +2110,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 20,
     "item": "4971bdb360",
-    "missing name": 20,
     "n": 57,
     "of": 20,
     "other": 0,
@@ -2116,8 +2121,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 15,
     "item": "cd884db76f",
-    "missing name": 15,
     "n": 58,
     "of": 22,
     "other": 0,
@@ -2127,8 +2132,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "edec7384ab",
-    "missing name": 0,
     "n": 59,
     "of": 7,
     "other": 0,
@@ -2138,8 +2143,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "383c54438d",
-    "missing name": 0,
     "n": 60,
     "of": 18,
     "other": 0,
@@ -2149,8 +2154,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "603434cf1e",
-    "missing name": 0,
     "n": 61,
     "of": 23,
     "other": 2,
@@ -2160,8 +2165,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "383c54438d",
-    "missing name": 0,
     "n": 62,
     "of": 18,
     "other": 0,
@@ -2171,8 +2176,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "c42ee1f498",
-    "missing name": 0,
     "n": 63,
     "of": 15,
     "other": 1,
@@ -2182,8 +2187,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 16,
     "item": "426ad7fbd5",
-    "missing name": 16,
     "n": 64,
     "of": 133,
     "other": 0,
@@ -2193,8 +2198,8 @@
    },
    {
     "assertion": 1,
+    "interface or collection": 0,
     "item": "edec7384ab",
-    "missing name": 0,
     "n": 65,
     "of": 7,
     "other": 0,
@@ -2204,8 +2209,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "603434cf1e",
-    "missing name": 0,
     "n": 66,
     "of": 23,
     "other": 2,
@@ -2215,8 +2220,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 59,
     "item": "3879e60983",
-    "missing name": 59,
     "n": 67,
     "of": 74,
     "other": 0,
@@ -2226,8 +2231,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 2,
     "item": "71a593d5a4",
-    "missing name": 2,
     "n": 68,
     "of": 33,
     "other": 0,
@@ -2237,8 +2242,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "0193bde842",
-    "missing name": 0,
     "n": 69,
     "of": 2,
     "other": 0,
@@ -2248,8 +2253,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "d20c739bd0",
-    "missing name": 0,
     "n": 70,
     "of": 34,
     "other": 0,
@@ -2259,8 +2264,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 89,
     "item": "2ebc78e1d8",
-    "missing name": 89,
     "n": 71,
     "of": 89,
     "other": 0,
@@ -2270,8 +2275,8 @@
    },
    {
     "assertion": 0,
+    "interface or collection": 0,
     "item": "906b3f734b",
-    "missing name": 0,
     "n": 72,
     "of": 35,
     "other": 0,
@@ -2295,7 +2300,7 @@
     "AssertionError: assert ['23f0567158b...0651e70', ...] == ['855dae9823d...04fcd3130f12']",
     "AssertionError: assert ['Breadth aga...ash command.'] == ['Breadth aga...ash command.']"
    ],
-   "missing name": [
+   "interface or collection": [
     "AttributeError: 'Federation' object has no attribute 'pair_trusted'",
     "AttributeError: 'Federation' object has no attribute 'pull_once'",
     "AttributeError: 'Federation' object has no attribute 'serve_pull'",
