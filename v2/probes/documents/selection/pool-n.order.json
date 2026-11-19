@@ -1,0 +1,428 @@
+{
+ "before_leaving_out_the_used": 46,
+ "items": [
+  {
+   "commit": "3595cceef26ffaed458c9efaf9b37a1bf629945a",
+   "counted_names": [
+    "trust_made"
+   ],
+   "hash": "0393e18936c806a39c78dae69d89b0b84b93744689509347cff120b1604e44a4",
+   "n": 1,
+   "parent": "7bd3c9aeb4b6a28271c2f2dff68f7fc546a7b6e4"
+  },
+  {
+   "commit": "bb8ae833ad90e8dd45ce885ca95047cc6d048657",
+   "counted_names": [
+    "_owned_room",
+    "_station_add",
+    "carried_along",
+    "describe_add_ship",
+    "named_room",
+    "station_add_ship"
+   ],
+   "hash": "08e36b85791be7cee2f9d23e7d46f66ccd3ec2e765a2b9a6bdbd6824a4d767ee",
+   "n": 2,
+   "parent": "60dd85175a1709627be63a4678694029c5721b74"
+  },
+  {
+   "commit": "a7c9d5267cd91afcdef7c0ad4ffcfad259053214",
+   "counted_names": [
+    "LISTED_AFTER_CLOSING",
+    "UNREAD_FROM",
+    "_left_out",
+    "_off_the_lists",
+    "breakout_filter",
+    "with_earlier_noise"
+   ],
+   "hash": "12bbea42d41b255323d779ef18f160223b5957741b35a622c7ff3cf60503f4ce",
+   "n": 3,
+   "parent": "73d61179692859353751195513321366f08cfdae"
+  },
+  {
+   "commit": "1a5d9ac6749117fd0a5a4bd39d0bf179bb939223",
+   "counted_names": [
+    "owner_eligible",
+    "read_bounded",
+    "ship_label_line"
+   ],
+   "hash": "135426bf30ebc32d4757535b06bf59e512201bbe903bd1a2f250c8ebe2f604e8",
+   "n": 4,
+   "parent": "fff1b349ccccd36d4cb9e78b54343c46e98c5265"
+  },
+  {
+   "commit": "09598bd076bf8d8cd1b319aaf1b8321ba3768d81",
+   "counted_names": [
+    "PRUNE_NONCES"
+   ],
+   "hash": "13c392a03ad36b3e6486ea6d480909b05d511c3e659772e9706a327816de5951",
+   "n": 5,
+   "parent": "36614112462cae0aabfeac29850f602d207e5db7"
+  },
+  {
+   "commit": "aa78e57cb6ffee70897b8c79411656896f7f877e",
+   "counted_names": [
+    "_not_this_station"
+   ],
+   "hash": "18e7c15082d226045ab00fd03cccb7d25bad2ba9883ca47c319edc2e99470f0d",
+   "n": 6,
+   "parent": "18587bf3e02e4849a098ed550000213198df8665"
+  },
+  {
+   "commit": "82bff0db02975df75f9850da3e448e70124a9a9a",
+   "counted_names": [
+    "SHUTDOWN_GRACE"
+   ],
+   "hash": "23d4671b67c151906b574c147e41274b523e6acd204bfe745124d4a5e2eba19b",
+   "n": 7,
+   "parent": "0a108681000937107299ce25f570710f656444ca"
+  },
+  {
+   "commit": "edec7384ab19b9bd6766929a0cd6d62548073662",
+   "counted_names": [
+    "NOT_ADDRESSED"
+   ],
+   "hash": "29d027be05cfe1d6b35d667c59c9e96a220cfe1bb250da2323aa11521b0b813e",
+   "n": 8,
+   "parent": "697182d64c07a4deee1cb051fdc29cd7b9c1863c"
+  },
+  {
+   "commit": "603434cf1ef8cfb4449dd23acf8d007aa720f9cb",
+   "counted_names": [
+    "_carry_lessons",
+    "_lessons_add_gate"
+   ],
+   "hash": "387090c0fbf9fa011afac275623537672e7798c07aaff4d29d7694568b7904f4",
+   "n": 9,
+   "parent": "38ec2ca7efbb884b90731ed38b34aa7107b30dac"
+  },
+  {
+   "commit": "d0ed1fe992e5e72dbfb16ca6a8c2413d3409cd9c",
+   "counted_names": [
+    "_replies_to"
+   ],
+   "hash": "3d8c490a75660767aebd257ec1611df89be38b10e0aa2bd516ec89f72c40e2a5",
+   "n": 10,
+   "parent": "3787e765565e6c12ffde5a33f7c5627417d11897"
+  },
+  {
+   "commit": "906b3f734bf349aefa18285a1e945c1d9a4646b9",
+   "counted_names": [
+    "COMMANDS_BYTES"
+   ],
+   "hash": "497d5abea34f37a01ca5c7053e7b22b6abc3b6bcb8efe4ce7c5139d8fce9cddd",
+   "n": 11,
+   "parent": "74f77061c50a5f4a0dfbedd1826070dd4916a577"
+  },
+  {
+   "commit": "648f5b89d4085d5fa9f71b7f170808e872b12456",
+   "counted_names": [
+    "ROUTE_BODY_MAX",
+    "SIGN_IN_BODY_MAX"
+   ],
+   "hash": "4d8b30d95d8d75e4f7b9ed351ecf51e7d521dc560ad5a6d341ab3dd4c4489b6d",
+   "n": 12,
+   "parent": "4be306dea0a3132eb9888520158b01be443e274a"
+  },
+  {
+   "commit": "08f3bf921ccf3534611a6b7aa68f46eee8f90510",
+   "counted_names": [
+    "REMOTE_REFUSED"
+   ],
+   "hash": "4ff862cda0aa635504190b5d7eb5a047238e65098413c40d05f173256221132a",
+   "n": 13,
+   "parent": "541670b586dbfcfcba6747a948fae12035dac540"
+  },
+  {
+   "commit": "426ad7fbd582b0d9ce6e040734b93e8b1645f5b6",
+   "counted_names": [
+    "SMALLEST_ROUTE_BODY",
+    "route_body_max"
+   ],
+   "hash": "5ded7ac92b7a51b620ad5fd6fff83dcbc25075ad6159da9ac487044f351cdf7b",
+   "n": 14,
+   "parent": "648f5b89d4085d5fa9f71b7f170808e872b12456"
+  },
+  {
+   "commit": "c7aee496504901f350a5675dc610f93854687940",
+   "counted_names": [
+    "INVITATION_TOKEN"
+   ],
+   "hash": "62e7f4b5f47fdfa73253b43237ced5d27b849b33d57cad62bf8f9d83495b7ce1",
+   "n": 15,
+   "parent": "6b9bde7ee356185605679d1cb9c04b0057e25a80"
+  },
+  {
+   "commit": "b204eff04fb87dc56ff569869cad9417c8bf4b80",
+   "counted_names": [
+    "OPTIONAL_UNITS"
+   ],
+   "hash": "78b0f81e19dd12cb141f88d756c79a43c691cc9a392df9cd6098a94d4447301c",
+   "n": 16,
+   "parent": "f90bc16e9dedc8a531b77e3466c00cf9f48bc18c"
+  },
+  {
+   "commit": "003e87b7a80bc9024fb5d0a25c58c47ef69b295b",
+   "counted_names": [
+    "_hash_for_removal",
+    "_remove_denied",
+    "_sweep_denied_staging"
+   ],
+   "hash": "79c21513bd3282bc657778c07c03ad36076a1166ae2f0e7e73ff11ef80ee4f89",
+   "n": 17,
+   "parent": "587b863e1295b0f740d1ce7790d1ac1e54a35ea4"
+  },
+  {
+   "commit": "77d0e6f1b79d306afb86a71b946da6d9c4e1a7ae",
+   "counted_names": [
+    "NONCE_KEEP"
+   ],
+   "hash": "86781f7d19995ff5dc4005224deb0c8849783b4597cc516598a30b3e4dfbe1b8",
+   "n": 18,
+   "parent": "2ab4032baf8b7d473ea085b264837a1c6d8f8bc6"
+  },
+  {
+   "commit": "9803aede28d4bdcc69726bb4ea05f2d817f67177",
+   "counted_names": [
+    "MAX_HELD",
+    "_save_rates"
+   ],
+   "hash": "95481b64cfca58830636246a94cbfbbf7faf33b2d08dff6de3f3c6e34aaf46e4",
+   "n": 19,
+   "parent": "b50b2c109c77562c1b7acd843e11459c445a0106"
+  },
+  {
+   "commit": "829ccc75f911a3894706fcd64007f1ea4741ce79",
+   "counted_names": [
+    "_stored_time"
+   ],
+   "hash": "a1f13e09212a9bdb87c349951c88558d51caa8039e357f2c6a649dc6c975ce86",
+   "n": 20,
+   "parent": "ae72ab5b2129a3e5f9662e291d8fa50f7e9a9da8"
+  },
+  {
+   "commit": "63311dbec1c52a0b71b4f0de80db41f228d7a4a9",
+   "counted_names": [
+    "PUBLIC_ROUTES",
+    "SECURITY_HEADERS"
+   ],
+   "hash": "a267387d9b5309b4a67ea4f5bf1f7f2d91c06ee2da0acf816f198a09c6e412c3",
+   "n": 21,
+   "parent": "71a593d5a417ae2c16e0207341bb9594aca1a889"
+  },
+  {
+   "commit": "b3a94c9b65f11640034a578b6ae93bb1b1316348",
+   "counted_names": [
+    "PEER_SCOPED_403",
+    "PEER_SCOPED_STATUS",
+    "_peer_outcome"
+   ],
+   "hash": "a2eba982eecee30eba23fa2488458a15a12d2cd6411fece08ba38bbf61674ca1",
+   "n": 22,
+   "parent": "dda9d9f3deea3eaf012b261182b13bca42649fba"
+  },
+  {
+   "commit": "706fdf59a5788ee06a50b5473cfc276905f2107d",
+   "counted_names": [
+    "EARLIER_SHIPS"
+   ],
+   "hash": "b48e6f54a1497a9465c423c33ab61ed3ea80d2971b502e0c05e3a546db25c285",
+   "n": 23,
+   "parent": "08f3bf921ccf3534611a6b7aa68f46eee8f90510"
+  },
+  {
+   "commit": "fc8a61cbb9abb385bc14dba65a2af13c9bef0213",
+   "counted_names": [
+    "ENGRAM_UNITS",
+    "engram_units"
+   ],
+   "hash": "b873898b5ef306cbb66f9bf91fc6410c957c09e221884975a38f2a0616fc9e6a",
+   "n": 24,
+   "parent": "e7b8fef22c19a8073fdcd6c4a1e2ff08bf49ac9a"
+  },
+  {
+   "commit": "2ebc78e1d8d117459fd41e3bfd5f83cb85f286ac",
+   "counted_names": [
+    "BODYLESS_METHODS"
+   ],
+   "hash": "bf656e3475a4be706c50a96886a6ed2d467900ea69823f36e47f911a7ef38cdc",
+   "n": 25,
+   "parent": "057f579ea03ac9a3cb0a73ff5f6d25e0887a7e69"
+  },
+  {
+   "commit": "d2a21c5ef987b243017a0ff7e84bf395fa8f9bfc",
+   "counted_names": [
+    "LIVE_NEEDED"
+   ],
+   "hash": "c96364099875a4b06e8e31178bb66bf3ba9ead2bf4765bdb6ab52c4ed3c2bd54",
+   "n": 26,
+   "parent": "0ed99e8b23602dcafc505df53525b6035fecf67f"
+  },
+  {
+   "commit": "afd40845400b0aac6dad1e8e32aa2b49f84c3620",
+   "counted_names": [
+    "_earlier_bridged"
+   ],
+   "hash": "c9807cb8fa48b6e99504888201118710dece1cc1ed19f40c58cb0db2832538cf",
+   "n": 27,
+   "parent": "53f68d1da42e03acac3508b882a701d1185588b5"
+  },
+  {
+   "commit": "1cc564417eb14ca30a383a51816686a288be3f02",
+   "counted_names": [
+    "CURSOR_MAX"
+   ],
+   "hash": "cab86807ad51a1fe9a1e0d2f73384b3d90d64b7f7b801f868a6d89afbcab9886",
+   "n": 28,
+   "parent": "dc7bd215227f5357182ed07c73e8b8a799777326"
+  },
+  {
+   "commit": "dd32b715f964496c3413311db8d07d4866da81a7",
+   "counted_names": [
+    "_unchanged_since"
+   ],
+   "hash": "cb0a134fb00a816005c73aae9fa90769dfa6cea4673b36018e3d02981ffbc961",
+   "n": 29,
+   "parent": "d9d81583981ca776ed87f3287e968cf0fee4719d"
+  },
+  {
+   "commit": "2ba95699cb5cb374eb275b222b837b2648274af8",
+   "counted_names": [
+    "_live_ship_key_in"
+   ],
+   "hash": "d05ef26945f3d6c3614a222691528e1b01d781d9fa7eb2ba932b2a5ee6b31adf",
+   "n": 30,
+   "parent": "444ba41786b8bc34ab6250ddaf35a4371c88c657"
+  },
+  {
+   "commit": "5a1ed02eda129f104c5a61fbf47ba2495dde3222",
+   "counted_names": [
+    "ENGRAM_INPUTS",
+    "choose_optional",
+    "engram_inputs_changed"
+   ],
+   "hash": "d0ed0b502c00dc4eab230877b5e16c1454397e0bf3c223878a139c6240b6ba97",
+   "n": 31,
+   "parent": "b204eff04fb87dc56ff569869cad9417c8bf4b80"
+  },
+  {
+   "commit": "a894d0d032012248716d658954262a40f02624fc",
+   "counted_names": [
+    "REMOTE_MESSAGE_KEYS",
+    "REMOTE_ROOM_KEYS"
+   ],
+   "hash": "d2d856a4df29cd6ac0bf4a59f82c96ce5fefc9ba64bc23ccb19217839d5dd798",
+   "n": 32,
+   "parent": "072335fc3f38103f57b345c5e807f00d6dfb8a8d"
+  },
+  {
+   "commit": "009be272987fa0fca7365558add4d47db4930020",
+   "counted_names": [
+    "lessons_listed_here"
+   ],
+   "hash": "d47f1e2f6bf0de2efc15abfc0b56c2bb83a3dab31e686a375f9250a090be9285",
+   "n": 33,
+   "parent": "e66ae3a9fbb22e9b34466feed5cb44b84941e79b"
+  },
+  {
+   "commit": "41cc7585a9719552a7152357cbf4c8e1bb5acd0f",
+   "counted_names": [
+    "safe_line"
+   ],
+   "hash": "d88c4733fd84fb5f5a18ce7640aaa01c3d047939cc7b4f9eb3debf874476d82c",
+   "n": 34,
+   "parent": "ffe704ac975389c3a9f72c99c0e6c01b1a67d0e9"
+  },
+  {
+   "commit": "7c4ac566d92e9d29c3ffc4b9495fa9c34d4a755f",
+   "counted_names": [
+    "WATCH_SESSIONS_PER_SHIP"
+   ],
+   "hash": "daa7fcd34e2e8da50fb1147395d15e12ab79e50e250c57469e0379db34ac058d",
+   "n": 35,
+   "parent": "c42ee1f498415a74315cfd29ab956f7c3da4c3f9"
+  },
+  {
+   "commit": "b92f080ddfc12847d8f81665faad00b89d1ef9df",
+   "counted_names": [
+    "admin_check"
+   ],
+   "hash": "e5c5b7fc3f6337c2b225fb9fdff903ede9dadea1453361fe27f71b670f2d08f4",
+   "n": 36,
+   "parent": "35202bdfffe76c2511771e00656598b0cf1b099f"
+  },
+  {
+   "commit": "433b6db1ec4d690e58d5180f9c90cadb641c75d8",
+   "counted_names": [
+    "_replay_floor"
+   ],
+   "hash": "ee60e2759733769cd3d85edb1ee0092eef813e4d2fd6298f7c88c4a3decfaa93",
+   "n": 37,
+   "parent": "2c29aa1782d5e225e65f5531f58fcc4e14988c65"
+  },
+  {
+   "commit": "6ceb5cb8e95f16ae3143dd79a7e67b4c14a19693",
+   "counted_names": [
+    "sign_in_lane"
+   ],
+   "hash": "efc177b605b50a52608b015d8059bc53ab582a42e4954e35cd6ae0a0c540b34c",
+   "n": 38,
+   "parent": "194b43e2e1b1f00c6c68ffabee8efec7b975dbf2"
+  },
+  {
+   "commit": "d7c8869c7aced06a3474c4a8992c1472d20e3e54",
+   "counted_names": [
+    "holds_person_data",
+    "lesson_values",
+    "names_pattern"
+   ],
+   "hash": "f404e41f57b34cbabf4f63b62b6fdcf3bdb22f87851bbeab119a2eb04e45d29c",
+   "n": 39,
+   "parent": "d3a178745b940a59b569ec4d8a297452705de36c"
+  },
+  {
+   "commit": "fc31ec6f697edde21a0d42eef478716abfb1e4f8",
+   "counted_names": [
+    "CARRY_ID"
+   ],
+   "hash": "f543908f3a2add6d594a9550c9d63678343497ba69b67f119752d4d317798519",
+   "n": 40,
+   "parent": "19036a3c5403f00b63da1bddb4bd0cc974579329"
+  },
+  {
+   "commit": "ab88cd560626e38370591ba5f4910f503e5323f4",
+   "counted_names": [
+    "BAD_QUERY",
+    "SEARCH_RESULTS",
+    "SEARCH_SQL",
+    "_tool_fetch",
+    "_tool_search",
+    "room_url"
+   ],
+   "hash": "f881717fe29e0cf64438f8362d2cc06792792a88fb6fa3c78147d9eb1292d5c8",
+   "n": 41,
+   "parent": "a7edba873a89a36be497db97d6c1b0378c000fbc"
+  },
+  {
+   "commit": "e31dec1910cd34156a8e40eeb47c5a1ba565f90e",
+   "counted_names": [
+    "_unverified_local_authors"
+   ],
+   "hash": "fbdfeedf7e5244837d88b2319f17a3f53c3fcb3a56aba1eb85ac80d9bf31629c",
+   "n": 42,
+   "parent": "8c32057743d9937fcfa4db25de145c37b2c5cd50"
+  },
+  {
+   "commit": "6f125e61acbaa31f7626b0ed3afc80764c55bc15",
+   "counted_names": [
+    "SPELLING_JOINERS"
+   ],
+   "hash": "fecd4b649c9e39c27bda235d16bcf272206b6fbd64816e08e91e68d3d66d41e1",
+   "n": 43,
+   "parent": "3d69602b38a8223ee1375b8871fe6d195d75754d"
+  }
+ ],
+ "left_out_as_used_before": null,
+ "made_from": "v2/probes/documents/census-2026-11-18.txt and the item list's repository, with the maker's reading of rule 2",
+ "pool": "N",
+ "seed_text": "20261120:pick:<commit>"
+}

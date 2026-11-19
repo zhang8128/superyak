@@ -1,0 +1,320 @@
+{
+ "before_leaving_out_the_used": 28,
+ "items": [
+  {
+   "commit": "4971bdb3601cb479c84b63f72e9e178c712eba4f",
+   "counted_names": [
+    "NOTICE_TEMPLATE",
+    "_post_notice"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+   "hash": "04b0f767dca84711814ee48113dfd5f50913eb4941d580286568c2e9b4a93b35",
+   "matching": [
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md"
+   ],
+   "n": 1,
+   "parent": "fac7bf83606227a407b4ab7771a89c522227bbe9"
+  },
+  {
+   "commit": "b50b2c109c77562c1b7acd843e11459c445a0106",
+   "counted_names": [
+    "GIVE_UPS_PER_DAY",
+    "LOCK_WAIT"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "074389767788d9350adcf4cb94e2fc386f5198a0f03727a9362dde0f0b7c8538",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 2,
+   "parent": "113a7e977ca95e6a7bcc614e09ed67b2c6883022"
+  },
+  {
+   "commit": "ca2d0d80ea9edd8bdb2315364ff561da14674d42",
+   "counted_names": [
+    "MIN_FREE",
+    "RETRY_SECONDS",
+    "_write_output",
+    "free_bytes"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "111a7b3a80de39aa60e761e7f1651b6b754e86da174c36810732930e456f25f1",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 3,
+   "parent": "b8aec9ab7f3fa2a05172f1ba98631a72952d0411"
+  },
+  {
+   "commit": "6ba4650f4d3b0e49cb792b256aa21815a01afd08",
+   "counted_names": [
+    "addable_contacts"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-11-03-lessons-room-adds.md",
+   "hash": "24d449d8d0e56d6701e7af0673d5400d68f19728ddf3734897459043352f8857",
+   "matching": [
+    "docs/superpowers/plans/2026-11-03-lessons-room-adds.md"
+   ],
+   "n": 4,
+   "parent": "173f7b884b97a9a45ccd15b16702d90319a252f6"
+  },
+  {
+   "commit": "aaef9e76051ed4356bd226825836331cf9f9e291",
+   "counted_names": [
+    "STALE_AFTER",
+    "describe_queue",
+    "notices_beside",
+    "stale_notice"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "455af5925d875db85af4799d09d364ee30486b34e7ef1458f2b0bdd94823b3a5",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 5,
+   "parent": "9803aede28d4bdcc69726bb4ea05f2d817f67177"
+  },
+  {
+   "commit": "762e72805b022aae1ae68b418ba6224c2e271c2e",
+   "counted_names": [
+    "copy_off"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "487f84e9690a2ec8c8eb5084916e70414554479a1fb6b78b6d01f644c658539c",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 6,
+   "parent": "ca2d0d80ea9edd8bdb2315364ff561da14674d42"
+  },
+  {
+   "commit": "383c54438dd92fc86599b89190f9794e4768d3e4",
+   "counted_names": [
+    "revoke_ship",
+    "ship_revoke",
+    "station_notices"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-03-ds9-station.md",
+   "hash": "5291ddd4c30d8b00e3bcafccd0b800af6c949970ca7a8fa13cb70cff2fcaae66",
+   "matching": [
+    "docs/superpowers/plans/2026-10-03-ds9-station.md"
+   ],
+   "n": 7,
+   "parent": "06c9a6c82e210aec684b2dc8092a0d55229afa32"
+  },
+  {
+   "commit": "c42ee1f498415a74315cfd29ab956f7c3da4c3f9",
+   "counted_names": [
+    "ship_watch",
+    "station_watch"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+   "hash": "5a95a4b829b276f935d36b4b1b872d967901dc59b792e3309ab97f54cad67035",
+   "matching": [
+    "docs/superpowers/plans/2026-10-10-ship-status-and-claims.md",
+    "docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md"
+   ],
+   "n": 8,
+   "parent": "a5ac34b6986d9c90d5f68c06c48a0d0fcd2ff1ca"
+  },
+  {
+   "commit": "19c5bf02c356aa0664652a98c9992be565287d3e",
+   "counted_names": [
+    "LINKS_PER_ITEM",
+    "OPEN_PER_ROOM",
+    "POSTS_PER_HOUR",
+    "_key_used"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-work-board.md",
+   "hash": "64b27533804571e91edf02b0d7f7dc1e6b8d8acfd7e220aa074bb76a3ea42a78",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-work-board.md"
+   ],
+   "n": 9,
+   "parent": "20cb756e51c1c8cca90460cfe5cf07d8ebe38d89"
+  },
+  {
+   "commit": "95e52061b6c28cd8d2f223d922c6d1fb60178bf0",
+   "counted_names": [
+    "BRIEF_RATE_SECONDS",
+    "NOT_THE_OWNERS_SHIP",
+    "NO_AT_SIGN",
+    "NO_BREAKOUT_BRIEF",
+    "NO_SHIP_REMOVAL",
+    "READ_AGAIN",
+    "REPLACED_ROOM",
+    "SHIP_BRIEFS_PER_HOUR",
+    "TOO_FAST",
+    "addressed_names",
+    "save_ship_brief",
+    "ship_brief"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-ship-room-briefs.md",
+   "hash": "6863b20c1c4f49e4a823c57f4e0088dff1e9a6e576715d9f4eba94d32a006837",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-ship-room-briefs.md"
+   ],
+   "n": 10,
+   "parent": "2e0937ca2e693bd92afcae70ac3160027c78d21e"
+  },
+  {
+   "commit": "521274677a6c23f3518e1d12725e84a264acc9b7",
+   "counted_names": [
+    "COPY_NAME",
+    "TEMP_MAX_AGE",
+    "TEMP_NAME",
+    "_stamp_ok",
+    "copy_time",
+    "newest_copy"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "6b2b62795552af49e72aa451419a8beb4b19cde09a10e772bee0efd4c998d956",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 11,
+   "parent": "891f72d1006e98684a5e3644bc2f7b2b6958d499"
+  },
+  {
+   "commit": "fcee532063ec101ef2369a0e56ca08620419f004",
+   "counted_names": [
+    "LINK_SHAPE",
+    "MESSAGE_ID",
+    "NOT_HERE",
+    "_message_here",
+    "board_link",
+    "no_at_name"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-work-board.md",
+   "hash": "8255e0abce535b94a3d4b3fecac87fd2e859450129bfc66a934fb849e93cc103",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-work-board.md"
+   ],
+   "n": 12,
+   "parent": "0bc2b27e5d8002a6237a95176da5e006d377e8b1"
+  },
+  {
+   "commit": "367ae42b7b54fd3d1fece3ac88bc086c6fbd9f20",
+   "counted_names": [
+    "GRANT_CAP",
+    "GRANT_ENDED",
+    "GRANT_PAUSED",
+    "_grant_gate"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-11-03-lessons-room-adds.md",
+   "hash": "8f68b782487c602d8f4816812e58cb0851bd6e491210fc94a41718056686351c",
+   "matching": [
+    "docs/superpowers/plans/2026-11-03-lessons-room-adds.md"
+   ],
+   "n": 13,
+   "parent": "5eda03344f67ee1a60de329faa4381e5436e1cec"
+  },
+  {
+   "commit": "5374c2d3ce3953d3c2d89e8131177b5fe22ac973",
+   "counted_names": [
+    "_layers_for",
+    "ship_instructions"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-08-instruction-layers.md",
+   "hash": "9cc5721502d03727dc7fd9e30bb22073d2d5e735fa137b26b1875c981cc16b70",
+   "matching": [
+    "docs/superpowers/plans/2026-10-08-instruction-layers.md"
+   ],
+   "n": 14,
+   "parent": "88aab6b1d06a0d925786ac6122103053cf65014f"
+  },
+  {
+   "commit": "c99020e116ba7c4089ac07016c5a650cfefa5866",
+   "counted_names": [
+    "RUNTIME_PATHS"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-version-check-2.md",
+   "hash": "aaadea770b31cf906f4130f9924aa449e4f644b676e81b8605243c3e97c954ea",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-version-check-2.md",
+    "docs/superpowers/specs/2026-10-14-version-check-design.md"
+   ],
+   "n": 15,
+   "parent": "65bbfaaa37e2fff3fb746484cf0469c253140861"
+  },
+  {
+   "commit": "b40d6db5457e9cc30f47fe8cd94f97e323d672e4",
+   "counted_names": [
+    "_board_writer"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-work-board.md",
+   "hash": "b471d3aff4d50a4b3a9280767c1213b6e9d5591ab22aa004ec9e0ede80c877c0",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-work-board.md"
+   ],
+   "n": 16,
+   "parent": "fcee532063ec101ef2369a0e56ca08620419f004"
+  },
+  {
+   "commit": "65fc994fb94bdd00fbee4b70f59935391d202f95",
+   "counted_names": [
+    "MAX_REPORT_BYTES",
+    "SIGN_INTERVAL",
+    "sign_first",
+    "sign_imprint_receipts"
+   ],
+   "direct_path": "engram/docs/superpowers/plans/2026-10-25-store-imprint.md",
+   "hash": "e1d771756afaed3828e0b20a43df46bd0e3a455d173563b0ef94598f167b09e1",
+   "matching": [
+    "engram/docs/superpowers/plans/2026-10-25-store-imprint.md"
+   ],
+   "n": 17,
+   "parent": "d6ccfa59096e2f6ff27217e2ef89becb91946230"
+  },
+  {
+   "commit": "a7005fc3ae8de930451ce6bab07d3668d12f5928",
+   "counted_names": [
+    "PENDING_SECONDS",
+    "REFUSED_PAGE",
+    "STATE_MAX",
+    "canonical_resource",
+    "check_client",
+    "sign_pending"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-28-remote-connector.md",
+   "hash": "e6bb11332d00309352922d47dd68a705a1f4e03fcd6357937559fa715e436bdc",
+   "matching": [
+    "docs/superpowers/plans/2026-10-28-remote-connector.md"
+   ],
+   "n": 18,
+   "parent": "2beda0715057461e487ddead14a20ac3b68778e1"
+  },
+  {
+   "commit": "18587bf3e02e4849a098ed550000213198df8665",
+   "counted_names": [
+    "REPORT_HEADER",
+    "SEQUENCE_JUMP",
+    "_clear_uncollected",
+    "_close_breakouts_like_replaced",
+    "_end_sessions",
+    "_expire_waiting",
+    "_lower_roles_like_replaced",
+    "_member_name",
+    "_raise_sequences",
+    "_remove_members_like_replaced",
+    "_report_differences",
+    "_revoke_held_keys",
+    "_revoke_like_replaced",
+    "_revoke_owned_ship_keys",
+    "_use_invitations",
+    "describe_reconcile"
+   ],
+   "direct_path": "docs/superpowers/plans/2026-10-14-station-backups-alerts.md",
+   "hash": "ff6f4e24841070e3d5d25894f67a9f8e0f85b9170556ab52d978b9f79d86052f",
+   "matching": [
+    "docs/superpowers/plans/2026-10-14-station-backups-alerts.md"
+   ],
+   "n": 19,
+   "parent": "08d9fff826ba162690b70f8f672621a157f3b152"
+  }
+ ],
+ "left_out_as_used_before": null,
+ "made_from": "v2/probes/documents/census-2026-11-18.txt and the item list's repository, with the maker's reading of rule 2",
+ "pool": "P",
+ "seed_text": "20261120:pick:<commit>"
+}
