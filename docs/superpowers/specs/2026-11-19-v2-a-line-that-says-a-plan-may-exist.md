@@ -1,193 +1,227 @@
 # v2: a line that says a plan may exist. A second pilot
 
-Serenity, 2026-11-19 (UTC). Revision 1. Not read and not built. It follows the pilot "a document
-offered" (`docs/superpowers/specs/2026-11-18-v2-a-document-offered.md`, revision 4; its report is
-`docs/reports/2026-11-19-v2-a-document-offered-pilot.md`) and changes no code of the room. Where this
-spec is silent, that spec's sections 3, 5 and 6 hold: how a base is made, the order, the pins, the
-controls, the score over cases frozen from the reference, the rows with no score.
+Serenity, 2026-11-19 (UTC). Revision 2. A fresh reader of the other family read revision 1: do not
+approve, six findings. Revision 1 reran the first pilot's twelve items with their documents taken out of
+the base; the reader showed that no rule of file names can make "no plan exists" true, and the design is
+dropped. This revision is the spend the reader proposed, with one small part added. What it named and
+where each is answered is at the end. Not built. It changes no code of the room.
+
+It follows the pilot "a document offered" (`docs/superpowers/specs/2026-11-18-v2-a-document-offered.md`,
+revision 4; report `docs/reports/2026-11-19-v2-a-document-offered-pilot.md`). Where this spec is silent,
+that spec's sections 3, 5 and 6 hold: how a base is made, the order, the pins, the controls, the score
+over cases frozen from the reference, the rows with no score.
 
 ## 1. What the first pilot left open
 
 At twelve items that each have a plan for their work in the repository, a Codex turn told "There is a
 plan for this work in the repository" passed 367 of 453 frozen test cases, and with nothing added 151
 and 154. Its walk named a matching file at 11 of 12 items when told, and in 1 of 24 turns when not.
-Three things that report says it does not show are what this pilot asks:
+That report says what it does not show. Three of those things are asked here:
 
 1. **A room cannot say "there is a plan" without knowing.** What it can say to every turn is that one
-   may exist. Whether that weaker line does what the cue did is not known.
-2. **Every item had a plan.** What the line costs where there is nothing to find, and whether a turn
-   then takes up some other document, is not known.
-3. **The tasks withhold every name.** At the one item probed before, turns whose task was the commit's
-   own message passed 55 and 54 of 64 with nothing added, against 0 of 64 in the pilot. How much of the
-   pilot's gap is the task's wording is known at one item.
+   may exist, and to look. What a turn does under that line was not observed.
+2. **Every item had a plan.** What a turn does under the line at work for which no plan is found was
+   not observed.
+3. **The tasks withheld every name.** At one item, earlier turns whose task was the commit's own message
+   passed 55 and 54 of 64 with nothing added, against 0 of 64 in the pilot. Those are observations under
+   two task texts at one item.
 
-**This pilot describes, at the same twelve items: what a turn's change passes of the reference's tests
-when the task ends with a line saying a plan may exist; the same when every document about the work has
-been taken out of the repository the turn is given; and the same when the task is the commit's own
-message.** It is descriptive. It tests nothing for a difference.
+**This pilot describes what a turn's change passes of the reference's tests, and what its walk names,
+with and without one added line, at twelve items not used before, six with a plan confirmed by reading
+and six where a stated review finds none; and, apart, what the line does at the first pilot's twelve.**
+It is descriptive. It tests nothing for a difference, and it recommends nothing for the room: its rule
+says only whether a larger trial is worth running.
 
-**The twelve items are not fresh.** They were chosen for the first pilot, 96 turns have been run at
-them, and their results informed this design. Nothing here confirms the first pilot on new work.
+## 2. The line
 
-## 2. The items, the tasks and the two bases
+Exactly, as one unwrapped ASCII paragraph with no quotation marks:
 
-The twelve items of the first pilot, with the same frozen tasks (`v2/probes/documents/tasks/`, hashes
-in `FROZEN.sha256`), the same frozen cases, and the same parent control. The first pilot's controls are
-made again for this plan and must give the same case lists.
+`There may be a plan for this work in the repository. Look for one before you change code.`
 
-Each item has two bases. Both hold the task file and the small check file laid over a tree; they differ
-in the tree.
+It names no folder and no file. It is two things at once, a statement that a plan may exist and an
+instruction to look; this pilot does not take them apart. One wording is tried.
 
-**Each base is a single commit with no parent,** so the repository a turn is given holds no history.
-In the first pilot a base had the item's first parent as its parent, and the whole history was there.
-Here it is not, for either base: a removed file would otherwise be one command away. So a `present`
-row here is not an exact repeat of a first-pilot row; it differs by the absent history.
+## 3. Part A: the first pilot's twelve, one new row
 
-- **The documents present:** the tree of the commit's first parent.
-- **The documents removed:** that tree with these files deleted, and nothing else changed:
-  - every Markdown file whose own file name holds the plan's slug. The slug is the direct path's file
-    name without its leading date (`YYYY-MM-DD-`) and its ending `.md`: for example `federation-pull`;
-  - every Markdown file that holds, as a whole word, a name the commit adds, by the first pilot's
-    reading of its second rule, with no limit on how many files hold it and in any folder.
+The first pilot's twelve items, bases, frozen tasks and frozen cases, unchanged. One new last paragraph,
+the line, run twice: rows `may-1` and `may-2`. 24 turns.
 
-Counted on 2026-11-19 with no model: the rule removes between 1 and 7 files an item, 46 over the twelve
-bases: the plan, and where they exist its design spec and the reviews and rechecks of either.
+These items are not fresh: 96 turns have been run at them and their results shaped this design. Part A
+is a look at whether, under the line, a walk names a matching file as it did under the cue, in the one
+setting where the first pilot saw a large gap. It enters no class and no rule. Its rows are given beside
+the first pilot's rows for the same items, which are an earlier run.
 
-**What "removed" does not mean.** Other files may still mention the work: between 0 and 6 files an item
-hold the slug or its words in their text and are kept. No kept Markdown file holds one of the item's new
-names or has the slug in its name. Other plans, for other work, are all still there; that is the point
-of the second question.
+## 4. Part B: twelve items not used before
 
-The maker proves for every item, before any turn: no base has a parent; the removed base's tree is
-the present base's tree less exactly the files of the rule; within a base the rows differ by the task
-file alone, byte for byte the same up to the last paragraph; and no object of a removed file is among
-the objects a removed row's turn is given.
+**Not used before** means: not one of the first pilot's twelve, and no model turn of any earlier probe,
+rehearsal or pass was run at it. The lead lists those items from its run records before selection; the
+list is pinned in the plan.
 
-## 3. The rows
+Two pools, counted on 2026-11-19 with no model from the item list's 188 commits (157 references pass
+the room's jail in the census; 101 commits add a counted name by the first pilot's reading of its
+second rule):
 
-Twelve rows an item. A row is a base, a task and a last paragraph.
+- **Pool P, a plan by the first pilot's rules:** the commit meets that pilot's rules 1 and 2 and is not
+  one of its twelve. 28 commits, 19 of them not used before; those 19 are of ten plans. All 28 have a
+  test-function definition in a matching file: the first pilot took every item without one. So these
+  plans hold test code, which the first pilot's did not.
+- **Pool N, no document holding a new name:** the reference passes the jail, the commit adds a counted
+  name, and no Markdown file tracked at the first parent, in any folder and with no limit of five,
+  holds a counted name as a whole word. 46 commits, 43 of them not used before.
 
-| Row | Base | Task | Last paragraph | Runs |
-| --- | --- | --- | --- | --- |
-| `present-nothing-1`, `present-nothing-2` | present | frozen | none | 2 |
-| `present-may-1`, `present-may-2` | present | frozen | the line | 2 |
-| `present-exists` | present | frozen | "There is a plan for this work in the repository." | 1 |
-| `removed-nothing-1`, `removed-nothing-2` | removed | frozen | none | 2 |
-| `removed-may-1`, `removed-may-2` | removed | frozen | the line | 2 |
-| `removed-exists` | removed | frozen | "There is a plan for this work in the repository." | 1 |
-| `message-nothing` | present | the commit's message | none | 1 |
-| `message-may` | present | the commit's message | the line | 1 |
+**Selection, frozen before any turn.** Each pool is put in ascending order of the SHA-256, in
+hexadecimal, of the ASCII text `20261120:pick:<commit>`, the commit's forty lower-case characters, with
+no newline. A fresh reader of the other family than the lead walks each order and takes an item or
+skips it, with its reason written down, until six are taken from each:
 
-- **The line,** exactly: "There may be a plan for this work in the repository. Look for one before you
-  change code." It names no folder and no file. One wording is tried; another might do otherwise.
-- **`removed-exists` tells the turn something false.** It is there to see what a wrong assurance costs.
-  No task asks a turn to believe it.
-- **The commit's message as a task:** the message's bytes as the item list holds them, then the same
-  fixed sentence as the frozen tasks have, then the last paragraph if any. A commit's message is written
-  after the work by those who did it, in the plan's words. It may name the plan.
-- A task file is otherwise as the first pilot's section 3 gives it.
+- **From pool P,** an item is taken when the reader, having read the matching file at the item's parent
+  and the commit's change, finds that the file is a plan for this item's own work and gives something
+  the item's tests use. No more than two items of one plan are taken.
+- **From pool N,** an item is taken when the reader's review finds no document at the parent that
+  specifies the item's work. The review, for each item: from the commit's message and change, the
+  reader writes down the work's subject and its distinctive terms (identifiers, routes, table and file
+  names, the message's own nouns); searches the path and the text of every Markdown file at the parent
+  for each; reads every file a search finds; and says "none found" or names the file. A file that
+  specifies the work under another name counts. An item with any doubt is skipped.
 
-## 4. The turns
+The reader's record, for every item walked: the terms searched, the files read, the verdict. It is
+kept beside the plan and its hash pinned.
 
-Twelve items by twelve rows: 144 turns, one at a time, in one order over all rows by the first pilot's
-hash with seed 20261120 and these rows' names. Worker, limits and pins as in the first pilot; the plan
-pins both bases of every item, the removal set of every item with each removed file's blob, and every
-script.
+**What "none found" is.** It is the outcome of that review by one reader. It is not a showing that no
+document bears on the work. The report says "no plan found by the review", never "no plan exists".
 
-## 5. What is read from each turn
+**After the controls,** an item none of whose frozen cases fails on the parent is replaced by the next
+of its pool's order that the reader takes: such an item can show no gain.
 
-As the first pilot's section 6: the frozen cases passed, the cases that do not pass on the parent, the
-room's verdict by replay, the outcomes with no score. A turn's change is judged on the item list's own
-base, which holds the documents; only what the turn changed under the source directory is applied. So
-the base a turn was given does not enter its judging.
+## 5. Part B's tasks and rows
 
-From the walk, where "names" is all a walk can say:
+**The task is the commit's own message.** No task in a user's words is written for these items. The
+bytes: the output of `git show -s --encoding=UTF-8 --format=%s%n%n%b <commit>` in the item list's
+repository, with trailing ASCII white space removed from its end (space, tab, carriage return, line
+feed, vertical tab, form feed) and nothing else changed, so trailers stay; then the fixed sentence and
+the last paragraph, framed as the first pilot's maker frames a task. The message's bytes are pinned for
+every item.
 
-- whether and when a step names a matching file (it cannot at a removed base, where none exists);
-- **at every row, how many files under a `plans`, `specs` or `reviews` folder the walk names, and
-  which;** at a removed base those are documents for other work;
-- the second of the first step that names a file under the source directory;
-- the turn's steps, its seconds and its tokens.
+A commit's message is written after the work by those who did it, in their own words for it. It may
+carry the plan's names and it may name the plan. That is what is tried here: the line beside a task
+that already speaks the work's language.
 
-## 6. How it is read
+Four rows an item: `nothing-1`, `nothing-2`, `may-1`, `may-2`. 48 turns. The four task files of an item
+are byte for byte the same up to the last paragraph, and the maker proves it.
 
-Shares are of the frozen cases; every tally is given again on the cases that do not pass on the parent,
-as in the first pilot.
+**The bases are made as the first pilot's:** a commit on the item's first parent holding the task file
+and the small check file. The history up to the parent is in the turn's repository, as it was in the
+first pilot; no document is removed anywhere.
 
-For a base and an item, with two Nothing shares `n1`, `n2` and two shares under the line `m1`, `m2`:
+## 6. The turns
 
-- the baseline `b = (n1 + n2) / 2` and its gap `rn = |n1 - n2|`;
-- the line's share `m = (m1 + m2) / 2`, its gap `rm = |m1 - m2|`, and `d = m - b`;
-- the line is **higher** at the item when `d > max(rn, rm)`, **lower** when `d < -max(rn, rm)`, and
-  otherwise within the observed gaps.
+72 turns, one at a time, in one order over both parts: ascending SHA-256, in hexadecimal, of the ASCII
+text `20261120:order:<commit>:<row's name>` with no newline. Worker, limits and pins as in the first
+pilot. The plan also pins the list of items used before, the two pools in their orders, and the
+selecting reader's record.
 
-The single-run rows (`present-exists`, `removed-exists`) are read against their base's baseline with
-its gap `rn` alone, as the first pilot read a row. The two `message` rows are one run each and are
-given as counts beside each other; no class is read on them.
+## 7. What is read from each turn
 
-**Five questions, each answered with counts and no test:**
+As the first pilot's section 6: the frozen cases passed; of those that do not pass on the parent, how
+many pass; the room's verdict by replay; the outcomes with no score.
 
-1. **Where the plan is there, does the line do what the cue did?** `present-may`: items higher, lower
-   and within; in how many of its 24 turns the walk names a matching file; beside `present-exists` in
-   this run and the first pilot's 11 of 12.
-2. **Where the documents are gone, what does the line cost?** `removed-may` against `removed-nothing`:
-   items lower; the mean seconds, steps and tokens of a turn; the second of the first source file
-   named; how many of its 24 walks name a file under `plans`, `specs` or `reviews`, and which.
-3. **What does a false assurance cost?** `removed-exists` against `removed-nothing`, the same counts.
-4. **Does a turn with nothing added depend on the documents at all?** `removed-nothing` against
-   `present-nothing`: frozen cases passed, item by item.
-5. **How much of the first pilot's gap is the task's wording?** `message-nothing` against
-   `present-nothing`, and `message-may` against `message-nothing`: frozen cases passed, item by item.
+From the walk, which holds the paths a step names and no command or output:
 
-Beside these: the first pilot's rows at the same items (its two Nothing rows and its cue), as a look at
-how much a cell moves between runs days apart. They are another day's turns, from bases that had a
-history, and enter no class here.
+- at a part A item and a pool P item, whether and when a step names a matching file;
+- at every item, how many distinct paths under a `plans`, `specs` or `reviews` folder the walk names,
+  and the paths. This says a path was named. It does not say a file was read, used or followed, and a
+  search can take in a file's text without naming it;
+- the second of the first step that names a path under the source directory;
+- the turn's steps, seconds and tokens. Where a turn's record lacks a number, the table says how many
+  turns it stands on.
 
-**A rule for what to recommend, fixed here before any turn.** It is a heuristic of the lead's, chosen
-after the first pilot's results were seen, and no protection against chance:
+## 8. How it is read
 
-- **Recommend the line for the room's text before work** when `present-may` is higher at six or more of
-  the twelve items and lower at one or none; and `removed-may` is lower at one or none; and the mean
-  seconds of a `removed-may` turn are no more than 60 above a `removed-nothing` turn's.
-- **Recommend against it** when `present-may` is higher at three or fewer, or `removed-may` is lower at
-  four or more.
+Shares are of the frozen cases. Every table is given again on the cases that do not pass on the parent,
+leaving out an item with no such case and saying how many items it stands on.
+
+**Part B, an item.** With both Nothing rows scored: `b = (n1 + n2) / 2` and `rn = |n1 - n2|`. With both
+rows under the line scored as well: `m = (m1 + m2) / 2`, `rm = |m1 - m2|` and `d = m - b`. The line is
+**higher** when `d > max(rn, rm)`, **lower** when `d < -max(rn, rm)`, otherwise within the observed
+gaps. If either row of a pair has no score, that pair gives no number for the item: one run is never
+taken as the cell. Every raw `d`, `rn` and `rm` is printed.
+
+**Part B, a pool.** The mean of `d` over the pool's items that have one, with the number of items it
+stands on; and for pool P the mean over plans of each plan's mean `d`. Beside it: how many items are
+higher, lower and within.
+
+**Counts beside the scores, by pool and row kind:** in how many turns the walk names a matching file
+(pool P); the distinct paths under `plans`, `specs` or `reviews` a walk names; the first second a
+source path is named; steps, seconds, tokens.
+
+**Part A** is given as counts: in how many of the 24 turns the walk names a matching file, and the
+frozen cases passed at each item in each run, beside the first pilot's rows. No class.
+
+**A rule for whether a larger trial of the line is worth running.** It was written by the lead after
+the first pilot's results were seen. It is a heuristic for spending, no protection against chance, and
+it recommends nothing for the room. It reads part B alone:
+
+- **Worth a larger trial:** at pool N the mean `d` is zero or above and no item is lower; and at pool P
+  the mean `d`, and the mean over plans, are zero or above.
+- **Not worth one:** at pool N two or more items are lower, or the mean `d` is below -0.05.
 - **Between:** reported as that.
 
-If a row the rule needs has no score, the rule is not applied and the report says so.
+The rule needs both Nothing rows and both line rows of every part B item. If one has no score the rule
+is not applied and the report says which. "Within" is not a finding of no cost: a loss inside a wide
+gap reads within, which is why the rule reads the mean and the raw differences are printed.
 
-## 7. What is built
+## 9. What is built
 
-Changes to the three scripts of the first pilot, in place, each with tests and a mutant for every
-condition added. The first pilot is judged and reported; its plan is not read by the changed scripts.
+Changes to the first pilot's three scripts, in place, each with tests and a mutant for every condition
+added. The first pilot is judged and reported; its plan is not read by the changed scripts.
 
-1. **The maker:** the removal rule and its set for each item; the second base and the proof of section
-   2; the twelve rows and their paragraphs; the commit's message as a task; the order over 144.
-2. **The runner:** unchanged but for what the tests show it needs. A row's base comes from the plan.
-3. **The judge:** the rows; the readings of section 6 with two runs a cell; the walk's counts of
-   section 5; the five questions' tables; the rule.
+1. **The maker:** the two parts; the pools, their orders and the pinned record of the selection; the
+   commit's message as a task with its exact bytes; the rows; the order over 72.
+2. **The runner:** unchanged but for what its tests show it needs.
+3. **The judge:** the readings of section 8 with two runs a cell; the walk's counts of section 7; the
+   tables; the rule.
+4. **The scripts' tests on a second machine:** the three test files are added to the list the
+   repository's "v2 checks" workflow runs on Linux and macOS, with the maker's history test skipped
+   where the checkout holds no history. The first pilot's scripts were pushed with their tests run on
+   one machine.
 
 Before the plan is made, the lead runs the whole path on the real room with a stand-in script in the
-worker's place, at a removed base and a present one, and the judge and report over those rows: the plan
-pins the judge.
+worker's place, at one item of each part and pool, through the judge and the report: the plan pins the
+judge.
 
-## 8. What it costs
+## 10. What it costs
 
-144 turns at about 190 seconds: seven to eight hours of one machine. The judging about an hour and a
-half.
+72 turns at about 190 seconds: about four hours of one machine. The judging under an hour. Before
+them, the selecting reader's review of up to 62 candidates, and the controls.
 
-## 9. What this narrows, said before any turn
+## 11. What this narrows, said before any turn
 
-- The same twelve items of six plans, seen before. One repository, one component, one worker program
-  and model, one machine.
-- The outcome is agreement with the reference's tests, as before: names, calls and wordings as well as
-  behaviour. Nothing here judges a change as work.
-- "Removed" is a tree with files deleted, in a repository with no history. Source comments, other
-  documents and the code itself may still speak of the work.
-- No base here has a history, and the first pilot's bases had. What a turn does with a history was not
-  looked at in either pilot.
-- One wording of the line. It names no folder; a line that did would be another condition.
-- Two runs a cell where the rule reads, one elsewhere. Two runs give two gaps, not a measure of
-  variation.
-- A commit's message is not what a person who wants the work would write, and not what the frozen tasks
-  are. The two `message` rows show the other end of the task's wording, not a middle.
-- The first pilot's rows are another day's. Putting them beside these is a look, not a comparison.
+- Twelve fresh items of one repository and one component, six an arm; one worker program and model; one
+  machine. Part A's twelve are seen.
+- The outcome is agreement with the reference's tests: names, calls and wordings as well as behaviour.
+  Nothing here judges a change as work.
+- Pool P's plans hold test code. A turn that names one may be taking its tests' own expectations from
+  it.
+- "No plan found" is one reader's review. A document may bear on the work and be missed.
+- The task is the commit's message. It is not what a person who wants the work would write, and it is
+  not the first pilot's kind of task; part B and the first pilot differ in items and in task kind at
+  once, and no difference between them is read as either's doing.
+- Two runs a cell give two gaps, not a measure of variation.
+- One wording of the line, which states and instructs at once.
+- Part A's rows and the first pilot's are two runs at different times; putting them side by side is a
+  look.
+
+## What the reader of revision 1 named, and where it is answered
+
+A fresh reader of the other family (the team's w122) read revision 1 at 674f6652: do not approve. It
+reproduced the removal counts and the first pilot's totals.
+
+| Its finding | Where |
+| --- | --- |
+| 1. A rule of file names does not establish that no plan remains: at three items the work's own design stayed under another name | The removed base is dropped. Section 4: "none found" by a stated review, with its record, and said as that |
+| 2. The rule could recommend while the line lost half the cases at every item, inside a wide gap | Section 8: a rule for a larger trial only; raw differences printed; means zero or above required |
+| 3. A base with no parent breaks the small check, and removed objects must be shown absent | No base without a parent and nothing removed: section 5 |
+| 4. The item list holds no commit message; message tasks cannot share the frozen tasks' prefix | Section 5: the message's exact bytes from the repository; the proof is within an item |
+| 5. No rule for a cell with one run missing | Section 8: a pair with a missing score gives no number |
+| 6. Each question claimed more than its rows show; "takes up", "false", "days apart" | Sections 1, 7 and 8 say what is named and counted; the false assurance row is dropped |
+| Its spend: 48 turns at twelve unused items, six with a plan confirmed by reading and six with none found | Part B. Part A, 24 turns at the seen twelve, is the lead's addition and enters no rule |
