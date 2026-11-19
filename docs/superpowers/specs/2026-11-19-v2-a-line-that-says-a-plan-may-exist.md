@@ -213,8 +213,11 @@ gap reads within, which is why the rule reads the mean and the raw differences a
 
 ## 9. What is built
 
-Changes to the first pilot's three scripts, in place, each with tests and a mutant for every condition
-added. The first pilot is judged and reported; its plan is not read by the changed scripts.
+Two new scripts beside the first pilot's three, which they import and reuse, each with tests and a
+mutant for every condition added. The first pilot's scripts change only where the build's plan names
+it (the runner's check of every item's controls; one function split out of the first judge; a test's
+skip), so its scoring stays under its own tests. (The lead changed this paragraph after the spec's
+approval: revision 3 as read said "in place". Nothing of the pilot's design changes by it.)
 
 1. **The maker:** the two parts; the pools, their orders and the pinned record of the selection; the
    walk that decides the twelve, which needs the candidates' controls before the plan is made; the
