@@ -72,6 +72,11 @@ jobs:
           python3 -I probes/items/test_pilot.py || status=1
           YAK_PASS_JAIL=1 YAK="$PWD/target/debug/yak" python3 -I probes/items/test_pass.py || status=1
           python3 -I probes/items/test_named.py || status=1
+          python3 -I probes/documents/test_documents_plan.py || status=1
+          python3 -I probes/documents/test_documents_run.py || status=1
+          python3 -I probes/documents/test_documents_judge.py || status=1
+          python3 -I probes/documents/test_documents_plan2.py || status=1
+          python3 -I probes/documents/test_documents_judge2.py || status=1
           exit "$status"
       - name: The first run's three checks
         # The frozen checks of the first run with model workers. Its items are done, so the checks are regression

@@ -199,6 +199,8 @@ def run_rows(out, rows=None):
     with runner_lock(out) as lock_fd:
         plan = load_plan(out)
         items = {i["commit"]: i for i in plan["items"]}
+        for item in plan["items"]:
+            controls_ready(out, item)
         completed = 0
         for row in plan["order"]:
             if rows is not None and completed >= rows:

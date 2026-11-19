@@ -163,6 +163,18 @@ class Runner(fixtures.Fixture):
         self.assertEqual(done.returncode, 1)
         self.assertIn("REFUSED:", done.stderr)
 
+    def test_later_items_controls_are_required_before_first_turn(self):
+        later = dict(self.plan["items"][0], commit="c" * 40, item="c" * 10)
+        self.plan["items"].append(later)
+        self.plan["order"].append(dict(self.plan["order"][-1], commit=later["commit"], item=later["item"]))
+        (self.out / "plan.json").unlink()
+        self.driver.pilot.write_json(self.out / "plan.json", self.plan)
+        (self.out / "plan.sha256").write_text(self.driver.digest((self.out / "plan.json").read_bytes()) + "\n")
+        with self.assertRaisesRegex(self.run.Refused, later["item"]):
+            self.run.run_rows(self.out, rows=1)
+        self.assertEqual(self.records(), [])
+        self.assertFalse((self.tmp / "calls.jsonl").exists())
+
     def test_controls_gate_precedes_any_row(self):
         cases = (self.controls / "cases.json").read_bytes()
         parent = (self.controls / "parent.json").read_bytes()

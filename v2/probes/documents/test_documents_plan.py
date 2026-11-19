@@ -490,6 +490,10 @@ class Rules(unittest.TestCase):
         census = driver.census_passes(census_file)
         # Include failing references too, so removing rule 1 changes the census.
         commits = [line.split()[0] for line in census_file.read_text().splitlines()]
+        try:
+            driver.git(ROOT, "cat-file", "-e", commits[0] + "^{commit}")
+        except driver.Refused:
+            raise unittest.SkipTest("the first census commit is unavailable in this checkout") from None
         entries = [{"commit": c, "reference": c} for c in commits]
         first_two = driver.select_items(ROOT, entries, census, exclude_test_functions=False)
         self.assertEqual(len(first_two), 40)

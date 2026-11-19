@@ -233,10 +233,10 @@ def check_script(parent):
         "echo 'FAIL: source difference not established' >&2\nexit 1\n" % (parent, SOURCE)).encode("ascii")
 
 
-def make_bases(src, item, task):
+def make_bases(src, item, task, rows=None):
     index = src.parent / "index.tmp"
     item["rows"] = {}
-    for name, paragraph in paragraphs(item).items():
+    for name, paragraph in (paragraphs(item) if rows is None else rows).items():
         git_as(src, "read-tree", item["parent"], index=index)
         content = task_bytes(task, paragraph)
         for path, data in ((CHECK_FILE, check_script(item["parent"])), (TASK_FILE, content)):
@@ -253,12 +253,14 @@ def make_bases(src, item, task):
         git_as(src, "update-ref", ref + "-wrong", wrong)
         item["rows"][name] = {"paragraph": paragraph, "base": base, "wrong": wrong, "task_file_sha256": digest(content)}
     index.unlink()
-    prove_bases(src, item, task)
+    prove_bases(src, item, task, rows)
 
 
-def prove_bases(src, item, task):
-    first = item["rows"]["nothing-1"]["base"]
-    for name, row in item["rows"].items():
+def prove_bases(src, item, task, rows=None):
+    first = item["rows"][next(iter(item["rows"]))]["base"]
+    paragraphs_by_name = {name: row["paragraph"] for name, row in item["rows"].items()} if rows is None else rows
+    for name, paragraph in paragraphs_by_name.items():
+        row = item["rows"][name]
         parent = git(src, "show", "-s", "--format=%P", row["base"]).decode().strip()
         if parent != item["parent"]:
             raise Refused("%s/%s: base parent differs: %s" % (item["item"], name, parent))
@@ -266,7 +268,7 @@ def prove_bases(src, item, task):
         if changed - {b"TASK.md"}:
             raise Refused("%s/%s: bases differ outside TASK.md: %r" % (item["item"], name, changed))
         actual = git(src, "show", row["base"] + ":TASK.md")
-        if actual != task_bytes(task, row["paragraph"]) or digest(actual) != row["task_file_sha256"]:
+        if actual != task_bytes(task, paragraph) or digest(actual) != row["task_file_sha256"]:
             raise Refused("%s/%s: TASK.md differs from frozen task and paragraph" % (item["item"], name))
 
 
