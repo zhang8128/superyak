@@ -24,16 +24,15 @@ load_plan = maker.load_plan
 
 @contextlib.contextmanager
 def runner_lock(out):
-    # flock releases on process death, so a stale pathname cannot block resumption.
+    # The clock inherits this open file description. Closing the runner's copy
+    # releases the lock only after the clock also exits; explicit LOCK_UN would
+    # release both copies at once. A stale pathname cannot block resumption.
     with (Path(out) / "run.lock").open("a", encoding="ascii") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise Refused("another runner holds run.lock") from None
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+        yield lock.fileno()
 
 
 @contextlib.contextmanager
@@ -48,12 +47,14 @@ def planned_environment(plan):
         os.environ.update(before)
 
 
-def outcome(turns, clock_exit):
+def outcome(turns, base):
     if not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict):
         return "clock-failed", None
     turn = turns[0]
     commit = turn.get("commit")
     if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
+        if commit == base:
+            return "no-hand-in", None
         return "handed-in", commit
     measured = turn.get("measured") or {}
     ended = measured.get("ended") if isinstance(measured, dict) else None
@@ -61,7 +62,7 @@ def outcome(turns, clock_exit):
         return "clock-failed", None
     if ended == "timed_out":
         return "limit", None
-    if ended == "exited" and clock_exit == 0:
+    if ended == "exited":
         return "no-hand-in", None
     return "clock-failed", None
 
@@ -76,6 +77,10 @@ def archive_interrupted(out, directory):
             k += 1
             saved = interrupted / (directory.name + "-%s" % k)
         directory.rename(saved)
+    archived = (Path(out) / "rows/interrupted").glob(directory.name + "-*")
+    return [{"directory": str(saved.relative_to(out)), "started": (saved / "started.txt").exists(),
+        "clock_exited": (saved / "clock.exit").exists()}
+        for saved in sorted(archived, key=lambda p: int(p.name.rsplit("-", 1)[1])) if saved.is_dir()]
 
 
 def export(yak, environment, room, identity, what, stdout, stderr):
@@ -87,6 +92,8 @@ def export(yak, environment, room, identity, what, stdout, stderr):
 
 
 def controls_ready(out, item):
+    if (Path(out) / "controls" / item["item"] / "stopped.json").exists():
+        raise Refused("%s: controls stopped (stopped.json exists)" % item["item"])
     for name in ("cases.json", "parent.json"):
         path = Path(out) / "controls" / item["item"] / name
         try:
@@ -99,12 +106,12 @@ def controls_ready(out, item):
             raise Refused("%s: control cases.json has no non-empty cases list: %r" % (item["item"], held.get("cases")))
 
 
-def run_turn(out, plan, row, item):
+def run_turn(out, plan, row, item, lock_fd):
     out = Path(out)
     directory = out / row["directory"]
     with planned_environment(plan):
         yak = pilot.settings(plan["items_dir"], directory, out / "src")
-    archive_interrupted(out, directory)
+    attempts = archive_interrupted(out, directory)
     directory.mkdir(parents=True)
     repo, room = directory / "repo", directory / "room"
     repo.mkdir()
@@ -137,14 +144,14 @@ def run_turn(out, plan, row, item):
     if not plan["worker"]["name"].startswith("script:"):
         argv.append("--own-prompts")
     began = pilot.now()
-    (directory / "started.txt").write_text(began + "\n", encoding="utf-8")
     load_before = pilot.command(["uptime"]).decode("utf-8", "replace")
     (directory / "load-before.txt").write_text(load_before, encoding="utf-8")
     code = -1
     with (directory / "clock.log").open("w", encoding="utf-8") as log:
         try:
             with subprocess.Popen(argv, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT) as clock:
+                    stderr=subprocess.STDOUT, pass_fds=(lock_fd,)) as clock:
+                (directory / "started.txt").write_text(began + "\n", encoding="utf-8")
                 for line in iter(clock.stdout.readline, b""):
                     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
                     log.write(stamp + " " + line.decode("utf-8", "replace").rstrip("\n") + "\n")
@@ -157,18 +164,20 @@ def run_turn(out, plan, row, item):
     (directory / "clock.exit").write_text(str(code) + "\n", encoding="ascii")
     (directory / "ended.txt").write_text(ended + "\n", encoding="utf-8")
     (directory / "load-after.txt").write_text(load_after, encoding="utf-8")
-    export(yak, environment, room, identity, "turns", directory / "turns.json", directory / "turns.err")
-    export(yak, environment, room, identity, "walks", directory / "walks.jsonl", directory / "walks.err")
+    turns_exit = export(yak, environment, room, identity, "turns", directory / "turns.json", directory / "turns.err")
+    walks_exit = export(yak, environment, room, identity, "walks", directory / "walks.jsonl", directory / "walks.err")
     try:
         turns = json.loads((directory / "turns.json").read_bytes())
     except ValueError:
         turns = None
-    kind, commit = outcome(turns, code)
-    at_limit = (isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
+    kind, commit = outcome(turns, base["base"]) if turns_exit == 0 else ("export-failed", None)
+    at_limit = (turns_exit == 0 and isinstance(turns, list) and len(turns) == 1 and isinstance(turns[0], dict)
         and isinstance(turns[0].get("measured"), dict) and turns[0]["measured"].get("ended") == "timed_out")
     record = {"n": row["n"], "commit": row["commit"], "row": row["row"], "began": began, "ended": ended,
         "load_before": load_before, "load_after": load_after, "clock_exit": code, "outcome": kind,
-        "turn_commit": commit, "at_limit": at_limit}
+        "turn_commit": commit, "at_limit": at_limit, "turns_exit": turns_exit, "walks_exit": walks_exit,
+        "earlier_attempts": len(attempts), "attempts": attempts,
+        "interrupted_attempts": sum(a["started"] and not a["clock_exited"] for a in attempts)}
     pilot.write_json(directory / "record.tmp", record)
     os.replace(str(directory / "record.tmp"), str(directory / "record.json"))
     return record
@@ -178,7 +187,7 @@ def run_rows(out, rows=None):
     if rows is not None and (type(rows) is not int or rows < 0):
         raise Refused("--rows must be a nonnegative integer: %r" % rows)
     out = Path(out).resolve()
-    with runner_lock(out):
+    with runner_lock(out) as lock_fd:
         plan = load_plan(out)
         items = {i["commit"]: i for i in plan["items"]}
         completed = 0
@@ -189,7 +198,7 @@ def run_rows(out, rows=None):
                 continue
             load_plan(out)
             controls_ready(out, items[row["commit"]])
-            run_turn(out, plan, row, items[row["commit"]])
+            run_turn(out, plan, row, items[row["commit"]], lock_fd)
             completed += 1
         return completed
 

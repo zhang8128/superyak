@@ -107,6 +107,9 @@ def has_word(text, name):
 
 
 def matching_documents(diff, parent_source, docs):
+    # Rule 2 reads names as def/class/async def at any indent, or an unindented
+    # UPPER_CASE assignment (the earlier ceiling probe's rule). Eight characters
+    # includes digits and underscores; __ prefixes are excluded.
     names = set()
     for line in diff.splitlines():
         match = ADDED.match(line)
@@ -124,7 +127,7 @@ def matching_documents(diff, parent_source, docs):
     return held
 
 
-def select_items(repo, entries, passing):
+def select_items(repo, entries, passing, exclude_test_functions=True):
     selected = []
     for entry in entries:
         commit = entry["commit"]
@@ -140,7 +143,8 @@ def select_items(repo, entries, passing):
         source = "\n".join(read_blobs(repo, source_blobs).values())
         docs = markdown(repo, parent)
         held = matching_documents(diff, source, docs)
-        if not held or any(re.search(r"^\s*def test_", docs[p]["text"], re.M) for p in held):
+        # Rule 3 includes indented def test_ lines, but not async def test_.
+        if not held or (exclude_test_functions and any(re.search(r"^\s*def test_", docs[p]["text"], re.M) for p in held)):
             continue
         direct = min(held, key=lambda p: (not under(p, "plans"), -len(held[p]), p.encode("utf-8")))
         selected.append({"commit": commit, "item": commit[:10], "parent": parent,
@@ -205,8 +209,9 @@ def git_as(repo, *words, data=None, index=None):
 
 
 def check_script(parent):
-    return ("#!/bin/sh\nif git -c core.fsmonitor=false diff --quiet %s HEAD -- %s; then\n"
-        " echo 'FAIL: nothing under the source differs from the parent' >&2\n exit 1\nfi\necho ok\n" % (parent, SOURCE)).encode("ascii")
+    return ("#!/bin/sh\ngit -c core.fsmonitor=false diff --quiet %s HEAD -- %s\n"
+        "status=$?\nif [ \"$status\" -eq 1 ]; then\n echo ok\n exit 0\nfi\n"
+        "echo 'FAIL: source difference not established' >&2\nexit 1\n" % (parent, SOURCE)).encode("ascii")
 
 
 def make_bases(src, item, task):
@@ -296,12 +301,16 @@ def runtime_pins(items, out, worker, worker_secs, replay_secs, diagnostic_secs):
     return {"name": worker, "version": version, "model": "script" if family == "script" else model}, limits, programs, environment
 
 
-def make_plan(items, tasks, out, worker, census, worker_secs=None, replay_secs=1200, diagnostic_secs=300, expected=EXPECTED):
+def make_plan(items, tasks, out, worker, census, worker_secs=None, replay_secs=1200, diagnostic_secs=300,
+        expected=EXPECTED, expected_list_sha256="4b25d330"):
     items, tasks, out = Path(items).resolve(), Path(tasks).resolve(), Path(out).absolute()
     for directory in (out, *out.parents):
         if not directory.exists() and re.search(r"[0-9a-fA-F]{32}", directory.name):
             raise Refused("directory name holds 32 hexadecimal characters: " + directory.name)
     data, raw = pilot.listed(items)
+    list_sha256 = digest(raw)
+    if not list_sha256.startswith(expected_list_sha256):
+        raise Refused("items.json sha256 differs: expected %s, found %s" % (expected_list_sha256, list_sha256))
     selected = select_items(items / "repo", data["commits"], census_passes(census))
     distinct_items([i["commit"] for i in selected])
     if expected is not None and ({i["commit"][:8] for i in selected} != expected or len(selected) != len(expected)):
@@ -342,7 +351,7 @@ def make_plan(items, tasks, out, worker, census, worker_secs=None, replay_secs=1
         item.update(tests=[t["path"] for t in meta["tests"]],
             kept_out={"reference": entry["reference"], "test_blobs": [t["blob"] for t in meta["tests"]]})
         make_bases(src, item, frozen_tasks[commit])
-    plan = {"v": 1, "seed": SEED, "spec_sha256": digest(SPEC.read_bytes()), "list_sha256": digest(raw),
+    plan = {"v": 1, "seed": SEED, "spec_sha256": digest(SPEC.read_bytes()), "list_sha256": list_sha256,
         "worker": worker_pin, "limits": limits, "inputs": {pin_path(p): digest(p.read_bytes()) for p in paths},
         "items": selected, "order": row_order([i["commit"] for i in selected]), "items_dir": str(items),
         "tasks_dir": str(tasks), "census_file": str(Path(census).resolve()), "spec_file": str(SPEC),

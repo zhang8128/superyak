@@ -1,0 +1,40 @@
+{
+ "file": "documents_run.py",
+ "source_sha256": "645e99578d95afcf8d89ad8a34ef6d2566db59ca786f1b1cf596d99460645acb",
+ "control": {
+  "command": "python3 -I v2/probes/documents/test_documents_run.py",
+  "returncode": 0,
+  "last_lines": [
+   "----------------------------------------------------------------------",
+   "Ran 17 tests in 60.779s",
+   "",
+   "OK"
+  ]
+ },
+ "mutants": [
+  {
+   "line": 153,
+   "kind": "clock-drops-lock",
+   "before": "pass_fds=(lock_fd,)",
+   "after": "pass_fds=()",
+   "killed": true,
+   "tests": [
+    "test_clock_keeps_lock_after_runner_is_killed (__main__.Runner.test_clock_keeps_lock_after_runner_is_killed)"
+   ],
+   "reason": "",
+   "column": 46
+  },
+  {
+   "line": 35,
+   "kind": "parent-unlocks-child",
+   "before": "yield lock.fileno()",
+   "after": "try:\n            yield lock.fileno()\n        finally:\n            fcntl.flock(lock, fcntl.LOCK_UN)",
+   "killed": true,
+   "tests": [
+    "test_inherited_lock_survives_runner_context_exit (__main__.Runner.test_inherited_lock_survives_runner_context_exit)"
+   ],
+   "reason": "",
+   "column": 8
+  }
+ ]
+}

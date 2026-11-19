@@ -1,19 +1,530 @@
 {
  "file": "documents_plan.py",
- "source_sha256": "bc1840759186d6068f63e84f5d710b3bc2dd2df103ec76cd560a948174cd3c75",
+ "source_sha256": "dc36d994395a59f23ccbabf722d617e1f1e2f40ef5802897bae0360920b8db6a",
  "control": {
-  "command": "python3 -I v2/probes/documents/test_documents_plan.py",
+  "command": "python3 -I v2/probes/documents/test_documents_plan.py Maker Rules.test_census_parser_only_accepts_passing_reference Rules.test_name_and_document_boundaries Rules.test_search_half_threshold_ties_and_task_bytes Rules.test_order_84_hashes_stable_and_full_commit Rules.test_collision_is_refused Rules.test_python_39",
   "returncode": 0,
   "last_lines": [
    "----------------------------------------------------------------------",
-   "Ran 17 tests in 41.084s",
+   "Ran 18 tests in 11.908s",
    "",
    "OK"
   ]
  },
  "mutants": [
   {
-   "line": 373,
+   "line": 168,
+   "kind": "condition",
+   "before": "min(len(search), len(newest), len(lot)) < 3",
+   "after": "not (min(len(search), len(newest), len(lot)) < 3)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 281,
+   "kind": "condition",
+   "before": "not path or not os.path.isfile(path) or not os.access(path, os.X_OK)",
+   "after": "not (not path or not os.path.isfile(path) or not os.access(path, os.X_OK))",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 296,
+   "kind": "condition",
+   "before": "any(type(n) is not int or n <= 0 for n in limits.values())",
+   "after": "not (any(type(n) is not int or n <= 0 for n in limits.values()))",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 316,
+   "kind": "condition",
+   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
+   "after": "not (expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 372,
+   "kind": "condition",
+   "before": "digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip()",
+   "after": "not (digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip())",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 383,
+   "kind": "condition",
+   "before": "family != \"script\"",
+   "after": "not (family != \"script\")",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 46,
+   "kind": "embedded-number",
+   "before": "r\"^\\+\\s*(?:async\\s+def|def|class)\\s+([A-Za-z_][A-Za-z0-9_]*)|^\\+([A-Z][A-Z0-9_]{3,})\\s*=\"",
+   "after": "'^\\\\+\\\\s*(?:async\\\\s+def|def|class)\\\\s+([A-Za-z_][A-Za-z0-9_]*)|^\\\\+([A-Z][A-Z0-9_]{4,})\\\\s*='",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent: raising the UPPER_CASE regex minimum is redundant with the later eight-character name minimum.",
+   "column": 19
+  },
+  {
+   "line": 65,
+   "kind": "condition",
+   "before": "len(words) >= 5 and words[-1] == \"passed\" and words[-3] == \"0\"",
+   "after": "not (len(words) >= 5 and words[-1] == \"passed\" and words[-3] == \"0\")",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 134,
+   "kind": "condition",
+   "before": "commit not in passing or not isinstance(entry.get(\"reference\"), str)",
+   "after": "not (commit not in passing or not isinstance(entry.get(\"reference\"), str))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 139,
+   "kind": "condition",
+   "before": "not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines())",
+   "after": "not (not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines()))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 147,
+   "kind": "condition",
+   "before": "not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held))",
+   "after": "not (not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 168,
+   "kind": "comparison",
+   "before": "min(len(search), len(newest), len(lot)) < 3",
+   "after": "not (min(len(search), len(newest), len(lot)) < 3)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 281,
+   "kind": "boolean",
+   "before": "not path or not os.path.isfile(path) or not os.access(path, os.X_OK)",
+   "after": "((not path) and (not os.path.isfile(path)) and (not os.access(path, os.X_OK)))",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: no missing or non-executable absolute worker path is supplied; valid programs and earlier syntax refusals do not distinguish this guard.",
+   "column": 7
+  },
+  {
+   "line": 304,
+   "kind": "number",
+   "before": "1200",
+   "after": "1201",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 79
+  },
+  {
+   "line": 304,
+   "kind": "number",
+   "before": "300",
+   "after": "301",
+   "killed": true,
+   "tests": [
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 101
+  },
+  {
+   "line": 305,
+   "kind": "embedded-number",
+   "before": "\"4b25d330\"",
+   "after": "'00000000'",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)"
+   ],
+   "reason": "",
+   "column": 48
+  },
+  {
+   "line": 316,
+   "kind": "boolean",
+   "before": "expected is not None and ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected))",
+   "after": "((expected is not None) or ({i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)))",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 349,
+   "kind": "condition",
+   "before": "meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
+   "after": "not (meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"])",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 372,
+   "kind": "comparison",
+   "before": "digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip()",
+   "after": "not (digest(raw) != (out / \"plan.sha256\").read_text(encoding=\"ascii\").strip())",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 380,
+   "kind": "condition",
+   "before": "actual != expected",
+   "after": "not (actual != expected)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 383,
+   "kind": "comparison",
+   "before": "family != \"script\"",
+   "after": "not (family != \"script\")",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 385,
+   "kind": "condition",
+   "before": "not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
+   "after": "not (not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"])",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 404,
+   "kind": "condition",
+   "before": "args.stage == \"make\"",
+   "after": "not (args.stage == \"make\")",
+   "killed": true,
+   "tests": [
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 65,
+   "kind": "boolean",
+   "before": "len(words) >= 5 and words[-1] == \"passed\" and words[-3] == \"0\"",
+   "after": "((len(words) >= 5) or (words[-1] == \"passed\") or (words[-3] == \"0\"))",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 76,
+   "kind": "condition",
+   "before": "kind == b\"blob\" and mode in (b\"100644\", b\"100755\")",
+   "after": "not (kind == b\"blob\" and mode in (b\"100644\", b\"100755\"))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 15
+  },
+  {
+   "line": 85,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent for the batch format: this skips the first character of an unused object-id header field; size and payload boundaries are still recovered.",
+   "column": 13
+  },
+  {
+   "line": 134,
+   "kind": "boolean",
+   "before": "commit not in passing or not isinstance(entry.get(\"reference\"), str)",
+   "after": "((commit not in passing) and (not isinstance(entry.get(\"reference\"), str)))",
+   "killed": true,
+   "tests": [
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 139,
+   "kind": "boolean",
+   "before": "not ADDED.search(diff) and not any(ADDED.match(line) for line in diff.splitlines())",
+   "after": "((not ADDED.search(diff)) or (not any(ADDED.match(line) for line in diff.splitlines())))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 147,
+   "kind": "boolean",
+   "before": "not held or (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held))",
+   "after": "((not held) and (exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
+   "killed": true,
+   "tests": [
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 160,
+   "kind": "filter",
+   "before": "df[w] <= len(docs) / 2",
+   "after": "not (df[w] <= len(docs) / 2)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 31
+  },
+  {
+   "line": 168,
+   "kind": "number",
+   "before": "3",
+   "after": "4",
+   "killed": true,
+   "tests": [
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 49
+  },
+  {
+   "line": 204,
+   "kind": "embedded-number",
+   "before": "\"2026-11-18T00:00:00Z\"",
+   "after": "'2026-11-19T00:00:00Z'",
+   "killed": false,
+   "tests": [],
+   "reason": "Only the fixed Git author or committer date changes. Object ids change consistently; no specification fixes this date.",
+   "column": 27
+  },
+  {
+   "line": 204,
+   "kind": "embedded-number",
+   "before": "\"2026-11-18T00:00:00Z\"",
+   "after": "'2026-11-19T00:00:00Z'",
+   "killed": false,
+   "tests": [],
+   "reason": "Only the fixed Git author or committer date changes. Object ids change consistently; no specification fixes this date.",
+   "column": 73
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not path",
+   "after": "path",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not os.path.isfile(path)",
+   "after": "os.path.isfile(path)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 19
+  },
+  {
+   "line": 281,
+   "kind": "negation",
+   "before": "not os.access(path, os.X_OK)",
+   "after": "os.access(path, os.X_OK)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 47
+  },
+  {
+   "line": 316,
+   "kind": "comparison",
+   "before": "expected is not None",
+   "after": "not (expected is not None)",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals)",
+    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)"
+   ],
+   "reason": "",
+   "column": 7
+  },
+  {
+   "line": 316,
+   "kind": "boolean",
+   "before": "{i[\"commit\"][:8] for i in selected} != expected or len(selected) != len(expected)",
+   "after": "(({i[\"commit\"][:8] for i in selected} != expected) and (len(selected) != len(expected)))",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 33
+  },
+  {
+   "line": 349,
+   "kind": "boolean",
+   "before": "meta[\"parent\"] != item[\"parent\"] or git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
+   "after": "((meta[\"parent\"] != item[\"parent\"]) and (git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]))",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: item metadata and the actual Git parent are consistent; no fixture makes only one parent check disagree.",
+   "column": 11
+  },
+  {
+   "line": 380,
+   "kind": "comparison",
+   "before": "actual != expected",
+   "after": "not (actual != expected)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 382,
    "kind": "number",
    "before": "0",
    "after": "1",
@@ -21,96 +532,459 @@
    "tests": [
     "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
    ],
-   "reason": ""
+   "reason": "",
+   "column": 50
   },
   {
-   "line": 373,
+   "line": 385,
+   "kind": "boolean",
+   "before": "not found or str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
+   "after": "((not found) and (str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]))",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 404,
+   "kind": "comparison",
+   "before": "args.stage == \"make\"",
+   "after": "not (args.stage == \"make\")",
+   "killed": true,
+   "tests": [
+    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 65,
+   "kind": "comparison",
+   "before": "len(words) >= 5",
+   "after": "not (len(words) >= 5)",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 65,
+   "kind": "comparison",
+   "before": "words[-1] == \"passed\"",
+   "after": "not (words[-1] == \"passed\")",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 31
+  },
+  {
+   "line": 65,
+   "kind": "comparison",
+   "before": "words[-3] == \"0\"",
+   "after": "not (words[-3] == \"0\")",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 57
+  },
+  {
+   "line": 76,
+   "kind": "boolean",
+   "before": "kind == b\"blob\" and mode in (b\"100644\", b\"100755\")",
+   "after": "((kind == b\"blob\") or (mode in (b\"100644\", b\"100755\")))",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: tree entries are regular blobs, without symlinks, submodules or unusual modes to distinguish this filter.",
+   "column": 15
+  },
+  {
+   "line": 134,
+   "kind": "comparison",
+   "before": "commit not in passing",
+   "after": "not (commit not in passing)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 134,
+   "kind": "negation",
+   "before": "not isinstance(entry.get(\"reference\"), str)",
+   "after": "isinstance(entry.get(\"reference\"), str)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 36
+  },
+  {
+   "line": 139,
+   "kind": "negation",
+   "before": "not ADDED.search(diff)",
+   "after": "ADDED.search(diff)",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent fast-path removal: no qualifying additions still produce an empty matching-document set and are rejected later.",
+   "column": 11
+  },
+  {
+   "line": 139,
+   "kind": "negation",
+   "before": "not any(ADDED.match(line) for line in diff.splitlines())",
+   "after": "any(ADDED.match(line) for line in diff.splitlines())",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 38
+  },
+  {
+   "line": 147,
+   "kind": "negation",
+   "before": "not held",
+   "after": "held",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 147,
+   "kind": "boolean",
+   "before": "exclude_test_functions and any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)",
+   "after": "((exclude_test_functions) or (any(re.search(r\"^\\s*def test_\", docs[p][\"text\"], re.M) for p in held)))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_selection_refuses_test_function_and_nonpassing_reference (__main__.Maker.test_selection_refuses_test_function_and_nonpassing_reference)"
+   ],
+   "reason": "",
+   "column": 24
+  },
+  {
+   "line": 160,
+   "kind": "comparison",
+   "before": "df[w] <= len(docs) / 2",
+   "after": "not (df[w] <= len(docs) / 2)",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 31
+  },
+  {
+   "line": 296,
+   "kind": "boolean",
+   "before": "type(n) is not int or n <= 0",
+   "after": "((type(n) is not int) and (n <= 0))",
+   "killed": true,
+   "tests": [
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(0, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(-1, 1200, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 0, 300))",
+    "test_runtime_and_task_refusals (__main__.Maker.test_runtime_and_task_refusals) (limits=(None, 1200, 0))"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 316,
+   "kind": "comparison",
+   "before": "{i[\"commit\"][:8] for i in selected} != expected",
+   "after": "not ({i[\"commit\"][:8] for i in selected} != expected)",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 33
+  },
+  {
+   "line": 316,
+   "kind": "comparison",
+   "before": "len(selected) != len(expected)",
+   "after": "not (len(selected) != len(expected))",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 84
+  },
+  {
+   "line": 349,
+   "kind": "comparison",
+   "before": "meta[\"parent\"] != item[\"parent\"]",
+   "after": "not (meta[\"parent\"] != item[\"parent\"])",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 349,
+   "kind": "comparison",
+   "before": "git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"]",
+   "after": "not (git(src, \"rev-parse\", entry[\"base\"] + \"^1\").decode().strip() != item[\"parent\"])",
+   "killed": true,
+   "tests": [
+    "test_item_list_hash_is_required_even_with_fixture_cohort (__main__.Maker.test_item_list_hash_is_required_even_with_fixture_cohort)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 47
+  },
+  {
+   "line": 382,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": false,
    "tests": [],
-   "reason": "The covering fixture tests passed; this mutation was not detected."
+   "reason": "Equivalent: increasing split maxsplit still leaves the same worker-family component at index zero.",
+   "column": 47
   },
   {
-   "line": 168,
+   "line": 385,
+   "kind": "negation",
+   "before": "not found",
+   "after": "found",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 385,
+   "kind": "comparison",
+   "before": "str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"]",
+   "after": "not (str(Path(found).absolute()) != plan[\"programs\"][\"worker\"][\"path\"])",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)"
+   ],
+   "reason": "",
+   "column": 24
+  },
+  {
+   "line": 399,
+   "kind": "number",
+   "before": "1200",
+   "after": "1201",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: CLI make defaults are not exercised with a canonical list; the CLI test runs show.",
+   "column": 57
+  },
+  {
+   "line": 400,
+   "kind": "number",
+   "before": "300",
+   "after": "301",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: CLI make defaults are not exercised with a canonical list; the CLI test runs show.",
+   "column": 61
+  },
+  {
+   "line": 65,
+   "kind": "number",
+   "before": "5",
+   "after": "6",
+   "killed": true,
+   "tests": [
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
+   ],
+   "reason": "",
+   "column": 25
+  },
+  {
+   "line": 74,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: no tracked file name contains a tab, so increasing the ls-tree split limit is not distinguished.",
+   "column": 43
+  },
+  {
+   "line": 76,
+   "kind": "comparison",
+   "before": "kind == b\"blob\"",
+   "after": "not (kind == b\"blob\")",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 15
+  },
+  {
+   "line": 76,
+   "kind": "comparison",
+   "before": "mode in (b\"100644\", b\"100755\")",
+   "after": "not (mode in (b\"100644\", b\"100755\"))",
+   "killed": true,
+   "tests": [
+    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+   ],
+   "reason": "",
+   "column": 35
+  },
+  {
+   "line": 91,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent for the batch format: this skips the first character of the next unused object-id header field; size and payload boundaries are still recovered.",
+   "column": 25
+  },
+  {
+   "line": 296,
+   "kind": "comparison",
+   "before": "type(n) is not int",
+   "after": "not (type(n) is not int)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 11
+  },
+  {
+   "line": 296,
+   "kind": "comparison",
+   "before": "n <= 0",
+   "after": "not (n <= 0)",
+   "killed": true,
+   "tests": [
+    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
+    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)"
+   ],
+   "reason": "",
+   "column": 33
+  },
+  {
+   "line": 160,
+   "kind": "number",
+   "before": "2",
+   "after": "3",
+   "killed": true,
+   "tests": [
+    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
+   ],
+   "reason": "",
+   "column": 52
+  },
+  {
+   "line": 296,
+   "kind": "number",
+   "before": "0",
+   "after": "1",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: no valid one-second limit is supplied, so rejecting one as well as zero is not detected.",
+   "column": 38
+  },
+  {
+   "line": 409,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Only the CLI JSON display indentation changes. Tests compare parsed JSON, and the frozen plan writer is unchanged.",
+   "column": 54
+  },
+  {
+   "line": 65,
    "kind": "number",
    "before": "1",
    "after": "2",
    "killed": true,
    "tests": [
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
    ],
-   "reason": ""
+   "reason": "",
+   "column": 38
   },
   {
-   "line": 168,
+   "line": 65,
    "kind": "number",
    "before": "3",
    "after": "4",
    "killed": true,
    "tests": [
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
+    "test_census_parser_only_accepts_passing_reference (__main__.Rules.test_census_parser_only_accepts_passing_reference)"
    ],
-   "reason": ""
+   "reason": "",
+   "column": 64
   },
   {
-   "line": 169,
-   "kind": "number",
-   "before": "3",
-   "after": "4",
-   "killed": true,
-   "tests": [
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ],
-   "reason": ""
-  },
-  {
-   "line": 146,
+   "line": 57,
    "kind": "number",
    "before": "10",
    "after": "11",
-   "killed": true,
-   "tests": [
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)"
-   ],
-   "reason": ""
+   "killed": false,
+   "tests": [],
+   "reason": "Only the displayed collision prefix changes from ten to eleven characters; collision detection is unchanged and the diagnostic prefix is not asserted exactly.",
+   "column": 79
   },
   {
-   "line": 168,
-   "kind": "filter",
-   "before": "p in newest",
-   "after": "not (p in newest)",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
-    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ],
-   "reason": ""
+   "line": 316,
+   "kind": "number",
+   "before": "8",
+   "after": "9",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: the canonical cohort is not made from the original list in unit tests. The mismatch fixture differs in both ids and count, so the independent guards are not isolated.",
+   "column": 47
   },
   {
-   "line": 168,
-   "kind": "comparison",
-   "before": "p in newest",
-   "after": "not (p in newest)",
-   "killed": true,
-   "tests": [
-    "test_changed_input_task_plan_are_refused (__main__.Maker.test_changed_input_task_plan_are_refused)",
-    "test_cli_show_and_refusal (__main__.Maker.test_cli_show_and_refusal)",
-    "test_paragraphs_bases_pins_and_directory_names (__main__.Maker.test_paragraphs_bases_pins_and_directory_names)",
-    "test_proof_rejects_difference_outside_task_and_wrong_parent (__main__.Maker.test_proof_rejects_difference_outside_task_and_wrong_parent)",
-    "test_script_path_is_absolute_and_worker_lookup_is_pinned (__main__.Maker.test_script_path_is_absolute_and_worker_lookup_is_pinned)",
-    "test_selection_and_ranking (__main__.Maker.test_selection_and_ranking)",
-    "test_task_cannot_change_between_search_and_freeze (__main__.Maker.test_task_cannot_change_between_search_and_freeze)",
-    "test_search_half_threshold_ties_and_task_bytes (__main__.Rules.test_search_half_threshold_ties_and_task_bytes)"
-   ],
-   "reason": ""
+   "line": 165,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Equivalent: increasing rsplit maxsplit leaves the final filename component unchanged.",
+   "column": 37
+  },
+  {
+   "line": 165,
+   "kind": "number",
+   "before": "1",
+   "after": "2",
+   "killed": false,
+   "tests": [],
+   "reason": "Fixture gap in existing code: all fixture plans share a directory, so the full-path tie break reproduces filename order even when the directory component is used.",
+   "column": 41
   }
  ]
 }
