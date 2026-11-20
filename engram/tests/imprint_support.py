@@ -556,7 +556,7 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
 _BASE_IMPORTS = {"admit": "import imprint, calibrate", "count": "import imprint, store_reader",
                  "plan": "import imprint, imprint_filter", "read": "import imprint, imprint_filter",
                  "build": "import imprint, imprint_filter", "import-receipts": "import imprint, imprint_copies",
-                 "use": "import imprint"}
+                 "use": "import imprint", "send": "import imprint, imprint_filter"}
 
 
 def base_peak(step=None) -> int:
@@ -2734,7 +2734,8 @@ def _run(cmd, env, cwd=None) -> str:
     return out.stdout
 
 
-STAGE_VERSION = "v3"      # v2: route waited for trails (review M2); v3: the cap ledger restamped (revision 8)
+STAGE_VERSION = "v4"      # v2: route waited for trails (review M2); v3: the cap ledger restamped (revision 8);
+                          # v4: a plan records its ledger, and a build writes sources.json and checks (revision 9)
 
 
 def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
@@ -2819,6 +2820,10 @@ def cap_command(world: CapWorld, step: str) -> list[str]:
         _staged(world, "planned", route=False, built=False)
         return [sys.executable, IMPRINT_PY, "build", "--plan", _plan_id(world), "--superyak-home", world.home,
                 "--engram-home", world.engram_home]
+    if step == "send":                                          # a built plan's send check alone (revision 9)
+        _staged(world, "built-noroute", route=False, built=True)
+        return [sys.executable, IMPRINT_PY, "build", "--plan", _plan_id(world), "--if-needed", "--superyak-home",
+                world.home, "--engram-home", world.engram_home]
     if step == "admit":                                         # a package without route: a count needs trails.py
         _staged(world, "built-noroute", route=False, built=True)
         root, imprint_id = _handed_off_from(world, route=False)
