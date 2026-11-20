@@ -1083,7 +1083,9 @@ class Ledger:
         # `fresh`: a file this process is building beside its final name (rebuild, migrate), which no other process
         # reads, so it skips the key, the memo and the marker, and is checked whole once at the end (the re-check, S4)
         self.conn, self.path, self.read_only, self._fresh = conn, path, read_only, fresh
-        self.state_key = None               # the key of the last state() checked (revision 8)
+        # the key of the last state() checked (revision 8). Each state() overwrites it, so one Ledger serves one
+        # reader at a time: two callers sharing one would each read the other's key (the reader's 3 on b3eb3497)
+        self.state_key = None
         # a fresh file's parts, carried in memory from append to append and written once, at `_finish_fresh` (the
         # section 2 review's S6); None until its first append reads them
         self._carried: dict | None = None
@@ -1834,7 +1836,7 @@ class Ledger:
         reads now, instead of "nothing was written" (P 12.3, "Before the raise"; the re-check's R5)."""
         try:
             yield
-        except (LedgerBusy, LedgerUnreadable) as e:
+        except (LedgerBusy, LedgerUnreadable, sqlite3.Error) as e:   # a raw SQLite error too (the reader's A)
             changed = body.get("houses") or []
             if not changed:
                 raise
