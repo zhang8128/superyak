@@ -76,10 +76,12 @@ Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied
 - T1 (goal 1): rail B. Tardis joins the lessons room through Andy's owner trust, which he grants at the Pi's terminal
   (train-1114, which it needed, is on main), then lays its own lessons. Measure: the two-part pass test (all hands
   bd7b170b), a receipt of a Tardis lesson on the Pi and of a Pi lesson on Tardis, each within a day of the CONFIRM.
-- T2 (goals 1 and 3): the crossing in use, with deadlines end to end (the embedder client in train-1112, the frame's in
-  train-1114, the peer's lessons client in train-1117), and the embedder dropping an asker that has gone. 8 crossings
-  ever, the last on 11-04. Measure: recalls in real work, logged helped or misled, and no embed in the publisher's log
-  waiting past its asker.
+- T2 (goals 1 and 3; refreshed 2026-11-20 in Tardis's words, all hands f61a5c7b): the crossing in use, with deadlines
+  end to end (the embedder client in train-1112, the frame's in train-1114, the peer's lessons client in train-1117),
+  and the embedder dropping an asker that has gone. A crossing has run at each Tardis task start since 11-18. By 11-20
+  there were 31, all delivering the same 3 Pi memories of 11-04, so the gap is in what's shared, not in use (lesson
+  26). Measure: distinct memories delivered across machines, never the count of crossings; recalls logged helped or
+  misled; and no embed in the publisher's log waiting past its asker.
 - T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
   C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
   oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
