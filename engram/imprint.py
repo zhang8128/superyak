@@ -213,6 +213,7 @@ class Plan:
     not_copied: tuple[str, ...]     # source tables no rule names (D4)
     owner: str
     cross_references: tuple = ()   # CrossRef(table, id, keys): shipped text that names something that stays
+    ledger: str | None = None       # the resolved path of the ledger the plan read, or None (revision 9)
 
 
 PEOPLE_REASONS = ("others", "needs_yes", "said_no", "retired")
@@ -310,8 +311,27 @@ def _plan_file(plan: Plan) -> str:
         "terms": {"audience": plan.terms.audience, "actions": sorted(plan.terms.actions),
                   "purposes": sorted(plan.terms.purposes), "days": plan.terms.days},
         "digest": plan.digest, "counts": plan.counts, "contents": plan.contents, "others": plan.others,
-        "package_bytes": plan.package_bytes, "parts": plan.parts,
+        "package_bytes": plan.package_bytes, "parts": plan.parts, "ledger": plan.ledger,
         "cross_references": len({c.id for c in plan.cross_references})}, indent=2, sort_keys=True) + "\n"
+
+
+def _ledger_path(ledger) -> str | None:
+    """The resolved path of a ledger (a ``Ledger``, the process's ``LedgerFacts``, or None), as a plan records it
+    (revision 9, asked 1)."""
+    from imprint_filter import LedgerFacts
+
+    if ledger is None:
+        return None
+    if isinstance(ledger, LedgerFacts):
+        ledger = ledger.ledger
+    return str(Path(ledger.path).resolve())
+
+
+def _same_ledger(saved: dict, ledger) -> None:
+    """``read`` and ``build`` open the ledger the plan read, or refuse (revision 9, asked 1): ledger paths are
+    compared, never engram homes."""
+    if _ledger_path(ledger) != saved["ledger"]:
+        raise PlanRefused(LEDGER_ELSEWHERE)
 
 
 def _ledger_facts(ledger, *, owner: str, now: int, terms, act: str):
@@ -422,7 +442,8 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
             ancestry_complete=bool(complete), selection=sel, terms=terms, digest=digest, counts=counts,
             contents=contents, package_bytes=size, parts=max(1, -(-size // PART_BYTES)), others=pr.others,
             home=bool(ctx.home), people=who, origin=identity.get("instance_id_origin"),
-            not_copied=tuple(not_copied), owner=context.owner, cross_references=crossed)
+            not_copied=tuple(not_copied), owner=context.owner, cross_references=crossed,
+            ledger=_ledger_path(facts))
         _write_private(plans_dir(home) / f"{plan.id}.json", _plan_file(plan))
         return plan
     finally:
@@ -789,6 +810,8 @@ def write_owner_lists(dir: Path, rows: PackageRows, source_id: str) -> None:
 
 
 _CHANGED = "Your store changed since the plan. Run the plan again."
+LEDGER_ELSEWHERE = "The permissions ledger this plan read is not the one here. Run the plan again."
+BEFORE_9 = "This plan was saved before each send asked the permissions ledger again. Run the plan again."
 
 
 def resolve_plan(home: Path, prefix: str) -> Path:
@@ -817,6 +840,10 @@ def _saved_plan(path: Path) -> dict:
         scope["lanes"], scope["layers"], scope["until"]
     except (OSError, ValueError, KeyError, TypeError):
         raise PlanRefused("The saved plan can't be read. Run the plan again.") from None
+    if "ledger" not in saved:                   # a missing key never reads as None (revision 9, the last read's 4)
+        raise PlanRefused(BEFORE_9)
+    if saved["ledger"] is not None and not isinstance(saved["ledger"], str):
+        raise PlanRefused("The saved plan can't be read. Run the plan again.")
     if "route" in terms["actions"] and not imprint_filter.ROUTE_OPEN:     # a plan saved before the gate (review S-1)
         raise PlanRefused(imprint_filter.ROUTE_WAITS + " Run the plan again without route.")
     return saved
@@ -858,6 +885,7 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        _same_ledger(saved, ledger)
         facts = _ledger_facts(ledger, owner=owner, now=now, terms=terms, act="read")
         try:
             source_id, _, _, _, _, working = _working_copy(store, work, engram_home=engram_home, home=home,
@@ -1002,6 +1030,7 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        _same_ledger(saved, ledger)
         facts = _ledger_facts(ledger, owner=owner, now=created, terms=terms, act="built")
         try:
             source_id, identity, ancestry, complete, _, working = _working_copy(
