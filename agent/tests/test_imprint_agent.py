@@ -675,9 +675,22 @@ def test_a_refusal_after_the_upload_leaves_withdrawing_to_the_owner(tmp_path, st
     assert 'whole package' in ' '.join(lines) and f'make imprint-withdraw ID={IMPRINT_ID[:4]}' in ' '.join(lines)
 
 
-def test_a_refusal_of_a_finished_imprint_reports_and_drops_the_copy(tmp_path):
+def test_a_refusal_of_an_admitted_imprint_says_withdrawing_is_the_owners(tmp_path):
+    """Admitted, the station holds it as received or approved would: the owner is told, and the run is refused
+    (Serenity's question on 1d0de86a). The local copy goes, as D24 says."""
     station, home = FakeStation(status='admitted'), refused_home(tmp_path)
-    assert Imprint(home, station.client()).refused(PLAN) == 'admitted'
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).refused(PLAN) == 'refused'
+    local = home / 'imprints' / IMPRINT_ID
+    assert not any(p.endswith('/withdraw') for p in station.paths())
+    assert f'make imprint-withdraw ID={IMPRINT_ID[:4]}' in ' '.join(lines) and 'admitted' in ' '.join(lines)
+    assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()
+
+
+@pytest.mark.parametrize('state, reason, said', [('declined', None, 'declined'), ('deleted', 'withdrawn', 'deleted')])
+def test_a_refusal_of_an_ended_imprint_reports_and_drops_the_copy(tmp_path, state, reason, said):
+    station, home = FakeStation(status=state, reason=reason), refused_home(tmp_path)
+    assert Imprint(home, station.client()).refused(PLAN) == said
     local = home / 'imprints' / IMPRINT_ID
     assert not any(p.endswith('/withdraw') for p in station.paths())
     assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()

@@ -67,9 +67,9 @@ machine almost every time.
    request as `make imprint-withdraw` does (D17: the ship's key, no password). It prints the request's short id, what
    the station held (nothing of the package while `requested`; the parts sent so far while `allowed`), that the
    request is withdrawn, and not to allow the link if it is still open. It ends with `STATUS: refused` (exit 1). In
-   `received` or `approved` it withdraws nothing. It says the station holds the whole package and that withdrawing is
-   the owner's choice, by `make imprint-withdraw`, and ends with `STATUS: refused` (exit 1). In `deleting`, in a final
-   status, or `admitted` with `imprint.db` still on disk, it reports as `send` does and drops the local copy on a
+   `received`, `approved` or `admitted` it withdraws nothing. It says the station holds the whole package and that withdrawing is
+   the owner's choice, by `make imprint-withdraw`, and ends with `STATUS: refused` (exit 1). In `deleting` or another final
+   status with `imprint.db` still on disk, it reports as `send` does and drops the local copy on a
    final status. A ledger that can't be read, or that changed during the check, and
    `check_owner`'s refusals, end "nothing was sent" at send.
 5. **A stamp ties the send to a check, and is read at each step that sends.** On success the check writes

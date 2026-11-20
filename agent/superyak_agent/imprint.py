@@ -241,9 +241,12 @@ class Imprint:
             self.out(f"{head} The station held {what}. The request is withdrawn. If its link is still open, don't "
                      'allow it.')
             return 'refused'
-        if state in ('received', 'approved'):
-            self.out(f'{head} The station holds the whole package. Withdrawing it is your choice: make '
+        if state in ('received', 'approved', 'admitted'):   # admitted too: the station holds it (Serenity, de24fa72)
+            held = 'has admitted it' if state == 'admitted' else 'holds the whole package'
+            self.out(f'{head} The station {held}. Withdrawing it is your choice: make '
                      f'imprint-withdraw ID={imprint_id[:4]}.')
+            if state in FINAL:
+                self._drop_local_copy(imprint_id)
             return 'refused'
         if state == 'deleted':
             state = self._deleted_as(status)
