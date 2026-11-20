@@ -20,7 +20,7 @@ HOOK_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT = HOOK_DIR.parent
 sys.path.insert(0, str(SOURCE_ROOT))
 sys.path.insert(0, str(HOOK_DIR))
-from harness import bind_session, emit, read_context, stamp_registry
+from harness import bind_session, emit, default_instance as harness_default_instance, instance_name, read_context, stamp_registry
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -31,7 +31,7 @@ PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
 def _load_instance_config():
     """Load instance config from project root .engram/config.toml if present."""
-    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
+    default_instance = harness_default_instance()
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
         return default_instance, None
@@ -40,7 +40,7 @@ def _load_instance_config():
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
         return (
-            config.get("instance") or default_instance,
+            instance_name(config.get("instance"), default_instance),
             config.get("session_context"),
         )
     except Exception:

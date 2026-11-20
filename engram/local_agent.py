@@ -44,6 +44,9 @@ def resolve_instance_db(instance_name: str | None) -> Path:
     """Resolve database path for a named instance, or default."""
     if instance_name is None:
         return DB_PATH
+    from config import valid_instance_name
+    if not valid_instance_name(instance_name):
+        raise FileNotFoundError("An instance's name is 1 to 64 letters, digits, - or _")
     inst_path = ENGRAM_HOME / ".engram" / "instances" / instance_name / "graph.db"
     if not inst_path.exists():
         raise FileNotFoundError(f"Instance '{instance_name}' not found at {inst_path}")

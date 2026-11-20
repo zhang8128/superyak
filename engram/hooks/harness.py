@@ -31,6 +31,28 @@ except ImportError:
         return value if isinstance(value, str) and re.fullmatch(r"^codex:[0-9]+$", value) else None
 
 
+_INSTANCE_NAME = None
+
+
+def instance_name(*candidates):
+    """The first candidate that is a plain instance name, or None. A hook reads the name from the config of the
+    folder the session starts in and from the environment; either could hold a path, and a path can leave the Engram
+    home. The pattern is config.INSTANCE_NAME."""
+    global _INSTANCE_NAME
+    if _INSTANCE_NAME is None:
+        import re
+        _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+    for candidate in candidates:
+        if isinstance(candidate, str) and _INSTANCE_NAME.fullmatch(candidate):
+            return candidate
+    return None
+
+
+def default_instance():
+    """ENGRAM_DEFAULT_INSTANCE when it is a plain name, with the spaces around it removed as the server removes them."""
+    return instance_name((os.environ.get("ENGRAM_DEFAULT_INSTANCE") or "").strip())
+
+
 def read_context() -> dict:
     """Parse harness selection + hook payload into one dict.
 
