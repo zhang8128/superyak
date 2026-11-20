@@ -213,7 +213,14 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "apps", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "apps", "accounts"].includes(route) ? route : "home", id: id ? addressId(id) : null };
+}
+
+// An id the address can't decode, such as a typed or pasted `%E0%A4%A`, names nothing, so it is no id. Thrown, it stopped
+// every draw: one room stayed drawn while state.room was another, and a press landed on the room not on screen (board
+// fix:bad-address-leaves-state-room-off-screen).
+function addressId(part) {
+  try { return decodeURIComponent(part); } catch (_) { return null; }
 }
 
 function navLink(route, label, icon) {
@@ -1492,13 +1499,13 @@ function cloudControl(room, replaced) {
       : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
       : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
         "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
-    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
+    return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
-  if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
+  if (replaced) return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
-  return `<div class="cloud-control"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
+  if (room.cloud) return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -3571,7 +3578,8 @@ document.addEventListener("click", async (event) => {
     const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
     if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
   }
-  if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
+  // Mark acts on one press, so only for the room its control was drawn for, as the board checks (boardOnScreen)
+  if (action === "cloud-mark" && state.room && target.closest(".cloud-control")?.dataset.room === state.room.id) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
   if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
     const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
