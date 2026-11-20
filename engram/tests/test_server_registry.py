@@ -145,6 +145,8 @@ _PROCESS_RESTART_PROBE = textwrap.dedent(
     server.DB_PATH = project / ".engram" / "graph.db"
     server.PROJECT_ROOT = project
     server.load_config = lambda _root: config
+    # The config above is the one under test, gates included; see the note in tests/test_category_server.py.
+    server.with_store_settings = lambda loaded, _db_path, _root: loaded
     server._init()
 
     observer = server._category_observer

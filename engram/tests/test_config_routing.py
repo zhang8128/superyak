@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import config
 
@@ -82,40 +83,85 @@ def test_missing_named_instance_warns_with_store_and_fallback(tmp_path, caplog):
     assert str(fallback) in caplog.text
 
 
-# --- settings that act on a store come from the store's home -------------------
+# --- settings that act on a store come from the config beside that store -------
 
-def _write(root, text):
-    folder = root / ".engram"
+def _write(folder, text):
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "config.toml").write_text(text)
 
 
-def _routed(home, project):
-    return config.with_store_settings(config.load_config(project), home, project)
+def _store(home, instance=None):
+    """A store's graph.db under a home: the default store, or a named instance. Returns its path."""
+    folder = home / ".engram" / "instances" / instance if instance else home / ".engram"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "graph.db").touch()
+    return folder / "graph.db"
 
 
-def test_a_store_switched_on_in_its_home_stays_on_from_another_folder(tmp_path, caplog):
+def _routed(db_path, project):
+    return config.with_store_settings(config.load_config(project), db_path, project)
+
+
+ON = "[cohesion]\nenabled = true\ndl_cost = 0.05\n\n[category_evolution]\nenabled = true\nshadow = true\n"
+
+
+def test_a_store_switched_on_stays_on_from_another_folder(tmp_path, caplog):
     # The fault this fixes: a session started in any other folder read that folder's default file, which says off.
     home, project = tmp_path / "home", tmp_path / "project"
-    _write(home, "[cohesion]\nenabled = true\ndl_cost = 0.05\n\n[category_evolution]\nenabled = true\nshadow = true\n")
+    db = _store(home)
+    _write(home / ".engram", ON)
     project.mkdir()
 
     with caplog.at_level(logging.WARNING, logger="engram.config"):
-        loaded = _routed(home, project)  # load_config makes the project's file from defaults, as a first session does
+        loaded = _routed(db, project)  # load_config makes the project's file from defaults, as a first session does
 
     assert (project / ".engram" / "config.toml").exists()
     assert loaded.cohesion.enabled is True and loaded.cohesion.dl_cost == 0.05
     assert loaded.category_evolution.enabled is True and loaded.category_evolution.shadow is True
-    assert loaded.persistence.enabled is False  # the home's file leaves it out: defaults, which are off
+    assert loaded.persistence.enabled is False  # the store's file leaves it out: defaults, which are off
     assert caplog.text == ""  # the project asked for nothing the store lacks
+
+
+def test_a_gate_on_for_one_store_is_not_on_for_another_in_the_same_home(tmp_path, caplog):
+    # The reader's finding on 281a9cb8: one home holds several stores, and a gate is calibrated against one of them.
+    home, project = tmp_path / "home", tmp_path / "project"
+    default, alpha, beta = _store(home), _store(home, "alpha"), _store(home, "beta")
+    _write(home / ".engram", ON)                                   # the default store's own file
+    _write(alpha.parent, "[cohesion]\nenabled = true\ndl_cost = 0.11\n")  # alpha's own file
+    project.mkdir()                                                 # beta has none
+
+    with caplog.at_level(logging.WARNING, logger="engram.config"):
+        for_default, for_alpha, for_beta = (_routed(db, project) for db in (default, alpha, beta))
+
+    assert (for_default.cohesion.enabled, for_default.cohesion.dl_cost) == (True, 0.05)
+    assert (for_alpha.cohesion.enabled, for_alpha.cohesion.dl_cost) == (True, 0.11)
+    assert for_alpha.category_evolution.enabled is False  # the home's file is the default store's, not alpha's
+    assert for_beta.cohesion == config.CohesionConfig() and for_beta.category_evolution.enabled is False
+    assert for_beta.persistence.enabled is False
+    assert not (beta.parent / "config.toml").exists()  # reading a store's settings writes nothing beside it
+    assert caplog.text == ""
+
+
+def test_a_named_instance_with_no_store_falls_back_to_the_default_store_and_its_file(tmp_path):
+    # resolve_db_path sends a binding to a store that isn't there to the default store, so its file decides.
+    home, project = tmp_path / "home", tmp_path / "project"
+    default = _store(home)
+    _write(home / ".engram", ON)
+    _write(project / ".engram", 'instance = "missing"\n')
+
+    db = config.resolve_db_path(home, project)
+
+    assert db == default
+    assert _routed(db, project).cohesion.enabled is True
 
 
 def test_only_the_three_store_sections_move(tmp_path):
     home, project = tmp_path / "home", tmp_path / "project"
-    _write(home, '[cohesion]\nenabled = true\n\n[memory]\ndefault_lane = "personal"\n\n[compression]\nauto_threshold = 99\n')
-    _write(project, 'instance = "lighthouse"\n\n[memory]\ndefault_lane = "work"\n\n[compression]\nauto_threshold = 7\n')
+    db = _store(home, "lighthouse")
+    _write(db.parent, '[cohesion]\nenabled = true\n\n[memory]\ndefault_lane = "personal"\n\n[compression]\nauto_threshold = 99\n')
+    _write(project / ".engram", 'instance = "lighthouse"\n\n[memory]\ndefault_lane = "work"\n\n[compression]\nauto_threshold = 7\n')
 
-    loaded = _routed(home, project)
+    loaded = _routed(db, project)
 
     assert loaded.cohesion.enabled is True
     assert loaded.instance == "lighthouse"
@@ -125,81 +171,111 @@ def test_only_the_three_store_sections_move(tmp_path):
 
 def test_a_project_cannot_switch_a_store_gate_on_and_is_told_which_file_decides(tmp_path, caplog):
     home, project = tmp_path / "home", tmp_path / "project"
-    _write(home, "[cohesion]\nenabled = false\n")
-    _write(project, "[cohesion]\nenabled = true\ndl_cost = 0.01\n\n[persistence]\nenabled = true\n")
+    db = _store(home, "alpha")
+    _write(db.parent, "[cohesion]\nenabled = false\n")
+    _write(project / ".engram", "[cohesion]\nenabled = true\ndl_cost = 0.01\n\n[persistence]\nenabled = true\n")
 
     with caplog.at_level(logging.WARNING, logger="engram.config"):
-        loaded = _routed(home, project)
+        loaded = _routed(db, project)
 
     assert loaded.cohesion.enabled is False and loaded.cohesion.dl_cost == config.CohesionConfig().dl_cost
     assert loaded.persistence.enabled is False  # forgetting never starts from a project's file
     assert "Ignoring [cohesion] enabled" in caplog.text
     assert "Ignoring [persistence] enabled" in caplog.text
     assert str(project / ".engram" / "config.toml") in caplog.text
-    assert str(home / ".engram" / "config.toml") in caplog.text
+    assert str(db.parent / "config.toml") in caplog.text
 
 
-def test_a_home_with_no_config_gives_defaults_and_gets_no_file(tmp_path, caplog):
+def test_a_store_with_no_config_gives_defaults_and_gets_no_file(tmp_path, caplog):
     home, project = tmp_path / "home", tmp_path / "project"
-    home.mkdir()
-    _write(project, "[cohesion]\nenabled = true\n")
+    db = _store(home, "alpha")
+    _write(home / ".engram", ON)  # the default store's file must not reach alpha
+    _write(project / ".engram", "[cohesion]\nenabled = true\n")
 
     with caplog.at_level(logging.WARNING, logger="engram.config"):
-        loaded = _routed(home, project)
+        loaded = _routed(db, project)
 
     assert loaded.cohesion == config.CohesionConfig()
     assert loaded.persistence == config.PersistenceConfig()
     assert loaded.category_evolution == config.CategoryEvolutionConfig()
-    assert not (home / ".engram").exists()  # reading a store's settings writes nothing into its home
+    assert not (db.parent / "config.toml").exists()
     assert "Ignoring [cohesion] enabled" in caplog.text
-    assert "Could not read" not in caplog.text  # a home with no file is ordinary, not a fault
+    assert "Could not read" not in caplog.text  # a store with no file is ordinary, not a fault
 
 
-def test_a_home_config_that_cannot_be_read_leaves_the_gates_off_and_says_so(tmp_path, caplog):
+def test_a_store_config_that_cannot_be_read_leaves_the_gates_off_and_says_so(tmp_path, caplog):
     home, project = tmp_path / "home", tmp_path / "project"
-    _write(home, "[cohesion\nenabled = true\n")
-    _write(project, "[cohesion]\nenabled = true\n\n[persistence]\nenabled = true\n")
+    db = _store(home, "alpha")
+    _write(db.parent, "[cohesion\nenabled = true\n")
+    _write(project / ".engram", "[cohesion]\nenabled = true\n\n[persistence]\nenabled = true\n")
 
     with caplog.at_level(logging.WARNING, logger="engram.config"):
-        loaded = _routed(home, project)
+        loaded = _routed(db, project)
 
     assert loaded.cohesion.enabled is False and loaded.persistence.enabled is False
     assert "Could not read the store's config" in caplog.text
-    assert str(home / ".engram" / "config.toml") in caplog.text
+    assert str(db.parent / "config.toml") in caplog.text
 
 
-def test_when_the_project_is_the_home_nothing_changes(tmp_path, caplog):
+def test_when_the_project_is_the_default_stores_home_nothing_changes(tmp_path, caplog):
     home = tmp_path / "home"
-    _write(home, "[cohesion]\nenabled = true\ndl_cost = 0.05\n\n[persistence]\nenabled = true\n")
+    db = _store(home)
+    _write(home / ".engram", "[cohesion]\nenabled = true\ndl_cost = 0.05\n\n[persistence]\nenabled = true\n")
 
     with caplog.at_level(logging.WARNING, logger="engram.config"):
-        loaded = _routed(home, home)
+        loaded = _routed(db, home)
 
     assert loaded.cohesion.enabled is True and loaded.cohesion.dl_cost == 0.05
     assert loaded.persistence.enabled is True
     assert caplog.text == ""
 
 
-def test_the_server_routes_its_config_through_the_store(tmp_path, monkeypatch):
-    # The server's own start-up, not a stand-in: the config it keeps must be the routed one.
+def _server_config_at_the_store(tmp_path, monkeypatch, project_text):
+    """The server's own start-up, stopped where it opens the store: the config it holds then, and the store's path."""
     import server
+    import storage
 
     home, project = tmp_path / "home", tmp_path / "project"
-    _write(home, "[cohesion]\nenabled = true\ndl_cost = 0.05\n")
-    project.mkdir()
+    _store(home)
+    _write(home / ".engram", "[cohesion]\nenabled = true\ndl_cost = 0.05\n")
+    alpha = _store(home, "alpha")
+    _write(alpha.parent, "[cohesion]\nenabled = true\ndl_cost = 0.11\n")
+    _store(home, "beta")
+    _write(project / ".engram", project_text)
     monkeypatch.setattr(server, "ENGRAM_HOME", home)
+    monkeypatch.setattr(server, "DB_PATH", home / ".engram" / "graph.db")
     monkeypatch.setattr(server, "PROJECT_ROOT", project)
+    monkeypatch.delenv("ENGRAM_DEFAULT_INSTANCE", raising=False)
+    monkeypatch.setattr(server, "_initialized", False)
+    monkeypatch.setattr(server, "_config", None)  # start-up sets these; this puts the old ones back afterwards
+    monkeypatch.setattr(server, "_instance_name", None)
     seen = {}
 
-    def stop_after_config(config_value):
-        seen["config"] = config_value
+    def stop_at_the_store(path, **kwargs):
+        seen["db"], seen["config"] = Path(path), server._config
         raise RuntimeError("far enough")
 
-    monkeypatch.setattr(server, "resolve_instance_name", stop_after_config)
-    monkeypatch.setattr(server, "_initialized", False)
-    monkeypatch.setattr(server, "_config", None)  # start-up sets it; this puts the old one back afterwards
+    monkeypatch.setattr(storage, "Storage", stop_at_the_store)
     try:
         server._init_unlocked()
     except RuntimeError as stopped:
         assert str(stopped) == "far enough"
-    assert seen["config"].cohesion.enabled is True and seen["config"].cohesion.dl_cost == 0.05
+    return home, seen
+
+
+def test_the_server_reads_the_gates_beside_the_store_it_opens(tmp_path, monkeypatch):
+    home, seen = _server_config_at_the_store(tmp_path, monkeypatch, 'instance = "alpha"\n')
+    assert seen["db"] == home / ".engram" / "instances" / "alpha" / "graph.db"
+    assert (seen["config"].cohesion.enabled, seen["config"].cohesion.dl_cost) == (True, 0.11)
+
+
+def test_the_server_leaves_an_uncalibrated_instance_off_though_its_home_is_on(tmp_path, monkeypatch):
+    home, seen = _server_config_at_the_store(tmp_path, monkeypatch, 'instance = "beta"\n')
+    assert seen["db"] == home / ".engram" / "instances" / "beta" / "graph.db"
+    assert seen["config"].cohesion == config.CohesionConfig()
+
+
+def test_the_server_with_no_instance_reads_the_default_stores_file(tmp_path, monkeypatch):
+    home, seen = _server_config_at_the_store(tmp_path, monkeypatch, "")
+    assert seen["db"] == home / ".engram" / "graph.db"
+    assert (seen["config"].cohesion.enabled, seen["config"].cohesion.dl_cost) == (True, 0.05)

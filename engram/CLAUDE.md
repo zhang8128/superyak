@@ -120,9 +120,10 @@ Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-de
 Config routing warns when it ignores unknown section keys or falls back after a
 parse error or missing instance store. A session reads the config of the folder
 it starts in, except `[cohesion]`, `[persistence]` and `[category_evolution]`:
-those act on the store, so they come from `ENGRAM_HOME/.engram/config.toml`
-(`config.with_store_settings`), and a project that asks for one the store has
-off is told which file decides.
+those act on a store, so they come from the `config.toml` beside that store's
+`graph.db` (`config.with_store_settings`; an instance has its own under
+`instances/<name>/`), and a project that asks for one the store has off is
+told which file decides.
 
 **Sheaf cohesion:** Each semantic gets a cohesion energy in [0,1] — the
 spectral gap of its source episodes' similarity graph, computed in the

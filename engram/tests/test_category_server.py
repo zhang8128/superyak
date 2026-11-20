@@ -237,6 +237,9 @@ def category_init_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DB_PATH", db_path)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(server, "load_config", lambda _root: config)
+    # This config is the one under test, gates included. A real server takes the three store gates from the config
+    # beside the store (tests/test_config_routing.py holds that); here it would put back the file's defaults.
+    monkeypatch.setattr(server, "with_store_settings", lambda loaded, _db_path, _root: loaded)
     monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
     for name, value in {
         "_initialized": False,

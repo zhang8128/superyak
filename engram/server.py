@@ -1407,7 +1407,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     from storage import Storage
 
     setup_logging(os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
-    _config = with_store_settings(load_config(PROJECT_ROOT), ENGRAM_HOME, PROJECT_ROOT)
+    _config = load_config(PROJECT_ROOT)
     _instance_name = resolve_instance_name(_config)
 
     # Federation: use instance DB when configured, otherwise default
@@ -1417,6 +1417,8 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
         if instance_db.exists():
             db_path = instance_db
             logger.info("Using instance DB: %s", _instance_name)
+    # The gates that act on a store are that store's own: read them from the config beside the store just chosen.
+    _config = with_store_settings(_config, db_path, PROJECT_ROOT)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # Every server and watcher access is serialized by the lifecycle barrier.
