@@ -45,7 +45,9 @@ confirm page, never ticks its box and never types the password, even when it has
 link, reads the view, ticks the check and types their own password. After the owner says they allowed it, the session
 runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi.
 `STATUS: code-expired` (make's `Error 1`) means nobody can allow that request any more: stop and tell the owner that
-it ends at the station's next hourly sweep, and that they plan again then. For now, plan with
+it ends at the station's next hourly sweep, and that they plan again then. Each run first asks the permissions ledger
+again: `STATUS: check-again` (`Error 3`) means run it again; `STATUS: refused` (`Error 1`) means the owner's permissions
+changed since the build, so relay what it says and the owner plans again. For now, plan with
 `--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan (new or saved) and the
 station refuse it.
 
