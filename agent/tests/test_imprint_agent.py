@@ -695,3 +695,15 @@ def test_check_again_and_refused_exit_codes(tmp_path):
     assert done.returncode == 3 and 'STATUS: check-again' in done.stdout
     from superyak_agent.__main__ import STATUS_CODES
     assert STATUS_CODES['check-again'] == 3 and STATUS_CODES['refused'] == 1
+
+
+@pytest.mark.parametrize('engram_exit, says, code', [(5, ['agent send --plan abcd --refused'], 0),
+                                                       (2, [], 2), (0, ['agent send --plan abcd'], 0)])
+def test_the_recipe_hands_a_refusal_to_the_agent(engram_exit, says, code):
+    """make imprint-send: the engram step's exit 5 runs `send --refused` instead of `send`; any other failure stops."""
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run(['make', '-s', '-C', str(root), 'imprint-send', 'PLAN=abcd',
+                           f'OWNER_ENGRAM=sh -c "exit {engram_exit}" --', 'OWNER_AGENT=echo agent'],
+                          capture_output=True, text=True, timeout=60)
+    assert [line for line in done.stdout.splitlines() if line.startswith('agent')] == says
+    assert (done.returncode == 0) == (code == 0), done.stderr
