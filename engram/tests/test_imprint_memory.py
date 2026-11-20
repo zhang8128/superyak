@@ -47,7 +47,9 @@ def test_pi_every_process_at_the_cap(cap_store, step):
     started = time.monotonic()
     peak = child_peak_rss(cmd=cmd, env=cap_store.env)
     if step.startswith("send"):                                 # revision 9: the check's time, kept under 60 s
-        print(step, f"{time.monotonic() - started:.1f} s")
+        seconds = time.monotonic() - started
+        print(step, f"{seconds:.1f} s")
+        assert seconds < 60, (step, seconds)
     assert peak < PEAK_BUDGET, (step, mib(peak))
     if step == "admit":                                         # no analysis lost to a MemoryError (review I4)
         assert analysis_errors(cap_store) == []

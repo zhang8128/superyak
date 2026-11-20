@@ -27,8 +27,10 @@ machine almost every time.
 1. **The plan and the build record what they read.** The plan file gains `ledger`: the resolved path of the ledger
    the plan actually read (its context's ledger), or null when it read none. `read` and `build` compare the resolved
    path of the ledger they open with it, and refuse when they differ or when it is gone ("Run the plan again."). They
-   compare ledger paths, never engram homes. The test fixtures pass `engram_home` to `make_plan`, as the CLI's `_plan`
-   already uses one home for both. The build always writes, beside the package and never sent, `sources.json`: each
+   compare ledger paths, never engram homes. The recorded path comes from the plan's own ledger, so a test fixture
+   that hands `make_plan` a ledger needs no engram home, and the CLI's `_plan` uses one home for both. No `ledger_id`
+   is recorded: an older copy of the same ledger restored at the same path carries the same id, so it wouldn't tell
+   that case apart (the code reader's 8). A ledger the owner restores from an older copy before a send is outside this check, as it is outside the build's; revision 8's closing read catches only a restore during the run. The build always writes, beside the package and never sent, `sources.json`: each
    shipped semantic's recorded source episodes with each episode's lane, as the build read them (Ŝ needs
    src(s) ⊆ Ê, 5.2), `[]` when there are none. It is written in R30's form, one element per line, streamed. It names
    episodes that stay home, so it goes when `imprint.db` goes (D24): the agent's `_drop_local_copy` deletes both. A

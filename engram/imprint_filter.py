@@ -482,8 +482,9 @@ def _ledger_sentences(act: str) -> tuple[str, str]:
             f"The permissions ledger changed while it was read; nothing was {act}. Run it again.")
 
 
-def open_ledger(engram_home: Path):
-    """The machine's permissions ledger, read-only; None when it has none."""
+def open_ledger(engram_home: Path, *, act: str = "planned"):
+    """The machine's permissions ledger, read-only; None when it has none. ``act`` ends the refusal ("sent" at a
+    send's check, revision 9)."""
     from permission_ledger import Ledger, LedgerUnreadable
 
     try:
@@ -491,7 +492,7 @@ def open_ledger(engram_home: Path):
     except FileNotFoundError:
         return None
     except (LedgerUnreadable, sqlite3.Error):
-        raise PlanRefused(_ledger_sentences("planned")[0]) from None
+        raise PlanRefused(_ledger_sentences(act)[0]) from None
 
 
 class SeqZero(Mapping):

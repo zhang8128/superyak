@@ -820,6 +820,8 @@ Send it:               make imprint-send PLAN=7c41
 Built by insertion, the file never held a left-out row, so no page, FTS segment or vec0 chunk was written from one.
 sqlite-vec deletions may leave vector bytes in chunk blobs. Insertion avoids depending on that (D3), and L3 checks it.
 
+**Revision 9.** The plan file records `ledger`, the resolved path of the ledger it read, or null, and `read` and `build` refuse another one. The build also writes, beside the package and never sent, `sources.json`: each shipped semantic's recorded source episodes with their lanes, in R30's form, `[]` when there are none, gone with `imprint.db` (D24). Each send's check asks the ledger about those episodes and the package's own rows (13, D44).
+
 ### 6.2 Every table
 
 The tables below are every table the migrations create (`001`–`028`), plus the tables the hooks create in
@@ -1503,6 +1505,8 @@ permissions spec's L1 and L3). Revision 1's
 order, with one purpose that had to be equal, is gone: two purposes had no meet there.
 
 ## 9. Transport over the tailnet
+
+Before each run sends anything, the owner's machine asks its ledger again (revision 9, 13): the request, the manifest and each run's first part go only with that check's stamp, no more than 300 s old.
 
 The station is `https://smart.tail7db420.ts.net`. Port 443 is tailnet-only (DS9 spec, line 84), and shared users
 reach only `smart:443` (DS9 spec, lines 106-108). The public door serves only its two access-request routes (DS9

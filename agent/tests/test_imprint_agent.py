@@ -196,9 +196,10 @@ def test_the_first_run_returns_once_the_link_is_printed(tmp_path, monkeypatch):
 
 def test_a_rerun_while_requested_prints_the_link_again(tmp_path):
     station, lines = FakeStation(), []
-    assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'waiting-for-you'
+    # the fake clock's one poll jumps past the stamp's 300 s, so the wait ends with it (revision 9, asked 7)
+    assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'check-again'
     assert IMPRINT_ID[:4] in lines[0] and REQUEST_ID[:4] in lines[0] and 'AB12CD34' in lines[0]
-    assert '#imprint?code=AB12CD34' in lines[1] and len(lines) == 2
+    assert '#imprint?code=AB12CD34' in lines[1] and lines[2] == imprint_module.CHECK_AGAIN and len(lines) == 3
     assert [c.method for c in station.calls][0] == 'GET' and 'POST' not in [c.method for c in station.calls]
 
 
@@ -641,7 +642,7 @@ def test_the_wait_for_the_yes_ends_with_the_stamp(tmp_path, monkeypatch):
     clock = [float(NOW)]
     monkeypatch.setattr(imprint_module.time, 'time', lambda: clock[0])
     monkeypatch.setattr(imprint_module.time, 'sleep', lambda s: clock.__setitem__(0, clock[0] + s))
-    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN, wait=540) == 'waiting-for-you'
+    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN, wait=540) == 'check-again'
     assert NOW + 300 <= clock[0] < NOW + 300 + imprint_module.POLL_SECONDS + 1
 
 
@@ -703,7 +704,31 @@ def test_the_recipe_hands_a_refusal_to_the_agent(engram_exit, says, code):
     """make imprint-send: the engram step's exit 5 runs `send --refused` instead of `send`; any other failure stops."""
     root = Path(__file__).resolve().parents[2]
     done = subprocess.run(['make', '-s', '-C', str(root), 'imprint-send', 'PLAN=abcd',
-                           f'OWNER_ENGRAM=sh -c "exit {engram_exit}" --', 'OWNER_AGENT=echo agent'],
+                           f'OWNER_ENGRAM=cd engram && sh -c "exit {engram_exit}" --',
+                           'OWNER_AGENT=test -d agent/superyak_agent && echo agent'],   # the agent runs from the root
                           capture_output=True, text=True, timeout=60)
     assert [line for line in done.stdout.splitlines() if line.startswith('agent')] == says
     assert (done.returncode == 0) == (code == 0), done.stderr
+
+
+
+def test_a_later_run_with_no_stamp_while_requested_ends_at_once(tmp_path, monkeypatch):
+    """No stamp, so nothing can be sent: the run shows the link again and ends with check-again, not a 540 s wait
+    (the code reader's 4)."""
+    station, home = FakeStation(status='requested'), sent_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'checked.json').unlink()
+    def no_wait(seconds):
+        raise AssertionError('a run with no stamp waited for the yes')
+    monkeypatch.setattr(imprint_module.time, 'sleep', no_wait)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).send(PLAN) == 'check-again'
+    assert any('AB12CD34' in line for line in lines)
+
+
+def test_a_finished_imprint_with_no_stamp_is_still_reported(tmp_path):
+    """After D24 no check runs and no stamp is written: the agent reports the station's word (the reader's 5c)."""
+    station, home = FakeStation(status='admitted'), sent_home(tmp_path)
+    local = home / 'imprints' / IMPRINT_ID
+    (local / 'checked.json').unlink()
+    assert Imprint(home, station.client()).send(PLAN) == 'admitted'
+    assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()

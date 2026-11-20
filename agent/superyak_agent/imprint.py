@@ -91,7 +91,7 @@ class Imprint:
             self._show_link(imprint_id, saved)
             return 'waiting-for-you'
         at = self._checked(folder, imprint_id)
-        deadline = time.time() + wait if at is None else min(time.time() + wait, at + STAMP_SECONDS)
+        deadline = time.time() + wait if at is None else at + wait     # 540 s less the check's own time (asked 7)
         shown = False
         while True:
             status = self.client.request('GET', f'/api/imprints/{saved["request_id"]}')
@@ -109,7 +109,13 @@ class Imprint:
                 if self._show_link(imprint_id, saved, again=True) == 'code-expired':
                     return 'code-expired'
                 shown = True
+            if at is None:                    # no stamp: nothing could be sent after a yes, so don't wait for one
+                self.out(CHECK_AGAIN)
+                return 'check-again'
             time.sleep(POLL_SECONDS)
+            if time.time() - at > STAMP_SECONDS:      # the wait ends with its stamp (revision 9, asked 7)
+                self.out(CHECK_AGAIN)
+                return 'check-again'
             if time.time() >= deadline:
                 return 'waiting-for-you'
 

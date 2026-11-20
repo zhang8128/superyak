@@ -1149,6 +1149,7 @@ EXIT_SEND_REFUSED = 5               # the check refused after a request: the rec
 LEDGER_GONE = "The permissions ledger this plan read is gone. Nothing was sent. Run the plan again."
 PACKAGE_GONE = "This imprint's package is gone, and no request was sent. Run the plan again."
 BUILT_BEFORE_9 = "This imprint was built before each send asked the permissions ledger again. Run the plan again."
+IMPRINT_UNREADABLE = "This imprint's files can't be read. Nothing was sent. Run the plan again."
 
 
 class SendRefused(PlanRefused):
@@ -1156,19 +1157,34 @@ class SendRefused(PlanRefused):
     exits with ``EXIT_SEND_REFUSED`` (revision 9, asked 4)."""
 
 
-def _stays_sentence(n: int) -> str:
-    return (f"Your permissions changed since this imprint was built: {_n(n, 'memory', 'memories')} would now stay "
-            "home. Nothing was sent. Run the plan again.")
+def _stays_sentence(n: int, *, sent: bool = False) -> str:
+    """The refusal. After a request the station may hold parts or the package, and the agent says what (the code
+    reader's 1), so this says only that nothing more left."""
+    tail = "Nothing more was sent; what the station holds follows." if sent else "Nothing was sent. Run the plan again."
+    return f"Your permissions changed since this imprint was built: {_n(n, 'memory', 'memories')} would now stay home. {tail}"
 
 
-def _source_rows(path: Path) -> Iterator[list]:
-    """``sources.json``'s elements, one per line (R30), read as a stream."""
+def _source_rows(path: Path) -> Iterator[tuple[str, str, str | None]]:
+    """``sources.json``'s elements, one per line (R30), read as a stream. The file must be whole: ``[`` first,
+    ``]`` last, and each element ``[semantic, episode, lane]``, else ``ValueError``, since a short file would leave
+    its semantics' sources unasked (the code reader's 3)."""
     with path.open(encoding="utf-8") as f:
+        if f.readline() != "[\n":
+            raise ValueError("sources.json does not open with [")
+        closed = False
         for line in f:
-            line = line.strip().rstrip(",")
-            if line in ("[", "]", ""):
+            if closed:
+                raise ValueError("sources.json goes on after ]")
+            if line == "]\n":
+                closed = True
                 continue
-            yield json.loads(line)
+            item = json.loads(line.rstrip("\n").removesuffix(","))
+            if (not isinstance(item, list) or len(item) != 3 or not all(isinstance(v, str) for v in item[:2])
+                    or not (item[2] is None or isinstance(item[2], str))):
+                raise ValueError("a sources.json element is not [semantic, episode, lane]")
+            yield item[0], item[1], item[2]
+        if not closed:
+            raise ValueError("sources.json does not close with ]")
 
 
 def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
@@ -1185,8 +1201,11 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
     if not isinstance(imprint_id, str):
         raise PlanRefused("This plan is not built. Run make imprint-send, which builds it first.")
     folder = home / "imprints" / imprint_id
-    for name in (CHECKED, REFUSED):
-        (folder / name).unlink(missing_ok=True)
+    try:
+        for name in (CHECKED, REFUSED):
+            (folder / name).unlink(missing_ok=True)
+    except OSError:
+        raise PlanRefused(IMPRINT_UNREADABLE) from None
     sent = (folder / "send.json").is_file()
     if not (folder / "imprint.db").is_file():
         if sent:
@@ -1200,14 +1219,14 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
     if recorded is not None:
         if not Path(recorded).is_file():
             raise PlanRefused(LEDGER_GONE)
-        ledger = open_ledger(Path(recorded).parent.parent)
+        ledger = open_ledger(Path(recorded).parent.parent, act="sent")
         if ledger is None:
             raise PlanRefused(LEDGER_GONE)
         if _ledger_path(ledger) != recorded:
             ledger.conn.close()
             raise PlanRefused(LEDGER_ELSEWHERE)
     else:
-        ledger = open_ledger(engram_home)       # none at the plan: one here now is asked (asked 3)
+        ledger = open_ledger(engram_home, act="sent")   # none at the plan: one here now is asked (asked 3)
     stays, at, seq = 0, int(clock()), None
     work = scratch = pkg = None
     try:
@@ -1225,6 +1244,10 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
             pkg = _connect(folder / "imprint.db", read_only=True)
             stays = _ask_again(facts, ctx, pkg, folder / "sources.json", counts)
             facts.close()                           # the closing read, before anything is written
+    except PlanRefused:
+        raise
+    except (OSError, ValueError, sqlite3.Error):    # the package or its lists damaged (the code reader's 3)
+        raise PlanRefused(IMPRINT_UNREADABLE) from None
     finally:
         if pkg is not None:
             pkg.close()
@@ -1234,14 +1257,17 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
             _remove_work(work, whole=True)
         if ledger is not None:
             ledger.conn.close()
-    if stays:
-        if sent:
-            _write_private(folder / REFUSED, json.dumps({"imprint_id": imprint_id, "at": at, "count": stays},
-                                                        sort_keys=True) + "\n")
-            raise SendRefused(_stays_sentence(stays))
-        raise PlanRefused(_stays_sentence(stays))
-    stamp = {"imprint_id": imprint_id, "at": at, "seq": seq}
-    _write_private(folder / CHECKED, json.dumps(stamp, sort_keys=True) + "\n")
+    try:
+        if stays:
+            if sent:
+                _write_private(folder / REFUSED, json.dumps({"imprint_id": imprint_id, "at": at, "count": stays},
+                                                            sort_keys=True) + "\n")
+                raise SendRefused(_stays_sentence(stays, sent=True))
+            raise PlanRefused(_stays_sentence(stays))
+        stamp = {"imprint_id": imprint_id, "at": at, "seq": seq}
+        _write_private(folder / CHECKED, json.dumps(stamp, sort_keys=True) + "\n")
+    except OSError:
+        raise PlanRefused(IMPRINT_UNREADABLE) from None
     return stamp
 
 
@@ -1253,9 +1279,12 @@ def _ask_again(facts, ctx, pkg: sqlite3.Connection, sources: Path, counts: Count
 
     source_id = ctx.source_id
     bad = IdSet(ctx.scratch)                        # semantics a source would now keep home
-    for semantic, episode, lane in _source_rows(sources):
-        if semantic not in bad and not _admits(facts, ctx, "episode", episode, lane, counts):
-            bad.add(semantic)
+    rows = _source_rows(sources)
+    while batch := list(itertools.islice(rows, BATCH)):     # in batches, with prefetch (the code reader's 7)
+        facts.prefetch([f"mem:{source_id}/episode/{episode}" for _, episode, _ in batch])
+        for semantic, episode, lane in batch:
+            if semantic not in bad and not _admits(facts, ctx, "episode", episode, lane, counts):
+                bad.add(semantic)
     stays = 0
     for layer, table in (("episode", "episodes"), ("semantic", "semantics")):
         cursor = pkg.execute(f"SELECT id, lane FROM {table} ORDER BY id")

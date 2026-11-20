@@ -172,9 +172,14 @@ def test_each_question_stops_the_send(tmp_path, change):
         retire(led, "person:jenn")
     elif change == "bound":
         _bound(led, _ref(args, "e1"))
-    elif change == "re-lane":
+    elif change == "re-lane":                       # finished: the note and the store say personal, the package work
         _put(led, "fixture-lane", "e1", {"insert": [_ins("lane_notes", object=_ref(args, "e1"), lane="personal",
                                                            at=NOW, seq="@seq")]})
+        import sqlite3
+        con = sqlite3.connect(args[0])
+        con.execute("UPDATE episodes SET lane = 'personal' WHERE id = 'e1'")
+        con.commit()
+        con.close()
     else:
         add_subject(led, _ref(args, "e2"), "person:lee")              # e2 had none: on a home plan, no deny
     with pytest.raises(PlanRefused, match=STAYS):
@@ -189,13 +194,15 @@ def test_any_co_subject_on_a_plan_that_leaves_home_stops_the_send(tmp_path):
 
 
 def test_a_co_subject_up_a_copies_chain_is_asked(tmp_path):
+    """e2 has no co-subject of its own: only its copies chain reaches kim, whose deny touches nothing else. A check
+    that read a ref's own rows alone would pass it (the code reader's 5a)."""
     args, plan, built = _made(tmp_path, cosubjects={"e1": "person:jenn"})
     led = args[3].ledger
     far = "mem:" + "0" * 32 + "/episode/far"
     link_copies(led, [_ref(args, "e2"), far])
-    add_subject(led, far, "person:jenn")
-    write_denies(led, "person:jenn", deny())
-    with pytest.raises(PlanRefused, match=STAYS):
+    add_subject(led, far, "person:kim")
+    write_denies(led, "person:kim", deny())
+    with pytest.raises(PlanRefused, match=r"1 memory would now stay home"):
         _check(tmp_path, plan)
 
 
@@ -333,3 +340,74 @@ def test_the_cli_exits_5_when_a_request_is_out(tmp_path):
                           cwd=ENGRAM, capture_output=True, text=True, timeout=300)   # build re-execs (R26)
     assert done.returncode == imprint.EXIT_SEND_REFUSED == 5, done.stderr
     assert "would now stay home" in done.stderr and (built.dir / "refused.json").is_file()
+    assert "Nothing more was sent" in done.stderr and "Nothing was sent" not in done.stderr   # the reader's 1
+
+
+# ---- the code reader's 2 and 3: every unreadable thing refuses, saying nothing was sent --------------------------
+
+from imprint_filter import LedgerFacts  # noqa: E402
+from permission_ledger import _forget_verified  # noqa: E402
+from tests.test_imprint_one_state import _overwrite, _same_counter_copy  # noqa: E402
+from tests.test_permissions_premerge_fixes import _tear_index, _unstamp  # noqa: E402
+
+UNREADABLE_SENT = "The permissions ledger can't be read; nothing was sent"
+
+
+@pytest.mark.parametrize("stamped", [True, False])
+def test_a_torn_page_at_the_check_says_nothing_was_sent(tmp_path, stamped):
+    args, plan, built = _made(tmp_path, cosubjects={"e1": "person:lee"})
+    args[3].ledger.close()
+    if not stamped:
+        _unstamp(EH(tmp_path))
+    _tear_index(EH(tmp_path), "subjects_object", f"NOT (object = '{_ref(args, 'e1')}' AND subject = 'person:lee')")
+    _forget_verified()
+    with pytest.raises(PlanRefused, match=UNREADABLE_SENT):
+        _check(tmp_path, plan)
+    assert not (built.dir / "checked.json").exists()
+
+
+def test_a_ledger_moved_during_the_check_says_nothing_was_sent(tmp_path, monkeypatch):
+    args, plan, built = _made(tmp_path, cosubjects={"e1": "person:lee"})
+    args[3].ledger.close()
+    path = ledger_path(EH(tmp_path))
+    data = _same_counter_copy(path)
+    real = LedgerFacts.close
+
+    def close(self):
+        _overwrite(path, data)
+        return real(self)
+    monkeypatch.setattr(LedgerFacts, "close", close)
+    with pytest.raises(PlanRefused, match="changed while it was read; nothing was sent"):
+        _check(tmp_path, plan)
+    assert not (built.dir / "checked.json").exists()
+
+
+def test_a_ledger_that_cant_be_opened_says_nothing_was_sent(tmp_path, monkeypatch):
+    args, plan, built = _made(tmp_path, cosubjects={"e1": "person:lee"})
+
+    def unreadable(*a, **k):
+        raise LedgerUnreadable("permissions.db: torn header")
+    monkeypatch.setattr(Ledger, "open_read_only", unreadable)
+    with pytest.raises(PlanRefused, match=UNREADABLE_SENT):
+        _check(tmp_path, plan)
+
+
+@pytest.mark.parametrize("damage", ["empty", "no-end", "short-element", "not-json", "not-a-list"])
+def test_a_damaged_sources_json_refuses(tmp_path, damage):
+    """A sources.json that isn't whole would let its semantics' sources go unasked (the reader's 3)."""
+    args, plan, built = _made(tmp_path, cosubjects={"e2": "person:jenn"})
+    path = built.dir / "sources.json"
+    text = {"empty": "", "no-end": '[\n["s1", "e1", "work"]\n', "short-element": '[\n["s1", "e1"]\n]\n',
+            "not-json": "[\n[s1\n]\n", "not-a-list": "{}\n"}[damage]
+    path.write_text(text)
+    with pytest.raises(PlanRefused, match="can't be read. Nothing was sent. Run the plan again."):
+        _check(tmp_path, plan)
+
+
+def test_a_damaged_package_refuses(tmp_path):
+    args, plan, built = _made(tmp_path, cosubjects={"e2": "person:jenn"})
+    package = built.dir / "imprint.db"
+    package.chmod(0o600)
+    package.write_bytes(b"not a database" * 512)
+    with pytest.raises(PlanRefused, match="can't be read. Nothing was sent. Run the plan again."):
+        _check(tmp_path, plan)
