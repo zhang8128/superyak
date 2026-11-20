@@ -2,6 +2,7 @@
 and against input it must refuse. The numpy code in sheaf.py and lighthouse_sheaf.py is the oracle."""
 from __future__ import annotations
 
+import ctypes
 import itertools
 import os
 import subprocess
@@ -95,6 +96,16 @@ def test_basis_is_numpys_top_subspace(n, d, threshold):
     assert np.allclose(rows.T @ rows, vt[:k].T @ vt[:k], atol=1e-6)  # the same subspace, whatever the signs
     for row in rows:
         assert row[np.argmax(np.abs(row))] > 0  # one sign on every machine
+
+
+def test_the_threshold_is_met_at_equality_as_numpys_search_is():
+    # Squared singular values 4, 1, 1: every share and every running sum is the same float in both, so the cut at
+    # exactly the threshold is decided by the comparison alone, and one step above it takes one more direction.
+    x = np.diag([2.0, 1.0, 1.0])
+    edge = float(np.cumsum(np.array([4.0, 1.0, 1.0]) / 6.0)[1])
+    for threshold, want in ((edge, 2), (float(np.nextafter(edge, 1.0)), 3), (float(np.nextafter(edge, 0.0)), 2)):
+        assert numpy_k(np.array([2.0, 1.0, 1.0]), threshold, 8) == want
+        assert len(sn.basis(x, threshold, 1, 8)[0]) == want
 
 
 def test_basis_completes_directions_the_data_does_not_have():
@@ -320,6 +331,57 @@ def test_a_random_sheaf_matches_numpy(seed):
     assert got["harmonic"] == pytest.approx(float(((x - nearest) ** 2).sum() / (x @ x)), abs=1e-8)
 
 
+def test_values_in_bounds_but_too_large_together_are_refused_not_returned_as_infinity():
+    # The first reader's finding 1: 256 products of 1e150 by 1e150 fit a double, and their square does not. Before,
+    # energy came back as infinity with a success code, and the Laplacian held entries of 1e300.
+    with sn.Sheaf([sn.MAX_STALK, 1]) as s:
+        s.add_edge(0, 1, map_u=np.full((1, sn.MAX_STALK), 1e150))
+        x = np.concatenate([np.full(sn.MAX_STALK, 1e150), [-1e150]])
+        for call in (lambda: s.energy(x), s.laplacian, s.sections, lambda: s.sections(x)):
+            with pytest.raises(sn.SheafKernelError) as refused:
+                call()
+            assert refused.value.code == -12
+        assert np.isfinite(s.coboundary(x)).all()  # 2.56e302: large, and still a number
+        energy, residual = s.energy(np.zeros(sn.MAX_STALK + 1))  # the same sheaf answers a cochain it can
+        assert energy == 0.0 and residual.tolist() == [0.0]
+    with sn.Sheaf([1, 1]) as s:
+        s.add_edge(0, 1, weight=1e150)
+        with pytest.raises(sn.SheafKernelError) as refused:
+            s.energy([1e150, -1e150])  # the square fits; the weight times it does not
+        assert refused.value.code == -12
+    with sn.Sheaf([sn.MAX_STALK, 1]) as s:
+        s.add_edge(0, 1, map_u=np.full((1, sn.MAX_STALK), 1e150), weight=0.0)
+        with pytest.raises(sn.SheafKernelError) as refused:  # no weight on the edge, and its residual is still refused
+            s.energy(np.concatenate([np.full(sn.MAX_STALK, 1e150), [-1e150]]))
+        assert refused.value.code == -12
+    with pytest.raises(sn.SheafKernelError) as refused:
+        sn.basis(np.full((3, 4), 1e100))  # each row is in bounds; the rows' products are past what is decomposed
+    assert refused.value.code == -12
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_the_count_of_h1_is_never_negative_whatever_the_tolerance(seed):
+    # With a tolerance of zero every rounding error above zero counts as rank, so the rank can pass the number of
+    # edge dimensions; h1 is held at zero then (the first reader's finding 3: nothing tested that).
+    rng = np.random.default_rng(seed)
+    with sn.Sheaf([3] * 6) as s:
+        s.add_edge(0, 1, map_u=rng.standard_normal((1, 3)), map_v=rng.standard_normal((1, 3)))
+        got = s.sections(tol=0.0)
+        assert got["h1"] >= 0 and 0 <= got["h0"] <= 18
+        assert s.sections() == {"h0": 17, "h1": 0}  # at the usual tolerance: one condition on eighteen numbers
+
+
+def test_at_a_tolerance_of_zero_the_rank_is_counted_past_the_edges_somewhere():
+    # The control for the test above: it only means something if a zero tolerance does overcount on some input.
+    overcounted = 0
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        with sn.Sheaf([3] * 6) as s:
+            s.add_edge(0, 1, map_u=rng.standard_normal((1, 3)), map_v=rng.standard_normal((1, 3)))
+            overcounted += 18 - s.sections(tol=0.0)["h0"] > 1
+    assert overcounted > 0
+
+
 # --- glue against lighthouse_sheaf.py -------------------------------------------------
 
 def stores(seed: int):
@@ -387,7 +449,7 @@ def test_glue_matches_on_edge_cases(name, hits, trust):
     same_result(ls.glue(hits, trust=trust, backend="native"), ls.glue(hits, trust=trust, backend="numpy"))
 
 
-def test_glue_falls_back_to_numpy_when_the_kernel_declines(monkeypatch):
+def test_glue_falls_back_to_numpy_when_the_kernel_declines_and_says_so(monkeypatch, caplog):
     hits, scores, trust = stores(3)
 
     def declined(*args, **kwargs):
@@ -395,7 +457,9 @@ def test_glue_falls_back_to_numpy_when_the_kernel_declines(monkeypatch):
 
     want = ls.glue(hits, scores=scores, trust=trust, backend="numpy")
     monkeypatch.setattr(sn, "glue", declined)
-    same_result(ls.glue(hits, scores=scores, trust=trust), want)
+    with caplog.at_level("INFO"):
+        same_result(ls.glue(hits, scores=scores, trust=trust), want)
+    assert "numpy takes this one" in caplog.text and "too large for the kernel" in caplog.text
     with pytest.raises(sn.SheafKernelError):
         ls.glue(hits, scores=scores, trust=trust, backend="native")
 
@@ -498,6 +562,30 @@ def test_the_kernel_checks_itself_under_the_sanitizers(tmp_path):
     ran = subprocess.run([str(out)], capture_output=True, text=True, timeout=300, env={"PATH": "/usr/bin:/bin"})
     assert ran.returncode == 0 and ran.stdout.startswith("ok: "), ran.stdout + ran.stderr
     assert "runtime error" not in ran.stderr and "AddressSanitizer" not in ran.stderr
+
+
+def test_a_decomposition_that_does_not_settle_is_refused_not_returned(tmp_path):
+    """No matrix has yet failed to settle in 64 sweeps, so the refusal is seen by building the kernel with one sweep
+    allowed (the first reader's finding 5). Every call that decomposes must pass the refusal on."""
+    out = tmp_path / "sheaf-one-sweep.so"
+    built = subprocess.run([native_build.compiler(), "-std=c11", "-O1", "-fPIC", "-shared", "-ffp-contract=off",
+                            "-DSHEAF_QL_SWEEPS=1", str(ENGRAM / "sheaf_kernel.c"), "-o", str(out), "-lm"],
+                           capture_output=True, text=True, env=native_build.BUILD_ENV)
+    assert built.returncode == 0, built.stderr
+    lib = ctypes.CDLL(str(out))
+    as_doubles = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+    a = symmetric(12, 4)
+    evals, evecs = np.zeros(12), np.zeros((12, 12))
+    assert lib.sheaf_sym_eig(12, as_doubles(a), as_doubles(evals), as_doubles(evecs)) == -8
+    x = np.ascontiguousarray(clustered(3)[:12, :16])
+    rows, sing, k = np.zeros((8, 16)), np.zeros(12), ctypes.c_int32()
+    lib.sheaf_basis.argtypes = [ctypes.c_int32, ctypes.c_int32, ctypes.POINTER(ctypes.c_double), ctypes.c_double,
+                                ctypes.c_int32, ctypes.c_int32, ctypes.POINTER(ctypes.c_double),
+                                ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int32)]
+    assert lib.sheaf_basis(12, 16, as_doubles(x), 0.9, 2, 8, as_doubles(rows), as_doubles(sing), ctypes.byref(k)) == -8
+    # and the same matrices settle in the kernel as it ships
+    sn.sym_eig(a)
+    sn.basis(x)
 
 
 def test_the_test_only_library_must_be_this_users_own(tmp_path, monkeypatch):

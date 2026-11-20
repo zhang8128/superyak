@@ -1,6 +1,8 @@
 # The sheaf kernel in C: design
 
-2026-11-20, by Serenity. Built on branch `serenity/sheaf-kernel`. The spec and the code go to one fresh reader together.
+2026-11-20, by Serenity. Built on branch `serenity/sheaf-kernel`. The spec and the code went to one fresh reader
+together, who said "approve with named changes"; its two required changes and four follow-ups are made (see "The
+reader's changes").
 
 ## Why
 
@@ -69,8 +71,9 @@ write), plus `-ffp-contract=off` so arm64 and x86-64 do the same arithmetic.
 3. **One sign per eigenvector** (the largest entry is positive), in the kernel and in the numpy path, so the same
    input names the same part first on every machine. Before, the sign was LAPACK's own.
 4. **Refused, with a code:** a value that is not finite or is beyond 1e150; sizes past the limits (a symmetric matrix
-   side over 2,048, a vector over 16,384, a matrix over 2^24 cells); a decomposition that did not settle. The binding
-   refuses wrong shapes and kinds before the kernel is called.
+   side over 2,048, a vector over 16,384, a matrix over 2^24 cells); a decomposition that did not settle; and values
+   that are each in bounds but too large together, so that a result would not be finite. No call reports success
+   with a result that is not finite. The binding refuses wrong shapes and kinds before the kernel is called.
 5. **An edge of weight zero is out of the cover.** It adds nothing to L and is not counted in H^1, but its residual is
    still reported. This is what `lighthouse_sheaf.py` already did with zero trust.
 
@@ -82,6 +85,27 @@ write), plus `-ffp-contract=off` so arm64 and x86-64 do the same arithmetic.
 - H^0 and H^1 are counted through the eigenvalues of L with a relative tolerance of 1e-9, so a restriction map that
   is nearly singular is counted by that tolerance and no finer.
 - Sizes are dense. A graph whose C^0 passes 2,048 dimensions is refused, not approximated.
+- Pairs with exactly equal residuals come in no promised order, in the kernel as in numpy.
+- The number of directions kept is the same as numpy's wherever the running share of variance is the same float in
+  both, which it is on exact inputs (tested at the threshold itself). On general inputs the two sums are rounded
+  separately, so a share within one rounding of the threshold could be cut differently. No such input was found.
+
+## The reader's changes
+
+1. **Required.** With maps other than the identity, values each within 1e150 could combine past what a double
+   holds: `sheaf_energy` returned infinity with a success code and `sheaf_laplacian` returned entries of 1e300. Both
+   now refuse (code -12), as do `sheaf_sections`, a coboundary that is not finite, and principal directions whose
+   Gram matrix passes the bound. The two measures were never exposed: they use identity maps on unit vectors.
+2. **Required.** `lighthouse_sheaf.glue` fell back to numpy without a word. It logs now, as `sheaf.measure` did.
+3. The clamp that keeps H^1 from going negative had no test. It has one now (a tolerance of zero), with a control
+   that the rank is in fact overcounted there.
+4. The order of equal residuals was promised and untested. The promise is withdrawn.
+5. The refusal for a decomposition that does not settle was never reached. A test builds the kernel with one sweep
+   allowed and sees it.
+6. The threshold's edge is tested on exact numbers, with the limit above stated.
+
+My own mutation run on these found one check of mine that nothing could reach (a second test for an infinite
+residual, which the test of the total already covers); it is removed.
 
 ## Not in this branch
 

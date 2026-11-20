@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +53,8 @@ from pathlib import Path
 import numpy as np
 
 import sheaf_native
+
+logger = logging.getLogger(__name__)
 
 _EPS = 1e-12
 _KERNEL_TOL = 1e-9
@@ -207,9 +210,11 @@ def glue(hits: dict[str, np.ndarray],
         try:
             core = _core_native(covered, sections, weights, trust_w, edge_weighting,
                                 variance_threshold, max_dim)
-        except sheaf_native.SheafKernelError:
+        except sheaf_native.SheafKernelError as error:
             if sheaf_native.insisted(backend):
                 raise
+            logger.info("the sheaf kernel declined %d lighthouses (%s); numpy takes this one",
+                        len(covered), error)
     if core is None:
         core = _core_numpy(covered, sections, weights, trust_w, edge_weighting,
                            variance_threshold, max_dim)

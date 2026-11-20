@@ -149,6 +149,7 @@ static void check_random_sheaf(int32_t nv, int32_t ne) {
     CHECK(h0 >= 0 && h0 <= n0 && h1 >= 0 && harmonic >= -1e-12 && harmonic <= 1.0 + 1e-12, "h0 %d h1 %d harmonic %g", h0, h1, harmonic);
     CHECK(sheaf_energy(s, near, &after, NULL) == 0 && after < 1e-7 * (1.0 + energy), "the nearest section has energy %g", after);
     CHECK(sheaf_sections(s, 1e-9, &h0, &h1, near, x, &again) == 0 && again < 1e-9, "a section is %g outside the sections", again);
+    CHECK(sheaf_sections(s, 0.0, &h0, &h1, NULL, NULL, NULL) == 0 && h1 >= 0 && h0 >= 0, "at no tolerance: h0 %d h1 %d", h0, h1);
     free(x);
     free(near);
     free(L);
@@ -227,6 +228,25 @@ static void check_refusals(void) {
     CHECK(sheaf_sections(NULL, 1e-9, &h0, &h1, NULL, NULL, NULL) == SHEAF_EARG && sheaf_energy(NULL, a, &energy, NULL) == SHEAF_EARG, "no sheaf at all");
     sheaf_free(s);
     sheaf_free(NULL);
+    /* Each value in bounds, and too large together: refused, never an infinity with a success code. */
+    int32_t wide[2] = {SHEAF_MAX_STALK, 1};
+    double *map = dalloc(SHEAF_MAX_STALK), *x = dalloc(SHEAF_MAX_STALK + 1), *L = dalloc((int64_t)(SHEAF_MAX_STALK + 1) * (SHEAF_MAX_STALK + 1)), dx[1];
+    CHECK(map && x && L, "out of memory");
+    for (int32_t i = 0; i < SHEAF_MAX_STALK; i++) map[i] = x[i] = 1e150;
+    x[SHEAF_MAX_STALK] = -1e150;
+    s = sheaf_new(2, wide);
+    CHECK(s && sheaf_add_edge(s, 0, 1, 1, map, NULL, 1.0) == 0, "the wide edge");
+    CHECK(sheaf_energy(s, x, &energy, NULL) == SHEAF_ERANGE, "an energy that would be infinite");
+    CHECK(sheaf_laplacian(s, L) == SHEAF_ERANGE, "a Laplacian past the bound");
+    CHECK(sheaf_sections(s, 1e-9, &h0, &h1, NULL, NULL, NULL) == SHEAF_ERANGE, "sections of a Laplacian past the bound");
+    CHECK(sheaf_coboundary(s, x, dx) == 0 && isfinite(dx[0]), "a coboundary that is large and still a number");
+    sheaf_free(s);
+    free(map);
+    free(x);
+    free(L);
+    double tall[12];
+    for (int32_t i = 0; i < 12; i++) tall[i] = 1e100;
+    CHECK(sheaf_basis(3, 4, tall, 0.9, 2, 8, rows, sing, &k) == SHEAF_ERANGE, "rows whose products pass the bound");
     SheafGlue out;
     int32_t counts[2] = {1, 1}, none[2] = {1, 0}, zeroed[2];
     double trust[2] = {1, 1}, over[2] = {1, 1.5}, stalks[16], off[2], res[1], ew[1], cons[8], dev[2], unit[4] = {1, 0, 0, 1};

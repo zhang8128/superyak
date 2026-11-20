@@ -22,8 +22,10 @@
  *   sheaf_glue       several stores' hits for one topic, in a basis the stores share. Trust weights the edges.
  *
  * Refused, and said: a value that is not finite or is beyond 1e150 in size (SHEAF_EARG), a size past the limits below
- * (SHEAF_ETOOBIG), and a decomposition that did not settle (SHEAF_ENOCONV). Nothing here reads a file, keeps a global, or
- * calls back; every function but the sheaf_* handle calls is a pure function of its arguments, so threads may share it.
+ * (SHEAF_ETOOBIG), a decomposition that did not settle (SHEAF_ENOCONV), and values that are each in bounds but too large
+ * together, so that a result would not be finite or a matrix to decompose would pass 1e150 (SHEAF_ERANGE). No call
+ * reports success with a result that is not finite. Nothing here reads a file, keeps a global, or calls back; every
+ * function but the sheaf_* handle calls is a pure function of its arguments, so threads may share it.
  *
  * The symmetric eigenvalue routine is Householder tridiagonalisation and implicit QL, after EISPACK's tred2 and tql2 by way
  * of JAMA (both public domain). Singular directions come from the smaller Gram matrix, which is exact enough for the top
@@ -33,7 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { SHEAF_ENOMEM = -6, SHEAF_EARG = -7, SHEAF_ENOCONV = -8, SHEAF_ETOOBIG = -9 };
+enum { SHEAF_ENOMEM = -6, SHEAF_EARG = -7, SHEAF_ENOCONV = -8, SHEAF_ETOOBIG = -9, SHEAF_ERANGE = -12 };
 #define SHEAF_ABI 1
 #define SHEAF_MAX_N 2048           /* the side of the largest symmetric matrix decomposed: 32 MiB, twice over */
 #define SHEAF_MAX_COLS 16384       /* the length of one input vector */
@@ -44,7 +46,9 @@ enum { SHEAF_ENOMEM = -6, SHEAF_EARG = -7, SHEAF_ENOCONV = -8, SHEAF_ETOOBIG = -
 #define SHEAF_MAX_N1 (1 << 22)     /* the dimension of C^1 */
 #define SHEAF_MAX_MAGNITUDE 1e150  /* squares of anything this size still fit a double */
 #define SHEAF_EPS 1e-12
+#ifndef SHEAF_QL_SWEEPS  /* a test builds with 1, to see the refusal a matrix has never yet caused */
 #define SHEAF_QL_SWEEPS 64
+#endif
 
 /* ---- small things ---------------------------------------------------------------------------------------------- */
 
@@ -56,6 +60,12 @@ static double *dalloc(int64_t count) {
 static int bounded(const double *x, int64_t n) {
     for (int64_t i = 0; i < n; i++)
         if (!(fabs(x[i]) <= SHEAF_MAX_MAGNITUDE)) return 0;  /* false for a NaN and for either infinity */
+    return 1;
+}
+
+static int all_finite(const double *x, int64_t n) {
+    for (int64_t i = 0; i < n; i++)
+        if (!isfinite(x[i])) return 0;
     return 1;
 }
 
@@ -313,6 +323,10 @@ static int32_t basis_core(int32_t n, int32_t d, const double *x, double threshol
         for (int32_t a = 0; a < d; a++)
             for (int32_t b = 0; b < a; b++) G[(int64_t)b * r + a] = G[(int64_t)a * r + b];
     }
+    if (!bounded(G, (int64_t)r * r)) {  /* rows in bounds whose products are not: nothing true could come of it */
+        rc = SHEAF_ERANGE;
+        goto done;
+    }
     rc = eig_inplace(r, G, ev, e);
     if (rc) goto done;
     double total = 0.0;
@@ -480,7 +494,7 @@ int32_t sheaf_cohesion(int32_t n, int32_t d, const double *x, double threshold, 
             double gap = fiedler[i] - fiedler[j], res = W[(int64_t)i * n + j] * gap * gap;
             if (kept == max_worst && !(res > worst_r[kept - 1])) continue;
             int32_t at = kept < max_worst ? kept : kept - 1;
-            while (at > 0 && res > worst_r[at - 1]) {  /* an equal residual stays behind the pair found first */
+            while (at > 0 && res > worst_r[at - 1]) {  /* pairs with equal residuals come in no promised order */
                 worst_r[at] = worst_r[at - 1];
                 worst_i[at] = worst_i[at - 1];
                 worst_j[at] = worst_j[at - 1];
@@ -624,7 +638,7 @@ int32_t sheaf_coboundary(void *handle, const double *x, double *dx) {
     if (!s || !x || !bounded(x, s->n0)) return SHEAF_EARG;
     if (s->ne && !dx) return SHEAF_EARG;
     for (int32_t i = 0; i < s->ne; i++) edge_difference(s, &s->edges[i], x, dx + s->edges[i].off);
-    return 0;
+    return all_finite(dx, s->n1) ? 0 : SHEAF_ERANGE;
 }
 
 /* energy: the weighted sum of |(dx)_e|^2, which is x' L x. residual, when it is not NULL: ne values of |(dx)_e|^2,
@@ -640,6 +654,9 @@ int32_t sheaf_energy(void *handle, const double *x, double *energy, double *resi
         if (residual) residual[i] = sq;
         total += edge->weight * sq;
     }
+    /* Maps and a cochain that are each in bounds can be too large together. An infinite |dx|^2 makes the total
+     * infinite, or not a number when its edge has no weight, so this one test covers every residual as well. */
+    if (!isfinite(total)) return SHEAF_ERANGE;
     *energy = total;
     return 0;
 }
@@ -674,12 +691,13 @@ static void laplacian_into(const Sheaf *s, double *L) {
     }
 }
 
-/* L: n0 by n0, row by row. */
+/* L: n0 by n0, row by row. When the maps and weights are too large together the call is refused, and what L then
+ * holds is not a Laplacian. */
 int32_t sheaf_laplacian(void *handle, double *L) {
     Sheaf *s = (Sheaf *)handle;
     if (!s || !L) return SHEAF_EARG;
     laplacian_into(s, L);
-    return 0;
+    return bounded(L, (int64_t)s->n0 * s->n0) ? 0 : SHEAF_ERANGE;
 }
 
 /* h0: the dimension of ker L, counting an eigenvalue as zero when it is at most tol times the larger of 1 and the largest
@@ -696,7 +714,7 @@ int32_t sheaf_sections(void *handle, double tol, int32_t *h0, int32_t *h1, const
     if (!L || !ev || !e) goto done;
     laplacian_into(s, L);
     if (!bounded(L, (int64_t)n * n)) {
-        rc = SHEAF_EARG;
+        rc = SHEAF_ERANGE;
         goto done;
     }
     rc = eig_inplace(n, L, ev, e);

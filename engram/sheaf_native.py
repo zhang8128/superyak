@@ -20,7 +20,8 @@ SOURCE = native_build.source('sheaf_kernel.c')
 ABI = 1
 MAX_N, MAX_COLS, MAX_CELLS, MAX_VERTICES, MAX_STALK = 2048, 16384, 1 << 24, 4096, 256
 ERRORS = {-6: 'out of memory', -7: 'bad argument: a value that is not finite, is beyond 1e150, or is out of range',
-          -8: "the decomposition didn't settle", -9: 'too large for the kernel'}
+          -8: "the decomposition didn't settle", -9: 'too large for the kernel',
+          -12: 'the values are each in bounds but too large together: a result would not be finite'}
 _double_p, _int_p = ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int32)
 
 
