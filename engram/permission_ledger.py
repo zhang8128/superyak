@@ -9,7 +9,8 @@ A log row's `body` is canonical JSON with these optional parts (the `kind` is a 
      "update": [{"table": T, "where": {...}, "set": {...}}],   # columns set on the rows matching `where`
      "meta":   {key: value},                         # meta keys set
      "name":   "Public Health",                      # a register-place's display name (R4)
-     "houses": [".engram/graph.db"]}                 # a gate act's record of the houses it marked (not projected)
+     "houses": [".engram/graph.db"]}                 # a gate act's houses whose mark it changed (not projected): marked,
+                                                     # or unmarked under a never-raised off (rows from 2026-11-19 on)
 
 In a row or a `set`, the string "@seq" stands for the log row's own seq and "@at" for its time; a dict or list
 value is stored as canonical JSON text; a places row's `pseudonym_salt` is hex."""
@@ -1822,9 +1823,26 @@ class Ledger:
             return self._file(state, spec, act, actor, channel, now)
         ref, body = self._make(spec, state, actor, args, auth, now)
         body = _stamp(body, channel, None)
-        seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
+        with self._houses_changed(body):
+            seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
         del state                 # P 5.6: no frame holds a State while the check builds the next
         return self._outcome("done", ref, seq, act.kind, args)
+
+    @contextlib.contextmanager
+    def _houses_changed(self, body: Mapping):
+        """A gate act's log write that fails after its houses changed: the refusal says which, and what the gate
+        reads now, instead of "nothing was written" (P 12.3, "Before the raise"; the re-check's R5)."""
+        try:
+            yield
+        except (LedgerBusy, LedgerUnreadable) as e:
+            changed = body.get("houses") or []
+            if not changed:
+                raise
+            names = ", ".join(_house_name(self.root / h) for h in changed)
+            gate = effective_gate(self.root, [self.root / h for h in changed])
+            text = str(e).replace("nothing was written, so try again", "the act's log row was not written")
+            raise type(e)(f"{text}; but the houses {names} were already changed, and the gate reads {gate.mode} now: "
+                          "run the gate act again") from e
 
     def _make(self, spec: "_Act", state: State, actor: str, args: Mapping, auth: Authority, now: int):
         """`spec.make`; an act that touches files (the gate) is also told the root of this ledger's engram home."""
@@ -1922,7 +1940,8 @@ class Ledger:
         args = spec.prepare(state, p.by_agent, dict(spec_act["args"]))
         ref, mbody = self._make(spec, state, p.by_agent, args, Authority("do", "person", None), now)
         mbody = _signed(_stamp(mbody, channel, pid), pid)
-        seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
+        with self._houses_changed(mbody):
+            seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
         del state
         return self._outcome("done", ref, seq, spec_act["kind"], args)
 
@@ -1943,7 +1962,9 @@ class Ledger:
             raise RuleError(_ACT, f"{actor} cannot make this change alone")
         ref, mbody = self._make(spec, state, actor, args, auth, now)
         mbody = _signed(_stamp(mbody, "terminal", p.id), p.id)
-        seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id, at=now)
+        with self._houses_changed(mbody):
+            seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id,
+                               at=now)
         return ref, seq, kind, args       # the caller drops its State, then `_outcome` builds the next
 
     def proposals(self, *, now: int) -> list[dict]:
@@ -2087,8 +2108,17 @@ class Ledger:
         """What a `gate` act would use if applied now: the published house, every house on disk, and those among
         them that lack migration 029 (R27). The act computes the same at the yes, never from a caller."""
         found = houses(self.root)
+        meta = self.meta()
+        this_id = []
+        if not meta.get("gate_raised"):          # P 12.3, "Before the raise": each such house reads closed
+            for h in found:
+                try:
+                    if _house_id(h) == meta["ledger_id"]:
+                        this_id.append(h)
+                except sqlite3.Error:
+                    pass
         return {"published_house": self.root / PUBLISHED_HOUSE, "houses": found,
-                "lacking_029": [h for h in found if _lacks_029(h)]}
+                "lacking_029": [h for h in found if _lacks_029(h)], "this_id": this_id}
 
     def place_rules(self, place: str, *, now: int) -> dict:
         """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published. Its
@@ -2982,6 +3012,12 @@ def _lacks_029(db_path: Path) -> bool:
     return not {"source_instance_id", "record_id"} <= columns or changes is None
 
 
+# P 12.3 rule 2's clause for a house that carries this ledger's id while the gate was never raised: one sentence,
+# naming the command whose plan says which path made it and the move for each (the review's R7).
+_NEVER_RAISED = ("carries this ledger's id but this ledger was never raised; run engram-permissions gate to see why "
+                 "and what each move does")
+
+
 def _closed(cause: str) -> Gate:
     return Gate("closed", cause)
 
@@ -3039,6 +3075,8 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
                            "engram-permissions gate <current mode> to mark it")
         if mark is not None and mark != ledger_id:
             return _closed(f"house {_house_name(house)} carries ledger id {mark}, not this ledger's")
+        if mark is not None and not raised:          # P 12.3, "Before the raise": an older ledger, a raise cut short,
+            return _closed(f"house {_house_name(house)} {_NEVER_RAISED}")    # or R50 as first written
     if mode is None:
         return _closed("gate_raised is set but the gate is missing") if raised else Gate("off", None)
     if mode not in GATE_MODES:
@@ -3110,20 +3148,31 @@ def check_gate_mode(mode) -> None:
         raise RuleError(_GATE, ENFORCE_WAITS)
 
 
-def _mark_house(db_path: Path, ledger_id: str) -> None:
-    """R17: plain sqlite3, one BEGIN IMMEDIATE per house."""
+def _mark_house(db_path: Path, ledger_id: str | None, changed: Sequence[Path] = ()) -> None:
+    """R17: plain sqlite3, one BEGIN IMMEDIATE per house. ``ledger_id`` None removes the mark (R50 as revised: a
+    never-raised `gate off`). ``changed`` are the houses this act already changed, which keep their change when this
+    one fails: the refusal names them, since the gate may now read closed (the review's N2)."""
     try:
         con = sqlite3.connect(db_path, isolation_level=None, timeout=BUSY_MS / 1000)
         try:
             con.execute("BEGIN IMMEDIATE")
-            con.execute("INSERT INTO meta(key, value) VALUES('permissions_ledger_id', ?) "
-                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ledger_id,))
+            if ledger_id is None:
+                con.execute("DELETE FROM meta WHERE key = 'permissions_ledger_id'")
+            else:
+                con.execute("INSERT INTO meta(key, value) VALUES('permissions_ledger_id', ?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ledger_id,))
             con.execute("COMMIT")
         finally:
             con.close()
     except sqlite3.Error as e:
-        raise RuleError(_GATE, f"house {_house_name(db_path)} could not be marked ({e}); nothing was recorded, "
-                               "run the gate again") from e
+        verb = "marked" if ledger_id is not None else "unmarked"
+        if changed:
+            names = ", ".join(_house_name(h) for h in changed)
+            then = (f"the houses {verb} before it ({names}) keep that and nothing was recorded in the log, so the gate "
+                    f"may read closed until the gate act runs again")
+        else:
+            then = "nothing was changed or recorded, run the gate again"
+        raise RuleError(_GATE, f"house {_house_name(db_path)} could not be {verb} ({e}); {then}") from e
 
 
 def _make_gate(state, actor, args, auth, now, *, root: Path):
@@ -3136,6 +3185,7 @@ def _make_gate(state, actor, args, auth, now, *, root: Path):
     if marking:
         body["meta"]["gate_raised"] = "1"
     ledger_id = state.meta["ledger_id"]
+    changed: list[Path] = []
     for house in houses(root):
         try:
             mark = _house_id(house)
@@ -3143,11 +3193,18 @@ def _make_gate(state, actor, args, auth, now, *, root: Path):
             if not marking:
                 continue        # never raised: a house whose mark cannot be read is left as it is
             mark = None
-        # Under every mode a house marked `unreadable`, or with an earlier ledger's id, is marked with this one's,
-        # so `gate off` opens it (Serenity's section 2, item 6); an unmarked house is marked once the gate is raised.
-        if mark != ledger_id and (marking or mark is not None):
-            _mark_house(house, ledger_id)
-            body["houses"].append(house.relative_to(root).as_posix())
+        # Once the gate is raised (or this act raises it), a house marked `unreadable`, with an earlier ledger's id,
+        # or with none is marked with this one's (Serenity's section 2, item 6). Under a never-raised `off` every mark
+        # is removed, this ledger's own included: a ledger never raised leaves no house carrying its id, so a house
+        # that does reads closed (R50 as revised; P 12.3, "Before the raise").
+        if marking and mark != ledger_id:
+            _mark_house(house, ledger_id, changed)
+        elif not marking and mark is not None:
+            _mark_house(house, None, changed)
+        else:
+            continue
+        changed.append(house)
+        body["houses"].append(house.relative_to(root).as_posix())
     return "gate:" + mode, body
 
 

@@ -271,8 +271,10 @@ only refuses or narrows: the daemon never serves `group:outside-home`, `share` r
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
 refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and
 two more hold: the `shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate
-G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens
-it. Under `enforce`,
+G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id once the gate is raised,
+and removes every house's mark under a never-raised `gate off`, so `gate off` opens it. A house that carries the
+ledger's id while the gate was never raised reads `closed` (an older or rebuilt copy of the ledger, a first raise cut
+short, or a `gate off` from before 2026-11-19); `engram-permissions gate` says which move fits. Under `enforce`,
 `remember(genome=True)` of delivered content is refused. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
 without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
