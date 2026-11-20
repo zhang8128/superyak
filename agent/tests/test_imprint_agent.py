@@ -196,10 +196,11 @@ def test_the_first_run_returns_once_the_link_is_printed(tmp_path, monkeypatch):
 
 def test_a_rerun_while_requested_prints_the_link_again(tmp_path):
     station, lines = FakeStation(), []
-    # the fake clock's one poll jumps past the stamp's 300 s, so the wait ends with it (revision 9, asked 7)
-    assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'check-again'
+    # the fake clock's one poll jumps past the stamp's 300 s: the wait ends with it, still waiting for the yes
+    # (revision 9, asked 7; the code reader's N1)
+    assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'waiting-for-you'
     assert IMPRINT_ID[:4] in lines[0] and REQUEST_ID[:4] in lines[0] and 'AB12CD34' in lines[0]
-    assert '#imprint?code=AB12CD34' in lines[1] and lines[2] == imprint_module.CHECK_AGAIN and len(lines) == 3
+    assert '#imprint?code=AB12CD34' in lines[1] and len(lines) == 2
     assert [c.method for c in station.calls][0] == 'GET' and 'POST' not in [c.method for c in station.calls]
 
 
@@ -642,7 +643,7 @@ def test_the_wait_for_the_yes_ends_with_the_stamp(tmp_path, monkeypatch):
     clock = [float(NOW)]
     monkeypatch.setattr(imprint_module.time, 'time', lambda: clock[0])
     monkeypatch.setattr(imprint_module.time, 'sleep', lambda s: clock.__setitem__(0, clock[0] + s))
-    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN, wait=540) == 'check-again'
+    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN, wait=540) == 'waiting-for-you'
     assert NOW + 300 <= clock[0] < NOW + 300 + imprint_module.POLL_SECONDS + 1
 
 

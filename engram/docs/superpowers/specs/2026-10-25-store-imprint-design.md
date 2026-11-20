@@ -2388,7 +2388,7 @@ refuses a store of more than 100,000 memories
   code and the confirm link. The first run returns once it has printed the link, so a session can relay it at once
   (the fresh review's M1, 2026-10-28): the code lives 10 minutes, and a session sees a command's output only when it
   ends. Every line is flushed.
-- Later runs wait up to 9 minutes per run. One that finds the request still `requested` prints the link and the two
+- Later runs wait up to 5 minutes per run, the life of their check's stamp (revision 9; 9 minutes before it). One that finds the request still `requested` prints the link and the two
   short ids again first.
 - A run that finds the code expired (send.json's `expires`, the station's own test) says so in one line, without the
   code: the request ends at the station's next hourly sweep, and then the owner plans again. It returns at once,

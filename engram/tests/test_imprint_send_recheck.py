@@ -411,3 +411,13 @@ def test_a_damaged_package_refuses(tmp_path):
     package.write_bytes(b"not a database" * 512)
     with pytest.raises(PlanRefused, match="can't be read. Nothing was sent. Run the plan again."):
         _check(tmp_path, plan)
+
+
+def test_a_damaged_imprint_after_its_request_says_nothing_more_was_sent(tmp_path):
+    """After a request the station may hold parts, so the refusal doesn't say nothing was sent (the reader's N2)."""
+    args, plan, built = _made(tmp_path, cosubjects={"e2": "person:jenn"})
+    (built.dir / "send.json").write_text("{}")
+    (built.dir / "sources.json").write_text("")
+    with pytest.raises(PlanRefused, match="can't be read. Nothing more was sent") as e:
+        _check(tmp_path, plan)
+    assert "Nothing was sent" not in str(e.value)

@@ -113,9 +113,8 @@ class Imprint:
                 self.out(CHECK_AGAIN)
                 return 'check-again'
             time.sleep(POLL_SECONDS)
-            if time.time() - at > STAMP_SECONDS:      # the wait ends with its stamp (revision 9, asked 7)
-                self.out(CHECK_AGAIN)
-                return 'check-again'
+            if time.time() - at > STAMP_SECONDS:      # the wait ends with its stamp (revision 9, asked 7), still
+                return 'waiting-for-you'              # waiting for the yes; the next run checks first (reader's N1)
             if time.time() >= deadline:
                 return 'waiting-for-you'
 

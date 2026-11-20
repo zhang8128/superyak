@@ -1150,6 +1150,8 @@ LEDGER_GONE = "The permissions ledger this plan read is gone. Nothing was sent. 
 PACKAGE_GONE = "This imprint's package is gone, and no request was sent. Run the plan again."
 BUILT_BEFORE_9 = "This imprint was built before each send asked the permissions ledger again. Run the plan again."
 IMPRINT_UNREADABLE = "This imprint's files can't be read. Nothing was sent. Run the plan again."
+IMPRINT_UNREADABLE_SENT = ("This imprint's files can't be read. Nothing more was sent; make imprint-status says what the "
+                           "station holds, and make imprint-withdraw ends it.")
 
 
 class SendRefused(PlanRefused):
@@ -1201,12 +1203,13 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
     if not isinstance(imprint_id, str):
         raise PlanRefused("This plan is not built. Run make imprint-send, which builds it first.")
     folder = home / "imprints" / imprint_id
+    sent = (folder / "send.json").is_file()
+    unreadable = IMPRINT_UNREADABLE_SENT if sent else IMPRINT_UNREADABLE    # the reader's N2
     try:
         for name in (CHECKED, REFUSED):
             (folder / name).unlink(missing_ok=True)
     except OSError:
-        raise PlanRefused(IMPRINT_UNREADABLE) from None
-    sent = (folder / "send.json").is_file()
+        raise PlanRefused(unreadable) from None
     if not (folder / "imprint.db").is_file():
         if sent:
             return None
@@ -1247,7 +1250,7 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
     except PlanRefused:
         raise
     except (OSError, ValueError, sqlite3.Error):    # the package or its lists damaged (the code reader's 3)
-        raise PlanRefused(IMPRINT_UNREADABLE) from None
+        raise PlanRefused(unreadable) from None
     finally:
         if pkg is not None:
             pkg.close()
@@ -1267,7 +1270,7 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
         stamp = {"imprint_id": imprint_id, "at": at, "seq": seq}
         _write_private(folder / CHECKED, json.dumps(stamp, sort_keys=True) + "\n")
     except OSError:
-        raise PlanRefused(IMPRINT_UNREADABLE) from None
+        raise PlanRefused(unreadable) from None
     return stamp
 
 
