@@ -53,19 +53,30 @@ test holds that a gate on for one store is off for its sibling.
 
 ## What changes when this is deployed
 
+**Before any machine's Engram restarts on this change,** the deploying ship lists every store under that machine's
+`ENGRAM_HOME` (the default store and each `instances/<name>/`), reads the `config.toml` beside each, and says in the
+room what it found: which stores have a gate on in their own file, and which have one on only in a file that will no
+longer apply to them. This holds for every machine, not only the Pi.
+
 - **Nothing comes on by itself.** A gate is on only where a `config.toml` beside that store says so.
 - **The default store of a home whose config has a gate on, with sessions that start elsewhere:** that gate comes
   back on.
 - **An instance store whose gate was switched on in its home's file** (how the live store above was set, when its
-  sessions started in the home folder): it stays off until the section is put in the instance's own file. For that
-  store this is a one-time copy of the two calibrated sections; run read-only today at its calibrated cost, the
-  sheaf pass would split none of its 266 summaries.
+  sessions started in the home folder): it stays off until the section is put in the instance's own file. That is a
+  one-time copy, by hand, of the calibrated sections and nothing else into
+  `<ENGRAM_HOME>/.engram/instances/<name>/config.toml`, made by the store's owner or by a ship that can point to the
+  recorded calibration for that store. Deleting the file undoes it. For the store above the sections are
+  `[cohesion]` and `[category_evolution]`; run read-only today at its calibrated cost, the sheaf pass would split
+  none of its 266 summaries.
 - **A project file that switched a gate on for a store that has it off:** that gate goes off, with the warning.
-- **The Pi:** the one config found there has all three off. No change expected; the deploying ship reads the config
-  beside each of the Pi's stores before the restart and says what it found.
+- **The Pi:** the one config found there on 2026-11-20 has all three off, so no change is expected. The step above
+  still applies.
 - **Tests that hand the server a whole config in memory** (`tests/test_category_server.py`, one in
   `tests/test_server_registry.py`) replace `with_store_settings` as they already replace `load_config`: the config
   under test is theirs, gates included. Six of them failed on draft 1's code and were not run before it was pushed.
+
+The same reader re-checked draft 2 and approved it, naming one follow-up: the audit step was written for the Pi
+alone, and the copy named no path. Both are made above.
 
 ## Undo
 
