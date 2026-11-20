@@ -80,7 +80,7 @@ its cap and a line cap gamed with long lines, so a cap needs lines and bytes bot
 | --- | --- |
 | S1 the map | At most 100 lines and 8 KB; every top-level folder of main is named in the parts table (the map names all sixteen today); a new folder that the table does not name fails |
 | S2 documents | Every spec, plan, report and decision is in the index with a status; links resolve |
-| S3 the start | The map's cap is S1's. `CLAUDE.md` is held by a ratchet at today's 146 lines and 13,042 bytes: it may shrink and may not grow |
+| S3 the start | The map's cap is S1's. `CLAUDE.md` is held by a ratchet at its size on this branch's head, 146 lines and 13,042 bytes by `wc`: it may shrink and may not grow |
 | S4 boundaries | Which part may name which; today's counts are the ratchet; a new crossing needs a decision page |
 | S5 private terms | Local, not in CI: each ship's reflect runs a command that says whether the pre-push scanner is installed in its checkout, and posts the answer. CI cannot see another machine's hooks |
 | S6 loose ends | Each reflect prints its ship's count of branches and worktrees; reported, not failing |

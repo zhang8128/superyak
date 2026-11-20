@@ -1,7 +1,7 @@
 # Superyak: the map
 
 One page, 100 lines at most, kept true: a change to the shape of the system changes this page in the same commit.
-Counted on main cdc639c1 and branch `v2` 7a78136e on 2026-11-20. Kept by Serenity, the Mac's ship. Andy vetoes.
+Counted on main d330c898 and branch `v2` 7a78136e on 2026-11-20. Kept by Serenity, the Mac's ship. Andy vetoes.
 
 ## What we are building
 
@@ -25,7 +25,7 @@ On 2026-11-20 it had carried 3 memories.
 | The graph | `engram/ncat_kernel.c` (C, 822 lines) with `engram/ncat*.py` | Live, little used. A C++20 port waits on `tardis/ncat-cpp` |
 | Paths into roads | `engram/ncat_routes.py`, on `v2` only | Ran in one rehearsal. Parked |
 | The agreement for sharing | `lighthouse/` (protocol v0.1, a TypeScript kit), `engram/lighthouse_protocol.py`, `atlas/workbench/lighthouse_wire.py` | Used by Engram's recall crossing. Kit untouched since 2026-09-11 |
-| The station: where ships and people meet | `peer/` (26,886 lines) and `agent/` (9,516) | Live on the Pi, nine services. Its own API for rooms; `peer/superyak_peer/crossing.py` carries the protocol's recall and read frames between peers |
+| The station: where ships and people meet | `peer/` (26,886 lines) and `agent/` (9,516) | Live on the Pi: nine `superyak-*` services running there on 2026-11-20, by `systemctl --user list-units`. Its own API for rooms; `peer/superyak_peer/crossing.py` carries the protocol's recall and read frames between peers |
 | Teams of builders | `team/` (9,955 lines) | Live on the Mac |
 | Evidence for research | `atlas/` (8,334 lines) | Last touched 2026-10-27 |
 | Frames | Outside this repository | Not connected to anything here |
@@ -47,8 +47,8 @@ One word, three things: "lighthouse" is the protocol kit, Engram's publisher, an
 ## Who holds what
 
 - Rio Grande (the Pi): the station, merges, deploys.
-- Tardis: the kernel and store, federation, the public route, CI.
-- Serenity (the Mac): the room, memory, and this map.
+- Tardis: the kernel and store, federation, the public route, CI, and the visitor's view.
+- Serenity (the Mac): the room, memory, this map, and trains (the law names Rio Grande and Serenity as the two that merge).
 - Andy: the law, admissions and direction.
 
 ## Rules
@@ -66,10 +66,13 @@ Rules 2 and 6 stay on trust, and 5 is each ship's to do and report in its reflec
 
 ## Decided on 2026-11-20
 
+By Serenity, as lead. Andy can veto each. None of these is law.
+
 1. The August protocol is the one agreement. Its first new use is a walk sealed as a Claim.
 2. The four lab folders move under `lab/`. Nothing is deleted.
 3. The kernel's C++ port is adopted after its gate and a read (Andy's request on issue #2, 2026-11-07).
-4. Tardis's branches merge in trains under section 2 of the law, as 67 already have.
+4. In practice Tardis's branches merge in trains under section 2, as 67 had by this date. The law's own line
+   (section 7, "until Andy decides how such branches merge") waits for its revision 2.
 
 ## Where the detail is
 
