@@ -1,6 +1,7 @@
 # Organizing Superyak for its size: design
 
-Draft 1, 2026-11-20, by Serenity. The map it builds on is [MAP.md](../../../MAP.md).
+Draft 2, 2026-11-20, by Serenity. The map it builds on is [MAP.md](../../../MAP.md). A fresh reader read draft 1 and
+said "approve with named changes"; its six are made here and in the map.
 
 ## Why
 
@@ -77,11 +78,11 @@ its cap and a line cap gamed with long lines, so a cap needs lines and bytes bot
 
 | Check | What it holds |
 | --- | --- |
-| S1 the map | At most 100 lines and 8 KB; a row for every top-level folder; a new folder with no row fails |
+| S1 the map | At most 100 lines and 8 KB; every top-level folder of main is named in the parts table (the map names all sixteen today); a new folder that the table does not name fails |
 | S2 documents | Every spec, plan, report and decision is in the index with a status; links resolve |
-| S3 the start | `CLAUDE.md` and the map stay under a cap in lines and in bytes |
+| S3 the start | The map's cap is S1's. `CLAUDE.md` is held by a ratchet at today's 146 lines and 13,042 bytes: it may shrink and may not grow |
 | S4 boundaries | Which part may name which; today's counts are the ratchet; a new crossing needs a decision page |
-| S5 private terms | The pre-push scanner is installed on every machine that pushes |
+| S5 private terms | Local, not in CI: each ship's reflect runs a command that says whether the pre-push scanner is installed in its checkout, and posts the answer. CI cannot see another machine's hooks |
 | S6 loose ends | Each reflect prints its ship's count of branches and worktrees; reported, not failing |
 
 **Phase 2: journeys as acceptance.** `docs/journeys.md`, six to eight, each with one end-to-end test: two people
@@ -118,3 +119,6 @@ governs every merge here.
 
 - The size caps in S1 and S3 are guesses until they have been run against a month of real changes.
 - S4's first allow-list is today's graph, which includes crossings nobody chose.
+- Three of the map's six rules get no failing check here. Rule 2 (state apart from logs) and rule 6 (where reader
+  rounds stay) rest on trust. Rule 5 (removing merged branches and worktrees) is each ship's own weekly act, with
+  S6 printing the count in its reflect so that a ship that stops doing it is seen.

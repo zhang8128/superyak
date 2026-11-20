@@ -14,7 +14,7 @@ Someone outside Andy's ships asks a lighthouse a scoped question and gets an ans
 lead's line; the five goals in [docs/goals.md](docs/goals.md) stand unchanged.
 
 The rail is measured by the distinct things it carried between machines, never by its trips (Tardis's lesson 26).
-On 2026-11-20: 3 memories, on 33 crossings.
+On 2026-11-20 it had carried 3 memories.
 
 ## The parts
 
@@ -30,12 +30,14 @@ On 2026-11-20: 3 memories, on 33 crossings.
 | Evidence for research | `atlas/` (8,334 lines) | Last touched 2026-10-27 |
 | Frames | Outside this repository | Not connected to anything here |
 | Lab | `tuning/`, `deploy/`, `research_tasks/`, `research_poc/` | Untouched since 2026-09-13. They move under `lab/` |
+| Support, not a layer | `docs/` (specs, plans, reports), `scripts/` (hooks, measures), `tests/`, `.github/` (CI), `.superyak/` (checklists), `.superpowers/` | In use |
 
 ## How the parts talk
 
 1. Protocol v0.1, as memories only: Engram's recall crosses machines in signed `recall` and `read` frames that the
    peer carries to a publisher's lighthouse daemon.
-2. What does not cross: the protocol's Claim and Witness, which exist only in the TypeScript kit, and rooms, which
+2. The crossing answers two kinds of request and no others, `recall` and `read`. The protocol's Claim is made and
+   checked in the TypeScript kit and in Atlas (`atlas/workbench/lighthouse.py`), but no crossing carries one. Rooms
    go by the station's own API.
 3. The room in `v2`: one machine, standard input and output.
 
@@ -51,8 +53,9 @@ One word, three things: "lighthouse" is the protocol kit, Engram's publisher, an
 
 ## Rules
 
-None of these is checked by a test yet. The plan that makes them checks is
+None of these is checked by a test yet. The plan that makes 1, 3 and 4 into checks is
 [docs/superpowers/specs/2026-11-20-organizing-for-size-design.md](docs/superpowers/specs/2026-11-20-organizing-for-size-design.md).
+Rules 2 and 6 stay on trust, and 5 is each ship's to do and report in its reflect.
 
 1. This page stays under 100 lines.
 2. State is overwritten and short. Logs are appended, and no session reads a log at its start.
