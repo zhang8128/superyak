@@ -127,3 +127,41 @@ def test_the_gate_plan_sets_apart_a_house_that_carries_this_ledgers_id_before_th
     assert "carry this ledger's id though it was never raised" in text and "revoked" in text
     raise_text = "\n".join(gate_plan_lines(plan, marking=True))
     assert "carry this ledger's id though it was never raised" in raise_text
+
+
+def test_a_raw_sqlite_error_at_the_log_write_still_says_the_houses_changed(tmp_path, monkeypatch):
+    """The reader's A on 4c6efb53 (all hands 0b392987): a never-raised `gate off` removes the marks, then its log row
+    meets a raw SQLite error (a disk error, a commit that fails), not LedgerBusy or LedgerUnreadable. The refusal
+    still says which houses changed and what the gate reads now."""
+    house = _restored_from_before_the_raise(tmp_path)
+    led = Ledger.open(tmp_path)
+
+    def disk(self, kind, *args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(Ledger, "_append", disk)
+    with pytest.raises(sqlite3.OperationalError) as e:
+        do(led, ANDY, "gate", now="2026-11-03", mode="off")
+    monkeypatch.undo()
+    text = str(e.value)
+    assert "disk I/O error" in text and "houses lighthouse" in text and "the gate reads off now" in text
+    assert "permissions_ledger_id" not in house_meta(house) and effective_gate(tmp_path, [house]).mode == "off"
+    led.close()
+
+
+def test_a_read_only_marked_house_refuses_gate_off_and_takes_gate_shadow(tmp_path):
+    """The reader's B on 4c6efb53: after a restore, a house that carries this ledger's id and can't be written
+    refuses `gate off`, which must remove its mark, and still reads closed; `gate shadow` passes it over, since its
+    mark is already this ledger's, and raises the gate."""
+    house = _restored_from_before_the_raise(tmp_path)
+    led = Ledger.open(tmp_path)
+    house.chmod(0o400)
+    try:
+        with pytest.raises(RuleError) as e:
+            do(led, ANDY, "gate", now="2026-11-03", mode="off")
+        assert "lighthouse" in str(e.value)
+        assert effective_gate(tmp_path, [house]).mode == "closed" and "gate_raised" not in led.meta()
+        do(led, ANDY, "gate", now="2026-11-03", mode="shadow")
+    finally:
+        house.chmod(0o600)
+    assert effective_gate(tmp_path, [house]).mode == "shadow"
+    led.close()

@@ -630,6 +630,10 @@ class LedgerFacts:
                 raise PlanRefused(self._changed if _CHANGED in str(e) else self._unreadable) from None
             except sqlite3.Error:
                 raise PlanRefused(self._unreadable) from None
+            except FileNotFoundError:           # the key's os.stat or os.pread: the ledger gone is a change
+                raise PlanRefused(self._changed) from None
+            except OSError:                     # any other error there, as an I/O error (the reader's 1 on b3eb3497)
+                raise PlanRefused(self._unreadable) from None
         return mapped()
 
     def _integrity_check(self):
