@@ -1,10 +1,11 @@
 # Imprints, revision 9: each send asks the ledger again
 
-Tardis, 2026-11-20, draft 3. A change to the imprint spec (`2026-10-25-store-imprint-design.md`, revision 8), for board
+Tardis, 2026-11-20, draft 4, approved: the fresh reader's confirming read of draft 3 named four text edits and no further reading, and they are made. A change to the imprint spec (`2026-10-25-store-imprint-design.md`, revision 8), for board
 item `fix:imprint-send-rechecks-ledger`, from Serenity's question on train 1140. It changes what may leave a person's
 machine, so it takes the safety-code path: a fresh reader of this text, a test-first build, and a fresh reader of the
 code. Draft 1 (4f7d9032) got DO NOT APPROVE with twelve named changes from a fresh reader, and its re-check of draft 2
-(61c5ce8d) APPROVE WITH NAMED CHANGES, N1 to N7. All are made here, and the last section says where. This text and its build stay off GitHub until the fix is merged and live.
+(61c5ce8d) APPROVE WITH NAMED CHANGES, N1 to N7, and its confirming read of draft 3 (14d0c3d7) the same, with four
+edits. All are made here, and the last section says where. This text and its build stay off GitHub until the fix is merged and live.
 
 ## Why
 
@@ -23,17 +24,21 @@ machine almost every time.
 
 ## What is asked
 
-1. **The plan and the build record what they read.** The plan file gains `engram_home`, the resolved engram home
-   the plan read the ledger from, and `ledger`, the ledger's resolved path, or null when the machine had none. `read`
-   and `build` open the recorded path and refuse when it is missing or differs from what their own engram home names
-   ("Run the plan again."). The build writes, beside the package and never sent, `sources.json`: each shipped
-   semantic's recorded source episodes with each episode's lane, as the build read them (Ŝ needs src(s) ⊆ Ê, 5.2).
-   It is written in R30's form, one element per line, streamed. It names episodes that stay home, so it goes when
-   `imprint.db` goes (D24). A plan or an imprint made before revision 9 has no `ledger` and no `sources.json`, and
-   its send refuses with "Run the plan again."
+1. **The plan and the build record what they read.** The plan file gains `ledger`: the resolved path of the ledger
+   the plan actually read (its context's ledger), or null when it read none. `read` and `build` compare the resolved
+   path of the ledger they open with it, and refuse when they differ or when it is gone ("Run the plan again."). They
+   compare ledger paths, never engram homes. The test fixtures pass `engram_home` to `make_plan`, as the CLI's `_plan`
+   already uses one home for both. The build always writes, beside the package and never sent, `sources.json`: each
+   shipped semantic's recorded source episodes with each episode's lane, as the build read them (Ŝ needs
+   src(s) ⊆ Ê, 5.2), `[]` when there are none. It is written in R30's form, one element per line, streamed. It names
+   episodes that stay home, so it goes when `imprint.db` goes (D24): the agent's `_drop_local_copy` deletes both. A
+   plan whose file has no `ledger` key, or an imprint with no `sources.json`, was made before revision 9, and its send
+   refuses with "Run the plan again." A missing key never reads as null.
 2. **Each send run asks the ledger again before anything leaves.** When `build --if-needed` finds the plan built, it
-   first deletes the imprint's `checked.json` if one is there. When the imprint's `imprint.db` is gone (D24, after a
-   final status), it checks nothing, writes no stamp, and leaves the agent to report the status. Otherwise it opens
+   first deletes the imprint's `checked.json` and `refused.json` if they are there. When the imprint's `imprint.db` is
+   gone and `send.json` exists (D24, after a final status), it checks nothing, writes no stamp, and leaves the agent to
+   report the status. When `imprint.db` is gone and no request was sent, it refuses ("Run the plan again."). Otherwise
+   it opens
    the ledger at the plan's recorded path and takes one checked State, as a build does (revision 8: `LedgerFacts`, the
    projection digest or SQLite's integrity check, and the closing read). It then asks:
    - **The memories:** every shipped episode and semantic, with its id and lane read from the imprint's own
@@ -48,19 +53,22 @@ machine almost every time.
    - **The store's row:** asked once (D37, `check_owner`).
    The memories are read in a stream, with `prefetch`, never all held at once.
 3. **A ledger that's gone refuses.** If the plan recorded a ledger and none is at that path now, the check refuses.
-   If the plan recorded none and one is at the plan's recorded engram home now, the check runs against it.
+   If the plan recorded none and the check's own engram home has one now, the check runs against it.
 4. **A refusal stops the send, and the agent says what's out there.** If any answer differs, the check sends nothing
    and makes no stamp. Before any request was sent, it refuses with `PlanRefused`: "Your permissions changed since
    this imprint was built: N memories would now stay home. Nothing was sent. Run the plan again." The count is a
    number, with no names. When `send.json` exists, a request is at the station, and the engram check has no station
    client. So the check writes `refused.json` in the imprint's folder (0600: `imprint_id`, `at`, the count) and exits
-   with code 5. The `imprint-send` recipe catches exactly that code and runs the agent's `send --plan … --refused`.
-   The agent reads the request's status. In `requested` or `allowed`, while the upload is unfinished, it withdraws the
+   with code 5. The `imprint-send` recipe catches exactly that code and runs the agent's `send --plan … --refused`,
+   with the engram step in a subshell, `(cd engram && …)`, so the agent runs from the checkout's root. The agent
+   reads `refused.json`, goes on only when it names this folder's imprint, and reads the request's status. In `requested` or `allowed`, while the upload is unfinished, it withdraws the
    request as `make imprint-withdraw` does (D17: the ship's key, no password). It prints the request's short id, what
    the station held (nothing of the package while `requested`; the parts sent so far while `allowed`), that the
    request is withdrawn, and not to allow the link if it is still open. It ends with `STATUS: refused` (exit 1). In
    `received` or `approved` it withdraws nothing. It says the station holds the whole package and that withdrawing is
-   the owner's choice, by `make imprint-withdraw`. A ledger that can't be read, or that changed during the check, and
+   the owner's choice, by `make imprint-withdraw`, and ends with `STATUS: refused` (exit 1). In `deleting`, in a final
+   status, or `admitted` with `imprint.db` still on disk, it reports as `send` does and drops the local copy on a
+   final status. A ledger that can't be read, or that changed during the check, and
    `check_owner`'s refusals, end "nothing was sent" at send.
 5. **A stamp ties the send to a check, and is read at each step that sends.** On success the check writes
    `checked.json` in the imprint's folder, atomically, at 0600: `{"imprint_id": …, "at": <unix seconds when the State
@@ -135,7 +143,8 @@ When approved, this is folded in as revision 9:
 - D44: "Each send run asks the ledger the build's questions again, for the package's own rows and the semantics'
   sources, and the agent's send goes on only with that check's stamp, no more than 300 s old, read before each step
   that sends."
-- the Makefile's `imprint-send` recipe: exit 5 runs `send --refused`;
+- the Makefile's `imprint-send` recipe: exit 5 runs `send --refused`, the engram step in a subshell;
+- the agent: `send --refused`, the stamp reads, `STATUS: check-again` and `refused`, and `_drop_local_copy`;
 - CLAUDE.md's imprint section: the refusal, the withdrawal, `STATUS: refused` and `STATUS: check-again`.
 
 ## The reader's changes on draft 1, and where each is made
@@ -165,3 +174,10 @@ When approved, this is folded in as revision 9:
 | N5. The wait ends at the stamp | Asked 7; the table |
 | N6. `check-again`'s exit 3 | Asked 5 |
 | N7. `sources.json`'s form and keeping | Asked 1 |
+
+| Named change (confirming read of 14d0c3d7) | Where |
+| --- | --- |
+| 1. Compare ledger paths, not homes; fixtures pass `engram_home` | Asked 1, 3 |
+| 2. `_drop_local_copy` deletes `sources.json` | Asked 1; Sections changed (the agent) |
+| 3. The recipe's subshell | Asked 4; Sections changed |
+| 4. Other statuses; stale `refused.json`; a missing key; `[]`; a gone `imprint.db` with no request | Asked 1, 2, 4 |
