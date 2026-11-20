@@ -273,3 +273,63 @@ def test_a_ledger_that_changes_during_the_check_says_nothing_was_sent(tmp_path, 
     monkeypatch.setattr(Ledger, "state", changed)
     with pytest.raises(PlanRefused, match="changed while it was read; nothing was sent"):
         _check(tmp_path, plan)
+
+
+# ---- T4: build checks too, and the CLI's exit 5 -----------------------------------------------------------------
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import imprint  # noqa: E402
+
+ENGRAM = Path(__file__).resolve().parent.parent
+
+
+def test_a_fresh_build_stamps_its_check(tmp_path):
+    plan = make_plan(*plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"}))
+    built = build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+    assert json.loads((built.dir / "checked.json").read_text())["imprint_id"] == built.imprint_id
+
+
+def test_build_if_needed_asks_again(tmp_path):
+    args = plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"})
+    plan = make_plan(*args)
+    build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+    write_denies(args[3].ledger, "person:jenn", deny())
+    with pytest.raises(PlanRefused, match=STAYS):
+        build(plan.id, home=HOME(tmp_path), now=NOW, if_needed=True, engram_home=EH(tmp_path))
+
+
+def test_a_deny_marked_during_the_build_stops_it_before_any_request(tmp_path, monkeypatch):
+    from imprint_filter import LedgerFacts
+
+    args = plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"})
+    plan = make_plan(*args)
+    real, fired = LedgerFacts.close, []
+
+    def close(self):
+        if not fired:                               # the build's own closing read: a writer's deny just before
+            fired.append(1)
+            code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+                    "from permission_ledger import Ledger; from tests.imprint_support import write_denies, deny; "
+                    "led = Ledger.open(Path(sys.argv[2])); write_denies(led, 'person:jenn', deny()); led.close()")
+            subprocess.run([sys.executable, "-I", "-c", code, str(ENGRAM), str(EH(tmp_path))], check=True, cwd=ENGRAM)
+        return real(self)
+    monkeypatch.setattr(LedgerFacts, "close", close)
+    with pytest.raises(PlanRefused, match=STAYS):
+        build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+    assert fired and not list((HOME(tmp_path) / "imprints").glob("*/checked.json"))
+
+
+def test_the_cli_exits_5_when_a_request_is_out(tmp_path):
+    args = plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"})
+    plan = make_plan(*args)
+    built = build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+    (built.dir / "send.json").write_text("{}")
+    write_denies(args[3].ledger, "person:jenn", deny())
+    done = subprocess.run([sys.executable, str(ENGRAM / "imprint.py"), "build", "--plan", plan.id[:8], "--if-needed",
+                           "--superyak-home", str(HOME(tmp_path)), "--engram-home", str(EH(tmp_path))],
+                          cwd=ENGRAM, capture_output=True, text=True, timeout=300)   # build re-execs (R26)
+    assert done.returncode == imprint.EXIT_SEND_REFUSED == 5, done.stderr
+    assert "would now stay home" in done.stderr and (built.dir / "refused.json").is_file()

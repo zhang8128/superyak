@@ -1122,7 +1122,8 @@ def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram
     try:
         saved = _saved_plan(path)
         if saved.get("imprint_id"):
-            if if_needed:
+            if if_needed:                           # each send run asks the ledger again first (revision 9)
+                recheck(plan_id, home=home, engram_home=engram_home)
                 return _built_of(home, saved["imprint_id"])
             raise PlanRefused(f"This plan was already built as imprint {saved['imprint_id'][:4]}; "
                               "send it, or run the plan again.")
@@ -1133,6 +1134,7 @@ def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram
         except BaseException:
             shutil.rmtree(built.dir, ignore_errors=True)
             raise
+        recheck(plan_id, home=home, engram_home=engram_home)    # on a new State, before the stamp (revision 9, 6)
         return built
     finally:
         if work is not None:
@@ -2072,6 +2074,9 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
     except PlanBusy as busy:
         print(str(busy), file=sys.stderr)
         return 4
+    except SendRefused as refusal:                  # a request is out: the recipe runs the agent's send --refused
+        print(str(refusal), file=sys.stderr)
+        return EXIT_SEND_REFUSED
     except PlanRefused as refusal:
         print(str(refusal), file=sys.stderr)
         return 2
