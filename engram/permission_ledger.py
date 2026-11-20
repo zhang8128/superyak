@@ -1082,6 +1082,7 @@ class Ledger:
         # `fresh`: a file this process is building beside its final name (rebuild, migrate), which no other process
         # reads, so it skips the key, the memo and the marker, and is checked whole once at the end (the re-check, S4)
         self.conn, self.path, self.read_only, self._fresh = conn, path, read_only, fresh
+        self.state_key = None               # the key of the last state() checked (revision 8)
         # a fresh file's parts, carried in memory from append to append and written once, at `_finish_fresh` (the
         # section 2 review's S6); None until its first append reads them
         self._carried: dict | None = None
@@ -1356,6 +1357,9 @@ class Ledger:
                 self._verify(*checked)
             else:
                 checked = None
+            # the key of the state just checked, for a reader that reads it again later (the imprint filter's
+            # closing read, store-copy spec revision 8); None when nothing was checked
+            self.state_key = None if checked is None else checked[0]
             # the only log bodies a State reads: place names. Log times are read when a decision asks.
             names = {}
             for r in self.conn.execute(

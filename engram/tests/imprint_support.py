@@ -812,13 +812,48 @@ def retire_place(led, place: str) -> None:
     _put(led, "fixture-retire-place", place, {"insert": rows})
 
 
-def forbid_state(monkeypatch) -> None:
-    """Any ``Ledger.state`` call fails the test (the plan builds no State without a deny or a retirement)."""
+def count_state(monkeypatch) -> list:
+    """Every ``Ledger.state`` call from now on, as a list that grows by one per call (store-copy spec revision 8:
+    one State per plan, per read and per build, deny or none)."""
     from permission_ledger import Ledger
 
-    def refuse(self, *args, **kwargs):
-        raise AssertionError("Ledger.state() was called")
-    monkeypatch.setattr(Ledger, "state", refuse)
+    calls, real = [], Ledger.state
+
+    def counted(self, *args, **kwargs):
+        calls.append(self.path)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Ledger, "state", counted)
+    return calls
+
+
+def splice_page(home: Path, name: str, delete_sql: str, args: tuple) -> None:
+    """A torn page of the ledger under ``home``: the one page of index or table ``name`` replaced by that page of a
+    twin file in which ``delete_sql`` deleted the row, so a read through it misses the row and every other page
+    still holds it (an autoindex can't be dropped and rebuilt as ``_tear_index`` does). ``name`` must fit in one
+    page, its root, which is a leaf. A pause first moves the key's ctime, since the splice keeps the size and the
+    change counter, so no mark is trusted (revision 8; the review's 6). No connection may hold the file."""
+    import time
+
+    from permission_ledger import ledger_path
+
+    path = ledger_path(home)
+    twin = path.with_name("permissions.twin.db")
+    shutil.copyfile(path, twin)
+    con = sqlite3.connect(twin)
+    try:
+        con.execute(delete_sql, args)
+        con.commit()
+        size = con.execute("PRAGMA page_size").fetchone()[0]
+        root = con.execute("SELECT rootpage FROM sqlite_master WHERE name = ?", (name,)).fetchone()[0]
+    finally:
+        con.close()
+    page = twin.read_bytes()[(root - 1) * size:root * size]
+    twin.unlink()
+    assert page[100 if root == 1 else 0] in (0x0A, 0x0D), f"{name} spans more than its root page"
+    time.sleep(0.02)
+    with open(path, "r+b") as f:
+        f.seek((root - 1) * size)
+        f.write(page)
 
 
 def ledger(home: Path, *, owner: str, store: Storage | None, store_owner: str | None = None,
@@ -2623,6 +2658,14 @@ def _fixture_ledger(eh: Path, store_path: Path, memories, per_memory: int) -> No
                              "VALUES (?, ?, ?, ?, ?)", batch)
     led.conn.execute("COMMIT")
     led.close()
+    from tests.permissions_memory_support import restamp_projection
+
+    restamp_projection(eh)          # rows written by SQL, so the stamp a writer would have kept (revision 8's review 1)
+
+
+# The kept fixtures' version: a fixture from before its ledger was restamped (store-copy spec revision 8, its review's 1)
+# fails the State's check, so the Pi builds it again.
+CAP_FIXTURE_VERSION = "restamped-1"
 
 
 def _cap_world(tmp_path: Path, kind: str, build_fixture) -> CapWorld:
@@ -2633,11 +2676,12 @@ def _cap_world(tmp_path: Path, kind: str, build_fixture) -> CapWorld:
     base.mkdir(parents=True, exist_ok=True)
     with open(CAP_ROOT / f"{kind}.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if not (base / ".ready").is_file():
+        ready = base / ".ready"
+        if not ready.is_file() or ready.read_text() != CAP_FIXTURE_VERSION:
             shutil.rmtree(base, ignore_errors=True)
             base.mkdir(parents=True)
             build_fixture(base)
-            (base / ".ready").write_text("ok")
+            ready.write_text(CAP_FIXTURE_VERSION)
     env = {**os.environ, "PYTHONPATH": str(_stub_trails_dir()), "PYTHONDONTWRITEBYTECODE": "1"}
     env.pop("ENGRAM_HOME", None)
     return CapWorld(kind, base / "src" / "graph.db", base / "eh", Path(tmp_path), env)
@@ -2690,7 +2734,7 @@ def _run(cmd, env, cwd=None) -> str:
     return out.stdout
 
 
-STAGE_VERSION = "v2"      # stages kept from before route waited for trails (2026-10-28) are made again (review M2)
+STAGE_VERSION = "v3"      # v2: route waited for trails (review M2); v3: the cap ledger restamped (revision 8)
 
 
 def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
@@ -2731,11 +2775,40 @@ def _handed_off_from(world: CapWorld, *, route: bool) -> tuple[Path, str]:
     return handed_off(world.work, built, route=route, valid_until=FAR)
 
 
+def deny_world(world: CapWorld) -> CapWorld:
+    """The cap fixture with one deny in the home layer of a co-subject of its first memory (``person:p0000000``),
+    refusing ``imprint`` for calibration, and a newly registered place retired, both written by the ledger's own
+    appends on a kept copy of its ledger: so ``record_matches`` and ``retired`` run at the cap (revision 8; the
+    re-check's R4). Its stages are its own."""
+    import dataclasses
+    import fcntl
+
+    from permission_ledger import Ledger
+
+    eh = CAP_ROOT / world.kind / "eh-deny"
+    with open(CAP_ROOT / f"{world.kind}-deny.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ready = eh / ".ready"
+        if not ready.is_file() or ready.read_text() != CAP_FIXTURE_VERSION:
+            shutil.rmtree(eh, ignore_errors=True)
+            shutil.copytree(world.engram_home, eh)
+            led = Ledger.open(eh)
+            try:
+                write_denies(led, "person:p0000000", deny(actions=["imprint"], purposes=["calibration"]))
+                retire_place(led, "place:la-county/closed-park")
+            finally:
+                led.close()
+            ready.write_text(CAP_FIXTURE_VERSION)
+    return dataclasses.replace(world, kind=world.kind + "-deny", engram_home=eh)
+
+
 def cap_command(world: CapWorld, step: str) -> list[str]:
     """The argv of one process of I 16's "Every process at its bounds" run on the cap fixture. What it needs made
     first (a plan, a built package, a handed-off root) is made unmeasured and kept, then copied to ``world.work``.
     Plan, read and build are measured as they ship, without route (it waits until trails ships; the fresh review's
     M2). ``count`` needs a package with route, so its stage is made with route open in those children alone."""
+    if step.endswith("-deny"):
+        return cap_command(deny_world(world), step.removesuffix("-deny"))
     if step == "plan":
         return _plan_command(world, _context_home(world, world.home), route=False)
     if step == "read":

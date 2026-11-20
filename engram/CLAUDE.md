@@ -289,8 +289,10 @@ taken mid-write without its journal) that tore one row per column. The projectio
 index page. `Ledger.state()` checks it before it serves a State, and every act and append checks the state it builds
 on the same way: a state this process verified (its memo) or a writer marked (`.engram/permissions.verified`, which
 only writers write) is trusted, and any other runs the full check, seconds on the Pi. Not every read checks it: the
-gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do some
-direct reads, such as the imprint filter's (`store_row`, its co-subject and refusal queries). A ledger that fails
+gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do the
+direct reads `Ledger.store_row` and `Ledger.latest_lane_note`, which no production code calls now. The imprint filter
+reads every ledger fact from one State per plan, read and build (`LedgerFacts`), and reads the key and the log's row
+at that State's seq once more before it saves anything (store-copy spec revision 8). A ledger that fails
 reads as unreadable. The recovery is `engram-permissions rebuild --out <dir>`, which replays the log and says whether
 the old tables matched it, then moving the copy into place with every Engram process stopped.
 

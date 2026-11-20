@@ -13,7 +13,7 @@ from imprint_filter import (IdSet, People, PlanRefused, Refusals, Scratch, Scrat
                             parse_terms, people)
 from permissions import subjects_of
 from tests.imprint_support import (GENOME_ID, NOW, T, add_subject, base_ids, copy_of, ctx, deny, empty_old_store,
-                                   ep, forbid_state, future_store, iid, imprint_file, ledger, link_copies,
+                                   ep, count_state, future_store, iid, imprint_file, ledger, link_copies,
                                    new_store, published_house, published_house_file, ref_of, remove_cosubject,
                                    retire, retire_place, selection, share_as)
 
@@ -210,10 +210,11 @@ def test_a_co_subjects_no_keeps_the_memory_home(tmp_path, monkeypatch):    # I 5
                      denies={"person:lee": [deny(kinds=kinds, actions=["route"], purposes=["trail-evaluation"])]})
         assert "about-lee" in base_ids(s, one, route=False) and "about-lee" not in base_ids(s, one, route=True), kinds
     calm = ledger(tmp_path / "h3", owner="andy", store=s, cosubjects={"about-lee": "person:lee"})
-    forbid_state(monkeypatch)                                  # any Ledger.state() call fails the test (the re-check's S5)
+    calls = count_state(monkeypatch)                           # revision 8: one State, deny or none (was S5's none)
     calm_ctx = ctx(s, ledger=calm, owner="andy", home=True, now=NOW)
     assert not Refusals(calm, calm_ctx).any
     assert sorted(base(s.conn, "episode", selection(), calm_ctx, Counter())) == ["about-jenn", "about-lee", "plain"]
+    assert len(calls) == 1
 
 def test_a_copy_carries_what_its_source_gains_after_the_copy(tmp_path):   # I 5.2; the re-check's RM1 (P 6.3 item 1, 7.4)
     src = f"mem:{GENOME_ID}/episode/g1"                    # genome sync's source (federation.py:207-213)
