@@ -83,7 +83,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-trust-grant station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove embedder-keep-loaded federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-trust-grant station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove embedder-keep-loaded federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room station-lessons-add lessons-room lessons-where lessons-ship lessons-check lessons-lay lessons-list lessons-own-shown lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants lesson-outcome lesson-outcomes
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -118,6 +118,7 @@ help:
 	@echo "make lessons-where      This peer's lessons room, by its full id"
 	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
 	@echo "make lessons-check SHIP=… FILE=… [COMMANDS=…]  Run this peer's checks on one lesson or retraction, without posting; COMMANDS says each command value's breadth"
+	@echo "make lessons-lay FILE=…  Lay one lesson or retraction in the lessons room as this peer's own ship, after the same checks"
 	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
 	@echo "make lessons-own-shown  Own lessons this machine's hook has shown (misses prompts; the last 14 days)"
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
@@ -527,6 +528,10 @@ lessons-ship:
 lessons-check:
 	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [COMMANDS=<your recent Bash commands, one JSON string per line: says how many each value matches>] [SHOW=1: and which, on this screen only] [LESSONS_DATA=…]'; exit 2; }
 	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)"$(if $(COMMANDS), --commands "$(COMMANDS)")$(if $(SHOW), --show) < "$(FILE)"
+
+lessons-lay:
+	@test -n "$(FILE)" || { echo 'Usage: make lessons-lay FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]: as this peer'"'"'s own ship'; exit 2; }
+	$(LESSONS) lay --data-dir "$(LESSONS_DATA)" < "$(FILE)"
 
 # Own lessons spec: a local count only. It misses own lessons shown at a prompt (the hook writes nothing there) and
 # covers the STATE_DAYS (14) a session record lives.

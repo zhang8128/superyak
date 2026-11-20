@@ -1392,6 +1392,25 @@ def test_space_context_and_display_preferences_work_on_mobile(browser_peer):
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
+def test_a_keyboard_user_goes_on_choosing_in_the_current_space_picker(browser_peer):
+    """Break caught: each choice in the header's Current space picker draws another space's page, and the focus fell to
+    the page, so a keyboard user's next arrow key went nowhere (fix:space-picker-keeps-focus; the reader's nit 4 on
+    69aac5b1). The shell around the main region keeps its control's focus across drawings."""
+    store, patient = browser_peer['app'].state.store, browser_peer['users']['patient']['id']
+    store.create_space(patient, 'Second project', 'project')
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        picker = page.get_by_label('Current space')
+        expect(picker).to_have_value('all')
+        options = picker.locator('option').evaluate_all('nodes => nodes.map(node => [node.value, node.textContent])')[1:]
+        assert len(options) == 2
+        picker.focus()
+        for value, name in options:  # the options after "All my spaces", in the picker's order
+            page.keyboard.press('ArrowDown')
+            expect(page.get_by_role('heading', name=name, level=1)).to_be_visible()
+            expect(picker).to_have_value(value)
+            expect(picker).to_be_focused()
+
+
 def delay_next_patch_response(page):
     page.evaluate("""() => {
       const original = window.fetch;

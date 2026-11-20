@@ -2405,7 +2405,12 @@ function render() {
   const listTop = app.querySelector(".split-list .item-list")?.scrollTop;  // the room list scrolls by itself on a desktop, and a render mustn't reset it
   const drawn = drawingFor();
   const typing = !hadDialog && drawn === drawnFor && app.contains(focused) ? typingIn(focused) : null;
-  const control = !hadDialog && drawn === drawnFor && !typing ? controlIn(focused) : null;
+  // The shell around the main region (the sidebar and the top bar) is drawn alike for every drawing, so a control there
+  // keeps its focus across drawings: the Current space picker opens another space's drawing at each choice, and a
+  // keyboard user goes on choosing (fix:space-picker-keeps-focus; the reader's nit 4 on 69aac5b1). Inside the main region,
+  // only the same drawing does. The shell's controls are the picker and the account button, whose dialog has its own return.
+  const inShell = app.contains(focused) && !focused.closest("#main-content");
+  const control = !hadDialog && (drawn === drawnFor || inShell) && !typing ? controlIn(focused) : null;
   app.innerHTML = layout(view);
   if (listTop) { const list = app.querySelector(".split-list .item-list"); if (list) list.scrollTop = listTop; }
   // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
