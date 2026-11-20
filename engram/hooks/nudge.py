@@ -29,7 +29,7 @@ SOURCE_ROOT = HOOK_DIR.parent
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
 sys.path.insert(0, str(SOURCE_ROOT))
 sys.path.insert(0, str(HOOK_DIR))
-from harness import emit, default_instance as harness_default_instance, instance_name, read_context, stamp_registry
+from harness import emit, binding, default_instance as harness_default_instance, read_context, stamp_registry
 
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
@@ -55,7 +55,7 @@ def _load_instance_config():
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return instance_name(config.get("instance"), default_instance)
+        return binding(config.get("instance"), default_instance)[0]
     except Exception:
         return default_instance
 

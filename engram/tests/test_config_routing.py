@@ -215,7 +215,7 @@ def _hook_binding(module):
 
 
 @pytest.mark.parametrize("hook", ["wake", "sleep", "nudge"])
-def test_each_hook_passes_over_a_binding_or_a_default_that_is_not_a_plain_name(tmp_path, monkeypatch, hook):
+def test_each_hook_passes_over_a_binding_or_a_default_that_is_not_a_plain_name(tmp_path, monkeypatch, hook, capsys):
     home, project, planted = _homes(tmp_path)
     module = _hook(hook)
     monkeypatch.setattr(module, "PROJECT_ROOT", project)
@@ -223,7 +223,11 @@ def test_each_hook_passes_over_a_binding_or_a_default_that_is_not_a_plain_name(t
     for value in [str(planted)] + NOT_NAMES:
         _bind(project, value)
         monkeypatch.delenv("ENGRAM_DEFAULT_INSTANCE", raising=False)
+        capsys.readouterr()
         assert _hook_binding(module) is None, value
+        said = capsys.readouterr().err
+        assert "names an instance that is not a plain name" in said, value  # never silent (the reader's finding 1)
+        assert str(planted) not in said and "planted" not in said and "x" * 65 not in said  # and never an echo
         monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "real")
         assert _hook_binding(module) == "real", value
     for value in NOT_STRINGS:
@@ -238,7 +242,23 @@ def test_each_hook_passes_over_a_binding_or_a_default_that_is_not_a_plain_name(t
         _bind(project, "real")
     monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", " real ")
     (project / ".engram" / "config.toml").unlink()
+    capsys.readouterr()
     assert _hook_binding(module) == "real"
+    _bind(project, "real")
+    assert _hook_binding(module) == "real"
+    (project / ".engram" / "config.toml").write_text("[memory]\n")  # a config that binds nothing
+    assert _hook_binding(module) == "real"
+    assert capsys.readouterr().err == ""  # a plain name, or no binding, says nothing
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "../x")
+    assert _hook_binding(module) is None
+    assert "ENGRAM_DEFAULT_INSTANCE is not a plain name" in capsys.readouterr().err
+    if hook == "wake":  # the note for the orientation is this read's own, never one left by an earlier read
+        _bind(project, "../x")
+        _hook_binding(module)
+        assert module._binding_notice
+        (project / ".engram" / "config.toml").unlink()
+        _hook_binding(module)
+        assert module._binding_notice is None
 
 
 def test_the_name_rule_is_one_rule_in_its_three_places():
@@ -268,3 +288,50 @@ def test_the_local_agent_refuses_a_name_that_is_not_a_plain_name(tmp_path, monke
     for value in [str(planted), "../../../planted", "a/b", ".."]:
         with pytest.raises(FileNotFoundError, match="An instance's name is"):
             local_agent.resolve_instance_db(value)
+
+
+def test_a_project_that_binds_nothing_gets_no_warning(tmp_path, monkeypatch, caplog):
+    # The fix's reader, finding 5: most folders never set `instance`, and they must not be told they set a bad one.
+    monkeypatch.delenv("ENGRAM_DEFAULT_INSTANCE", raising=False)
+    home, project, _ = _homes(tmp_path)
+    for text in ("", "[memory]\n", 'instance = ""\n'):
+        (project / ".engram" / "config.toml").write_text(text)
+        with caplog.at_level(logging.WARNING, logger="engram.config"):
+            assert config.resolve_instance_name(config.load_config(project)) is None
+            assert config.resolve_db_path(home, project) == home / ".engram" / "graph.db"
+    assert caplog.text == ""
+
+
+def _wake(home, project):
+    """hooks/wake.py as a session start runs it: its orientation text and its stderr."""
+    import json
+    import os
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("ENGRAM_DEFAULT_INSTANCE", "ENGRAM_HARNESS", "ENGRAM_WAKE", "ENGRAM_ASSESSMENT",
+                        "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_PAIR_SESSION_ID")}
+    env.update(ENGRAM_HOME=str(home), ENGRAM_PROJECT_ROOT=str(project))
+    ran = subprocess.run([sys.executable, str(ENGRAM / "hooks" / "wake.py")], capture_output=True, text=True, env=env,
+                         input="", timeout=60)
+    return (json.dumps(json.loads(ran.stdout)) if ran.stdout.strip() else ""), ran.stderr
+
+
+def test_wake_tells_the_session_when_its_folders_binding_was_passed_over(tmp_path):
+    # A session that quietly used another store than its folder named would keep doing so. The orientation says it.
+    from storage import Storage
+
+    home, project, planted = _homes(tmp_path)
+    for store in (home / ".engram" / "graph.db", home / ".engram" / "instances" / "real" / "graph.db"):
+        store.unlink()
+        Storage(str(store)).close()  # a real, migrated store, as wake reads one
+
+    _bind(project, str(planted))
+    text, err = _wake(home, project)
+    assert "is not a plain name" in text and "This session uses the default store." in text
+    assert "is not a plain name" in err
+    assert str(planted) not in text and str(planted) not in err
+
+    _bind(project, "real")
+    text, err = _wake(home, project)
+    assert "# Engram (real)" in text and "plain name" not in text and "plain name" not in err

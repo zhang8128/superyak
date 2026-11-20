@@ -48,9 +48,32 @@ def instance_name(*candidates):
     return None
 
 
+PASSED_OVER = ("this folder's Engram config names an instance that is not a plain name (1 to 64 letters, digits, - "
+               "or _), so it was passed over")
+
+
 def default_instance():
-    """ENGRAM_DEFAULT_INSTANCE when it is a plain name, with the spaces around it removed as the server removes them."""
-    return instance_name((os.environ.get("ENGRAM_DEFAULT_INSTANCE") or "").strip())
+    """ENGRAM_DEFAULT_INSTANCE when it is a plain name, with the spaces around it removed as the server removes them.
+    One that is set and is not a plain name is passed over, and stderr says so."""
+    raw = (os.environ.get("ENGRAM_DEFAULT_INSTANCE") or "").strip()
+    name = instance_name(raw)
+    if raw and name is None:
+        print("# engram: ENGRAM_DEFAULT_INSTANCE is not a plain name, so it was passed over", file=sys.stderr)
+    return name
+
+
+def binding(project_value, default):
+    """The instance a hook uses: the project's binding when it is a plain name, else ``default``. With it, a sentence
+    when the project's binding was passed over, else None, and stderr gets that sentence too. It never repeats what
+    the folder wrote. A session that quietly used another store than its folder asked for would keep doing so, so
+    the hooks say it (the fix's reader, finding 1)."""
+    name = instance_name(project_value)
+    if name is not None:
+        return name, None
+    if not project_value:
+        return default, None
+    print(f"# engram: {PASSED_OVER}", file=sys.stderr)
+    return default, PASSED_OVER
 
 
 def read_context() -> dict:
