@@ -786,6 +786,17 @@ def subjects_for(rows: PackageRows, source_id: str) -> Iterator[list[str]]:
                 yield [f"mem:{source_id}/{layer}/{row['memory_id']}", row["subject"]]
 
 
+def sources_for(conn: sqlite3.Connection, rows: PackageRows) -> Iterator[list]:
+    """``[semantic, episode, lane]`` for each recorded source episode of each shipped semantic, as the build read
+    them from its working copy: ``sources.json`` (revision 9, asked 1). A send asks these episodes the build's
+    questions again, since a semantic ships only while all its sources are admissible (Ŝ, I 5.2)."""
+    for id in rows.shipped.semantics:
+        for episode, lane in conn.execute(
+                "SELECT ss.episode_id, e.lane FROM semantic_sources ss LEFT JOIN episodes e ON e.id = ss.episode_id "
+                "WHERE ss.semantic_id = ? ORDER BY ss.episode_id", (id,)):
+            yield [id, episode, lane]
+
+
 def _write_json_lines(path: Path, items: Iterable) -> None:
     """A JSON array, one element per line, ``[`` and ``]`` on lines of their own (R30)."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1080,6 +1091,7 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         _write_bytes_private(dest / "request.json", canonical(request))
         _write_bytes_private(dest / "manifest.json", canonical(manifest))
         write_owner_lists(dest, pr, source_id)
+        _write_json_lines(dest / "sources.json", sources_for(conn, pr))   # always, [] with none (revision 9)
         package.chmod(0o400)                                           # step 9
         return Built(imprint_id, dest, request, manifest)
     except BaseException:

@@ -78,3 +78,22 @@ def test_the_same_ledger_reads_and_builds(tmp_path):
     plan = make_plan(*plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"}))
     read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
     build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+
+
+# ---- T2: the build writes the semantics' sources ------------------------------------------------------------------
+
+def _built(tmp_path, **kw):
+    plan = make_plan(*plan_args(tmp_path, owner="andy", **kw))
+    return build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+
+
+def test_the_build_writes_each_shipped_semantics_sources_with_their_lanes(tmp_path):
+    built = _built(tmp_path, cosubjects={"e2": "person:jenn"})
+    path = built.dir / "sources.json"
+    assert json.loads(path.read_text()) == [["s1", "e1", "work"]]
+    assert path.read_text().startswith("[\n") and (path.stat().st_mode & 0o777) == 0o600     # R30's form
+
+
+def test_the_build_writes_sources_json_with_no_semantic(tmp_path):
+    built = _built(tmp_path, cosubjects={"e2": "person:jenn"}, exclude=("s1",))
+    assert json.loads((built.dir / "sources.json").read_text()) == []
