@@ -748,16 +748,17 @@ def _facts_of(ledger, ctx: SourceContext | None, *, owner: str | None = None) ->
     return ctx._memo[key]
 
 
-def check_owner(ledger, source_id: str, owner: str) -> None:
-    """D37: with a ledger, the source store is registered there with the ship's owner as its owner."""
+def check_owner(ledger, source_id: str, owner: str, *, act: str = "planned") -> None:
+    """D37: with a ledger, the source store is registered there with the ship's owner as its owner. ``act`` ends
+    the refusal ("nothing was sent" at a send's check, revision 9)."""
     if ledger is None:
         return
     row = _facts_of(ledger, None, owner=owner).store_row(source_id)
     if row is None:
-        raise PlanRefused("The source store is not registered in the permissions ledger; nothing was planned.")
+        raise PlanRefused(f"The source store is not registered in the permissions ledger; nothing was {act}.")
     if row["owner"] != f"person:{owner}":
         raise PlanRefused(f"The source store belongs to {row['owner']} in the permissions ledger, "
-                          f"not to person:{owner}; nothing was planned.")
+                          f"not to person:{owner}; nothing was {act}.")
 
 
 def cosubjects_of(ledger, ref: str, *, owner: str) -> frozenset[str]:
