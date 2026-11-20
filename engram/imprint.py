@@ -1151,7 +1151,7 @@ PACKAGE_GONE = "This imprint's package is gone, and no request was sent. Run the
 BUILT_BEFORE_9 = "This imprint was built before each send asked the permissions ledger again. Run the plan again."
 IMPRINT_UNREADABLE = "This imprint's files can't be read. Nothing was sent. Run the plan again."
 IMPRINT_UNREADABLE_SENT = ("This imprint's files can't be read. Nothing more was sent; make imprint-status says what the "
-                           "station holds, and make imprint-withdraw ends it.")
+                           "station holds, and make imprint-withdraw ID={id} ends it.")
 
 
 class SendRefused(PlanRefused):
@@ -1204,7 +1204,7 @@ def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
         raise PlanRefused("This plan is not built. Run make imprint-send, which builds it first.")
     folder = home / "imprints" / imprint_id
     sent = (folder / "send.json").is_file()
-    unreadable = IMPRINT_UNREADABLE_SENT if sent else IMPRINT_UNREADABLE    # the reader's N2
+    unreadable = IMPRINT_UNREADABLE_SENT.format(id=imprint_id[:4]) if sent else IMPRINT_UNREADABLE   # the reader's N2
     try:
         for name in (CHECKED, REFUSED):
             (folder / name).unlink(missing_ok=True)

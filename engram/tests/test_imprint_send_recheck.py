@@ -420,4 +420,4 @@ def test_a_damaged_imprint_after_its_request_says_nothing_more_was_sent(tmp_path
     (built.dir / "sources.json").write_text("")
     with pytest.raises(PlanRefused, match="can't be read. Nothing more was sent") as e:
         _check(tmp_path, plan)
-    assert "Nothing was sent" not in str(e.value)
+    assert "Nothing was sent" not in str(e.value) and f"make imprint-withdraw ID={built.imprint_id[:4]}" in str(e.value)
