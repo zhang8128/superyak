@@ -24,6 +24,9 @@ BUSY = 'Another make imprint-send of this plan is running.'
 HEX = frozenset('0123456789abcdef')
 MAX_SEQ = 2**53                   # a receipt's seq is a bounded non-negative int before it names a file (review I2)
 MALFORMED = 'The station sent receipts this agent cannot read; nothing was saved. Run make imprint-status again later.'
+STAMP_SECONDS = 300               # the send check's stamp goes stale after this (store-imprint revision 9, asked 5)
+CHECK_AGAIN = ('Your permissions were not checked in the last 5 minutes, so nothing more was sent. Run make imprint-send '
+               'again, which checks them first.')
 
 
 class ImprintRefused(Exception):
@@ -78,18 +81,23 @@ class Imprint:
         that finds the code expired says so and returns `code-expired` at once: nobody can allow it any more."""
         saved = read_json(folder / 'send.json')
         if saved is None:
+            if self._checked(folder, imprint_id) is None:     # revision 9: the check's stamp, before each send
+                self.out(CHECK_AGAIN)
+                return 'check-again'
             made = self.client.request('POST', '/api/imprints', raw=(folder / 'request.json').read_bytes())
             saved = {'imprint_id': imprint_id, 'request_id': made['id'], 'code': made['code'],
                      'expires': made['expires'], 'confirm_url': made['confirm_url']}
             write_private(folder / 'send.json', saved)
             self._show_link(imprint_id, saved)
             return 'waiting-for-you'
-        deadline, shown = time.time() + wait, False
+        at = self._checked(folder, imprint_id)
+        deadline = time.time() + wait if at is None else min(time.time() + wait, at + STAMP_SECONDS)
+        shown = False
         while True:
             status = self.client.request('GET', f'/api/imprints/{saved["request_id"]}')
             state = status.get('status')
             if state == 'allowed':
-                return self._upload(folder, saved, status)
+                return self._upload(folder, imprint_id, saved, status)
             if state == 'deleted':
                 state = self._deleted_as(status)
             if state in FINAL:
@@ -133,12 +141,29 @@ class Imprint:
             self.out(f'Deleted: {_shown(reason)}.')
         return reason if reason in ('denied', 'failed') else 'deleted'
 
-    def _upload(self, folder, saved, status):
+    def _checked(self, folder, imprint_id):
+        """The send check's stamp (store-imprint revision 9, asked 5): its `at` when it names this imprint, is no
+        more than 300 s old and is not in the future; else None."""
+        try:
+            stamp = read_json(folder / 'checked.json')
+        except (OSError, ValueError):
+            return None
+        if not isinstance(stamp, dict) or stamp.get('imprint_id') != imprint_id:
+            return None
+        at = stamp.get('at')
+        if not isinstance(at, int) or isinstance(at, bool):
+            return None
+        return at if 0 <= time.time() - at <= STAMP_SECONDS else None
+
+    def _upload(self, folder, imprint_id, saved, status):
         base = f'/api/imprints/{saved["request_id"]}'
         package = _package_of(folder / 'manifest.json')
         count, size = len(package['parts']), package['part_bytes']
         if not 0 < size <= PART_BYTES:
             raise ImprintRefused('The manifest names a part longer than 4 MiB.')
+        if self._checked(folder, imprint_id) is None:         # before the manifest
+            self.out(CHECK_AGAIN)
+            return 'check-again'
         try:
             self.client.request('PUT', f'{base}/manifest', raw=(folder / 'manifest.json').read_bytes())
         except StationError as error:
@@ -146,6 +171,9 @@ class Imprint:
                 raise
         held = set(status.get('held') or [])
         todo = [n for n in range(count) if n not in held]
+        if todo and self._checked(folder, imprint_id) is None:   # and before the run's first part
+            self.out(CHECK_AGAIN)
+            return 'check-again'
         with open(folder / 'imprint.db', 'rb') as package_file:
             for done, n in enumerate(todo, 1):
                 self.out(f'Sending part {done} of {len(todo)}.')
@@ -169,8 +197,54 @@ class Imprint:
             time.sleep(60)
 
     def _drop_local_copy(self, imprint_id):
-        """The package goes once the imprint is over; the manifest, plan, owner lists and receipts stay (D24)."""
-        (self.root / imprint_id / 'imprint.db').unlink(missing_ok=True)
+        """The package goes once the imprint is over, and with it `sources.json`, which names episodes that stay home
+        (revision 9); the manifest, plan, owner lists and receipts stay (D24)."""
+        for name in ('imprint.db', 'sources.json'):
+            (self.root / imprint_id / name).unlink(missing_ok=True)
+
+    def refused(self, plan_prefix):
+        """`send --refused` (store-imprint revision 9, asked 4): the engram check refused while a request is at the
+        station. While the upload is unfinished the request is withdrawn (D17, the ship's key); after it, withdrawing
+        stays the owner's choice. A finished imprint is reported as `send` reports it."""
+        imprint_id = self._imprint_of(plan_prefix)
+        folder = self.root / imprint_id
+        with open(folder / 'send.lock', 'a+') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                raise ImprintRefused(BUSY, 4) from None
+            return self._refused(folder, imprint_id)
+
+    def _refused(self, folder, imprint_id):
+        try:
+            refusal = read_json(folder / 'refused.json')
+        except (OSError, ValueError):
+            refusal = None
+        if not isinstance(refusal, dict) or refusal.get('imprint_id') != imprint_id:
+            raise ImprintRefused("There is no refusal of this imprint's check to act on. Run make imprint-send again.")
+        count = refusal.get('count')
+        count = count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 1
+        request_id = self._request_id(imprint_id)
+        status = self.client.request('GET', f'/api/imprints/{request_id}')
+        state = status.get('status')
+        head = (f'Imprint {imprint_id[:4]}, request {_shown(request_id)[:4]}: your permissions changed since it was '
+                f'built, and {count:,} {"memory" if count == 1 else "memories"} would now stay home.')
+        if state in ('requested', 'allowed'):
+            held = len(status.get('held') or []) if state == 'allowed' else 0
+            what = 'nothing of the package' if state == 'requested' else f'{held:,} of its parts'
+            self._act(imprint_id, 'withdraw', {})
+            self.out(f"{head} The station held {what}. The request is withdrawn. If its link is still open, don't "
+                     'allow it.')
+            return 'refused'
+        if state in ('received', 'approved'):
+            self.out(f'{head} The station holds the whole package. Withdrawing it is your choice: make '
+                     f'imprint-withdraw ID={imprint_id[:4]}.')
+            return 'refused'
+        if state == 'deleted':
+            state = self._deleted_as(status)
+        if state in FINAL:
+            self._drop_local_copy(imprint_id)
+        return state
 
     # status, withdraw and shorten (I 12, 13)
 

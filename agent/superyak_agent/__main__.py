@@ -3,6 +3,9 @@ import sys
 from pathlib import Path
 
 
+
+STATUS_CODES = {'waiting-for-you': 3, 'code-expired': 1, 'check-again': 3, 'refused': 1}   # imprint send's exits
+
 def build_parser():
     import argparse  # here, not at the top: the hold path never loads it (Ruling 44)
     from .station import CONFIG, HOME
@@ -79,6 +82,8 @@ def build_parser():
         if name == 'send':
             sub.add_argument('--plan', required=True, help='The first characters of a built plan')
             sub.add_argument('--wait', type=int, default=540)
+            sub.add_argument('--refused', action='store_true',
+                             help="After the engram check refused: withdraw the request if it is unfinished, and say")
     for name, help_ in (('status', 'What the station says of your imprints'), ('withdraw', 'Ask the station to delete an imprint now'),
                         ('shorten', 'Ask the station to end an imprint sooner')):
         sub = imprint_commands.add_parser(name, help=help_)
@@ -182,7 +187,7 @@ def _imprint(args):
             done = imprint.withdraw(args.id) if args.imprint_command == 'withdraw' else imprint.shorten(args.id, args.days)
             print(f'STATUS: {label(done.get("status", "shortened"))}')
             return 0
-        status = imprint.send(args.plan, wait=args.wait)
+        status = imprint.refused(args.plan) if args.refused else imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:
         print(error, flush=True)
         return error.code
@@ -190,7 +195,7 @@ def _imprint(args):
         print(f'imprint: {label(str(error), 300)}', flush=True)     # a station's message is data: one printable line (review I2)
         return 1
     print(f'STATUS: {label(status)}', flush=True)
-    return {'waiting-for-you': 3, 'code-expired': 1}.get(status, 0)
+    return STATUS_CODES.get(status, 0)
 
 
 def main(argv=None):

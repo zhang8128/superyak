@@ -5,6 +5,7 @@ under `systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`, against
 The child's peak resident size (`VmHWM`, read as `ru_maxrss` of that one child) must stay under 384 MiB, and under
 64 MiB plus two parts."""
 import json
+import time
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -148,6 +149,8 @@ def agent_send_command(home, station, env):
     """The argv of the run that uploads. The run that makes the request returns once it has printed the link (the
     fresh review's M1), so it runs here first, unmeasured."""
     (home / 'station.json').write_text(json.dumps({'station': station.url, 'key': 'key'}))
+    (home / 'imprints' / IMPRINT_ID / 'checked.json').write_text(json.dumps(   # the engram step's stamp (revision 9)
+        {'imprint_id': IMPRINT_ID, 'at': int(time.time()), 'seq': 1}))
     argv = [sys.executable, str(RUN_AGENT), 'imprint', 'send', '--plan', PLAN, '--home', str(home)]
     asked = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
     assert asked.returncode == 3 and 'STATUS: waiting-for-you' in asked.stdout, asked.stdout + asked.stderr
