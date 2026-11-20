@@ -256,13 +256,13 @@ def test_should_fix_4_an_unrecordable_kept_copy_under_enforce_leaves_no_imprint_
 
 @pytest.mark.parametrize("mode", ["off", "enforce"])
 def test_nit_the_gate_plan_says_which_houses_the_yes_marks(cli_home_with_house, fake_tty, capsys, mode):
-    """Under `off` on a ledger never raised, only a house marked `unreadable` or with another ledger's id is marked
-    (R50), so the plan does not say every house is."""
+    """Under `off` on a ledger never raised the yes removes each house's mark (R50 as revised), so the plan says so
+    and does not say it marks every house."""
     fake_tty.answer("wrong1"); assert cli_main(["gate", mode]) == 3
     out = capsys.readouterr().out
     assert "every house it will mark" not in out and out.index("instances/lighthouse/graph.db") < out.index("code:")
     if mode == "off":
-        assert "the yes marks only each that carries `unreadable` or another ledger's id" in out
+        assert "the yes removes the mark of each that carries one, since the gate was never raised" in out
     else:
         assert "the yes marks each that does not carry this ledger's id" in out
 
