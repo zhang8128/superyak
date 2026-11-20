@@ -29,6 +29,11 @@ Mapping (see docs/superpowers/specs/2026-09-29-lighthouse-sheaf-design.md):
 - obstruction: the harmonic (non-kernel) part of the stalk family and the
   per-edge residuals localizing it.
 
+The arithmetic runs in the C kernel (``sheaf_kernel.c``, where this is the
+sheaf engine with identity maps) wherever that loads, and in the numpy code
+here otherwise. The numpy code is the kernel's oracle
+(tests/test_sheaf_kernel.py); ``glue(..., backend=)`` names one of them.
+
 Observational only: it gates nothing and never writes. The disk adapter
 opens each store with ``Storage.open_read_only``; no embedding model is
 needed because the CLI takes an existing memory's stored vector as the
@@ -45,6 +50,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+import sheaf_native
 
 _EPS = 1e-12
 _KERNEL_TOL = 1e-9
@@ -142,7 +149,8 @@ def glue(hits: dict[str, np.ndarray],
          min_score: float | None = None,
          edge_weighting: str = "product",
          variance_threshold: float = 0.90,
-         max_dim: int = 8) -> LighthouseSheafResult:
+         max_dim: int = 8,
+         backend: str | None = None) -> LighthouseSheafResult:
     """Glue per-lighthouse topic hits into one cellular sheaf.
 
     ``hits[name]`` is that lighthouse's (n_i, D) hit matrix for the topic;
@@ -194,24 +202,71 @@ def glue(hits: dict[str, np.ndarray],
             0.0, 0.0, [], [], {}, 0, 0, 0.0, True, edge_weighting,
             ["no lighthouse covers this topic"])
 
+    core = None
+    if sheaf_native.chosen(backend):
+        try:
+            core = _core_native(covered, sections, weights, trust_w, edge_weighting,
+                                variance_threshold, max_dim)
+        except sheaf_native.SheafKernelError:
+            if sheaf_native.insisted(backend):
+                raise
+    if core is None:
+        core = _core_numpy(covered, sections, weights, trust_w, edge_weighting,
+                           variance_threshold, max_dim)
+    V, X, k = core["basis"], core["stalks"], core["k"]
+    pairs = list(itertools.combinations(range(len(covered)), 2))
+    residual, w_e = core["residual"], core["edge_weight"]
+    for i, name in enumerate(covered):
+        if core["zeroed"][i]:
+            notes.append(f"{name}: section cancels to zero in the basis")
+    if core["all_edges_zero"]:
+        notes.append("every edge has zero trust; weighted energy reported as 0")
+    if core["consensus_unweighted"]:
+        notes.append("every covered lighthouse has zero trust; consensus unweighted")
+    order = np.argsort(-residual, kind="stable")
+    edges = [{"a": covered[pairs[e][0]], "b": covered[pairs[e][1]],
+              "residual": float(residual[e]), "weight": float(w_e[e]),
+              "weighted_residual": float(w_e[e] * residual[e])} for e in order]
+    return LighthouseSheafResult(
+        covered=covered, uncovered=uncovered, k=k, basis=V,
+        stalks={n: X[i].tolist() for i, n in enumerate(covered)}, n_hits=n_hits,
+        trust=trust_w,
+        off_basis={n: float(core["off_basis"][i]) for i, n in enumerate(covered)},
+        energy=float(np.clip(core["energy"], 0.0, 1.0)),
+        energy_unweighted=float(np.clip(core["energy_unweighted"], 0.0, 1.0)),
+        edges=edges, consensus=np.asarray(core["consensus"]).tolist(),
+        deviations={n: float(core["deviation"][i]) for i, n in enumerate(covered)},
+        kernel_dim=int(core["kernel_dim"]), glued_dim=int(core["glued_dim"]),
+        harmonic_fraction=float(np.clip(core["harmonic"], 0.0, 1.0)),
+        glued=int(core["glued_dim"]) == k, edge_weighting=edge_weighting, notes=notes)
+
+
+def _core_native(covered, sections, weights, trust_w, edge_weighting, variance_threshold, max_dim) -> dict:
+    """The arithmetic of ``glue`` in the C kernel."""
+    return sheaf_native.glue([sections[n] for n in covered], [weights[n] for n in covered],
+                             [trust_w[n] for n in covered], edge_weighting, variance_threshold, max_dim)
+
+
+def _core_numpy(covered, sections, weights, trust_w, edge_weighting, variance_threshold, max_dim) -> dict:
+    """The arithmetic of ``glue`` in numpy: the kernel's oracle, and what runs where the kernel can't load."""
     V = _shared_basis(sections, variance_threshold, max_dim)
+    for row in V:  # a direction's sign is the routine's own; fix it as the kernel does
+        if row[int(np.argmax(np.abs(row)))] < 0:
+            row *= -1.0
     k = V.shape[0]
-    stalks: dict[str, np.ndarray] = {}
-    off_basis: dict[str, float] = {}
-    for name in covered:
+    m = len(covered)
+    X = np.zeros((m, k))
+    off_basis, zeroed = np.zeros(m), np.zeros(m, bool)
+    for i, name in enumerate(covered):
         mean = weights[name] @ sections[name] / weights[name].sum()
         p = V @ mean
         full, kept = float(mean @ mean), float(p @ p)
-        off_basis[name] = 0.0 if full <= _EPS else float(np.clip(1 - kept / full, 0, 1))
+        off_basis[i] = 0.0 if full <= _EPS else float(np.clip(1 - kept / full, 0, 1))
         norm = np.sqrt(kept)
-        if norm <= _EPS:
-            notes.append(f"{name}: section cancels to zero in the basis")
-            stalks[name] = np.zeros(k)
-        else:
-            stalks[name] = p / norm
+        zeroed[i] = norm <= _EPS
+        if not zeroed[i]:
+            X[i] = p / norm
 
-    m = len(covered)
-    X = np.array([stalks[n] for n in covered])  # m x k
     t = np.array([trust_w[n] for n in covered])
     pairs = list(itertools.combinations(range(m), 2))
     combine = np.multiply if edge_weighting == "product" else np.minimum
@@ -229,37 +284,19 @@ def glue(hits: dict[str, np.ndarray],
     residual = np.array([float(((X[j] - X[i]) ** 2).sum()) for i, j in pairs])
     energy = (float(x @ L @ x) / (4.0 * w_e.sum())) if w_e.sum() > _EPS else 0.0
     energy_unweighted = float(residual.mean() / 4.0) if pairs else 0.0
-    if pairs and w_e.sum() <= _EPS:
-        notes.append("every edge has zero trust; weighted energy reported as 0")
-
-    order = np.argsort(-residual, kind="stable")
-    edges = [{"a": covered[pairs[e][0]], "b": covered[pairs[e][1]],
-              "residual": float(residual[e]), "weight": float(w_e[e]),
-              "weighted_residual": float(w_e[e] * residual[e])} for e in order]
-
-    if t.sum() > _EPS:
-        consensus = t @ X / t.sum()
-    else:
-        consensus = X.mean(axis=0)
-        notes.append("every covered lighthouse has zero trust; consensus unweighted")
-    deviations = {n: float(((X[i] - consensus) ** 2).sum() / 4.0)
-                  for i, n in enumerate(covered)}
-
+    consensus_unweighted = not t.sum() > _EPS
+    consensus = X.mean(axis=0) if consensus_unweighted else t @ X / t.sum()
     kernel_dim, x_ker = _kernel_projection(L, x)
     D = (np.array([X[j] - X[i] for i, j in pairs]) if pairs else np.zeros((0, k)))
     rank = int(np.linalg.matrix_rank(D, tol=1e-6)) if len(D) else 0
     xx = float(x @ x)
     harmonic = float(((x - x_ker) ** 2).sum() / xx) if xx > _EPS else 0.0
-    return LighthouseSheafResult(
-        covered=covered, uncovered=uncovered, k=k, basis=V,
-        stalks={n: stalks[n].tolist() for n in covered}, n_hits=n_hits,
-        trust=trust_w, off_basis=off_basis,
-        energy=float(np.clip(energy, 0.0, 1.0)),
-        energy_unweighted=float(np.clip(energy_unweighted, 0.0, 1.0)),
-        edges=edges, consensus=consensus.tolist(), deviations=deviations,
-        kernel_dim=kernel_dim, glued_dim=k - rank,
-        harmonic_fraction=float(np.clip(harmonic, 0.0, 1.0)),
-        glued=rank == 0, edge_weighting=edge_weighting, notes=notes)
+    return {"k": k, "basis": V, "stalks": X, "off_basis": off_basis, "zeroed": zeroed,
+            "energy": energy, "energy_unweighted": energy_unweighted, "residual": residual,
+            "edge_weight": w_e, "consensus": consensus, "consensus_unweighted": consensus_unweighted,
+            "all_edges_zero": bool(pairs) and not w_e.sum() > _EPS,
+            "deviation": ((X - consensus) ** 2).sum(axis=1) / 4.0,
+            "kernel_dim": kernel_dim, "glued_dim": k - rank, "harmonic": harmonic}
 
 
 # --- Disk adapter (read-only) ---------------------------------------------
