@@ -300,9 +300,6 @@ hard_boundary_confirmations = 2
 
 def load_config(project_root: Path | None = None) -> EngramConfig:
     """Load config from .engram/config.toml, creating defaults if missing."""
-    import logging
-    from dataclasses import fields as dataclass_fields
-
     if project_root is None:
         project_root = Path.cwd()
 
@@ -312,6 +309,14 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
     if not config_file.exists():
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file.write_text(_DEFAULT_TOML)
+
+    return _read_config(config_file)
+
+
+def _read_config(config_file: Path) -> EngramConfig:
+    """Parse one config file. It reads and never writes."""
+    import logging
+    from dataclasses import fields as dataclass_fields
 
     raw = tomllib.loads(config_file.read_text())
 
@@ -361,6 +366,49 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
+
+
+# What each of these does, it does to a store during maintenance: split a summary, forget, run the evolving categories.
+STORE_SECTIONS = ("cohesion", "persistence", "category_evolution")
+
+
+def with_store_settings(
+    config: EngramConfig, engram_home: Path, project_root: Path
+) -> EngramConfig:
+    """Take the settings that act on a store from the store's home, not from the folder a session starts in.
+
+    ``[cohesion]``, ``[persistence]`` and ``[category_evolution]`` are calibrated against a store and then change it.
+    A session's config is ``<project>/.engram/config.toml``, which ``load_config`` makes from defaults in every
+    folder a session starts in. So a store whose home had one of these switched on ran with it off from every other
+    folder, and nothing said so (one store's sheaf pass last ran on 2026-09-07 for this reason).
+
+    These three sections now come from ``<home>/.engram/config.toml``. A section that file leaves out, a home with no
+    config file, and a file that can't be read all give that section's defaults, which are off; the project's value
+    is never used. A project that asks for one the store does not have on gets a warning naming both files.
+    """
+    import logging
+
+    home_file = engram_home / ".engram" / "config.toml"
+    project_file = project_root / ".engram" / "config.toml"
+    log = logging.getLogger("engram.config")
+    store = EngramConfig()
+    if home_file.exists():
+        try:
+            store = _read_config(home_file)
+        except Exception as error:  # a store's gates stay off when its own file can't say otherwise
+            log.warning(
+                "Could not read the store's config %s: %s; %s keep their defaults",
+                home_file, error, ", ".join(f"[{name}]" for name in STORE_SECTIONS),
+            )
+    for name in STORE_SECTIONS:
+        asked, held = getattr(config, name), getattr(store, name)
+        if getattr(asked, "enabled", False) and not getattr(held, "enabled", False):
+            log.warning(
+                "Ignoring [%s] enabled in %s: it acts on the store, so the store's own config decides (%s)",
+                name, project_file, home_file,
+            )
+        setattr(config, name, held)
+    return config
 
 
 def resolve_instance_name(

@@ -19,7 +19,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 import margins
-from config import load_config, resolve_instance_name
+from config import load_config, resolve_instance_name, with_store_settings
 from indexer import incremental_index
 from logging_config import setup_logging
 from operation_audit import sanitize_operation_details
@@ -1407,7 +1407,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     from storage import Storage
 
     setup_logging(os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
-    _config = load_config(PROJECT_ROOT)
+    _config = with_store_settings(load_config(PROJECT_ROOT), ENGRAM_HOME, PROJECT_ROOT)
     _instance_name = resolve_instance_name(_config)
 
     # Federation: use instance DB when configured, otherwise default

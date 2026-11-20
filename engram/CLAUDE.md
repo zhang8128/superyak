@@ -118,7 +118,11 @@ A recall kept to one lane leaves out `transfers` and `knowledge`, which are fed 
 shares, which keep their publisher's lane.
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
 Config routing warns when it ignores unknown section keys or falls back after a
-parse error or missing instance store.
+parse error or missing instance store. A session reads the config of the folder
+it starts in, except `[cohesion]`, `[persistence]` and `[category_evolution]`:
+those act on the store, so they come from `ENGRAM_HOME/.engram/config.toml`
+(`config.with_store_settings`), and a project that asks for one the store has
+off is told which file decides.
 
 **Sheaf cohesion:** Each semantic gets a cohesion energy in [0,1] — the
 spectral gap of its source episodes' similarity graph, computed in the
