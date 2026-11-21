@@ -6,7 +6,9 @@ import subprocess
 
 import pytest
 
-from superyak_peer.sitting import FIRST_UNIT, OPTIONAL_UNITS, OTHER_UNITS, PROBES, Interrupted, Sitting, Stopped, run_command
+from superyak_peer.sitting import (FIRST_UNIT, OPTIONAL_UNITS, OTHER_UNITS, PROBES, PROBES_OPEN, Interrupted, Sitting,
+                                   Stopped, run_command)
+from connector_support import PUBLIC_ORIGIN, home, public_client  # noqa: F401
 
 
 def git(cwd, *args):
@@ -562,3 +564,46 @@ def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_pu
     calls = [argv for argv, _ in host.calls]
     assert calls.index(next(a for a in calls if a[0] == 'uv' and 'engram' in a)) < calls.index(
         ('systemctl', '--user', 'restart', 'superyak-engram-publisher.service'))
+
+
+def test_open_connector_routes_are_the_apps_real_answers_to_an_anonymous_get(home):
+    client = public_client(home.app)
+    assert {path: str(client.get(path).status_code) for path in PROBES_OPEN} == PROBES_OPEN
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("{ path=/x ; argv[]=python -m superyak_peer serve --origin ${O} --public-origin ${O} ; ignore_errors=no }", "open"),
+    ("{ path=/x ; argv[]=python -m superyak_peer serve --public-origin=https://h.example ; }", "open"),
+    ("{ path=/x ; argv[]=python -m superyak_peer serve --origin ${O} --share-link-file f ; }", "closed"),
+    ("{ path=/x ; argv[]=python -m superyak_peer serve --no-public-origin-here ; }", "closed"),
+    ("{ path=/x ; argv[]=python -m superyak_peer serve --public-origin-note x ; }", "closed"),  # another flag, same start
+    ("", "closed"),
+])
+def test_the_sitting_expects_the_connector_as_the_lighthouse_runs_it(station, command, expected):
+    host = Host(station['repo'])
+    host.exec_start = command
+    made, _, _ = sitting(station, host)
+    assert made.expected_probes() == (PROBES_OPEN if expected == "open" else PROBES)
+
+
+def _open_lighthouse(station):
+    host = Host(station['repo'])
+    host.exec_start = f'{{ path={station["repo"].resolve()}/peer/.venv/bin/python ; argv[]=... --public-origin ${{O}} }}'
+    return host
+
+
+def test_a_deployed_connector_passes_the_sitting(station):
+    host = _open_lighthouse(station)
+    host.probes = dict(PROBES_OPEN)
+    made, _, lines = sitting(station, host, push=False)
+    assert made.sit() == 0
+    assert any('open connector routes' in line for line in lines)
+    assert head(station) == station['train']
+
+
+def test_a_connector_closed_where_the_lighthouse_says_open_fails_and_puts_main_back(station):
+    host = _open_lighthouse(station)                         # the lighthouse says open, but every route is 404
+    made, _, lines = sitting(station, host, push=False)
+    assert made.sit() != 0
+    assert any('/mcp answered 404, not 405' in line for line in lines)
+    assert head(station) == station['old']
