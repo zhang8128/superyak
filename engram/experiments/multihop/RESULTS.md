@@ -66,3 +66,34 @@ off. Each answer, with its gold and timing, is in `results/smoke-2026-11-21.json
   and partial F1.
 - **The large model answered "No" to some wh-questions** when its evidence lacked the answer. It's untested whether a
   prompt that allows "unknown" changes that.
+
+## The same harness on 100 questions (2026-11-21, on the Mac, 415 s)
+
+The same seed draws 100 questions (88 bridge, 12 comparison), whose first 10 are the 10 above. The models, prompt and
+scoring are unchanged. Each answer is in `results/smoke100-2026-11-21.jsonl`.
+
+| Exact matches out of 100 (mean F1) | No evidence | BM25 | Hop | Gold | Model time |
+|---|---|---|---|---|---|
+| nemotron-mini (about 4B) | 26 (0.37) | 47 (0.57) | 50 (0.64) | 68 (0.83) | 43 s |
+| qwen3.6:27b-mlx | 24 (0.38) | 38 (0.51) | 44 (0.58) | 65 (0.84) | 371 s |
+
+**Paired differences in exact match, 95% CI:**
+
+| Comparison | Difference |
+|---|---|
+| Hop against BM25, small model | +3 (-4.1 to +10.1); F1 +6.4 (+0.1 to +12.7) |
+| Hop against BM25, large model | +6 (+0.6 to +11.4) |
+| Small with the hop against large with BM25 | +12 (+4.0 to +20.0) |
+| Small against large, both given the gold paragraphs | +3 (-4.6 to +10.6); F1 -0.2 (-4.8 to +4.4) |
+
+**How to read it:**
+- **Evidence matters most:** about 25 correct with none, about 66 with the gold paragraphs, for either model.
+- **The hop beats BM25 modestly for both models,** clearly for the large one, and on F1 for the small one. Its
+  retrieval gain (+24 points of both-gold) shrinks to 3 to 6 points of answers.
+- **Small with the hop beats large with BM25, but don't read it as "the graph makes up for size".** Given the gold
+  paragraphs, the large model is no better than the small one here. It also answered "No" to non-yes/no questions 9
+  times with BM25's evidence and 7 with the hop's, against 1 each for the small model: my prompt lists "yes or no" as an
+  answer form. This setup doesn't show the large model's strength. A prompt that allows "unknown", and thinking on, are
+  the next controls.
+- **Cost:** the large model took 8.6 times as long for the same calls.
+- **Still the distractor setting:** both arms choose among 10 paragraphs. #8's corpus v0 is the open test.

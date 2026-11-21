@@ -79,13 +79,13 @@ def ask(model: str, text: str, timeout: float = 300) -> tuple[str, float, dict]:
     return reply["message"]["content"].strip().splitlines()[0] if reply["message"]["content"].strip() else "", took, usage
 
 
-def sample(rows: list[dict]) -> list[tuple[Question, str]]:
-    chosen = random.Random(SEED).sample(range(len(rows)), COUNT)
+def sample(rows: list[dict], count: int = COUNT) -> list[tuple[Question, str]]:
+    chosen = random.Random(SEED).sample(range(len(rows)), count)  # 100 starts with the same 10
     return [(from_row(rows[i]), rows[i]["answer"]) for i in chosen]
 
 
-def run(rows: list[dict], models: list[str], out) -> dict:
-    questions = sample(rows)
+def run(rows: list[dict], models: list[str], out, count: int = COUNT) -> dict:
+    questions = sample(rows, count)
     all_corpus = {t: x for row in rows for t, x in from_row(row).paragraphs}
     bm25 = BM25({t: t + " " + x for t, x in all_corpus.items()})   # the same IDF as hotpot_retrieval
     arms = {"closed": lambda q: None, "bm25": lambda q: pick_bm25(q, bm25),
@@ -104,7 +104,7 @@ def run(rows: list[dict], models: list[str], out) -> dict:
                 cell["f1"] += row["f1"]
                 cell["seconds"] += took
     return {"questions": [q.qid for q, _ in questions], "types": dict(Counter(q.kind for q, _ in questions)),
-            "seed": SEED, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / COUNT, 3),
+            "seed": SEED, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / count, 3),
                                                 "seconds": round(c["seconds"], 1)} for a, c in arms_.items()}
                                         for m, arms_ in totals.items()}}
 
@@ -114,11 +114,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("parquet")
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--count", type=int, default=COUNT)
     args = parser.parse_args(argv)
     import pyarrow.parquet as pq
     rows = pq.read_table(args.parquet).to_pylist()
     with open(args.out, "w") as out:
-        summary = run(rows, args.models, out)
+        summary = run(rows, args.models, out, args.count)
     print(json.dumps(summary, indent=1))
     return 0
 
