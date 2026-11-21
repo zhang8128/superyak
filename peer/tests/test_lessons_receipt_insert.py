@@ -14,8 +14,9 @@ def test_a_receipt_is_written_to_a_store_with_a_column_this_peer_does_not_know(l
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c0', HASHES)
     store.lessons_index(None)
-    with store.transaction() as db:
-        db.execute("ALTER TABLE lesson_receipts ADD COLUMN place TEXT CHECK(place IN ('superyak','other'))")
+    with store.transaction() as db:   # once receipt-place lands the fresh schema has it; before, the newer peer adds it
+        if 'place' not in {r['name'] for r in db.execute('PRAGMA table_info(lesson_receipts)')}:
+            db.execute("ALTER TABLE lesson_receipts ADD COLUMN place TEXT CHECK(place IN ('superyak','other'))")
     request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'git show 1a2b', 'words_only': True}))
     answer = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0)[0]
     assert answer['lessons']
