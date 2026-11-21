@@ -190,3 +190,28 @@ def test_a_git_without_z_is_read_without_it_and_a_quoted_path_tells_nothing(worl
                            'case "$*" in *worktree*) printf \'worktree "%s"\\n\\n\' "$PWD"; exit 0;; esac\nexec "$REAL" "$@"')
     monkeypatch.setenv('PATH', f'{quoted}:{os.environ["PATH"]}')
     assert place(checkout / 'agent', checkout) is None
+
+
+def test_a_plain_porcelain_field_git_never_writes_tells_nothing(world, monkeypatch):
+    """The re-check's B: without -z, a newline in a path or a lock reason can split a record; a field whose key isn't
+    one git writes gives no place."""
+    tmp, checkout = world
+    bin_ = fake_git(tmp, 'for a in "$@"; do [ "$a" = -z ] && exit 129; done\n'
+                         'case "$*" in *worktree*) printf "worktree %s\\nHEAD 0\\nbogus line\\n\\n" "$PWD"; exit 0;; esac\n'
+                         'exec "$REAL" "$@"')
+    monkeypatch.setenv('PATH', f'{bin_}:{os.environ["PATH"]}')
+    assert place(checkout / 'agent', checkout) is None
+
+
+def test_a_listed_root_that_cant_be_statted_tells_nothing(world, monkeypatch):
+    """The re-check's C: a registered root dropped for a failed stat would let a deeper worktree's folder read as a
+    nested repository under the checkout."""
+    tmp, checkout = world
+    real, inner = os.stat, os.path.realpath(checkout / 'inner')
+
+    def stat(path, *a, **k):
+        if os.fspath(path) == inner:
+            raise PermissionError(13, 'Permission denied', inner)
+        return real(path, *a, **k)
+    monkeypatch.setattr(rp.os, 'stat', stat)
+    assert place(checkout / 'agent', checkout) is None

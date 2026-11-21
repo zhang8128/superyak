@@ -16,6 +16,7 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 MAX_FOLDERS = 64          # folders checked from the cwd up to its root, the cwd included and the root excluded
 MAX_UP = 256              # folders walked up from the cwd before the answer is given up as unknown
 SHARE = 0.25              # of the time left, for all of classifying: it never takes the lessons' time
+KEYS = frozenset({'worktree', 'HEAD', 'branch', 'bare', 'detached', 'locked', 'prunable'})  # what porcelain writes
 _roots_memo: dict = {}    # checkout -> (its canonical path, its git common dir, its roots by (st_dev, st_ino)); this
                           # process alone, never written to disk
 
@@ -47,8 +48,8 @@ def _records(checkout, until, monotonic):
         if got is None or got[0] != 0:
             return None
         fields = got[1].decode('utf-8', 'surrogateescape').split('\n')
-        if any(f.startswith('worktree "') for f in fields):
-            return None
+        if any(f and f.split(' ', 1)[0] not in KEYS for f in fields):
+            return None       # a newline in a path or a lock reason split a record (the re-check's B)
     records, current = [], []
     for field in fields:
         if field:
@@ -96,7 +97,7 @@ def roots(checkout, until, monotonic=time.monotonic):
         try:
             st = os.stat(root)
         except OSError:
-            continue
+            return None       # every listed root is placed, or none is (the re-check's C)
         ids.setdefault((st.st_dev, st.st_ino), root)
     _roots_memo[key] = (me, common, ids)
     return _roots_memo[key]
