@@ -14,18 +14,14 @@ import math
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-ATLAS = Path(__file__).resolve().parents[2] / "atlas"
-if not (ATLAS / "workbench" / "research_corpus.py").exists():
-    pytest.skip("atlas isn't beside engram here", allow_module_level=True)
-sys.path.insert(0, str(ATLAS))
+from tests.multihop_atlas import research_corpus
+from experiments.multihop.export_corpus_tsv import export
 
-from workbench.research_corpus import build  # noqa: E402
-from experiments.multihop.export_corpus_tsv import export  # noqa: E402
+build = research_corpus().build
 
 CRATE_DIR = Path(__file__).resolve().parents[1] / "native" / "corpus_index"
 
