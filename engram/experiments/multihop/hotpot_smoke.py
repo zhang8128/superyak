@@ -74,10 +74,10 @@ def prompt(q: Question, picks: list[int] | None) -> str:
     return f"Paragraphs:\n{evidence}\n\nQuestion: {q.question}"
 
 
-def ask(model: str, text: str, timeout: float = 300, system: str = SYSTEM) -> tuple[str, float, dict]:
-    body = json.dumps({"model": model, "stream": False, "think": False,
+def ask(model: str, text: str, timeout: float = 900, system: str = SYSTEM, think: bool = False) -> tuple[str, float, dict]:
+    body = json.dumps({"model": model, "stream": False, "think": think,
                        "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}],
-                       "options": {"temperature": 0, "seed": SEED, "num_predict": 64}}).encode()
+                       "options": {"temperature": 0, "seed": SEED, "num_predict": 8192 if think else 64}}).encode()
     request = urllib.request.Request(OLLAMA, data=body, headers={"Content-Type": "application/json"})
     start = time.perf_counter()
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -92,18 +92,20 @@ def sample(rows: list[dict], count: int = COUNT) -> list[tuple[Question, str]]:
     return [(from_row(rows[i]), rows[i]["answer"]) for i in chosen]
 
 
-def run(rows: list[dict], models: list[str], out, count: int = COUNT, prompt_version: str = "v1") -> dict:
+def run(rows: list[dict], models: list[str], out, count: int = COUNT, prompt_version: str = "v1",
+        think: bool = False, only: list[str] | None = None) -> dict:
     questions = sample(rows, count)
     all_corpus = {t: x for row in rows for t, x in from_row(row).paragraphs}
     bm25 = BM25({t: t + " " + x for t, x in all_corpus.items()})   # the same IDF as hotpot_retrieval
     arms = {"closed": lambda q: None, "bm25": lambda q: pick_bm25(q, bm25),
             "hop": lambda q: pick_hop(q, bm25), "oracle": pick_oracle}
+    arms = {name: pick for name, pick in arms.items() if not only or name in only}
     totals: dict = {}
     for model in models:
         for q, gold in questions:
             for arm, pick in arms.items():
-                answer, took, usage = ask(model, prompt(q, pick(q)), system=PROMPTS[prompt_version])
-                row = {"model": model, "prompt": prompt_version, "arm": arm, "id": q.qid, "type": q.kind, "gold": gold, "answer": answer,
+                answer, took, usage = ask(model, prompt(q, pick(q)), system=PROMPTS[prompt_version], think=think)
+                row = {"model": model, "prompt": prompt_version, "think": think, "arm": arm, "id": q.qid, "type": q.kind, "gold": gold, "answer": answer,
                        "em": exact(answer, gold), "f1": round(f1(answer, gold), 4), "seconds": round(took, 2)} | usage
                 out.write(json.dumps(row) + "\n")
                 out.flush()
@@ -112,7 +114,7 @@ def run(rows: list[dict], models: list[str], out, count: int = COUNT, prompt_ver
                 cell["f1"] += row["f1"]
                 cell["seconds"] += took
     return {"questions": [q.qid for q, _ in questions], "types": dict(Counter(q.kind for q, _ in questions)),
-            "seed": SEED, "prompt": prompt_version, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / count, 3),
+            "seed": SEED, "prompt": prompt_version, "think": think, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / count, 3),
                                                 "seconds": round(c["seconds"], 1)} for a, c in arms_.items()}
                                         for m, arms_ in totals.items()}}
 
@@ -124,11 +126,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--count", type=int, default=COUNT)
     parser.add_argument("--prompt", choices=sorted(PROMPTS), default="v1")
+    parser.add_argument("--think", action="store_true")
+    parser.add_argument("--arms", nargs="+", choices=["closed", "bm25", "hop", "oracle"])
     args = parser.parse_args(argv)
     import pyarrow.parquet as pq
     rows = pq.read_table(args.parquet).to_pylist()
     with open(args.out, "w") as out:
-        summary = run(rows, args.models, out, args.count, args.prompt)
+        summary = run(rows, args.models, out, args.count, args.prompt, args.think, args.arms)
     print(json.dumps(summary, indent=1))
     return 0
 
