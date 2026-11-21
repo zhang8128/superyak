@@ -271,8 +271,10 @@ only refuses or narrows: the daemon never serves `group:outside-home`, `share` r
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
 refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and
 two more hold: the `shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate
-G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens
-it. Under `enforce`,
+G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id once the gate is raised,
+and removes every house's mark under a never-raised `gate off`, so `gate off` opens it. A house that carries the
+ledger's id while the gate was never raised reads `closed` (an older or rebuilt copy of the ledger, a first raise cut
+short, or a `gate off` from before 2026-11-19); `engram-permissions gate` says which move fits. Under `enforce`,
 `remember(genome=True)` of delivered content is refused. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
 without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
@@ -289,8 +291,10 @@ taken mid-write without its journal) that tore one row per column. The projectio
 index page. `Ledger.state()` checks it before it serves a State, and every act and append checks the state it builds
 on the same way: a state this process verified (its memo) or a writer marked (`.engram/permissions.verified`, which
 only writers write) is trusted, and any other runs the full check, seconds on the Pi. Not every read checks it: the
-gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do some
-direct reads, such as the imprint filter's (`store_row`, its co-subject and refusal queries). A ledger that fails
+gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do the
+direct reads `Ledger.store_row` and `Ledger.latest_lane_note`, which no production code calls now. The imprint filter
+reads every ledger fact from one State per plan, read and build (`LedgerFacts`), and reads the key and the log's row
+at that State's seq once more before it saves anything (store-copy spec revision 8). A ledger that fails
 reads as unreadable. The recovery is `engram-permissions rebuild --out <dir>`, which replays the log and says whether
 the old tables matched it, then moving the copy into place with every Engram process stopped.
 

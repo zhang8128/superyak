@@ -314,6 +314,16 @@ def _plan_file(plan: Plan) -> str:
         "cross_references": len({c.id for c in plan.cross_references})}, indent=2, sort_keys=True) + "\n"
 
 
+def _ledger_facts(ledger, *, owner: str, now: int, terms, act: str):
+    """The process's one State of the ledger (I 5.2, revision 8), or None with no ledger. ``ledger`` may already be
+    those facts (a caller that built them)."""
+    from imprint_filter import LedgerFacts
+
+    if ledger is None or isinstance(ledger, LedgerFacts):
+        return ledger
+    return LedgerFacts(ledger, owner=owner, now=now, terms=terms, act=act)
+
+
 def _working_copy(store: Path, work: Path, *, engram_home: Path, home: Path, ledger, owner: str,
                   expected_id: str, wrong_id: str):
     """Snapshot ``store`` into ``work``, check it is a source the plan may read, and migrate a working copy.
@@ -359,8 +369,10 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
     work = _new_scratch(home) if scratch_dir is None else Path(scratch_dir)
     scratch = conn = None
     try:
+        facts = _ledger_facts(ctx.ledger, owner=context.owner, now=now, terms=terms, act="planned")
+        ctx = replace(ctx, ledger=facts)
         source_id, identity, ancestry, complete, not_copied, working = _working_copy(
-            store, work, engram_home=engram_home, home=home, ledger=ctx.ledger, owner=context.owner,
+            store, work, engram_home=engram_home, home=home, ledger=facts, owner=context.owner,
             expected_id=ctx.source_id,
             wrong_id="The source store is not the one this plan was set up for; nothing was planned.")
         scratch = Scratch(work / "scratch.db")
@@ -396,6 +408,13 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
         package = work / "package.db"
         write_package(pr, package, source_id=source_id, source_ancestry=ancestry, source_complete=complete,
                       imprint_id=str(uuid.uuid4()))
+        if facts is not None:                       # the closing read, after the last ledger read (revision 8)
+            try:
+                facts.close()
+            except PlanRefused:
+                if list_to is not None:
+                    Path(list_to).unlink(missing_ok=True)
+                raise
         size = package.stat().st_size
         plan = Plan(
             id=uuid.uuid4().hex, created=now, store=store, source_id=source_id,
@@ -839,9 +858,10 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        facts = _ledger_facts(ledger, owner=owner, now=now, terms=terms, act="read")
         try:
             source_id, _, _, _, _, working = _working_copy(store, work, engram_home=engram_home, home=home,
-                                                          ledger=ledger, owner=owner,
+                                                          ledger=facts, owner=owner,
                                                           expected_id=saved["source_id"], wrong_id=_CHANGED)
         except sqlite3.Error:
             raise PlanRefused(_CHANGED) from None
@@ -850,7 +870,7 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         scratch = Scratch(work / "scratch.db")
         published = published_house_path(engram_home)
         ctx = SourceContext(source_path=store, source_id=source_id, instance_name=_instance_name(store), owner=owner,
-                            published=published if published.is_file() else None, ledger=ledger,
+                            published=published if published.is_file() else None, ledger=facts,
                             home=bool(saved.get("home")), scratch=scratch, terms=terms, now=now)
         conn = _connect(working, read_only=True, vec=True)
         conn.row_factory = sqlite3.Row
@@ -872,6 +892,8 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
                 memory = dict(row, layer="semantic")
             memory["position"] = i
             page.append(memory)
+        if facts is not None:
+            facts.close()                           # the closing read (revision 8)
         return page
     finally:
         if conn is not None:
@@ -980,16 +1002,17 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        facts = _ledger_facts(ledger, owner=owner, now=created, terms=terms, act="built")
         try:
             source_id, identity, ancestry, complete, _, working = _working_copy(
-                store, work, engram_home=engram_home, home=home, ledger=ledger, owner=owner,
+                store, work, engram_home=engram_home, home=home, ledger=facts, owner=owner,
                 expected_id=saved["source_id"], wrong_id=_CHANGED)
         except sqlite3.Error:
             raise PlanRefused(_CHANGED) from None
         scratch = Scratch(work / "scratch.db")
         published = published_house_path(engram_home)
         ctx = SourceContext(source_path=store, source_id=source_id, instance_name=_instance_name(store), owner=owner,
-                            published=published if published.is_file() else None, ledger=ledger,
+                            published=published if published.is_file() else None, ledger=facts,
                             home=bool(saved.get("home")), scratch=scratch, terms=terms, now=created)
         conn = _connect(working, read_only=True, vec=True)
         conn.row_factory = sqlite3.Row
@@ -1012,6 +1035,8 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         failures = _leak_checks(package, x_star, pr, scratch, work)    # step 8
         if failures:
             raise PlanRefused("The package failed its leak checks, so nothing was kept: " + "; ".join(failures[:5]))
+        if facts is not None:
+            facts.close()                           # the closing read, before the request is written (revision 8)
         size = package.stat().st_size
         plan = Plan(
             id=saved["id"], created=created, store=store, source_id=source_id,

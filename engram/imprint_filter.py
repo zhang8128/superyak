@@ -474,33 +474,12 @@ ROAD_NAME = "imprint"                   # the name of the road ref a deny is tes
 
 # ---- The permissions ledger (I 5.1, 5.2) -------------------------------------------------------------------
 
-# cosubjects(m): subjects_of (permissions.py) at the plan's clock, less the owner. The ref and up to MAX_COPY_CHAIN
-# sources up the copies chain, each with its subjects rows not removed and its store's owner when the store is
-# registered and no imprint.
-COSUBJECTS_SQL = """
-WITH RECURSIVE chain(ref, links) AS (
-  SELECT :ref, 0
-  UNION
-  SELECT copies.source, chain.links + 1 FROM chain JOIN copies ON copies.object = chain.ref
-   WHERE chain.links < :max_links)
-SELECT subjects.subject FROM chain JOIN subjects
-    ON subjects.object = chain.ref AND subjects.removed_seq IS NULL
-UNION
-SELECT stores.owner FROM chain JOIN stores
-    ON chain.ref LIKE 'mem:%'
-   AND stores.instance_id = substr(chain.ref, 5, instr(substr(chain.ref, 5), '/') - 1)
-   AND stores.imprint_of IS NULL
-EXCEPT SELECT :owner
-ORDER BY 1 LIMIT :limit
-"""
+# The ledger's facts, all from one State (I 5.2; revision 8). Revision 7 read them with direct SQL on the ledger's
+# connection, through indexes and table pages no check covers, so a torn page could hide a co-subject or a deny.
 
-# One query: every deny that is not revoked or ended outside the owner's home, and every retirement (I 5.2).
-REFUSALS_SQL = """
-SELECT 'deny' AS kind, id FROM records
- WHERE effect = 'deny' AND revoked IS NULL AND (valid_until IS NULL OR valid_until > :now) AND layer != :home
-UNION ALL SELECT 'retired', id FROM persons WHERE retired_seq IS NOT NULL
-UNION ALL SELECT 'retired', id FROM places WHERE retired_seq IS NOT NULL
-"""
+def _ledger_sentences(act: str) -> tuple[str, str]:
+    return (f"The permissions ledger can't be read; nothing was {act}.",
+            f"The permissions ledger changed while it was read; nothing was {act}. Run it again.")
 
 
 def open_ledger(engram_home: Path):
@@ -512,66 +491,74 @@ def open_ledger(engram_home: Path):
     except FileNotFoundError:
         return None
     except (LedgerUnreadable, sqlite3.Error):
-        raise PlanRefused("The permissions ledger can't be read; nothing was planned.") from None
+        raise PlanRefused(_ledger_sentences("planned")[0]) from None
 
 
-def check_owner(ledger, source_id: str, owner: str) -> None:
-    """D37: with a ledger, the source store is registered there with the ship's owner as its owner."""
-    if ledger is None:
-        return
-    row = ledger.store_row(source_id)
-    if row is None:
-        raise PlanRefused("The source store is not registered in the permissions ledger; nothing was planned.")
-    if row["owner"] != f"person:{owner}":
-        raise PlanRefused(f"The source store belongs to {row['owner']} in the permissions ledger, "
-                          f"not to person:{owner}; nothing was planned.")
+class SeqZero(Mapping):
+    """The State's log times with seq 0 at time 0, where the agent this plan adds was made and placed; every other
+    seq is the ledger's own, read when asked. ``prefetch`` is passed on, so a chunk's times still load at once."""
 
+    def __init__(self, inner: Mapping):
+        self._inner = inner
 
-def cosubjects_of(ledger, ref: str, *, owner: str) -> frozenset[str]:
-    """I 5.2's cosubjects(m): at most MAX_SUBJECTS of them, which is enough to tell ``bound``."""
-    if ledger is None:
-        return frozenset()
-    rows = ledger.conn.execute(COSUBJECTS_SQL, {"ref": ref, "max_links": MAX_COPY_CHAIN, "owner": f"person:{owner}",
-                                                "limit": MAX_SUBJECTS}).fetchall()
-    return frozenset(r[0] for r in rows)
+    def __getitem__(self, seq):
+        return 0 if seq == 0 else self._inner[seq]
+
+    def __iter__(self):
+        return iter(self._inner)
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def prefetch(self, seqs):
+        fetch = getattr(self._inner, "prefetch", None)
+        return None if fetch is None else fetch(seqs)
 
 
 def _with_agent(state, place: str):
-    """P26: the State with agent:station-imprints acting for and placed in ``place``, when the ledger has no
-    such agent or placement. Added to this State's tables only, never to the ledger."""
-    from permissions import State
+    """P26: the State with agent:station-imprints acting for and placed in ``place``, when the ledger has no such
+    agent or placement. Added to this State's two small whole tables only, never to the ledger, and never through
+    ``to_tables()``, which would hold every per-object row (851 MiB at the reference ledger; revision 8). Its memo
+    is its own, since a memo of the State without the agent may not hold for it."""
+    import dataclasses
 
-    tables = state.to_tables()
-    if AGENT not in state.agents:
-        tables["agents"].append(dict(id=AGENT, acts_for=place, created_seq=0, retired_seq=None))
-    if not state.agent_places.get(AGENT):
-        tables["agent_places"].append(dict(agent=AGENT, place=place, added_seq=0, removed_seq=None))
-    return State.from_tables(tables, seq=state.seq, seq_at={**state.seq_at, 0: 0}, meta=state.meta,
-                             names=state.names)
+    from permissions import _row
+
+    agents, agent_places = state.agents, state.agent_places
+    if AGENT not in agents:
+        agents = {**agents, AGENT: _row("agents", dict(id=AGENT, acts_for=place, created_seq=0, retired_seq=None))}
+    if not agent_places.get(AGENT):
+        agent_places = {**agent_places, AGENT: (_row("agent_places", dict(
+            agent=AGENT, place=place, added_seq=0, removed_seq=None)),)}
+    return dataclasses.replace(state, agents=agents, agent_places=agent_places, seq_at=SeqZero(state.seq_at),
+                               _cache={})
 
 
 class Refusals:
-    """What the ledger refuses whole or by a co-subject's deny (I 5.2 retired(m) and denied(m)).
+    """What the ledger refuses whole or by a co-subject's deny (I 5.2 retired(m) and denied(m)), read from a State:
+    every deny not revoked or ended in a layer other than the owner's home, and every retirement.
+    ``Refusals(ledger, ctx)`` is the plan's own, from its one State; ``Refusals.of_state`` reads any State."""
 
-    One query decides ``any``. With no deny outside the owner's home and no retirement, no State is built.
-    """
+    def __new__(cls, ledger, ctx: SourceContext):
+        return _facts_of(ledger, ctx).refusals
 
-    def __init__(self, ledger, ctx: SourceContext):
-        self._now = ctx.now
-        self._home = f"place:home/{ctx.owner}"
-        self._route = bool(ctx.terms is not None and ctx.terms.route)
-        self._purposes = sorted(ctx.terms.purposes) if ctx.terms is not None else []
-        rows = ledger.conn.execute(REFUSALS_SQL, {"now": ctx.now, "home": self._home}).fetchall()
-        self.any = bool(rows)
-        self._state = None
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @classmethod
+    def of_state(cls, state, *, owner: str, now: int, terms: Terms | None) -> "Refusals":
+        self = object.__new__(cls)
+        self._state, self._now, self._home = state, now, f"place:home/{owner}"
+        self._route = bool(terms is not None and terms.route)
+        self._purposes = sorted(terms.purposes) if terms is not None else []
         self._denies: dict[str, list] = {}
-        if not self.any:
-            return
-        self._state = _with_agent(ledger.state(), self._home)
-        for r in rows:
-            record = self._state.records.get(r["id"]) if r["kind"] == "deny" else None
-            if record is not None:
-                self._denies.setdefault(record.layer, []).append(record)
+        for r in state.records.values():
+            if (r.effect == "deny" and r.revoked is None and (r.valid_until is None or r.valid_until > now)
+                    and r.layer != self._home):
+                self._denies.setdefault(r.layer, []).append(r)
+        self.any = bool(self._denies) or any(p.retired_seq is not None for p in state.persons.values()) or any(
+            p.retired_seq is not None for p in state.places.values())
+        return self
 
     def retired(self, subject: str) -> bool:
         """A person with a retirement, or whose home or a place above it is retired; never a place."""
@@ -605,11 +592,179 @@ class Refusals:
         return False
 
 
-def _refusals(ctx: SourceContext) -> Refusals:
-    key = ("refusals", id(ctx.ledger), ctx.now, ctx.owner, ctx.terms)
+class LedgerFacts:
+    """Every fact a plan, a read or a build takes from the permissions ledger, from one ``Ledger.state()`` (I 5.2,
+    revision 8): the source store's row (D37), cosubjects(m), the denies and retirements, and the lane notes. On a
+    stamped ledger the State is the one the projection digest and SQLite's integrity check passed; on an unstamped
+    one SQLite's integrity check runs first, in the transaction that reads the key. ``close`` reads the key once
+    more, before anything is saved. Every read maps the ledger's errors to the process's sentences."""
+
+    def __init__(self, ledger, *, owner: str, now: int, terms: Terms | None, act: str = "planned"):
+        from permission_ledger import _keeps_digest
+
+        self.ledger, self.owner = ledger, owner
+        self._unreadable, self._changed = _ledger_sentences(act)
+        with self._mapped():
+            self._stamped = _keeps_digest(ledger.meta())
+            anchor = None if self._stamped else self._integrity_check()
+            state = ledger.state()
+            if anchor is None:
+                key = ledger.state_key
+                anchor = (key, key.head) if key is not None and key.head is not None else self._read_anchor()
+            self._key0, self._head0 = anchor
+            self.state = _with_agent(state, f"place:home/{owner}")
+            self.refusals = Refusals.of_state(self.state, owner=owner, now=now, terms=terms)
+        self.any = self.refusals.any
+
+    # -- reads
+    def _mapped(self):
+        import contextlib
+
+        from permission_ledger import _CHANGED, LedgerUnreadable
+
+        @contextlib.contextmanager
+        def mapped():
+            try:
+                yield
+            except LedgerUnreadable as e:
+                raise PlanRefused(self._changed if _CHANGED in str(e) else self._unreadable) from None
+            except sqlite3.Error:
+                raise PlanRefused(self._unreadable) from None
+        return mapped()
+
+    def _integrity_check(self):
+        """An unstamped ledger has no digest to check: SQLite's own check holds its indexes against its tables,
+        and the key read in the same transaction is the one the close compares with (the review's 3, R1c)."""
+        from permission_ledger import LedgerUnreadable, _read_key
+
+        conn = self.ledger.conn
+        conn.execute("BEGIN")
+        try:
+            key, _ = _read_key(conn, self.ledger.path)
+            checked = [str(r[0]) for r in conn.execute("PRAGMA integrity_check")]
+            row = conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
+        finally:
+            conn.execute("COMMIT")
+        if checked != ["ok"]:
+            raise LedgerUnreadable(f"{self.ledger.path}: SQLite's integrity check: {'; '.join(checked)}")
+        return key, None if row is None else f"{row[0]}:{row[1]}"
+
+    def _fresh_read(self):
+        """(the key now, whether it is pinned, the log's row at the State's seq), on a new read-only connection:
+        SQLite keeps its cached pages while the change counter is unchanged, so no older connection would do."""
+        from permission_ledger import _read_key
+
+        led = self.ledger
+        conn = led._connect(led.path, read_only=True, shared=True)
+        try:
+            conn.execute("BEGIN")
+            try:
+                key, pinned = _read_key(conn, led.path)
+                row = conn.execute("SELECT seq, digest FROM ledger_log WHERE seq = ?", (self.state.seq,)).fetchone()
+            finally:
+                conn.execute("COMMIT")
+        finally:
+            conn.close()
+        return key, pinned, None if row is None else f"{row[0]}:{row[1]}"
+
+    def _read_anchor(self):
+        """The key and the head when ``state()`` kept no checked key (a ledger made in this process)."""
+        from permission_ledger import _read_key
+
+        conn = self.ledger.conn
+        conn.execute("BEGIN")
+        try:
+            key, _ = _read_key(conn, self.ledger.path)
+        finally:
+            conn.execute("COMMIT")
+        return key, key.head
+
+    def store_row(self, instance_id: str) -> dict | None:
+        with self._mapped():
+            row = self.state.stores.get(instance_id)
+            return None if row is None else dict(row._asdict())
+
+    def cosubjects(self, ref: str, owner: str | None = None) -> frozenset[str]:
+        """I 5.2's cosubjects(m): ``subjects_of`` with every row not removed, less the owner, at most
+        MAX_SUBJECTS of them in sorted order, which is enough to tell ``bound``."""
+        from permissions import subjects_of
+
+        mine = f"person:{self.owner if owner is None else owner}"
+        with self._mapped():
+            return frozenset(sorted(set(subjects_of(self.state, ref, None)) - {mine})[:MAX_SUBJECTS])
+
+    def latest_lane_note(self, ref: str) -> str | None:
+        """The lane of the newest note on ref (the State orders them by `at`, then seq), or None when it has none."""
+        with self._mapped():
+            notes = self.state.lane_notes.get(ref, ())
+            return notes[-1].lane if notes else None
+
+    def retired(self, subject: str) -> bool:
+        with self._mapped():
+            return self.refusals.retired(subject)
+
+    def refuses(self, ref: str, subject: str) -> bool:
+        with self._mapped():
+            return self.refusals.refuses(ref, subject)
+
+    def prefetch(self, refs: Sequence[str]) -> None:
+        with self._mapped():
+            self.state.prefetch(list(refs))
+
+    def close(self) -> None:
+        """The closing read (the review's 2, R1, F1), before anything is saved: the whole key once more, and the
+        log's row at the State's seq. A key that moved refuses unless a writer marked it, and on an unstamped ledger,
+        where writers mark nothing, it always does; a log whose row at that seq is not the head the State was read
+        at (an older copy restored, then appended to) refuses too."""
+        from permission_ledger import _pause, _verified
+
+        with self._mapped():
+            key, pinned, row = self._fresh_read()
+            if key != self._key0:
+                if not self._stamped:
+                    raise PlanRefused(self._changed)
+                if not _verified(self.ledger.path, key, pinned):
+                    _pause()
+                    if not _verified(self.ledger.path, key, pinned):
+                        raise PlanRefused(self._changed)
+            if row != self._head0:
+                raise PlanRefused(self._changed)
+
+
+def _facts_of(ledger, ctx: SourceContext | None, *, owner: str | None = None) -> LedgerFacts | None:
+    """The ledger's facts: the process's own when ``ledger`` is them or the context's ledger, else one State of a
+    ledger a caller handed in (a test's), kept in the context's memo."""
+    if ledger is None or isinstance(ledger, LedgerFacts):
+        return ledger
+    if ctx is None:
+        return LedgerFacts(ledger, owner=owner, now=0, terms=None)
+    key = ("facts", id(ledger))
     if key not in ctx._memo:
-        ctx._memo[key] = Refusals(ctx.ledger, ctx)
+        ctx._memo[key] = LedgerFacts(ledger, owner=ctx.owner, now=ctx.now, terms=ctx.terms)
     return ctx._memo[key]
+
+
+def check_owner(ledger, source_id: str, owner: str) -> None:
+    """D37: with a ledger, the source store is registered there with the ship's owner as its owner."""
+    if ledger is None:
+        return
+    row = _facts_of(ledger, None, owner=owner).store_row(source_id)
+    if row is None:
+        raise PlanRefused("The source store is not registered in the permissions ledger; nothing was planned.")
+    if row["owner"] != f"person:{owner}":
+        raise PlanRefused(f"The source store belongs to {row['owner']} in the permissions ledger, "
+                          f"not to person:{owner}; nothing was planned.")
+
+
+def cosubjects_of(ledger, ref: str, *, owner: str) -> frozenset[str]:
+    """I 5.2's cosubjects(m), from the ledger's one State; ``frozenset()`` with no ledger."""
+    if ledger is None:
+        return frozenset()
+    return _facts_of(ledger, None, owner=owner).cosubjects(ref, owner)
+
+
+def _refusals(ctx: SourceContext) -> LedgerFacts:
+    return _facts_of(ctx.ledger, ctx)
 
 
 # ---- The people a plan counts (I 5.2, S3) -------------------------------------------------------------------
@@ -664,6 +819,7 @@ def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContex
             house = store_reader.connect(ctx.published)
         cur = conn.cursor()
         cur.execute(f"SELECT id, lane, created_at, content FROM {table} ORDER BY created_at, id")
+        chunk: list[tuple[str, str]] = []           # read 512 at a time, so the State's rows load in one query
         for id, lane, created_at, content in cur:
             if lane not in sel.lanes:
                 continue
@@ -680,22 +836,40 @@ def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContex
                     house is None or not shared(house, {"id": id, "content": content}, layer, ctx,
                                                 sel.shared_with)):
                 continue
-            if ledger is not None and not _admits(ledger, ctx, layer, id, lane, counts):
+            if ledger is None:
+                yield id
                 continue
-            yield id
+            chunk.append((id, lane))
+            if len(chunk) == CHUNK:
+                yield from _admitted(ledger, ctx, layer, chunk, counts)
+                chunk = []
+        if chunk:
+            yield from _admitted(ledger, ctx, layer, chunk, counts)
     finally:
         if house is not None:
             house.close()
 
 
+CHUNK = 512                     # memories decided per prefetch of the State's per-object rows (revision 8)
+
+
+def _admitted(ledger, ctx: SourceContext, layer: str, chunk, counts: Counter) -> Iterator[str]:
+    facts = _facts_of(ledger, ctx)
+    facts.prefetch([f"mem:{ctx.source_id}/{layer}/{id}" for id, _ in chunk])
+    for id, lane in chunk:
+        if _admits(facts, ctx, layer, id, lane, counts):
+            yield id
+
+
 def _admits(ledger, ctx: SourceContext, layer: str, id: str, lane: str, counts: Counter) -> bool:
-    """The ledger's terms of base(m) for one memory (D40, D27, I 5.2)."""
+    """The ledger's terms of base(m) for one memory (D40, D27, I 5.2), from the plan's one State."""
     ref = f"mem:{ctx.source_id}/{layer}/{id}"
-    note = ledger.latest_lane_note(ref)
+    facts = _facts_of(ledger, ctx)
+    note = facts.latest_lane_note(ref)
     if note is not None and (note == "pending" or note != lane):
         counts["lane_unsettled"] += 1
         return False
-    cos = cosubjects_of(ledger, ref, owner=ctx.owner)
+    cos = facts.cosubjects(ref)
     if not cos:
         return True
     scratch = ctx.scratch
@@ -879,9 +1053,14 @@ def cosubject_rows(sh: Shipped, ctx: SourceContext) -> Iterator[tuple[str, str, 
     ``home`` or a ledger (D43)."""
     if not ctx.home or ctx.ledger is None:
         return
-    for id, layer in sorted([(i, "episode") for i in sh.episodes] + [(i, "semantic") for i in sh.semantics]):
-        for subject in sorted(cosubjects_of(ctx.ledger, f"mem:{ctx.source_id}/{layer}/{id}", owner=ctx.owner)):
-            yield id, layer, subject
+    facts = _facts_of(ctx.ledger, ctx)
+    pairs = sorted([(i, "episode") for i in sh.episodes] + [(i, "semantic") for i in sh.semantics])
+    for k in range(0, len(pairs), CHUNK):
+        chunk = [(id, layer, f"mem:{ctx.source_id}/{layer}/{id}") for id, layer in pairs[k:k + CHUNK]]
+        facts.prefetch([ref for _, _, ref in chunk])
+        for id, layer, ref in chunk:
+            for subject in sorted(facts.cosubjects(ref)):
+                yield id, layer, subject
 
 
 # ---- Sessions closed at t1 (I 5.2), session ids and operation_log (D6, D7) ----------------------------------
