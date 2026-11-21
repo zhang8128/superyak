@@ -9,7 +9,9 @@ compiled binary's picks agree with an independent reimplementation of the same m
 from __future__ import annotations
 
 from collections import Counter
+import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -60,14 +62,18 @@ def corpus_index_bin():
     cargo = _cargo_path()
     if cargo is None:
         pytest.skip("cargo isn't available; can't build the corpus-index crate")
-    env = {**__import__("os").environ, "PATH": f"{Path(cargo).parent}:{__import__('os').environ.get('PATH', '')}"}
-    result = subprocess.run([cargo, "build", "--offline"], cwd=CRATE_DIR, capture_output=True, text=True, env=env)
+    env = {**os.environ, "PATH": f"{Path(cargo).parent}:{os.environ.get('PATH', '')}"}
+    result = subprocess.run([cargo, "build", "--offline", "--message-format=json"], cwd=CRATE_DIR,
+                            capture_output=True, text=True, env=env)
     if result.returncode != 0:
         pytest.fail(f"cargo build --offline failed:\n{result.stdout}\n{result.stderr}")
-    binary = CRATE_DIR / "target" / "debug" / "corpus-index"
-    if not binary.exists():
-        pytest.fail(f"build succeeded but {binary} is missing")
-    return binary
+    # cargo names the executable it built, wherever CARGO_TARGET_DIR or a config puts it.
+    built = [m["executable"] for m in map(json.loads, result.stdout.splitlines())
+             if m.get("reason") == "compiler-artifact" and m.get("executable")
+             and m.get("target", {}).get("name") == "corpus-index"]
+    if len(built) != 1 or not Path(built[0]).exists():
+        pytest.fail(f"cargo's build messages name no single corpus-index executable: {built}")
+    return Path(built[0])
 
 
 @pytest.fixture

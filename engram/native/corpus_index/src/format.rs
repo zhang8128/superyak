@@ -52,8 +52,22 @@ impl<'a> ByteReader<'a> {
         Self { buf, pos: 0 }
     }
 
+    /// Bytes not yet read.
+    pub fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
+    /// Refuses a stated count of `size`-byte records that can't fit in the bytes left, so a corrupt
+    /// count is an error before any allocation sized by it.
+    pub fn fits(&self, count: u64, size: usize, what: &str) -> Result<usize, String> {
+        match usize::try_from(count).ok().and_then(|c| c.checked_mul(size).map(|bytes| (c, bytes))) {
+            Some((c, bytes)) if bytes <= self.remaining() => Ok(c),
+            _ => Err(format!("index file states {count} {what}, more than its remaining bytes hold")),
+        }
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        if self.pos + n > self.buf.len() {
+        if self.pos.checked_add(n).is_none_or(|end| end > self.buf.len()) {
             return Err("unexpected end of index file".to_string());
         }
         let s = &self.buf[self.pos..self.pos + n];

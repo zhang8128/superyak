@@ -399,6 +399,10 @@ impl Index {
         buf
     }
 
+    /// Reads an index written by `write_to`. Every count is checked against the bytes left before it
+    /// sizes an allocation, and the parts are checked against each other, so a corrupt file is an
+    /// error here and a query on a loaded index can't index out of bounds or break the scoring's
+    /// invariants (a posting's tf >= 1 keeps every contribution > 0; the vocabulary is sorted).
     pub fn from_bytes(buf: &[u8]) -> Result<Index, String> {
         let mut r = ByteReader::new(buf);
         let magic = r.bytes(4)?;
@@ -411,7 +415,13 @@ impl Index {
         }
         let doc_count = r.u64()?;
         let avg_doc_len = r.f64()?;
-        let n = doc_count as usize;
+        if !(avg_doc_len.is_finite() && avg_doc_len >= 0.0) {
+            return Err(format!("bad average doc length {avg_doc_len}"));
+        }
+        if doc_count > u32::MAX as u64 {
+            return Err(format!("{doc_count} docs is more than a u32 doc index can name"));
+        }
+        let n = r.fits(doc_count, 12, "docs")?;
         let mut page_ids = Vec::with_capacity(n);
         let mut doc_lens = Vec::with_capacity(n);
         for _ in 0..n {
@@ -419,30 +429,58 @@ impl Index {
             doc_lens.push(r.u32()?);
         }
         let vocab_count = r.u64()?;
-        let mut vocab = Vec::with_capacity(vocab_count as usize);
+        let mut vocab: Vec<VocabEntry> = Vec::with_capacity(r.fits(vocab_count, 16, "terms")?);
         for _ in 0..vocab_count {
             let len = r.u32()? as usize;
             let bytes = r.bytes(len)?;
             let term = String::from_utf8(bytes.to_vec()).map_err(|_| "bad utf-8 in index term".to_string())?;
             let doc_freq = r.u32()?;
             let postings_offset = r.u64()?;
+            if doc_freq == 0 {
+                return Err(format!("term {term:?} has no documents"));
+            }
+            if vocab.last().is_some_and(|prev| prev.term >= term) {
+                return Err(format!("vocabulary not strictly sorted at {term:?}"));
+            }
             vocab.push(VocabEntry { term, doc_freq, postings_offset });
         }
         let postings_count = r.u64()?;
-        let mut postings = Vec::with_capacity(postings_count as usize);
+        let mut postings = Vec::with_capacity(r.fits(postings_count, 6, "postings")?);
         for _ in 0..postings_count {
             let doc_idx = r.u32()?;
             let tf = r.u16()?;
+            if doc_idx as u64 >= doc_count || tf == 0 {
+                return Err(format!("posting ({doc_idx}, {tf}) names no doc or has tf 0"));
+            }
             postings.push((doc_idx, tf));
         }
-        let edge_count = r.u64()?;
-        let mut csr_offsets = Vec::with_capacity(n + 1);
-        for _ in 0..=n {
-            csr_offsets.push(r.u64()?);
+        for v in &vocab {
+            if v.postings_offset.checked_add(v.doc_freq as u64).is_none_or(|end| end > postings_count) {
+                return Err(format!("term {:?}'s postings run past the postings array", v.term));
+            }
         }
-        let mut csr_edges = Vec::with_capacity(edge_count as usize);
+        let edge_count = r.u64()?;
+        let mut csr_offsets = Vec::with_capacity(r.fits(doc_count + 1, 8, "link offsets")?);
+        for _ in 0..=n {
+            let offset = r.u64()?;
+            if offset > edge_count || csr_offsets.last().is_some_and(|&prev| offset < prev) {
+                return Err(format!("link offset {offset} out of order or past {edge_count} edges"));
+            }
+            csr_offsets.push(offset);
+        }
+        if csr_offsets.first() != Some(&0) || csr_offsets.last() != Some(&edge_count) {
+            return Err("link offsets don't run from 0 to the edge count".to_string());
+        }
+        let mut csr_edges = Vec::with_capacity(r.fits(edge_count, 4, "edges")?);
         for _ in 0..edge_count {
-            csr_edges.push(r.u32()?);
+            let target = r.u32()?;
+            if target as u64 >= doc_count {
+                return Err(format!("link target {target} names no doc"));
+            }
+            csr_edges.push(target);
+        }
+        if r.remaining() != 0 {
+            return Err(format!("{} bytes trail the index", r.remaining()));
         }
         Ok(Index { doc_count, avg_doc_len, page_ids, doc_lens, vocab, postings, csr_offsets, csr_edges })
     }
@@ -984,6 +1022,71 @@ mod tests {
         let bytes = index.to_bytes();
         let truncated = &bytes[..bytes.len() / 2];
         assert!(Index::from_bytes(truncated).is_err());
+    }
+
+    /// Each consistency check, by corrupting one field of a real index and writing it out again: all
+    /// are refused, including the two that would otherwise give wrong answers without a panic.
+    #[test]
+    fn a_corrupt_but_well_formed_index_is_refused_for_each_check() {
+        let (docs, links) = fixture();
+        let fresh = || Index::build(&docs, &links).0;
+        assert!(Index::from_bytes(&fresh().to_bytes()).is_ok(), "control: the real index loads");
+        type Corrupt = Box<dyn Fn(&mut Index)>;
+        let cases: Vec<(&str, Corrupt)> = vec![
+            ("tf 0", Box::new(|ix| ix.postings[0].1 = 0)),
+            ("posting past the docs", Box::new(|ix| ix.postings[0].0 = ix.doc_count as u32)),
+            ("vocabulary unsorted", Box::new(|ix| ix.vocab.swap(0, 1))),
+            ("term with no docs", Box::new(|ix| ix.vocab[0].doc_freq = 0)),
+            ("postings run past the array", Box::new(|ix| ix.vocab[0].postings_offset = ix.postings.len() as u64)),
+            ("link target past the docs", Box::new(|ix| ix.csr_edges[0] = ix.doc_count as u32)),
+            ("link offsets decrease", Box::new(|ix| { ix.csr_offsets[1] = 1; ix.csr_offsets[2] = 0; })),
+            ("link offsets don't start at 0", Box::new(|ix| ix.csr_offsets[0] = 1)),
+            ("average length NaN", Box::new(|ix| ix.avg_doc_len = f64::NAN)),
+            ("average length negative", Box::new(|ix| ix.avg_doc_len = -1.0)),
+        ];
+        for (name, corrupt) in &cases {
+            let mut ix = fresh();
+            corrupt(&mut ix);
+            assert!(Index::from_bytes(&ix.to_bytes()).is_err(), "{name} was accepted");
+        }
+        let mut trailing = fresh().to_bytes();
+        trailing.push(0);
+        assert!(Index::from_bytes(&trailing).is_err(), "trailing bytes were accepted");
+        // A doc count far past what the file holds is refused before anything is allocated for it.
+        let mut huge = fresh().to_bytes();
+        huge[8..16].copy_from_slice(&(u32::MAX as u64).to_le_bytes());
+        assert!(Index::from_bytes(&huge).is_err());
+        huge[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(Index::from_bytes(&huge).is_err());
+    }
+
+    /// Every byte of a small index set to 0x00, 0xFF and its value + 1: each load is an error or an
+    /// index that answers queries, never a panic.
+    #[test]
+    fn every_single_byte_corruption_is_refused_or_loads_and_queries_without_panic() {
+        let (docs, links) = fixture();
+        let good = Index::build(&docs, &links).0.to_bytes();
+        let (mut loaded, mut refused) = (0, 0);
+        for pos in 0..good.len() {
+            for v in [0x00u8, 0xFF, good[pos].wrapping_add(1)] {
+                if v == good[pos] {
+                    continue;
+                }
+                let mut bad = good.clone();
+                bad[pos] = v;
+                match Index::from_bytes(&bad) {
+                    Ok(ix) => {
+                        loaded += 1;
+                        let mut scratch = ix.scratch();
+                        for q in ["Lotus band singer", "Ann Vale Leeds", "Delhi", "zzz", ""] {
+                            let _ = ix.query_with(&mut scratch, q, 2);
+                        }
+                    }
+                    Err(_) => refused += 1,
+                }
+            }
+        }
+        assert!(loaded > 0 && refused > 0, "loaded {loaded}, refused {refused}");
     }
 
     #[test]
