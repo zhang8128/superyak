@@ -1,6 +1,9 @@
 """Issue #8's corpus v0: pages from a Wikipedia multistream dump become corpus records."""
 import bz2
 
+import pytest
+
+from tests.multihop_atlas import atlas_workbench  # noqa: F401
 from experiments.multihop.wiki_dump import canonical, clean, lead, parse_pages, read_streams, records
 
 PAGE = """<page><title>{title}</title><ns>{ns}</ns><id>{pid}</id>{redirect}<revision><id>{rid}</id>
@@ -103,16 +106,9 @@ def test_links_outside_the_articles_are_not_collected_and_repeats_count_once():
     assert text == "See , yak, and Yak, the yaks."
 
 
-def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
+def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path, atlas_workbench):
     import json
-    import sys
-    from pathlib import Path
-    import pytest
-    atlas = Path(__file__).resolve().parents[2] / "atlas"
-    if not (atlas / "workbench" / "research_corpus.py").exists():
-        pytest.skip("atlas isn't beside engram here")
-    sys.path.insert(0, str(atlas))
-    from workbench.research_corpus import FrozenCorpus
+    FrozenCorpus = atlas_workbench.FrozenCorpus   # build_corpus.main imports it by name
     from experiments.multihop import build_corpus
 
     header = "<mediawiki><siteinfo><sitename>Test</sitename></siteinfo>"
