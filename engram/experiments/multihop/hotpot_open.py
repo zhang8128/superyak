@@ -16,6 +16,7 @@ Usage: ``PYTHONPATH=engram:atlas python -m experiments.multihop.hotpot_open --co
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import random
 import sqlite3
@@ -30,7 +31,8 @@ SEED = 20261121
 
 
 def current_title(title: str, redirects: sqlite3.Connection | None) -> str:
-    name = canonical(title)
+    """HotpotQA writes its titles HTML-escaped ("Merck &amp; Co."); Wikipedia doesn't."""
+    name = canonical(html.unescape(title))
     if redirects is None:
         return name
     row = redirects.execute("SELECT target FROM r WHERE title = ?", (name,)).fetchone()

@@ -148,3 +148,33 @@ prompt v2, answered the same 100 questions given the 2 gold paragraphs. Its answ
 - **So in this setting retrieval is the limit, not the reader.** That's why better retrieval (the hop) helps a small
   model more than a large model helps itself. Whether that holds where reading is harder, with a corpus to search
   rather than 10 paragraphs, is #8's corpus v0.
+
+## The open test: each arm searches all of Wikipedia (2026-11-21, on the Mac)
+
+**Corpus v0** (`build_corpus.py`): `enwiki-20261101`, the dump's own sha1s checked; 25,991,252 pages read; 7,245,115
+article lead sections; 43,921,329 links between articles both in the corpus (709,056 dropped); 12,097,295 redirects
+resolved; 3 duplicate titles (pages moved while the dump was written) kept at their newest revision. 9.4 GB, digest
+`adb91dafb82dab98dac7e20062c4b4197955240c5dbd647102e06c8a5e7c8c43`, built in 29 minutes with 12 workers.
+
+**The test** (`hotpot_open.py`): the same 100 seeded questions. BM25 picks the corpus's top 2; the hop picks the top 1
+and the article it links to that ranks best against the question. Gold titles are 2017's, mapped through the dump's
+redirects. The first run didn't unescape HotpotQA's HTML titles ("Merck &amp; Co."), which left 7 questions
+uncovered; the picks don't depend on the gold, so the counts below are recomputed from the saved picks with the fix.
+
+| Both gold articles among the 2 picked | BM25 | Hop |
+|---|---|---|
+| All 96 covered questions | 7 (7.3%) | 17 (17.7%) |
+| Bridge (85) | 6 | 17 |
+| Comparison (11) | 1 | 0 |
+
+Paired, hop against BM25: 13 hop-only, 3 BM25-only, **+10.4 points (95% CI +2.5 to +18.3)**. Four questions stay
+uncovered: their gold articles appear to have been deleted or renamed since 2017.
+
+**How to read it:**
+- **Open retrieval is hard for both arms.** With 7.2 million candidates and 2 picks, the distractor setting's 24% and
+  48% fall to 7% and 18%. The hop's lead holds, at about 2.4 times BM25's rate.
+- **The distractor construction is gone; the bridge construction is not.** HotpotQA built bridge questions from linked
+  article pairs, and the hop follows Wikipedia's links. That favours the hop by design here too.
+- **Cost:** a full-question BM25 query over the whole corpus took about 19 s (common words have huge posting lists;
+  2.5 s without them). The hop adds almost nothing on top: its link ranking is restricted to a few hundred titles.
+- **Next:** the same arms with models answering, then a corpus whose questions weren't built from its links.

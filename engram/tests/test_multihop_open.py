@@ -56,3 +56,8 @@ def test_gold_titles_map_through_redirects_and_coverage_is_counted(corpus, tmp_p
     assert summary["both_gold"]["hop"]["hits"] == 1 and summary["both_gold"]["bm25"]["hits"] == 0
     assert rows[1]["gold_in_corpus"] == 1 and rows[1]["hop_both"] is False
     assert summary["verified"] is True
+
+
+def test_hotpotqa_titles_are_unescaped_before_mapping():
+    assert current_title("Merck &amp; Co.", None) == "Merck & Co."
+    assert current_title("S&amp;M (song)", None) == "S&M (song)"
