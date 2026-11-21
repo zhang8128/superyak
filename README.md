@@ -55,7 +55,7 @@ while she says yes (a copy already downloaded or sent to another home stays), an
 people.
 
 You need `git`, `make` and [uv](https://docs.astral.sh/uv/) (uv fetches the right Python itself). The clone and what
-`make setup-peer` installs take about 300 MB of disk; one install on a fast connection took seconds.
+`make setup-peer` installs take about 340 MB of disk, Python included; one install on a fast connection took seconds.
 
 ```sh
 git clone https://github.com/zhang8128/superyak.git
