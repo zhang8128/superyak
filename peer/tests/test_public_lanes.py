@@ -293,11 +293,35 @@ def test_a_full_public_sign_in_lane_pauses_before_its_429_and_does_no_work(tmp_p
 
 
 def test_only_the_public_sign_in_lane_pauses(tmp_path):
-    """The tailnet and known lanes, and the public store lanes (the miss lane's and layers' 503 busy, which a page asks
-    again after once), refuse at once, as before."""
+    """The tailnet and known lanes, and the public store lanes (the miss, layers and redeem lanes' 503 busy, which a
+    page asks again after once), refuse at once, as before."""
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'])
-    lanes = [app.state.sign_in_lanes.tailnet, app.state.sign_in_lanes.known, app.state.miss_lane]
+    lanes = [app.state.sign_in_lanes.tailnet, app.state.sign_in_lanes.known, app.state.miss_lane, app.state.layer_lane,
+             app.state.redeem_lane]
     assert all(lane.pause == 0 for lane in lanes)
+
+
+def test_an_admitted_public_sign_in_is_never_paused(tmp_path):
+    """The pause reader's S1: only a full lane's refusal waits. A sign-in the lane admits runs at once, and holds no
+    place among the paused."""
+    from superyak_peer.app import REFUSAL_PAUSE
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'])
+    lane = app.state.sign_in_lanes.public
+
+    async def admitted():
+        began = time.monotonic()
+        result = await lane.run(lambda: 'signed in')
+        return result, time.monotonic() - began, lane.held
+    result, took, held = asyncio.run(admitted())
+    assert (result, held, lane.inside) == ('signed in', 0, 0)
+    assert took < REFUSAL_PAUSE / 2
+
+
+def test_a_pause_needs_somewhere_to_wait():
+    """The reader's nit: a pause with no held places would never pause, silently; it's refused when the lane is made."""
+    from superyak_peer.app import SignInLane
+    with pytest.raises(ValueError):
+        SignInLane(2, 8, 'public', pause=0.1, held_max=0)
 
 
 def test_a_sender_waiting_on_each_refusal_is_held_to_one_per_pause_per_connection():

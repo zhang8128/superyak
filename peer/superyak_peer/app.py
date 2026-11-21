@@ -290,11 +290,24 @@ class SignInLane:
     429 without hashing or counting.
 
     With `pause`, a full lane waits that long before its 429, holding no thread and doing no work, so a sender that
-    waits for each answer gets one refusal per pause per connection. The landing comparison found the cheap 429 let a
-    16-connection flood deliver 500 a second where main's slower answers held it to 155, and the person paid for it
-    (breakout 77c6e4, device c16); 0.1 s holds those 16 to about 160. At most `held_max` wait at once, so a flood over
-    many connections can't make the pause hold a socket each: past it, a refusal is answered at once."""
+    waits for each answer gets at most one refusal per pause per connection. The landing comparison found the cheap 429
+    let a 16-connection flood deliver 500 a second where main's slower answers held it to 155, and the person paid for
+    it (breakout 77c6e4, device c16). 0.1 s holds those 16 to at most 160 a second, a ceiling. At most `held_max` wait
+    at once, so a flood over many connections can't make the pause hold a socket each: past it, a refusal is answered
+    at once. A closed loop over more than `held_max` connections therefore gets that many paused and the rest at once;
+    the pause closes the measured case, not the class. A sign-in the lane admits is never paused.
+
+    A cancelled caller (shutdown, a cancel scope) gives its place back at once. A caller that disconnects doesn't:
+    uvicorn's h11 only marks the cycle disconnected and doesn't cancel the handler, so its place comes back when its
+    pause ends, and its 429 is dropped.
+
+    Only the public lane pauses (create_app), and every route that signs in through `sign_in_lane` shares it, so each
+    pauses alike when it's full: POST /api/login, the connector's POST /authorize/signin, POST
+    /api/imprints/{id}/confirm, and the owner-trust grant and renew (POST /api/connections/{contact_id}/trust, POST
+    /api/owner-trust/{grant_id}/renew); POST /api/local-demo/login too, which exists only with --local-demo."""
     def __init__(self, size, queue, name, *, pause=0.0, held_max=0):
+        if pause > 0 and held_max <= 0:
+            raise ValueError('a lane that pauses needs held_max > 0, or it would never pause')
         self.size, self.queue, self.inside, self.name = size, queue, 0, name
         self.pause, self.held_max, self.held = pause, held_max, 0
         self.limiter = anyio.CapacityLimiter(size)
@@ -308,7 +321,7 @@ class SignInLane:
             try:
                 await anyio.sleep(self.pause)
             finally:
-                self.held -= 1  # a caller gone mid-pause gives its place back
+                self.held -= 1  # on a cancel (shutdown, a scope) at once; a disconnected caller keeps it to the end
         raise self.refused()
 
     async def run(self, call, *args, **kwargs):
