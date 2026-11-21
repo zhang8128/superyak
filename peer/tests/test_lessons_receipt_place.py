@@ -146,3 +146,36 @@ def test_the_report_splits_receipts_and_outcomes_by_place_and_keeps_its_line(les
         'In other sessions: 1 outcome on 1 receipt. Helped 0, misled 0, unused 1.',
         'Unknown place, including receipts from before this change: 1 outcome on 1 receipt. Helped 0, misled 1, unused 0.',
         'Verified repeats are counted over all places: a query keeps no place.']
+
+
+# ---- the round trip through the command the hook runs ------------------------------------------------------------
+
+TOOL = lesson_body(claim='Read the room before posting.', command=('mcp__station__station_post',))
+PEER = lesson_body(claim='In the peer.', command=('zzzz-never',), file=('superyak/peer',))
+SHAPES = {'start': {'cwd': '/home/x/superyak/peer', 'branch': 'main'},
+          'failure': {'command': 'git show 1a2b', 'error': 'fatal: bad object 1a2b', 'cwd': '/home/x/p'},
+          'hold': {'command': 'git show 1a2b', 'words_only': True},
+          'held tool': {'command': 'mcp__station__station_post', 'words_only': True}}
+
+
+@pytest.mark.parametrize('place', ['superyak', 'other', None])
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_a_place_goes_through_the_query_command_to_its_receipt(lessons_station, tmp_path, shape, place):
+    """The table's "A place reaches its receipt": each request shape the hook and the hold send, through `lessons
+    query` in a child as the hook runs it, read back from lesson_receipts."""
+    store, clock, ids, room = laid(lessons_station, HASHES, TOOL, PEER)
+    config = tmp_path / 'runtime.json'
+    config.write_text(json.dumps({'embedder_socket': str(tmp_path / 'none.sock')}))
+    request = {'ship': 'rio-grande', 'budget_ms': 3000, **SHAPES[shape], **({} if place is None else {'place': place})}
+    done = run_lessons('query', '--data-dir', store.data_dir, '--runtime-config', config, stdin=json.dumps(request))
+    assert done.returncode == 0 and json.loads(done.stdout)['lessons'], (done.stdout, done.stderr)
+    assert places(store) == [place]
+
+
+def test_a_bad_place_through_the_query_command_writes_no_receipt_and_echoes_nothing(lessons_station, tmp_path):
+    store, clock, ids, room = laid(lessons_station, HASHES)
+    config = tmp_path / 'runtime.json'
+    config.write_text(json.dumps({'embedder_socket': str(tmp_path / 'none.sock')}))
+    request = {'ship': 'rio-grande', 'command': 'git show 1a2b', 'words_only': True, 'place': SECRET}
+    done = run_lessons('query', '--data-dir', store.data_dir, '--runtime-config', config, stdin=json.dumps(request))
+    assert places(store) == [] and SECRET not in done.stdout + done.stderr
