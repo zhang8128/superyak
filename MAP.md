@@ -72,8 +72,8 @@ None of these is law, and Andy can veto each. Rio Grande leads the ships (Andy, 
    sealed as a Claim.
 2. Proposed by Serenity under section 8: the four lab folders move under `lab/`. Nothing is deleted.
 3. Andy's word, 11-14 at the Pi's terminal: the n-category kernel stays C, new native code is Rust, and C++ is only
-   for CUDA or HPC. `tardis/ncat-cpp` stays a branch unless he says otherwise. (His 11-07 request for C++ on issue
-   #2 came before it.)
+   for CUDA or HPC. `tardis/ncat-cpp` stays a branch unless he says otherwise. For the sheaf, his later word at the
+   Mac on 11-20 allows "some flavor of c or rust". (His 11-07 request for C++ on issue #2 came before both.)
 4. Tardis's branches merge in trains under section 2, on Andy's 10-27 word, and Defiant's on his 11-09 word. Law
    revision 2's draft (layer 263d19b8) writes both into section 2 for him to sign.
 
