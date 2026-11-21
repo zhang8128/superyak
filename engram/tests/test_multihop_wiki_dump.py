@@ -119,7 +119,8 @@ def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
     groups = [[page("Lotus (band)", 11, 101, LOTUS), page("Ann Vale", 12, 102, "Ann Vale sings."),
                page("Kestrel (band)", 14, 104, "#REDIRECT [[Kestrels]]", redirect="Kestrels")],
               [page("Kestrels", 15, 105, "Kestrels play."), page("Talk:Lotus", 16, 106, "chat", ns=1)],
-              [page("Late", 17, 107, "Not in a one-stream slice.")]]
+              [page("Late", 17, 107, "Not in a one-stream slice."),
+               page("Ann Vale", 99, 199, "Ann Vale, the newer page under the same title, as a dump written over days has.")]]
     blobs = [bz2.compress(header.encode())] + [bz2.compress("".join(g).encode()) for g in groups]
     blobs.append(bz2.compress(b"</mediawiki>"))
     dump = tmp_path / "dump.xml.bz2"
@@ -129,7 +130,8 @@ def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
         offsets.append(at)
         at += len(blob)
     lines = [f"{offsets[1]}:11:Lotus (band)", f"{offsets[1]}:12:Ann Vale", f"{offsets[1]}:14:Kestrel (band)",
-             f"{offsets[2]}:15:Kestrels", f"{offsets[2]}:16:Talk:Lotus", f"{offsets[3]}:17:Late"]
+             f"{offsets[2]}:15:Kestrels", f"{offsets[2]}:16:Talk:Lotus", f"{offsets[3]}:17:Late",
+             f"{offsets[3]}:99:Ann Vale"]
     index = tmp_path / "index.txt.bz2"
     index.write_bytes(bz2.compress(("\n".join(lines) + "\n").encode()))
 
@@ -139,7 +141,7 @@ def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
     corpus = FrozenCorpus(out)
     assert corpus.manifest["id"] == "enwiki-20261107-s2"
     assert corpus.manifest["counts"] == {"pages": 5, "articles": 3, "redirects": 1, "skipped_empty_or_long": 0,
-                                         "other_namespaces": 1}
+                                         "other_namespaces": 1, "duplicate_titles_dropped": 0}
     assert corpus.manifest["inputs"][0]["bytes"] == [offsets[1], offsets[3]]   # exactly the two streams read
     assert corpus.links("Lotus (band)") == ["Ann Vale", "Kestrels"]           # the redirect resolved, in the corpus
     assert [p["title"] for p in corpus.search("Kestrels play")["papers"]][0] == "Kestrels"
@@ -153,4 +155,8 @@ def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
     everything = tmp_path / "all.sqlite3"
     assert build_corpus.main(["--dump", str(dump), "--index", str(index), "--snapshot", "2026-11-07", "--out",
                               str(everything), "--work", str(tmp_path / "work3"), "--workers", "2"]) == 0
-    assert FrozenCorpus(everything).manifest["counts"]["articles"] == 4         # all three streams: "Late" too
+    every = FrozenCorpus(everything)
+    assert every.manifest["counts"]["articles"] == 5                          # all three streams: "Late" too
+    assert every.manifest["counts"]["duplicate_titles_dropped"] == 1          # two "Ann Vale" pages: the newer kept
+    vale = every.search("Ann Vale newer page")["papers"][0]
+    assert (vale["title"], vale["page_id"], vale["rev_id"]) == ("Ann Vale", 99, 199)

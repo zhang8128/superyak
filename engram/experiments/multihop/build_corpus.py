@@ -117,11 +117,29 @@ def first_pass(dump, index, streams: int | None, work: Path, workers: int = 1) -
     return dict(counts)
 
 
-def resolved_records(work: Path):
+def newest_lines(work: Path) -> tuple[set[int], int]:
+    """A dump is written over days, so a page moved meanwhile can appear twice under one title (11-01: 3 such titles).
+    Keep the record with the newest revision, the end state, and count the others."""
+    best: dict[str, tuple[int, int]] = {}
+    total = 0
+    with open(work / "records.jsonl", encoding="utf-8") as lines:
+        for number, line in enumerate(lines):
+            record = json.loads(line)
+            total += 1
+            held = best.get(record["title"])
+            if held is None or record["rev_id"] > held[0]:
+                best[record["title"]] = (record["rev_id"], number)
+    keep = {number for _, number in best.values()}
+    return keep, total - len(keep)
+
+
+def resolved_records(work: Path, keep: set[int] | None = None):
     redirects = sqlite3.connect(f"file:{work / 'redirects.sqlite3'}?mode=ro", uri=True)
     try:
         with open(work / "records.jsonl", encoding="utf-8") as lines:
-            for line in lines:
+            for number, line in enumerate(lines):
+                if keep is not None and number not in keep:
+                    continue
                 record = json.loads(line)
                 resolved = []
                 for name in record["links"]:
@@ -149,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     offsets = stream_offsets(args.index, args.streams)
     end = offsets[args.streams] if args.streams is not None and len(offsets) > args.streams else None
     counts = first_pass(args.dump, args.index, args.streams, Path(args.work), args.workers)
+    keep, duplicates = newest_lines(Path(args.work))
+    counts["duplicate_titles_dropped"] = duplicates
     read_range = [offsets[0], end if end is not None else os.path.getsize(args.dump)]
     corpus_id = args.id or ("enwiki-" + args.snapshot.replace("-", "") + (f"-s{args.streams}" if args.streams else ""))
     manifest = {
@@ -160,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         "streams": args.streams, "extraction": "engram/experiments/multihop/wiki_dump.py, lead sections",
         "counts": counts,
     }
-    summary = build(resolved_records(Path(args.work)), manifest, args.out)
+    summary = build(resolved_records(Path(args.work), keep), manifest, args.out)
     FrozenCorpus(args.out, digest=summary["digest"])   # a run-time self-check: the digest reproduces from the rows
     summary |= {"counts": counts, "seconds": round(time.time() - started, 1), "manifest_inputs": manifest["inputs"]}
     print(json.dumps(summary, indent=1))
