@@ -8,6 +8,17 @@ evaluation can shape the corpus.
 ``FrozenCorpus`` is a provider with Europe PMC's shape: ``search(query, cursor, limit)`` and ``read(paper)``, so
 Atlas's runner can use it unchanged, plus ``links(title)`` for navigation. ``read`` returns each passage byte for byte
 and refuses one whose bytes no longer match the hash recorded at build time.
+
+**Identity.** The corpus is named by its digest, not by the file's bytes (``built_at`` makes identical builds differ):
+a sha256 over every passage's page id, revision id, title, text hash and sorted links, in page-id order. A run records
+the digest it expects and opens the corpus with ``FrozenCorpus(path, digest=...)``, which rehashes every text,
+recomputes the digest from the rows and refuses a mismatch, so a file edited with its hashes rewritten is caught by a
+value held outside it.
+
+**Links** are kept only when both ends are in the corpus; the build returns how many it dropped. Redirects must be
+resolved to their target titles before the build, or links through them are dropped. **A question-derived corpus**
+(``question_derived: true``, built from an evaluation's own material) opens only with ``allow_question_derived=True``,
+so an evaluation can't score itself on one by accident.
 """
 from __future__ import annotations
 
@@ -19,13 +30,29 @@ import re
 import sqlite3
 from typing import Iterable
 
-FORMAT = 1
+FORMAT = 2  # 2: the digest covers ids and links
+_SEPARATORS = ("\t", "\n", "\x1f")
 TEXT_LIMIT = 18000  # Europe PMC's passage cap; a longer record is refused at build time
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _digest(db: sqlite3.Connection, *, rehash: bool) -> str:
+    """The corpus's identity, from its rows. With ``rehash``, each text's hash is recomputed, not read."""
+    links: dict[str, list[str]] = {}
+    for src, dst in db.execute("SELECT src, dst FROM links ORDER BY src, dst"):
+        links.setdefault(src, []).append(dst)
+    digest = hashlib.sha256()
+    for page_id, rev_id, title, text, sha in db.execute(
+            "SELECT page_id, rev_id, title, text, sha256 FROM passages ORDER BY page_id"):
+        if rehash and _sha(text) != sha:
+            raise ValueError(f"passage {page_id}'s text no longer matches its recorded hash")
+        line = "\t".join((str(page_id), str(rev_id), title, sha, "\x1f".join(links.get(title, []))))
+        digest.update((line + "\n").encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _check_manifest(manifest: dict) -> dict:
@@ -54,15 +81,16 @@ def _check_record(record: dict) -> tuple[str, int, int, str, list[str]]:
         raise ValueError("a record must be an object")
     title, text, links = record.get("title"), record.get("text"), record.get("links", [])
     page_id, rev_id = record.get("page_id"), record.get("rev_id")
-    if not isinstance(title, str) or not title.strip() or len(title) > 512:
-        raise ValueError("record.title must be a nonblank string of at most 512 characters")
+    if not isinstance(title, str) or not title.strip() or len(title) > 512 or any(c in title for c in _SEPARATORS):
+        raise ValueError("record.title must be a nonblank string of at most 512 characters, with no tab or newline")
     for name, value in (("page_id", page_id), ("rev_id", rev_id)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 < value < 10**18:  # read's key is 1-18 digits
             raise ValueError(f"record.{name} must be a positive integer")
     if not isinstance(text, str) or not text.strip() or len(text) > TEXT_LIMIT:
         raise ValueError(f"record.text must be nonblank and at most {TEXT_LIMIT} characters")
-    if not isinstance(links, list) or not all(isinstance(link, str) for link in links):
-        raise ValueError("record.links must be a list of titles")
+    if not isinstance(links, list) or not all(isinstance(link, str) and not any(c in link for c in _SEPARATORS)
+                                              for link in links):
+        raise ValueError("record.links must be a list of titles, with no tab or newline")
     return title, page_id, rev_id, text, links
 
 
@@ -96,18 +124,17 @@ def build(records: Iterable[dict], manifest: dict, path) -> dict:
             CREATE TABLE links (src TEXT NOT NULL, dst TEXT NOT NULL, PRIMARY KEY (src, dst)) WITHOUT ROWID;
             INSERT OR IGNORE INTO links SELECT r.src, r.dst FROM raw_links r JOIN passages p ON p.title = r.dst
                 WHERE r.src != r.dst;
-            DROP TABLE raw_links;
         """)
+        offered = db.execute("SELECT count(*) FROM raw_links WHERE src != dst").fetchone()[0]
+        db.execute("DROP TABLE raw_links")
         count = db.execute("SELECT count(*) FROM passages").fetchone()[0]
         if not count:
             raise ValueError("a corpus needs at least one record")
-        digest = hashlib.sha256()
-        for title, sha in db.execute("SELECT title, sha256 FROM passages ORDER BY title"):
-            digest.update(f"{title}\t{sha}\n".encode("utf-8"))
+        digest = _digest(db, rehash=True)
         link_count = db.execute("SELECT count(*) FROM links").fetchone()[0]
         db.executemany("INSERT INTO meta VALUES (?, ?)", [
             ("format", str(FORMAT)), ("manifest", json.dumps(manifest, sort_keys=True)),
-            ("digest", digest.hexdigest()), ("built_at", datetime.now(timezone.utc).isoformat())])
+            ("digest", digest), ("built_at", datetime.now(timezone.utc).isoformat())])
         db.commit()
         db.execute("VACUUM")
     except BaseException:
@@ -116,20 +143,29 @@ def build(records: Iterable[dict], manifest: dict, path) -> dict:
         raise
     db.close()
     partial.rename(path)
-    return {"passages": count, "links": link_count, "digest": digest.hexdigest(), "path": str(path)}
+    return {"passages": count, "links": link_count, "links_dropped": offered - link_count, "digest": digest,
+            "path": str(path)}
 
 
 class FrozenCorpus:
     """Search, read and follow links in a corpus ``build`` wrote, opened read-only."""
 
-    def __init__(self, path):
+    def __init__(self, path, digest: str | None = None, *, allow_question_derived: bool = False):
         self.path = Path(path)
         self._db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False)
         meta = dict(self._db.execute("SELECT key, value FROM meta"))
         if meta.get("format") != str(FORMAT):
             raise ValueError(f"unsupported corpus format {meta.get('format')!r}")
         self.manifest = _check_manifest(json.loads(meta["manifest"]))
+        if self.manifest["question_derived"] and not allow_question_derived:
+            raise ValueError("this corpus was built from an evaluation's own material; pass allow_question_derived")
         self.digest = meta["digest"]
+        self.verified = False
+        if digest is not None:
+            actual = _digest(self._db, rehash=True)
+            if actual != digest or self.digest != digest:
+                raise ValueError("the corpus's rows don't match the digest the run expects")
+            self.verified = True
         self.year = date.fromisoformat(self.manifest["snapshot"]).year
 
     def _paper(self, page_id: int, rev_id: int, title: str, text: str, query: str) -> dict:

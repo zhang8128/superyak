@@ -31,6 +31,7 @@ def test_build_counts_and_keeps_only_links_inside_the_corpus(corpus):
     provider, summary, _ = corpus
     assert summary["passages"] == 3
     assert summary["links"] == 2            # "Nowhere Page" isn't in the corpus
+    assert summary["links_dropped"] == 1
     assert provider.links("Lotus (band)") == ["Ann Vale"]
     assert provider.links("Ann Vale") == ["Kestrel (band)"]
     assert provider.links("No Such Title") == []
@@ -155,3 +156,58 @@ def test_hostile_ids_and_queries_are_refused_or_cleaned(corpus):
             provider.read({"key": key})
     paper = provider.search("Leeds \ud800 band")["papers"][0]
     paper["search_url"].encode("utf-8")      # the raw query, surrogate and all, never lands in the paper
+
+
+def test_the_digest_covers_ids_and_links_s1(tmp_path):
+    base = build(RECORDS, MANIFEST, tmp_path / "base.sqlite3")["digest"]
+    changed = [
+        [RECORDS[0] | {"rev_id": 9999}] + RECORDS[1:],
+        [RECORDS[0] | {"page_id": 10}] + RECORDS[1:],      # same order, so only the id itself can change it
+        [RECORDS[0] | {"links": ["Ann Vale", "Kestrel (band)"]}] + RECORDS[1:],
+        [RECORDS[0] | {"links": []}] + RECORDS[1:],
+        [RECORDS[0] | {"text": RECORDS[0]["text"] + " "}] + RECORDS[1:],
+    ]
+    digests = {build(records, MANIFEST, tmp_path / f"c{i}.sqlite3")["digest"] for i, records in enumerate(changed)}
+    assert base not in digests and len(digests) == len(changed)
+    assert build(list(reversed(RECORDS)), MANIFEST, tmp_path / "again.sqlite3")["digest"] == base   # order-free
+
+
+def _edit(path, sql):
+    with sqlite3.connect(path) as db:
+        db.execute(sql)
+
+
+def test_an_expected_digest_is_checked_against_the_rows_when_opening_s2(corpus, tmp_path):
+    provider, summary, path = corpus
+    assert FrozenCorpus(path, digest=summary["digest"]).verified
+    assert not provider.verified
+    with pytest.raises(ValueError):
+        FrozenCorpus(path, digest="0" * 64)
+    for i, sql in enumerate([
+        "UPDATE passages SET text = 'forged', sha256 = '%s' WHERE page_id = 13" % hashlib.sha256(b"forged").hexdigest(),
+        "UPDATE passages SET rev_id = 7 WHERE page_id = 13",
+        "UPDATE passages SET text = 'edited, hash left as it was' WHERE page_id = 13",   # only a rehash sees it
+        "DELETE FROM links WHERE src = 'Ann Vale'",
+    ]):
+        copy = tmp_path / f"forged{i}.sqlite3"
+        copy.write_bytes(path.read_bytes())
+        _edit(copy, sql)
+        with pytest.raises(ValueError):
+            FrozenCorpus(copy, digest=summary["digest"])
+        FrozenCorpus(copy)       # without an expected digest it opens: the check is the run's to ask for
+    with pytest.raises(ValueError):
+        FrozenCorpus(path, digest="A" * 64)
+
+
+def test_a_question_derived_corpus_needs_an_explicit_allow(tmp_path):
+    path = tmp_path / "q.sqlite3"
+    build(RECORDS, MANIFEST | {"question_derived": True}, path)
+    with pytest.raises(ValueError, match="evaluation"):
+        FrozenCorpus(path)
+    assert FrozenCorpus(path, allow_question_derived=True).manifest["question_derived"] is True
+
+
+def test_titles_and_links_with_separators_are_refused(tmp_path):
+    for bad in ({"title": "A\tB"}, {"title": "A\nB"}, {"links": ["A\x1fB"]}):
+        with pytest.raises(ValueError):
+            build([RECORDS[0] | bad], MANIFEST, tmp_path / "sep.sqlite3")
