@@ -91,6 +91,22 @@ def test_outside_validity():
     assert decision.code == "OUTSIDE_VALIDITY"
 
 
+@pytest.mark.parametrize("at, allowed", [
+    (datetime(2026, 8, 30, tzinfo=timezone.utc), True),  # validFrom itself
+    (datetime(2027, 8, 30, tzinfo=timezone.utc), True),  # validUntil itself: the window holds both ends
+    (datetime(2027, 8, 30, 0, 0, 1, tzinfo=timezone.utc), False),
+    (datetime(2026, 8, 29, 23, 59, 59, tzinfo=timezone.utc), False),
+])
+def test_a_rule_allows_at_both_ends_of_its_window(at, allowed):
+    """validFrom <= at <= validUntil, as policy.ts has it: a rule allows at each end and refuses a second outside.
+    The receiver's own window test walks the same edge on a source's clock (test_context_lighthouse); this pins it in
+    the policy itself, so an end made exclusive fails here."""
+    decision = load_policy(FIXTURES / "policies" / "workflow-policy.json").decide(base_request(at=at))
+    assert (decision.effect == "allow") is allowed, decision
+    if not allowed:
+        assert decision.code == "OUTSIDE_VALIDITY"
+
+
 def test_deny_wins_specificity_tie(tmp_path):
     from lighthouse_protocol import artifact_digest
 

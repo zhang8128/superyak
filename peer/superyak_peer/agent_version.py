@@ -86,9 +86,10 @@ def load(module_file=__file__, run=subprocess.run, err=None):
             history, reason = read_history(checkout, run=run)
     except Exception as error:  # noqa: BLE001
         history, reason = None, f'unexpected error ({type(error).__name__})'
-    # the count is of older agent versions this station can recognize, not of commits this station lacks
-    line = (f'superyak: version check on: {history.station} (ships on any of {len(history.behind)} older agent versions '
-            'are told to update)' if history is not None
+    # Said for a person starting their home, who may have no AI agent connected (Tardis, walking Sam's side: a count of
+    # versions and "update" read as a to-do). The station's commit stays, for anyone reporting a problem.
+    line = (f'superyak: version check on ({history.station}): an AI agent connected here is told when it needs updating '
+            '(nothing to do if none is)' if history is not None
             else f'superyak: version check off: {reason}')
     try:
         print(line, file=err, flush=True)

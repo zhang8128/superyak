@@ -921,7 +921,7 @@ git commit -m "Imprints: the selection, its half-open window, shared-with and th
     `records` with `revoked` null and `valid_until` null or after `ctx.now` in any layer but `place:home/<owner>`,
     and no row of `persons` or `places` with a `retired_seq` (I 5.2: a co-subject read through `copies` may belong to
     another store, so it asks about every layer), and then it builds no State; else it holds `ledger.state()` and
-    those denies; `.retired(subject) -> bool` is true for a person whose row has a `retired_seq` or whose home, or a
+    those denies (Task 8a replaces this: one State per plan, deny or none, and no direct query); `.retired(subject) -> bool` is true for a person whose row has a `retired_seq` or whose home, or a
     place above it, is retired (`place_retired`), as `_subject_retired` tests it, and false for a place;
     `.refuses(ref, subject) -> bool` is true when one of that subject's denies `record_matches` a
     `Use(requester="agent:station-imprints", place=f"place:home/{owner}", obj=ref, copy=…, action=x,
@@ -1101,7 +1101,7 @@ the plan from the station's context (R7), never from a flag.
 `pending(m)` is true when `ledger.latest_lane_note(ref)` is `pending` or names a lane other than the row's `lane`; no
 ledger or no note gives false (D40). `denied(m)` is `any(refusals.refuses(ref, s) for s in cosubjects(m))`, asked
 only when `ctx.home` is true and `refusals.any`; with no ledger it is false. The State is built at most once per plan,
-and only when a deny outside the owner's home or a retirement exists; in step 1 only the owner writes either (P 7.6,
+and only when a deny outside the owner's home or a retirement exists (Task 8a: once per process with a ledger, always); in step 1 only the owner writes either (P 7.6,
 4.2); its memory is I 14.1's. `people` runs three queries on `plan_people` for one reason: `COUNT(DISTINCT
 subject)`; `COUNT(DISTINCT memory_id || '/' || layer)`; and `SELECT subject, COUNT(DISTINCT memory_id || '/' ||
 layer) AS n ... GROUP BY subject ORDER BY n DESC, subject LIMIT ?`. Their sorts spill under `SQLITE_TMPDIR` (R26);
@@ -1120,6 +1120,93 @@ Run: the command of step 2. Expected: PASS, 13 passed (Task 7's 4 and these 9).
 git add engram/imprint_filter.py engram/tests/imprint_support.py engram/tests/test_imprint_selection.py
 git commit -m "Imprints: co-subjects carried at home or kept home, a co-subject's no kept, unsettled lanes, the source owner, refused sources (I 5.1, 5.2, D27, D37, D40, D43)"
 ```
+
+### Task 8a: One checked State per process (spec revision 8)
+
+Added 2026-11-18 by Tardis, after Tasks 1 to 50 shipped (board item `fix:imprint-filter-verified-read`; Rio Grande
+chose this path in all hands 3436a219; the fresh review's changes, `docs/superpowers/reviews/2026-11-18-imprint-revision-8-review.md`,
+applied). It replaces Task 8's calm path: revision 7's direct queries read the ledger through indexes and table pages
+no check covers, and its deny path held every per-object row (851 MiB at the reference ledger).
+
+**Files:**
+- Modify: `engram/permission_ledger.py` (`Ledger.state()` keeps the key it checked as `Ledger.state_key`, the one
+  change to permissions code)
+- Modify: `engram/imprint_filter.py` (`Refusals`, `_with_agent`, `cosubjects_of`, `cosubject_rows`, `check_owner`,
+  the lane-note read, and `base()`, which reads in chunks of 512 so `prefetch` has refs to batch)
+- Modify: `engram/imprint.py` (`_working_copy` takes the process's `LedgerFacts`, so `check_owner` reads the same State;
+  `make_plan`, `read` and `build` build one each; the ledger's sentences caught where `_working_copy`'s callers now say
+  "the source store changed")
+- Modify: `engram/tests/imprint_support.py` (`count_state(monkeypatch)` in place of `forbid_state`; `splice_page(path,
+  index_or_table, twin)` that tears one page from a twin without the row, after a pause that moves ctime;
+  `_fixture_ledger` restamps with `restamp_projection(eh)` after its SQL inserts, and `STAGE_VERSION` and the kept cap
+  fixture's version move so the Pi builds them again; the deny variant writes its deny and retired place with the
+  ledger's own appends on a copy of `eh`)
+- Modify: `engram/tests/test_imprint_selection.py`, `engram/tests/test_imprint_memory.py` (the deny variant)
+- Modify: `engram/CLAUDE.md` (the Permissions section's "Not every read checks it" sentence no longer names the
+  imprint filter)
+
+**Interfaces:**
+- Produces:
+  - `LedgerFacts(ledger, *, owner, now, terms)`, one per `plan`, `read` and `build` process: on an unstamped ledger it
+    first runs `PRAGMA integrity_check` and refuses on anything but `ok`, reading the key K0 in that check's
+    transaction; then one `ledger.state()` (on a stamped ledger K0 is `ledger.state_key`), with
+    `agent:station-imprints` added by `_with_agent` to `agents` and `agent_places` only, through
+    `dataclasses.replace(state, agents=…, agent_places=…, seq_at=SeqZero(state.seq_at), _cache={})`, where `SeqZero`
+    reads seq 0 as time 0, every other seq from the ledger's lazy `LogTimes`, and forwards `prefetch`. Never
+    `to_tables()`;
+  - `.store_row(source_id)` (D37, from `state.stores`), `.cosubjects(ref)` (`subjects_of(state, ref, None)` less
+    `person:<owner>`, the first `MAX_SUBJECTS` in sorted order), `.latest_lane_note(ref)` (the last of
+    `state.lane_notes[ref]`, which the State orders by `(at, seq)`), `.any`, `.retired(subject)` and
+    `.refuses(ref, subject)` as Task 8's `Refusals` reads them, now from the State's `records`, `persons` and
+    `places`; `.prefetch(refs)` before each chunk of at most 512 memories;
+  - `.close()`, at the end of the process's ledger reads and before anything is saved, on a fresh read-only
+    connection (SQLite keeps cached pages while the change counter is unchanged): the whole key read once more and
+    compared with K0, every field (`dev`, `ino`, `size`, `ctime_ns`, `counter`, `head`), not only the counter as
+    `_check_late` compares it, and the log's row at the State's seq read; it refuses with the "Run it again" sentence
+    when the key differs and neither the memo nor the marker holds it, or when that row's digest is not K0's head (an
+    older copy restored and appended to); on an unstamped ledger any difference refuses the same way;
+  - every read above, `.close()` included, maps `LedgerUnreadable` and `sqlite3.Error` to `PlanRefused("The
+    permissions ledger can't be read; nothing was planned.")`, and the `_CHANGED` race to `PlanRefused("The
+    permissions ledger changed while it was read; nothing was planned. Run it again.")` (in `read` and `build`, the
+    same sentences with their verbs).
+
+- [ ] **Step 1: Write the failing tests** (I 16, revision 8's bullets)
+  - `test_each_process_reads_the_ledger_through_one_state`: with a calm ledger and with a deny, `count_state` sees one
+    `Ledger.state()` per `plan`, per `read` and per `build`, and a spy on the ledger's `conn.execute` sees no filter
+    query;
+  - `test_the_state_answers_as_the_queries_did`: Task 8's fixture of copies, removed rows, places, an imprint's
+    store, an unregistered store and a 6-link chain; for every memory, `.cosubjects` equals `COSUBJECTS_SQL` run in
+    the test, `.any`, `.retired` and `.refuses` agree with `REFUSALS_SQL` and Task 8's tests, and `.store_row` and
+    `.latest_lane_note` equal revision 7's reads;
+  - `test_a_torn_page_refuses_the_plan`, parametrized over the five cases of I 16: the four index cases on ledgers
+    with no deny outside the owner's home and no retirement, their copy links written with `link_copies`, and the `records` case with
+    lee's deny alone; each asserts the ledger's sentence and no saved plan. On main each case's memory ships, as I 16
+    says: without lee's `imprint_subjects` row, with its re-lane unsettled, or carrying lee despite lee's no;
+  - `test_a_ledger_read_that_fails_late_refuses`, over `plan`, `read` and `build`: `StateRows._query` made to raise
+    after the State is built, a `sqlite3.DatabaseError` from the State's reads, and the `_CHANGED` race; no plan or
+    package is left;
+  - `test_the_ledger_moved_mid_run_refuses`: after the State and a ctime pause, the file overwritten in place by a
+    same-size, same-counter copy with lee's row changed, and, as a second case, by a clean copy from before lee's row
+    then appended to twice by a writer that marks each; `.close()` refuses both before anything is saved. A marked
+    append passes; on an unstamped ledger any append refuses with "Run it again";
+  - `test_an_unstamped_ledger_is_checked_by_sqlite`: a schema-1 fixture with a torn `subjects_object` page refuses;
+    untorn, it plans;
+  - `test_the_agent_keeps_the_state_lazy`: the State's per-object maps are the ledger's `RowMap`s, its `seq_at` is a
+    `SeqZero` over `LogTimes`, its `_cache` is not the ledger State's; with the jenn deny naming only
+    `place:la-county/parks`, its decisions on every memory equal a whole State's built with the same agent.
+
+- [ ] **Step 2: Run them on main and see each fail**, then each half of the change reverted alone fails its own test.
+
+- [ ] **Step 3: Implement `LedgerFacts`** and move every caller onto it, `_working_copy`'s `check_owner` and
+  `cosubject_rows` included; `base()` reads in chunks of 512; remove `REFUSALS_SQL` and `COSUBJECTS_SQL` from the
+  module (both stay in the tests as oracles).
+
+- [ ] **Step 4: The cap fixture restamped and its deny variant** (Task 50): `_fixture_ledger` restamps, the kept
+  fixture's version moves, and `test_pi_every_process_at_the_cap` gains `plan-deny`, `read-deny` and `build-deny` on a
+  copy of the cap ledger with one deny in a cap co-subject's home layer, matching `imprint` for the plan's purpose,
+  and one newly registered place retired, both appended; each peaks under `PEAK_BUDGET`. Run on the Pi (`ENGRAM_PI_BUDGET=1`).
+
+- [ ] **Step 5: The engram suite**, then commit, and the section 2 path for safety code.
 
 ### Task 9: Down-closure, the shipped memories and induced links
 
@@ -4973,7 +5060,7 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | Every table classified | 6 |
 | Selection | 7, 8 |
 | Co-subjects carried (A3, D27, D43) | 8 (rows), 12 (digest), 13 (table), 15 (dry run, the n = 0 words), 18 (request, `subjects.json`), 24 (the `others` rule), 25 and 47 (the two checks; 25 tests both home texts), 26 (the pending line), 33 (checks 10, 12, 13), 34 (registered), 45 (`use_subjects`) |
-| A co-subject's no (I 5.2 `denied`, D27; the check's M1) | 8 (kept home, counted, no State without a deny: a spy on `Ledger.state`), 15 (dry run), 19 (a deny between plan and build) |
+| A co-subject's no (I 5.2 `denied`, D27; the check's M1) | 8 (kept home, counted), 8a (one State per process, deny or none: a spy on `Ledger.state`; a torn page refused; a late read; the lazy agent), 15 (dry run), 19 (a deny between plan and build), 50 (the cap's plan and build with a deny) |
 | Co-subjects through copies; a retired co-subject; more than 8 subjects (I 5.2; the re-check's RM1 and S1) | 8 (`cosubjects_of` against `subjects_of`, a source's co-subject added after the copy, the chain's bound, `bound`, `retired`), 50 (the cap fixture's 700,000 people) |
 | The people counted on disk (I 5.4, 14.1; the re-check's S3) | 8 (`plan_people`, `people`, no key per person), 15 (10 names and "and 2 more"), 50 (the plan and build at 700,000 people) |
 | `sessions_too_large` beside N (I 10, 12; T I7; the re-check's S4) | 23 (`DETAIL_KEYS`), 34 (`result.json`), 35 (the largest lane's count, so one session counts once), 36 (the receipt and `station-imprints`) |

@@ -9,6 +9,7 @@ import uuid
 import pytest
 
 from lighthouse_daemon import PublisherDaemon, retrieve
+from tests.pinned_clock import pinned_clock
 from lighthouse_protocol import read_frame, recall_frame
 from storage import Storage
 from tests.test_lighthouse_daemon import (
@@ -186,7 +187,7 @@ def test_allowed_receiver_absent_from_policy_audience_map_sees_nothing(tmp_path)
         audience_map={"urn:engram:engram": ["commons"]},
     )
     daemon = PublisherDaemon(
-        {"why": publisher}, tmp_path / "lighthouse.sock", FakeEmbeddings()
+        {"why": publisher}, tmp_path / "lighthouse.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     out = daemon.handle_frame(
         recall_frame(
@@ -217,7 +218,7 @@ def test_read_refuses_share_outside_receiver_audiences(tmp_path):
         audience_map={"urn:engram:engram": ["group:crossing"]},
     )
     daemon = PublisherDaemon(
-        {"why": publisher}, tmp_path / "lighthouse.sock", FakeEmbeddings()
+        {"why": publisher}, tmp_path / "lighthouse.sock", FakeEmbeddings(), clock=pinned_clock()
     )
     out = daemon.handle_frame(
         read_frame(

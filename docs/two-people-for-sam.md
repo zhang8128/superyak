@@ -25,7 +25,7 @@ which keeps ships and connected apps out of it on his home.
   whole walk yet; you'd be the first.
 - **A Mac or Linux laptop** you may install software on. Windows isn't tried yet.
 - **Nothing that costs money.** You'll install uv (a Python installer), `git` and `make` if you don't have them, and
-  Tailscale. About 400 MB lands on your disk, most of it Python and its packages. On fast broadband the clone and setup
+  Tailscale. About 340 MB lands on your disk, most of it Python and its packages. On fast broadband the clone and setup
   took seconds when we timed them, not counting installing uv, Tailscale or Apple's tools; on a slow link, the download
   is what takes the time.
 - Your home only runs while its terminal window is open, and messages wait until both laptops are awake.

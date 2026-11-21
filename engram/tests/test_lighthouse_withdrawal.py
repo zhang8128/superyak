@@ -17,6 +17,7 @@ from lighthouse_policy import Policy
 from lighthouse_protocol import artifact_digest, decode, encode, read_frame, recall_frame
 from sharing import share, unshare
 from storage import Storage
+from tests.pinned_clock import pinned_clock
 from tests.test_lighthouse_daemon import CONTEXT, NOW, FakeEmbeddings, write_policy
 
 
@@ -54,7 +55,7 @@ def live_publisher(tmp_path):
     write_policy(publisher.policy_path)
     # Keep below Darwin's short Unix socket path limit.
     socket_path = Path("/tmp") / f"engram-withdraw-{uuid.uuid4().hex}.sock"
-    daemon = PublisherDaemon({"why": publisher}, socket_path, FakeEmbeddings())
+    daemon = PublisherDaemon({"why": publisher}, socket_path, FakeEmbeddings(), clock=pinned_clock())
     thread = threading.Thread(target=daemon.serve_forever, daemon=True)
     thread.start()
     try:

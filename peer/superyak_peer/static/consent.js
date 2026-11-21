@@ -45,6 +45,10 @@ function show(...nodes) {
   root.querySelector("h1")?.focus();
 }
 
+// Every route this page posts to answers JSON. Anything else is something in the way, like a portal's page, a proxy's
+// error or an answer cut short, so it reads as a lost connection whatever its status, as the app's api() does
+// (fix:a-200-that-isnt-the-home-reads-as-sent). A 200 of some other page used to read as signed in, and the page was
+// left on "Signing in..." with nothing more said (fix:consent-page-reads-any-200-as-the-home).
 async function post(path, body) {
   try {
     let response;
@@ -56,12 +60,19 @@ async function post(path, body) {
       if (wait === null) break;
       await new Promise((done) => setTimeout(done, wait));
     }
-    let data = {};
-    try { data = await response.json(); } catch { data = {}; }
-    return { ok: response.ok, data, busy: busyWait(response) !== null };
+    const busy = busyWait(response) !== null;   // still busy after the one wait: said as busy, not as lost
+    const isJson = (response.headers.get("content-type") || "").includes("application/json");
+    const data = isJson ? await response.json().catch(() => null) : null;
+    if (!data || typeof data !== "object" || Array.isArray(data)) return { ok: false, data: {}, busy };
+    return { ok: response.ok, data, busy };
   } catch {
     return { ok: false, data: {} };
   }
+}
+
+// What the sign-in's answer must hold before the consent view is drawn from it.
+function isConsentView(data) {
+  return ["app", "pending", "csrf"].every((key) => typeof data[key] === "string") && Array.isArray(data.rooms);
 }
 
 function ended(code) {
@@ -85,7 +96,7 @@ function signIn(message = "", csrf = null) {
     status.textContent = "Signing in...";
     // Switch person sends the token this page holds: without it a request already signed in can't be taken over
     const answer = await post("/authorize/signin", { request, username: username.value, password: password.value, ...(csrf ? { csrf } : {}) });
-    if (answer.ok) return consent(answer.data);
+    if (answer.ok && isConsentView(answer.data)) return consent(answer.data);
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
     status.textContent = answer.busy ? BUSY : RETRY[code] || LOST;
@@ -140,7 +151,7 @@ function consent(view) {
     status.textContent = yes ? "Allowing..." : "Denying...";
     const body = { pending: view.pending, csrf: view.csrf, allow: yes };
     const answer = await post("/authorize/decision", yes ? { ...body, rooms: chosen(), days: Number.parseInt(days.value, 10) } : body);
-    if (answer.ok && answer.data.redirect) return location.assign(answer.data.redirect);
+    if (answer.ok && typeof answer.data.redirect === "string" && answer.data.redirect) return location.assign(answer.data.redirect);  // only the shape checked (Tardis, 7d182323)
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
     status.textContent = answer.busy ? BUSY : LOST;

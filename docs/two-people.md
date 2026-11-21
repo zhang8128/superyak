@@ -128,8 +128,10 @@ version, called a release, for the people you name. It doesn't go into a room, s
 - **`card` and `pair` weren't run for this page,** because pairing is a person's to do. They, and every button named
   here, were checked by reading the code, its tests and `--help`. On 2026-11-10 every button and label was checked
   again against main's code (124a2343, then 728b0f64), and each number against the code it names. A reader then found
-  step 8's "within a few seconds" true only of Alex's room (a received room is reread every 30 s or more, `app.js:686`),
-  and step 8 now gives each side's.
+  step 8's "within a few seconds" true only of Alex's room (a received room is reread every 30 s or more,
+  `ROOM_ASK_WHOLE_MS` in `app.js`), and step 8 now gives each side's. On 2026-11-14 every button, label, command, flag
+  and number was checked again against main's code at aa5128d7, after the sign-in, one-wave and public-route trains:
+  each still reads as the page says.
 - **Run on one machine, with no real message:** `init`, and `make home HOME_ARGS=--sync` beside `federation-listen`,
   with the delivery mode set by hand. `--sync` stands in for `peer/README.md`'s `federate` and runs the same loop.
   `peer/tests/test_federate.py` exchanges a room, a reply and a release on one machine; it was read, not run.
