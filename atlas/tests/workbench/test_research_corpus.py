@@ -211,3 +211,25 @@ def test_titles_and_links_with_separators_are_refused(tmp_path):
     for bad in ({"title": "A\tB"}, {"title": "A\nB"}, {"links": ["A\x1fB"]}):
         with pytest.raises(ValueError):
             build([RECORDS[0] | bad], MANIFEST, tmp_path / "sep.sqlite3")
+
+
+def test_the_digest_covers_the_manifest_and_cannot_be_matched_by_merging_fields(tmp_path):
+    two_links = [RECORDS[0] | {"links": ["Ann Vale", "Kestrel (band)"]}] + RECORDS[1:]
+    path = tmp_path / "base.sqlite3"
+    expected = build(two_links, MANIFEST, path)["digest"]
+    forgeries = {
+        "manifest": "UPDATE meta SET value = replace(value, '2026-11-07', '2026-11-08') WHERE key = 'manifest'",
+        "merged links": None,
+    }
+    for name, sql in forgeries.items():
+        copy = tmp_path / f"{name.replace(' ', '-')}.sqlite3"
+        copy.write_bytes(path.read_bytes())
+        with sqlite3.connect(copy) as db:
+            if sql:
+                db.execute(sql)
+            else:   # two links become one title that holds the old separator between them
+                db.execute("DELETE FROM links WHERE src = 'Lotus (band)'")
+                db.execute("INSERT INTO links VALUES ('Lotus (band)', 'Ann Vale' || char(31) || 'Kestrel (band)')")
+        with pytest.raises(ValueError):
+            FrozenCorpus(copy, digest=expected)
+    assert build(two_links, MANIFEST | {"name": "Other"}, tmp_path / "other.sqlite3")["digest"] != expected

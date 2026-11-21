@@ -10,7 +10,8 @@ Atlas's runner can use it unchanged, plus ``links(title)`` for navigation. ``rea
 and refuses one whose bytes no longer match the hash recorded at build time.
 
 **Identity.** The corpus is named by its digest, not by the file's bytes (``built_at`` makes identical builds differ):
-a sha256 over every passage's page id, revision id, title, text hash and sorted links, in page-id order. A run records
+a sha256 over the format and the manifest, then every passage's page id, revision id, title, text hash and sorted
+links, in page-id order, each row an escaped JSON line. A run records
 the digest it expects and opens the corpus with ``FrozenCorpus(path, digest=...)``, which rehashes every text,
 recomputes the digest from the rows and refuses a mismatch, so a file edited with its hashes rewritten is caught by a
 value held outside it.
@@ -30,7 +31,7 @@ import re
 import sqlite3
 from typing import Iterable
 
-FORMAT = 2  # 2: the digest covers ids and links
+FORMAT = 3  # 2: the digest covers ids and links; 3: and the manifest, as one JSON line per row
 _SEPARATORS = ("\t", "\n", "\x1f")
 TEXT_LIMIT = 18000  # Europe PMC's passage cap; a longer record is refused at build time
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -40,18 +41,20 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _digest(db: sqlite3.Connection, *, rehash: bool) -> str:
-    """The corpus's identity, from its rows. With ``rehash``, each text's hash is recomputed, not read."""
+def _digest(db: sqlite3.Connection, manifest: dict, *, rehash: bool) -> str:
+    """The corpus's identity: the format and manifest, then one row per passage, each an escaped ASCII JSON line,
+    so no field's text can stand in for a separator. With ``rehash``, each text's hash is recomputed, not read."""
     links: dict[str, list[str]] = {}
     for src, dst in db.execute("SELECT src, dst FROM links ORDER BY src, dst"):
         links.setdefault(src, []).append(dst)
     digest = hashlib.sha256()
+    digest.update((json.dumps({"format": FORMAT, "manifest": manifest}, sort_keys=True) + "\n").encode("ascii"))
     for page_id, rev_id, title, text, sha in db.execute(
             "SELECT page_id, rev_id, title, text, sha256 FROM passages ORDER BY page_id"):
         if rehash and _sha(text) != sha:
             raise ValueError(f"passage {page_id}'s text no longer matches its recorded hash")
-        line = "\t".join((str(page_id), str(rev_id), title, sha, "\x1f".join(links.get(title, []))))
-        digest.update((line + "\n").encode("utf-8"))
+        line = json.dumps([page_id, rev_id, title, sha, links.get(title, [])])
+        digest.update((line + "\n").encode("ascii"))
     return digest.hexdigest()
 
 
@@ -130,7 +133,7 @@ def build(records: Iterable[dict], manifest: dict, path) -> dict:
         count = db.execute("SELECT count(*) FROM passages").fetchone()[0]
         if not count:
             raise ValueError("a corpus needs at least one record")
-        digest = _digest(db, rehash=True)
+        digest = _digest(db, manifest, rehash=True)
         link_count = db.execute("SELECT count(*) FROM links").fetchone()[0]
         db.executemany("INSERT INTO meta VALUES (?, ?)", [
             ("format", str(FORMAT)), ("manifest", json.dumps(manifest, sort_keys=True)),
@@ -162,7 +165,7 @@ class FrozenCorpus:
         self.digest = meta["digest"]
         self.verified = False
         if digest is not None:
-            actual = _digest(self._db, rehash=True)
+            actual = _digest(self._db, self.manifest, rehash=True)
             if actual != digest or self.digest != digest:
                 raise ValueError("the corpus's rows don't match the digest the run expects")
             self.verified = True
