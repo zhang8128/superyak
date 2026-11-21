@@ -101,3 +101,48 @@ def test_links_outside_the_articles_are_not_collected_and_repeats_count_once():
     text, links = clean("See [[Wikipedia:Policy]], [[wikt:yak|yak]], [[:fr:Paris]] and [[Yak]], the [[yak|yaks]].")
     assert links == ["Yak"]
     assert text == "See , yak, and Yak, the yaks."
+
+
+def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
+    import json
+    import sys
+    from pathlib import Path
+    import pytest
+    atlas = Path(__file__).resolve().parents[2] / "atlas"
+    if not (atlas / "workbench" / "research_corpus.py").exists():
+        pytest.skip("atlas isn't beside engram here")
+    sys.path.insert(0, str(atlas))
+    from workbench.research_corpus import FrozenCorpus
+    from experiments.multihop import build_corpus
+
+    header = "<mediawiki><siteinfo><sitename>Test</sitename></siteinfo>"
+    groups = [[page("Lotus (band)", 11, 101, LOTUS), page("Ann Vale", 12, 102, "Ann Vale sings."),
+               page("Kestrel (band)", 14, 104, "#REDIRECT [[Kestrels]]", redirect="Kestrels")],
+              [page("Kestrels", 15, 105, "Kestrels play."), page("Talk:Lotus", 16, 106, "chat", ns=1)],
+              [page("Late", 17, 107, "Not in a one-stream slice.")]]
+    blobs = [bz2.compress(header.encode())] + [bz2.compress("".join(g).encode()) for g in groups]
+    blobs.append(bz2.compress(b"</mediawiki>"))
+    dump = tmp_path / "dump.xml.bz2"
+    dump.write_bytes(b"".join(blobs))
+    offsets, at = [], 0
+    for blob in blobs:
+        offsets.append(at)
+        at += len(blob)
+    lines = [f"{offsets[1]}:11:Lotus (band)", f"{offsets[1]}:12:Ann Vale", f"{offsets[1]}:14:Kestrel (band)",
+             f"{offsets[2]}:15:Kestrels", f"{offsets[2]}:16:Talk:Lotus", f"{offsets[3]}:17:Late"]
+    index = tmp_path / "index.txt.bz2"
+    index.write_bytes(bz2.compress(("\n".join(lines) + "\n").encode()))
+
+    out = tmp_path / "corpus.sqlite3"
+    assert build_corpus.main(["--dump", str(dump), "--index", str(index), "--snapshot", "2026-11-07",
+                              "--out", str(out), "--work", str(tmp_path / "work"), "--streams", "2"]) == 0
+    corpus = FrozenCorpus(out)
+    assert corpus.manifest["id"] == "enwiki-20261107-s2"
+    assert corpus.manifest["counts"] == {"pages": 5, "articles": 3, "redirects": 1, "skipped_empty_or_long": 0,
+                                         "other_namespaces": 1}
+    assert corpus.manifest["inputs"][0]["bytes"] == [offsets[1], offsets[3]]   # exactly the two streams read
+    assert corpus.links("Lotus (band)") == ["Ann Vale", "Kestrels"]           # the redirect resolved, in the corpus
+    assert [p["title"] for p in corpus.search("Kestrels play")["papers"]][0] == "Kestrels"
+    assert corpus.search("Late")["papers"] == []
+    with pytest.raises(FileExistsError):
+        build_corpus.first_pass(dump, index, 1, tmp_path / "work")             # a work directory is never reused
