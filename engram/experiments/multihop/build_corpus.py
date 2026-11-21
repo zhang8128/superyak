@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import bz2
+from collections import Counter
+import multiprocessing
 import hashlib
 import json
 import os
@@ -25,9 +27,9 @@ import sys
 import time
 
 try:
-    from experiments.multihop.wiki_dump import TEXT_LIMIT, canonical, clean, lead, parse_pages, read_streams
+    from experiments.multihop.wiki_dump import TEXT_LIMIT, canonical, clean, lead, parse_pages, read_stream, read_streams
 except ImportError:  # pragma: no cover
-    from wiki_dump import TEXT_LIMIT, canonical, clean, lead, parse_pages, read_streams
+    from wiki_dump import TEXT_LIMIT, canonical, clean, lead, parse_pages, read_stream, read_streams
 
 
 def stream_offsets(index, streams: int | None) -> list[int]:
@@ -58,32 +60,61 @@ def sha256_range(path, start: int, end: int | None) -> str:
     return digest.hexdigest()
 
 
-def first_pass(dump, index, streams: int | None, work: Path) -> dict:
+def _sort_pages(pages) -> tuple[Counter, list[tuple[str, str]], list[str]]:
+    """One stream's pages, sorted into counts, redirects and article record lines."""
+    counts, redirects, lines = Counter(), [], []
+    for page in pages:
+        counts["pages"] += 1
+        if page["ns"] != 0:
+            counts["other_namespaces"] += 1
+        elif page["redirect"]:
+            redirects.append((canonical(page["title"]), canonical(page["redirect"])))
+            counts["redirects"] += 1
+        else:
+            text, links = clean(lead(page["text"]))
+            if not text or len(text) > TEXT_LIMIT:
+                counts["skipped_empty_or_long"] += 1
+                continue
+            lines.append(json.dumps({"title": canonical(page["title"]), "page_id": page["page_id"],
+                                     "rev_id": page["rev_id"], "text": text, "links": links}))
+            counts["articles"] += 1
+    return counts, redirects, lines
+
+
+def _one_stream(job: tuple[str, int]):
+    dump, offset = job
+    with open(dump, "rb") as handle:
+        return _sort_pages(parse_pages([read_stream(handle, offset)]))
+
+
+def first_pass(dump, index, streams: int | None, work: Path, workers: int = 1) -> dict:
+    """Workers each read and clean whole streams; this process writes their results in stream order, so the
+    records and the corpus are the same for any number of workers."""
     work.mkdir(parents=True, exist_ok=False)
     redirects = sqlite3.connect(work / "redirects.sqlite3")
     redirects.execute("CREATE TABLE r (title TEXT PRIMARY KEY, target TEXT NOT NULL) WITHOUT ROWID")
-    counts = {"pages": 0, "articles": 0, "redirects": 0, "skipped_empty_or_long": 0, "other_namespaces": 0}
-    count_streams = streams if streams is not None else 10**12
+    counts = Counter({k: 0 for k in ("pages", "articles", "redirects", "skipped_empty_or_long", "other_namespaces")})
+    offsets = stream_offsets(index, streams)[:streams] if streams is not None else stream_offsets(index, None)
+    jobs = [(str(dump), offset) for offset in offsets]
     with open(work / "records.jsonl", "w", encoding="utf-8") as out:
-        for page in parse_pages(read_streams(dump, index, count_streams)):
-            counts["pages"] += 1
-            if page["ns"] != 0:
-                counts["other_namespaces"] += 1
-            elif page["redirect"]:
-                redirects.execute("INSERT OR REPLACE INTO r VALUES (?, ?)",
-                                  (canonical(page["title"]), canonical(page["redirect"])))
-                counts["redirects"] += 1
-            else:
-                text, links = clean(lead(page["text"]))
-                if not text or len(text) > TEXT_LIMIT:
-                    counts["skipped_empty_or_long"] += 1
-                    continue
-                out.write(json.dumps({"title": canonical(page["title"]), "page_id": page["page_id"],
-                                      "rev_id": page["rev_id"], "text": text, "links": links}) + "\n")
-                counts["articles"] += 1
+        if workers > 1:
+            pool = multiprocessing.get_context("spawn").Pool(workers)
+            results = pool.imap(_one_stream, jobs, chunksize=4)
+        else:
+            pool, results = None, map(_one_stream, jobs)
+        try:
+            for part, found, lines in results:
+                counts.update(part)
+                redirects.executemany("INSERT OR REPLACE INTO r VALUES (?, ?)", found)
+                for line in lines:
+                    out.write(line + "\n")
+        finally:
+            if pool is not None:
+                pool.close()
+                pool.join()
     redirects.commit()
     redirects.close()
-    return counts
+    return dict(counts)
 
 
 def resolved_records(work: Path):
@@ -112,11 +143,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work", required=True, help="a new directory for the work files")
     parser.add_argument("--streams", type=int, help="only the first N page streams (a slice)")
     parser.add_argument("--id", help="the corpus id (default enwiki-<snapshot>[-sN])")
+    parser.add_argument("--workers", type=int, default=1, help="processes that read and clean streams")
     args = parser.parse_args(argv)
     started = time.time()
     offsets = stream_offsets(args.index, args.streams)
     end = offsets[args.streams] if args.streams is not None and len(offsets) > args.streams else None
-    counts = first_pass(args.dump, args.index, args.streams, Path(args.work))
+    counts = first_pass(args.dump, args.index, args.streams, Path(args.work), args.workers)
     read_range = [offsets[0], end if end is not None else os.path.getsize(args.dump)]
     corpus_id = args.id or ("enwiki-" + args.snapshot.replace("-", "") + (f"-s{args.streams}" if args.streams else ""))
     manifest = {

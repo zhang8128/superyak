@@ -146,3 +146,11 @@ def test_build_corpus_end_to_end_on_a_synthetic_dump(tmp_path):
     assert corpus.search("Late")["papers"] == []
     with pytest.raises(FileExistsError):
         build_corpus.first_pass(dump, index, 1, tmp_path / "work")             # a work directory is never reused
+    parallel = tmp_path / "parallel.sqlite3"
+    assert build_corpus.main(["--dump", str(dump), "--index", str(index), "--snapshot", "2026-11-07", "--out",
+                              str(parallel), "--work", str(tmp_path / "work2"), "--streams", "2", "--workers", "2"]) == 0
+    assert FrozenCorpus(parallel).digest == corpus.digest                      # any number of workers, one corpus
+    everything = tmp_path / "all.sqlite3"
+    assert build_corpus.main(["--dump", str(dump), "--index", str(index), "--snapshot", "2026-11-07", "--out",
+                              str(everything), "--work", str(tmp_path / "work3"), "--workers", "2"]) == 0
+    assert FrozenCorpus(everything).manifest["counts"]["articles"] == 4         # all three streams: "Late" too

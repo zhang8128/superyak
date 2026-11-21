@@ -110,14 +110,19 @@ def read_streams(dump, index, streams: int) -> Iterator[bytes]:
                     break
     with open(dump, "rb") as handle:
         for offset in offsets[:streams]:
-            handle.seek(offset)
-            decompressor, parts = bz2.BZ2Decompressor(), []
-            while not decompressor.eof:
-                chunk = handle.read(1 << 20)
-                if not chunk:
-                    raise ValueError(f"the stream at {offset} ends early")
-                parts.append(decompressor.decompress(chunk))
-            yield b"".join(parts)
+            yield read_stream(handle, offset)
+
+
+def read_stream(handle, offset: int) -> bytes:
+    """One bz2 stream of the dump, starting at ``offset``, decompressed."""
+    handle.seek(offset)
+    decompressor, parts = bz2.BZ2Decompressor(), []
+    while not decompressor.eof:
+        chunk = handle.read(1 << 20)
+        if not chunk:
+            raise ValueError(f"the stream at {offset} ends early")
+        parts.append(decompressor.decompress(chunk))
+    return b"".join(parts)
 
 
 def parse_pages(chunks: Iterable[bytes]) -> Iterator[dict]:
