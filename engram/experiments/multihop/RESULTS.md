@@ -46,3 +46,23 @@ Random sits a little above 1 in 45 (2.2%). Some questions may have fewer than 10
     partly recovers that construction.
 - **Not measured yet:** answers from a model (the 10-question smoke test), a corpus beyond each question's 10 paragraphs
   (#8's corpus v0), and dense retrieval.
+
+## The 10-question smoke test, with models (2026-11-21, on the Mac, 63 s)
+
+`hotpot_smoke.py` asks each model the same 10 dev questions (9 bridge, 1 comparison, seed 20261121) four times, with
+no evidence, BM25's 2 paragraphs, the hop's 2, and the 2 gold paragraphs. Ollama on the Mac, temperature 0, thinking
+off. Each answer, with its gold and timing, is in `results/smoke-2026-11-21.jsonl`.
+
+| Exact matches out of 10 (mean F1) | No evidence | BM25 | Hop | Gold |
+|---|---|---|---|---|
+| nemotron-mini (about 4B) | 1 (0.33) | 3 (0.42) | 5 (0.57) | 7 (0.83) |
+| qwen3.6:27b-mlx | 1 (0.22) | 2 (0.33) | 3 (0.43) | 7 (0.83) |
+
+**How to read it:**
+- **The harness works end to end.** Both models order the arms the same way, as the retrieval measure predicts.
+- **Ten questions decide nothing.** That the small model with the hop beat the large one with BM25 (5 against 2) is a
+  direction to test at 100 questions, not a result.
+- **Some misses are scoring, not reasoning.** "Belleville, Michigan" against "Belleville", for example, scores 0 exact
+  and partial F1.
+- **The large model answered "No" to some wh-questions** when its evidence lacked the answer. It's untested whether a
+  prompt that allows "unknown" changes that.
