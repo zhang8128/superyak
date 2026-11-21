@@ -184,6 +184,15 @@ function bindEditorIdentity(user) {
   state.editorIdentity = next;
 }
 
+// Public-route-bound Task 5: a 503 marked x-superyak-busy was refused before the home did anything (spec R3), so it's
+// asked again once, after its Retry-After (at most 5 s) and up to 1 s more, so pages turned away together don't all come
+// back together. A 503 without the mark (a proxy's, or the home's own failure) is never asked again.
+function busyWait(response) {
+  if (response.status !== 503 || response.headers.get("x-superyak-busy") !== "1") return null;
+  const after = Number.parseInt(response.headers.get("retry-after") || "1", 10);
+  return (Math.min(Number.isFinite(after) && after >= 0 ? after : 1, 5) + Math.random()) * 1000;
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.json !== undefined) {
@@ -194,10 +203,15 @@ async function api(path, options = {}) {
     headers.set("x-csrf-token", state.me.csrf_token);
   }
   let response;
-  try {
-    response = await fetch(path, { credentials: "same-origin", ...options, headers });
-  } catch (_) {
-    throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(path, { credentials: "same-origin", ...options, headers });
+    } catch (_) {
+      throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
   }
   const isJson = (response.headers.get("content-type") || "").includes("application/json");
   const data = await (isJson ? response.json() : response.text()).catch(() => undefined);
@@ -1997,6 +2011,51 @@ async function renderPublic() {
   }
   clearDialogs();
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
+  for (const link of app.querySelectorAll(".attachments .attachment")) {
+    link.addEventListener("click", (event) => { event.preventDefault(); downloadAttachment(link); });
+  }
+}
+
+// Public-route-bound Task 7b (the Task 6 reader's N3): a public file read waits in the layers' lane, so its busy answer
+// is asked again once, after the same wait api() takes, and a reader never sees that answer's raw JSON. The file is
+// saved from what came back, under the name its answer gives.
+async function downloadAttachment(link) {
+  const says = (words) => {
+    let status = link.closest(".attachments").querySelector(".attachment-status");
+    if (!status) {
+      status = Object.assign(document.createElement("p"), { className: "inline-message attachment-status" });
+      status.setAttribute("role", "status");
+      link.closest(".attachments").append(status);
+    }
+    status.textContent = words;
+  };
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(link.href, { credentials: "same-origin" });
+    } catch (_) {
+      return says("Connection lost. Try again when this home is reachable.");
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
+  }
+  if (!response.ok) {
+    return says(busyWait(response) !== null ? "This home is busy just now. Try again in a moment." : "This attachment is unavailable.");
+  }
+  const named = /filename="([^"]*)"/.exec(response.headers.get("content-disposition") || "");
+  let blob;
+  try {
+    blob = await response.blob();  // a connection dropped mid-file throws here
+  } catch (_) {
+    return says("Connection lost. Try again when this home is reachable.");
+  }
+  const url = URL.createObjectURL(blob);
+  const save = Object.assign(document.createElement("a"), { href: url, download: named ? named[1] : "attachment" });
+  document.body.append(save);
+  save.click();
+  save.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 40000);  // as FileSaver waits: long enough for a slow save to read it
 }
 
 // A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.

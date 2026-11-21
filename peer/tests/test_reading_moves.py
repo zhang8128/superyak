@@ -20,6 +20,7 @@ from superyak_peer import inbox
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federate import Federate
+from superyak_peer.live_set import LiveSet
 from superyak_peer.identity import canonical
 from superyak_peer.journal_mode import switch_journal
 from conftest import paired
@@ -51,6 +52,7 @@ MOVED_READS = (
     'layers.Layers.get_layer',
     'layers.Layers.list_layers',
     'layers.Layers.layer_revisions',
+    'live_set.LiveSet.load_live_rows',  # public-route-bound Task 2: serve's start reads every live credential once
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -80,6 +82,7 @@ CALLS = {
     'layers.Layers.layer_revisions': lambda s: s.store.layer_revisions(s.ids['andy'], s.layer),
     'chats.Chats.list_rooms': lambda s: s.store.list_rooms(s.ids['andy']),  # not serenity: its quiet breakout's closure is due, which goes back under the gate
     'peer_store.PeerStore.remote_rooms': lambda s: s.store.remote_rooms(s.ids['andy']),
+    'live_set.LiveSet.load_live_rows': lambda s: LiveSet().load_live_rows(s.store),
 }
 
 

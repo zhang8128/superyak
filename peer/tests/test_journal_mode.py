@@ -251,3 +251,49 @@ def test_refuses_when_sqlite_answers_another_mode(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='memory'):
         switch_journal(store.data_dir, 'wal', active=none_active)
 
+
+
+def test_the_switch_refuses_while_a_serve_holds_its_lock_and_changes_nothing(tmp_path):
+    """Public-route-bound Task 9: a serve the unit list missed (one run by hand) still holds serve.lock."""
+    from superyak_peer.dispatch import serve_lock
+    store = station(tmp_path)
+    held = serve_lock(store.data_dir)
+    try:
+        with pytest.raises(ValueError, match='A serve still runs on this data dir'):
+            switch_journal(store.data_dir, 'wal', active=none_active)
+    finally:
+        os.close(held)
+    assert header_mode(store.db_path) == 'delete'
+
+
+def test_no_serve_starts_during_a_switch_and_the_lock_is_free_after(tmp_path, monkeypatch):
+    from superyak_peer.dispatch import serve_lock
+    store = station(tmp_path)
+    real, tried = journal_mode._set_mode, []
+
+    def a_serve_tries_to_start(db, mode):
+        try:
+            os.close(serve_lock(store.data_dir))
+            tried.append('started')
+        except ValueError:
+            tried.append('refused')
+        return real(db, mode)
+    monkeypatch.setattr(journal_mode, '_set_mode', a_serve_tries_to_start)
+    assert switch_journal(store.data_dir, 'wal', active=none_active) == ('delete', 'wal')
+    assert tried == ['refused']
+    os.close(serve_lock(store.data_dir))  # released when the switch ends
+    monkeypatch.setattr(journal_mode, '_set_mode', lambda db, mode: (_ for _ in ()).throw(sqlite3.DatabaseError('file is not a database')))
+    with pytest.raises(ValueError):
+        switch_journal(store.data_dir, 'delete', active=none_active)
+    os.close(serve_lock(store.data_dir))  # and when it fails
+
+
+def test_the_switch_names_any_other_lock_refusal_as_itself(tmp_path, monkeypatch):
+    """Rio Grande's nit on Task 9: only a held lock is "a serve still runs"; any other refusal says what it is."""
+    store = station(tmp_path)
+
+    def refused(data_dir):
+        raise ValueError('Symlinked state is not allowed')
+    monkeypatch.setattr(journal_mode, 'serve_lock', refused)
+    with pytest.raises(ValueError, match='^Symlinked state is not allowed$'):
+        switch_journal(store.data_dir, 'wal', active=none_active)

@@ -7,6 +7,7 @@ import sqlite3
 import stat
 import threading
 import time
+from . import counting
 from .auth import Auth
 from .spaces import Spaces
 from .layers import Layers
@@ -63,10 +64,15 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 JOURNAL_SIZE_LIMIT = 67108864  # store-wal-mode D2: a checkpointed WAL is cut back to 64 MB
 CHECKPOINT_WAIT = 0.1  # store-wal-mode D2: TRUNCATE's busy wait, so a long reader makes it give up, not block a post
 _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
+_bounded = threading.local()  # public-route-bound Task 6: this thread's lane deadline, on the store's monotonic clock
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, OwnerTrust, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
+    live = None  # serve's LiveSet, set by create_app (public-route-bound Task 2); a CLI's Store has none
+    tag_keys = None  # serve's {label: {kid: key}}, loaded by create_app (Task 7a); never in __init__
+    untagged = None  # serve's tags.StartSet of untagged invitations and activations (Task 7b)
+    spent = None  # serve's tags.SpentSet of tagged ones that can redeem nothing more (Task 7b, the reader's D1)
     _keeper = None  # the connection keep_open() holds for a long-running process (store-wal-mode D2)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
@@ -172,14 +178,34 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         (health's 3 s); without it the Store's rule holds (30 s, or `busy_until`). Refused inside reading()."""
         if self.in_reading():
             raise RuntimeError('a write inside reading(): a gate-free snapshot never writes')
-        with self.dispatch_gate:
+        with counting.counted('transaction'), self.dispatch_gate:  # counted at entry, after the refusal, before the gate
             with self._transaction(wait) as db:
                 yield db
 
     def _wait(self, wait=None):
-        if wait is not None:
-            return wait
-        return 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
+        """A connection's SQLite busy wait: `wait` if given, else 30 s or what's left before `busy_until`, and inside
+        bounded() never past its deadline, even when a caller asks for longer (health's 3 s, say)."""
+        if wait is None:
+            wait = 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
+        deadline = getattr(_bounded, 'deadline', None)
+        return wait if deadline is None else max(0.001, min(wait, deadline - self._monotonic()))
+
+    @contextmanager
+    def bounded(self, seconds):
+        """Public-route-bound Task 6: store work inside waits for the dispatch gate (DispatchGate.bounded, then
+        GateTimeout) and for SQLite's own busy wait (each connection's timeout, then "database is locked") only until
+        `seconds` from now, so a public lane's slot is never held for SQLite's 30 s. Bounding only one would leave the
+        other's. SQLite waits per statement, with the timeout set at connect, so a writer outside the gate that takes
+        the lock again between two statements can hold a slot about twice the bound in rollback mode, never 30 s (the
+        Task 6 reader's N1). This thread's only, as the gate's bound is."""
+        deadline = self._monotonic() + seconds
+        before = getattr(_bounded, 'deadline', None)
+        _bounded.deadline = deadline if before is None else min(before, deadline)
+        try:
+            with self.dispatch_gate.bounded(_bounded.deadline, clock=self._monotonic):
+                yield
+        finally:
+            _bounded.deadline = before
 
     @contextmanager
     def _transaction(self, wait=None):
@@ -204,12 +230,17 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         finally:
             db.close()
 
+    @staticmethod
+    def counting():
+        """For tests: count this process's store work by bucket while the block runs (public-route-bound plan, Task 0)."""
+        return counting.counts()
+
     def in_reading(self):
         """Whether this thread is inside reading() now."""
         return getattr(_reading, 'depth', 0) > 0
 
     @contextmanager
-    def reading(self):
+    def reading(self, *, wait=None):
         """Store-wal-mode D3: one consistent snapshot that cannot write. In WAL mode it takes neither the dispatch gate
         nor SQLite's write lock, so a pure read never waits for a write and no write waits for it; in any other mode it is
         the gate plus a deferred BEGIN, as safe as a transaction, with the gate taken before SQLite is touched and the
@@ -218,37 +249,40 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         drop this process's SQLite locks (the re-check's M1). A Store that has seen WAL checks that SQLite still says so,
         and reads under the gate again if not. It refuses, in both modes, a thread that holds the gate or is already
         inside reading(), and transaction() refuses inside it. Never hold it across an await or in a yield dependency:
-        its thread-local state and, in rollback mode, the gate belong to the thread that entered it."""
+        its thread-local state and, in rollback mode, the gate belong to the thread that entered it. `wait` bounds its
+        connection's SQLite busy wait, as transaction()'s does (public-route-bound Task 6)."""
         if self.in_reading():  # first, so a nested reading() says so in both modes (in rollback mode the outer holds the gate)
             raise RuntimeError('reading() inside reading(): one snapshot at a time')
         if self.dispatch_gate.held():
             raise RuntimeError('reading() inside the dispatch gate: a gated caller reads in its own transaction')
-        self._check_paths()
-        if self._journal == 'wal':
-            db = self._read_only_connection()
-            try:
-                wal = db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
-            except BaseException:
+        # Counted once here, after its refusals and before the gate, as transaction() is (public-route-bound Task 0)
+        with counting.counted('read'):
+            self._check_paths()
+            if self._journal == 'wal':
+                db = self._read_only_connection(wait)
+                try:
+                    wal = db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+                except BaseException:
+                    db.close()
+                    raise
+                if wal:
+                    with self._snapshot(db):
+                        yield db
+                    return
                 db.close()
-                raise
-            if wal:
+                self._journal = None  # the store left WAL since this Store looked: read under the gate, and look again
+            with self.dispatch_gate:
+                db = self._read_only_connection(wait)
+                try:
+                    self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]
+                except BaseException:
+                    db.close()
+                    raise
                 with self._snapshot(db):
                     yield db
-                return
-            db.close()
-            self._journal = None  # the store left WAL since this Store looked: read under the gate, and look again
-        with self.dispatch_gate:
-            db = self._read_only_connection()
-            try:
-                self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]
-            except BaseException:
-                db.close()
-                raise
-            with self._snapshot(db):
-                yield db
 
-    def _read_only_connection(self):
-        db = sqlite3.connect(self.db_path, timeout=self._wait())
+    def _read_only_connection(self, wait=None):
+        db = sqlite3.connect(self.db_path, timeout=self._wait(wait))
         try:
             db.row_factory = sqlite3.Row
             db.execute('PRAGMA query_only=ON')
