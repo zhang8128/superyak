@@ -159,15 +159,16 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
     # could hold never reads the transcript. A lesson already shown then starts no query (both reviews' S1/S2).
     if could_hold(cut, settings['ship'], settings['data_dir'], seen) is not True:
         return []
+    place = None
+    if cwd and settings['query'] == lh.default_query():  # receipt-place spec 1: this event's cwd, never the record's;
+        place = receipt_place.place_of(cwd, deadline, monotonic)   # before the budget, which counts what is left after
     budget_ms = int((deadline - monotonic() - START_MARGIN) * 1000)
     if budget_ms <= 0:
         return given_up()  # too late for the query to answer before the entry gives up: it isn't started
     request = {'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
                'seen': seen, 'budget_ms': budget_ms}
-    if cwd and settings['query'] == lh.default_query():  # receipt-place spec 1: this event's cwd, never the record's
-        place = receipt_place.place_of(cwd, deadline, monotonic)
-        if place:
-            request['place'] = place
+    if place:
+        request['place'] = place
     answer = lh.ask(settings, request, deadline, monotonic)
     if answer is None:
         return given_up()  # late or failing: a Bash head may ask again

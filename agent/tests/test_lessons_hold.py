@@ -630,3 +630,46 @@ def test_the_entry_hands_its_events_cwd_to_the_lessons_provider(monkeypatch, tmp
     assert got == {'cwd': '/the/events/cwd'}
     stand_in = lambda command, record, now, limit: []      # noqa: E731
     assert hold._provider(stand_in, '/x') is stand_in
+
+
+def slow_git(rail, monkeypatch):
+    bin_ = rail.root / 'slow-bin'
+    bin_.mkdir(exist_ok=True)
+    (bin_ / 'git').write_text('#!/bin/sh\nsleep 5\n')
+    (bin_ / 'git').chmod(0o700)
+    monkeypatch.setenv('PATH', f'{bin_}:{os.environ["PATH"]}')
+
+
+def test_the_holds_budget_is_counted_after_classifying(rail, placed, monkeypatch):
+    """The code reader's 1 on 5197bf2f: budget_ms is what is left when the query starts, less its start-up, so the
+    query's deadline falls inside the hold's however long classifying took."""
+    slow_git(rail, monkeypatch)
+    seen, real = [], lh.ask
+
+    def ask(settings, request, deadline, monotonic=time.monotonic):
+        seen.append((request['budget_ms'], deadline - monotonic()))
+        return real(settings, request, deadline, monotonic)
+    monkeypatch.setattr(lh, 'ask', ask)
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(placed))
+    [(budget, left)] = seen
+    assert budget <= (left - lessons_hold.START_MARGIN) * 1000 + 1, (budget, left)
+
+
+def test_a_query_sharing_only_the_defaults_first_word_is_sent_no_place(rail, placed, monkeypatch):
+    stub = json.loads(rail.settings.read_text())['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: [stub[0], '-S', '-B', '/elsewhere/query.py'])
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(placed))
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_hold_in_a_registered_worktree_or_another_repository(rail, placed):
+    subprocess.run(['git', 'worktree', 'add', '-q', str(rail.root / 'wt')], cwd=placed, check=True, capture_output=True)
+    theirs = rail.root / 'theirs'
+    theirs.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=theirs, check=True, capture_output=True)
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(rail.root / 'wt'))
+    asked_with(rail, rec=record(session='s2', rail=rail), cwd=str(theirs))
+    assert [r.get('place') for r in rail.sent()] == ['superyak', 'other']

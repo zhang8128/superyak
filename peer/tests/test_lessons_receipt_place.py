@@ -107,6 +107,9 @@ def test_a_populated_store_gains_the_column_once_and_keeps_its_rows(tmp_path):
         rows = db.execute('SELECT id, angle, place FROM lesson_receipts').fetchall()
         linked = db.execute('SELECT o.id FROM lesson_outcomes o JOIN lesson_receipts r ON r.id = o.receipt_id').fetchall()
     assert columns.count('place') == 1 and rows == [('r1', 0.5, None)] and linked == [('o1',)]
+    with closing(sqlite3.connect(data / 'peer.sqlite3')) as db, pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle, place) "
+                   "VALUES('k', 1, 'u', 'l', 'a', NULL, 'home')")        # the migrated column keeps its CHECK (8d)
 
 
 def test_a_fresh_store_has_the_column(tmp_path):

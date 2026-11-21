@@ -81,10 +81,12 @@ def test_a_dot_git_git_cant_resolve_or_read_gives_no_place(world):
     (unreadable / '.git').mkdir(parents=True)
     (unreadable / '.git').chmod(0)
     try:
-        assert place(unreadable, checkout) in (None, 'superyak')   # git decides; never "other" by guess
-        assert place(unreadable, checkout) != 'other'
+        assert place(unreadable, checkout) is None              # git can't read it: no answer (the reader's 3)
     finally:
         (unreadable / '.git').chmod(0o700)
+    empty = checkout / 'empty'
+    (empty / '.git').mkdir(parents=True)                         # a .git git passes over, finding the checkout
+    assert place(empty, checkout) is None and place(empty / '.git', checkout) is None
 
 
 def test_failed_or_ambiguous_discovery_is_none(world, monkeypatch):
@@ -129,3 +131,62 @@ def test_the_roots_are_kept_in_memory_only(world):
     assert place(checkout, checkout) == 'superyak'
     after = {p for p in tmp.rglob('*')}
     assert after == before and str(checkout) in rp._roots_memo
+
+
+
+# ---- the code reader's 2, 4 and 6 on 5197bf2f ----------------------------------------------------------------------
+
+def test_a_worktree_path_recloned_as_another_repository_is_not_superyak(world):
+    tmp, checkout = world
+    shutil.rmtree(tmp / 'beside')                               # removed by hand: git still lists it
+    other = tmp / 'unrelated'
+    other.mkdir()
+    git('init', '-q', cwd=other)
+    git('commit', '-q', '--allow-empty', '-m', 'x', cwd=other)
+    subprocess.run(['git', 'clone', '-q', str(other), str(tmp / 'beside')], check=True, capture_output=True)
+    (tmp / 'beside' / 'src').mkdir()
+    assert place(tmp / 'beside', checkout) is None and place(tmp / 'beside' / 'src', checkout) is None
+
+
+def test_a_checkout_without_its_own_git_inside_another_repository_tells_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(rp, '_roots_memo', {})
+    home = tmp_path / 'dotfiles'
+    (home / 'Projects' / 'superyak' / 'agent').mkdir(parents=True)
+    (home / 'notes').mkdir()
+    git('init', '-q', cwd=home)
+    git('commit', '-q', '--allow-empty', '-m', 'x', cwd=home)
+    checkout = home / 'Projects' / 'superyak'                    # installed inside it, with no .git of its own
+    assert place(checkout / 'agent', checkout) is None and place(home / 'notes', checkout) is None
+
+
+def fake_git(tmp, body):
+    """A `git` first on PATH: `body` is shell, with the real git as $REAL."""
+    bin_ = tmp / 'fake-bin'
+    bin_.mkdir(exist_ok=True)
+    (bin_ / 'git').write_text(f'#!/bin/sh\nREAL={shutil.which("git")}\n{body}\n')
+    (bin_ / 'git').chmod(0o700)
+    return bin_
+
+
+def test_every_git_call_shares_one_quarter_of_the_time(world, monkeypatch):
+    tmp, checkout = world
+    nested = tmp / 'beside' / 'vendor'
+    (nested / '.git').mkdir(parents=True)
+    bin_ = fake_git(tmp, 'case "$*" in *worktree*) exec "$REAL" "$@";; esac\nsleep 0.4; exec "$REAL" "$@"')
+    monkeypatch.setenv('PATH', f'{bin_}:{os.environ["PATH"]}')
+    begun = time.monotonic()
+    assert place(nested, checkout, seconds=2.0) is None          # each slow call would fit a quarter of what is left
+    assert time.monotonic() - begun < 2.0 * rp.SHARE + 0.15
+
+
+def test_a_git_without_z_is_read_without_it_and_a_quoted_path_tells_nothing(world, monkeypatch):
+    tmp, checkout = world
+    bin_ = fake_git(tmp, 'for a in "$@"; do [ "$a" = -z ] && { echo "error: unknown switch" >&2; exit 129; }; done\n'
+                         'exec "$REAL" "$@"')
+    monkeypatch.setenv('PATH', f'{bin_}:{os.environ["PATH"]}')
+    assert place(checkout / 'agent', checkout) == 'superyak'     # git before 2.36 (the reader's 6)
+    monkeypatch.setattr(rp, '_roots_memo', {})
+    quoted = fake_git(tmp, 'for a in "$@"; do [ "$a" = -z ] && exit 129; done\n'
+                           'case "$*" in *worktree*) printf \'worktree "%s"\\n\\n\' "$PWD"; exit 0;; esac\nexec "$REAL" "$@"')
+    monkeypatch.setenv('PATH', f'{quoted}:{os.environ["PATH"]}')
+    assert place(checkout / 'agent', checkout) is None

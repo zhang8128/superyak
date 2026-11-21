@@ -1065,3 +1065,22 @@ def test_a_classifying_that_runs_out_of_time_sends_no_place_and_the_lessons_stil
     begun = time.monotonic()
     assert rail.run('SessionStart', cwd=str(placed)) == [A, B, C]
     assert time.monotonic() - begun < lh.LIMITS['SessionStart'] and [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_query_sharing_only_the_defaults_first_word_is_sent_no_place_by_the_hook(rail, placed, monkeypatch):
+    stub = json.loads(rail.settings.read_text())['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: [stub[0], '-S', '-B', '/elsewhere/query.py'])
+    rail.answers(*SERENITY)
+    rail.run('SessionStart', cwd=str(placed))
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_the_hook_in_a_registered_worktree_or_another_repository(rail, placed):
+    subprocess.run(['git', 'worktree', 'add', '-q', str(rail.root / 'wt')], cwd=placed, check=True, capture_output=True)
+    theirs = rail.root / 'theirs'
+    theirs.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=theirs, check=True, capture_output=True)
+    rail.answers(*SERENITY)
+    rail.run('SessionStart', cwd=str(rail.root / 'wt'))
+    rail.run('PostToolUseFailure', session='s2', cwd=str(theirs), **failure())
+    assert [r.get('place') for r in rail.sent()] == ['superyak', 'other']
