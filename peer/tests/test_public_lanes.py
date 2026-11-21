@@ -260,3 +260,106 @@ def test_a_wait_asked_for_inside_the_bound_is_cut_to_it(env):
     took = time.monotonic() - started
     holder.join(10)
     assert 0.4 <= took < 1.5, took
+
+
+# ---- the comparison's device c16 finding (breakout 77c6e4, Rio Grande's ruling 4fa05cff): a full public sign-in lane
+# pauses before its 429, so a sender that waits for each answer can't go faster against a cheap refusal than main let it
+
+def lane_full(lane):
+    lane.inside = lane.size + lane.queue  # white-box: only the event loop changes it, and nothing else runs here
+    return lane
+
+
+def never_called(*_):
+    raise AssertionError('a full lane hashed or counted')
+
+
+def test_a_full_public_sign_in_lane_pauses_before_its_429_and_does_no_work(tmp_path):
+    from superyak_peer.app import REFUSAL_HELD_MAX, REFUSAL_PAUSE
+    from superyak_peer.common import Problem
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'])
+    lane = lane_full(app.state.sign_in_lanes.public)
+    assert (lane.pause, lane.held_max) == (REFUSAL_PAUSE, REFUSAL_HELD_MAX) == (0.1, 64)
+
+    async def refuse():
+        began = time.monotonic()
+        with pytest.raises(Problem) as refused:
+            await lane.run(never_called)
+        return time.monotonic() - began, refused.value
+    took, problem = asyncio.run(refuse())
+    assert REFUSAL_PAUSE <= took < REFUSAL_PAUSE + 0.5
+    assert (problem.status, problem.message) == (429, 'Too many sign-ins at once; try again shortly')
+    assert lane.held == 0
+
+
+def test_only_the_public_sign_in_lane_pauses(tmp_path):
+    """The tailnet and known lanes, and the public store lanes (the miss lane's and layers' 503 busy, which a page asks
+    again after once), refuse at once, as before."""
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'])
+    lanes = [app.state.sign_in_lanes.tailnet, app.state.sign_in_lanes.known, app.state.miss_lane]
+    assert all(lane.pause == 0 for lane in lanes)
+
+
+def test_a_sender_waiting_on_each_refusal_is_held_to_one_per_pause_per_connection():
+    """The mechanism the comparison needs: 16 senders, each waiting for its answer, against a full lane for 0.5 s get
+    at most one refusal per pause each. Without the pause they would get thousands."""
+    from superyak_peer.app import SignInLane
+    from superyak_peer.common import Problem
+    lane = lane_full(SignInLane(2, 8, 'public', pause=0.05, held_max=64))
+
+    async def flood():
+        answered, until = [0], time.monotonic() + 0.5
+
+        async def sender():
+            while time.monotonic() < until:
+                try:
+                    await lane.run(never_called)
+                except Problem:
+                    answered[0] += 1
+        await asyncio.gather(*(sender() for _ in range(16)))
+        return answered[0]
+    answered = asyncio.run(flood())
+    assert 16 <= answered <= 16 * (0.5 / 0.05 + 1)
+
+
+def test_refusals_past_the_held_cap_are_answered_at_once_and_held_never_exceeds_it():
+    """The fresh reader's question for this fix: many connections at once must not each hold a socket through the
+    pause. Past held_max, a refusal is answered at once, so at most held_max wait."""
+    from superyak_peer.app import SignInLane
+    from superyak_peer.common import Problem
+    lane = lane_full(SignInLane(2, 8, 'public', pause=0.2, held_max=8))
+    seen = []
+
+    async def burst():
+        async def one():
+            began = time.monotonic()
+            try:
+                await lane.run(never_called)
+            except Problem:
+                seen.append(lane.held)
+                return time.monotonic() - began
+
+        async def watch():
+            for _ in range(20):
+                seen.append(lane.held)
+                await asyncio.sleep(0.01)
+        took, _ = await asyncio.gather(asyncio.gather(*(one() for _ in range(100))), watch())
+        return took
+    took = asyncio.run(burst())
+    assert max(seen) <= 8 and lane.held == 0
+    assert sum(1 for t in took if t >= 0.2) == 8 and sum(1 for t in took if t < 0.1) == 92
+
+
+def test_a_refusal_whose_caller_goes_away_mid_pause_gives_its_place_back():
+    from superyak_peer.app import SignInLane
+    lane = lane_full(SignInLane(2, 8, 'public', pause=5, held_max=4))
+
+    async def gone():
+        task = asyncio.ensure_future(lane.run(never_called))
+        await asyncio.sleep(0.05)
+        assert lane.held == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(gone())
+    assert lane.held == 0

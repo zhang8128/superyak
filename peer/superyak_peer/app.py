@@ -280,20 +280,40 @@ class PublicRoute:
     def listed(route, method):
         return isinstance(route, (APIRoute, Mount)) and method in PUBLIC_ROUTES.get(route.path, ())
 
+REFUSAL_PAUSE = 0.1  # the public sign-in lane's pause before a full lane's 429, in seconds (see SignInLane)
+REFUSAL_HELD_MAX = 64  # refusals paused at once at most; past it, a refusal is answered at once
+
+
 class SignInLane:
     """Public route spec 3: all of Store.login runs in a worker under its lane's own limiter, so sign-ins never compete
     with sync routes for anyio's shared threads. `size` sign-ins at a time with `queue` waiting; a full lane answers
-    429 without hashing or counting."""
-    def __init__(self, size, queue, name):
+    429 without hashing or counting.
+
+    With `pause`, a full lane waits that long before its 429, holding no thread and doing no work, so a sender that
+    waits for each answer gets one refusal per pause per connection. The landing comparison found the cheap 429 let a
+    16-connection flood deliver 500 a second where main's slower answers held it to 155, and the person paid for it
+    (breakout 77c6e4, device c16); 0.1 s holds those 16 to about 160. At most `held_max` wait at once, so a flood over
+    many connections can't make the pause hold a socket each: past it, a refusal is answered at once."""
+    def __init__(self, size, queue, name, *, pause=0.0, held_max=0):
         self.size, self.queue, self.inside, self.name = size, queue, 0, name
+        self.pause, self.held_max, self.held = pause, held_max, 0
         self.limiter = anyio.CapacityLimiter(size)
 
     def refused(self):
         return Problem(429, 'Too many sign-ins at once; try again shortly')
 
+    async def _refuse(self):
+        if self.pause > 0 and self.held < self.held_max:
+            self.held += 1  # only the event loop changes it
+            try:
+                await anyio.sleep(self.pause)
+            finally:
+                self.held -= 1  # a caller gone mid-pause gives its place back
+        raise self.refused()
+
     async def run(self, call, *args, **kwargs):
         if self.inside >= self.size + self.queue:
-            raise self.refused()
+            await self._refuse()
         self.inside += 1  # only the event loop changes it
         try:
             return await anyio.to_thread.run_sync(functools.partial(self._counted, call, *args, **kwargs), limiter=self.limiter)
@@ -458,7 +478,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.sync_enabled = sync_enabled
     app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
     # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
-    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8, 'public'), tailnet=SignInLane(1, 4, 'tailnet'), known=SignInLane(1, 4, 'known'))
+    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8, 'public', pause=REFUSAL_PAUSE, held_max=REFUSAL_HELD_MAX), tailnet=SignInLane(1, 4, 'tailnet'), known=SignInLane(1, 4, 'known'))
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
