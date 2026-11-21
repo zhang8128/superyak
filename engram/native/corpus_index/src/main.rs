@@ -77,6 +77,7 @@ fn cmd_query(opts: &HashMap<String, String>) -> Result<(), String> {
     let mut out = BufWriter::new(stdout.lock());
     let mut buf: Vec<u8> = Vec::new();
 
+    let mut scratch = index.scratch();
     loop {
         buf.clear();
         let n = reader.read_until(b'\n', &mut buf).map_err(|e| format!("reading stdin: {e}"))?;
@@ -94,7 +95,7 @@ fn cmd_query(opts: &HashMap<String, String>) -> Result<(), String> {
             Some((q, rest)) => (q, rest),
             None => (line.as_ref(), ""),
         };
-        let result = index.query(query, k);
+        let result = index.query_with(&mut scratch, query, k);
         let bm25_field = result.bm25.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
         let hop_field = result.hop.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
         writeln!(out, "{qid}\t{bm25_field}\t{hop_field}").map_err(|e| format!("writing output: {e}"))?;

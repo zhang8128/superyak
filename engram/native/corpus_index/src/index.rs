@@ -87,6 +87,14 @@ pub struct QueryResult {
     pub hop: Vec<u64>,
 }
 
+/// A query's working memory, from `Index::scratch`: one score slot per doc (all 0.0 between
+/// queries), the docs this query touched, and a copy of them to zero the slots afterwards.
+pub struct Scratch {
+    acc: Vec<f64>,
+    touched: Vec<u32>,
+    touched_all: Vec<u32>,
+}
+
 impl Index {
     /// Build an index from documents (in the order they define doc index 0..N) and links
     /// (`src_page_id`, `dst_page_id`). A link is kept only when both ends resolve to a document
@@ -462,8 +470,129 @@ impl Index {
         out
     }
 
+    /// Reusable per-query buffers: a dense score per doc and the list of docs a query touched, so
+    /// a query costs its postings, not a hash map of millions of entries. One per querying thread.
+    pub fn scratch(&self) -> Scratch {
+        Scratch { acc: vec![0.0; self.doc_lens.len()], touched: Vec::new(), touched_all: Vec::new() }
+    }
+
+    /// Adds every doc's BM25 score for `terms` into `scratch` (zeroed beforehand). Each doc's
+    /// contributions are added in `terms` order, the order the map-based reference adds them in, so
+    /// every sum is bit-for-bit the same. A posting's contribution is always > 0 (tf >= 1, idf > 0),
+    /// so a slot still at 0.0 is one this query hasn't touched yet.
+    fn accumulate(&self, terms: &[String], scratch: &mut Scratch) {
+        for term in terms {
+            if let Some(v) = self.vocab_lookup(term) {
+                let idf_value = idf(self.doc_count, v.doc_freq);
+                for &(doc_idx, tf) in self.postings_for(v) {
+                    let doc_len = self.doc_lens[doc_idx as usize];
+                    let contribution = term_contribution(idf_value, tf, doc_len, self.avg_doc_len);
+                    let slot = &mut scratch.acc[doc_idx as usize];
+                    if *slot == 0.0 {
+                        scratch.touched.push(doc_idx);
+                    }
+                    *slot += contribution;
+                }
+            }
+        }
+    }
+
+    /// Highest score first, ties broken by the smaller doc index: a partial selection over the
+    /// touched docs, then a sort of the `k` kept, in the same total order a full sort uses.
+    fn topk_touched(scratch: &mut Scratch, k: usize) -> Vec<(u32, f64)> {
+        let acc = &scratch.acc;
+        let order = |a: &u32, b: &u32| {
+            acc[*b as usize].partial_cmp(&acc[*a as usize]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b))
+        };
+        let touched = &mut scratch.touched;
+        if touched.len() > k && k > 0 {
+            touched.select_nth_unstable_by(k - 1, order);
+            touched.truncate(k);
+        }
+        touched.sort_by(order);
+        touched.truncate(k);
+        touched.iter().map(|&d| (d, acc[d as usize])).collect()
+    }
+
+    /// BM25's top-`k` page ids, plus the hop's pick: BM25's top 1, then the out-link scoring
+    /// highest (> 0) against the same query; with none, BM25's second pick. A query with no known
+    /// terms gives empty fields, never a panic. Allocates its own scratch; a loop should reuse one
+    /// with `query_with`.
+    pub fn query(&self, query: &str, k: usize) -> QueryResult {
+        let mut scratch = self.scratch();
+        self.query_with(&mut scratch, query, k)
+    }
+
+    pub fn query_with(&self, scratch: &mut Scratch, query: &str, k: usize) -> QueryResult {
+        let result = self.query_scored(scratch, query, k);
+        for &d in &scratch.touched_all {
+            scratch.acc[d as usize] = 0.0;
+        }
+        scratch.touched_all.clear();
+        scratch.touched.clear();
+        result
+    }
+
+    fn query_scored(&self, scratch: &mut Scratch, query: &str, k: usize) -> QueryResult {
+        let terms = self.query_terms(query);
+        if terms.is_empty() {
+            return QueryResult { bm25: Vec::new(), hop: Vec::new() };
+        }
+        self.accumulate(&terms, scratch);
+        if scratch.touched.is_empty() {
+            return QueryResult { bm25: Vec::new(), hop: Vec::new() };
+        }
+        // The selection reorders and shortens `touched`; keep the full list to zero the slots after.
+        scratch.touched_all.clear();
+        scratch.touched_all.extend_from_slice(&scratch.touched);
+        let need = k.max(2);
+        let top = Self::topk_touched(scratch, need);
+        let bm25_page_ids: Vec<u64> = top.iter().take(k).map(|&(d, _)| self.page_ids[d as usize]).collect();
+
+        let hop = match top.first() {
+            None => Vec::new(),
+            Some(&(first_idx, _)) => {
+                let start = self.csr_offsets[first_idx as usize] as usize;
+                let end = self.csr_offsets[first_idx as usize + 1] as usize;
+                let out_links = &self.csr_edges[start..end];
+                let mut best: Option<(u32, f64)> = None;
+                for &target in out_links {
+                    // The out-link's whole BM25 score for this query, already summed in term order.
+                    let s = scratch.acc[target as usize];
+                    if s > 0.0 {
+                        best = match best {
+                            None => Some((target, s)),
+                            Some((bd, bs)) => {
+                                if s > bs || (s == bs && target < bd) {
+                                    Some((target, s))
+                                } else {
+                                    Some((bd, bs))
+                                }
+                            }
+                        };
+                    }
+                }
+                match best {
+                    Some((target, _)) => vec![self.page_ids[first_idx as usize], self.page_ids[target as usize]],
+                    None => {
+                        if top.len() >= 2 {
+                            vec![self.page_ids[first_idx as usize], self.page_ids[top[1].0 as usize]]
+                        } else {
+                            vec![self.page_ids[first_idx as usize]]
+                        }
+                    }
+                }
+            }
+        };
+
+        QueryResult { bm25: bm25_page_ids, hop }
+    }
+
+    // ---- The first, map-based query path, kept verbatim for tests to hold the fast path to. ----
+
     /// BM25 scores for every doc that contains at least one of `terms`. A term absent from the
     /// vocabulary is simply skipped (it offers no evidence either way).
+    #[cfg(test)]
     fn scores_for_terms(&self, terms: &[String]) -> HashMap<u32, f64> {
         let mut scores: HashMap<u32, f64> = HashMap::new();
         for term in terms {
@@ -480,6 +609,7 @@ impl Index {
     }
 
     /// Highest score first, ties broken by the smaller doc index.
+    #[cfg(test)]
     fn topk_from_scores(scores: &HashMap<u32, f64>, k: usize) -> Vec<(u32, f64)> {
         let mut v: Vec<(u32, f64)> = scores.iter().map(|(&d, &s)| (d, s)).collect();
         v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
@@ -489,6 +619,7 @@ impl Index {
 
     /// One doc's BM25 score against `terms`, computed directly (used for the hop, where the
     /// candidate set is a single document's handful of out-links, not the whole corpus).
+    #[cfg(test)]
     fn score_doc_for_terms(&self, doc_idx: u32, terms: &[String]) -> f64 {
         let mut score = 0.0;
         for term in terms {
@@ -508,7 +639,8 @@ impl Index {
     /// BM25's top-`k` page ids, plus the hop's pick: BM25's top 1, then the out-link scoring
     /// highest (> 0) against the same query; with none, BM25's second pick. A query with no known
     /// terms gives empty fields, never a panic.
-    pub fn query(&self, query: &str, k: usize) -> QueryResult {
+    #[cfg(test)]
+    pub fn query_reference(&self, query: &str, k: usize) -> QueryResult {
         let terms = self.query_terms(query);
         if terms.is_empty() {
             return QueryResult { bm25: Vec::new(), hop: Vec::new() };
@@ -677,6 +809,59 @@ mod tests {
 
     /// The fixture used across these tests: a tiny "band -> singer" link, plus an unrelated
     /// article and one with no text match at all.
+    /// A deterministic random corpus with a skewed vocabulary (a few words in most docs, many
+    /// rare), duplicate docs for exact score ties, and random links; 500 queries through one
+    /// reused scratch must give exactly what the map-based reference gives.
+    #[test]
+    fn the_dense_path_matches_the_map_based_reference_exactly_on_random_queries() {
+        let mut seed: u64 = 0x5eed_1121;
+        let mut next = move |m: u64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) % m
+        };
+        let words: Vec<String> = (0..60).map(|i| format!("w{i}")).collect();
+        let pick = |next: &mut dyn FnMut(u64) -> u64| {
+            // Skewed: index = floor(60 * u^3), so low indices (common words) dominate.
+            let u = next(1_000_000) as f64 / 1_000_000.0;
+            words[((u * u * u) * 60.0) as usize].clone()
+        };
+        let mut docs = Vec::new();
+        for id in 1..=400u64 {
+            let len = 1 + next(30);
+            let text: Vec<String> = (0..len).map(|_| pick(&mut next)).collect();
+            docs.push(doc(id, &format!("T{}", id % 97), &text.join(" ")));
+        }
+        for id in 401..=420u64 {
+            // exact duplicates of earlier docs: same text, same length, so equal scores
+            let src = &docs[(id - 401) as usize];
+            docs.push(doc(id, &src.title.clone(), &src.text.clone()));
+        }
+        let mut links = Vec::new();
+        for _ in 0..3000 {
+            links.push((1 + next(420), 1 + next(440))); // some targets unknown, dropped
+        }
+        let (index, _) = Index::build(&docs, &links);
+        let mut scratch = index.scratch();
+        let mut compared = 0;
+        for q in 0..500 {
+            let n = 1 + next(12);
+            let mut terms: Vec<String> = (0..n).map(|_| pick(&mut next)).collect();
+            if q % 25 == 0 {
+                terms.push("absentword".to_string());
+            }
+            let query = terms.join(" ");
+            for k in [1usize, 2, 5] {
+                let fast = index.query_with(&mut scratch, &query, k);
+                let slow = index.query_reference(&query, k);
+                assert_eq!(fast.bm25, slow.bm25, "bm25 differs for {query:?} k={k}");
+                assert_eq!(fast.hop, slow.hop, "hop differs for {query:?} k={k}");
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 1500);
+        assert!(scratch.acc.iter().all(|&x| x == 0.0), "the scratch is left clean");
+    }
+
     fn fixture() -> (Vec<DocRecord>, Vec<(u64, u64)>) {
         let docs = vec![
             doc(1, "Lotus (band)", "Lotus is a band whose singer was Ann Vale."),
