@@ -278,7 +278,7 @@ class Sheaf:
         return self._handle
 
     def add_edge(self, u, v, map_u=None, map_v=None, weight=1.0, dim=None):
-        """An edge from u to v. `map_u` and `map_v` take each end's stalk to the edge's; None is the identity. The
+        """An edge from u to v, or a loop when u is v. `map_u` and `map_v` take each end's stalk to the edge's; None is the identity. The
         edge's dimension is the maps' row count, or `dim`, or (with two identities) the vertices' own."""
         n = len(self.vertex_dims)
         _small(u, 0, n - 1, 'u')

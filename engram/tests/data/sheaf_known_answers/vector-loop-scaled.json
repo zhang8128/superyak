@@ -1,0 +1,41 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "One node with a loop whose head map doubles. The coboundary is 2 - 1 = 1, so nothing but zero agrees with itself around the loop: H0 = 0 and H1 = 0. The local value 3 has residual 3 and squared distance 9 from the only section, 0.",
+ "nodes": [
+  {
+   "id": "v",
+   "dim": 1
+  }
+ ],
+ "edges": [
+  {
+   "tail": "v",
+   "head": "v",
+   "dim": 1,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     2.0
+    ]
+   ]
+  }
+ ],
+ "local": {
+  "v": [
+   3.0
+  ]
+ },
+ "expect": {
+  "dim_h0": 0,
+  "dim_h1": 0,
+  "glued": false,
+  "residual_edges": [
+   0
+  ],
+  "residuals": [
+   3.0
+  ],
+  "distance_squared": 9.0
+ }
+}

@@ -528,7 +528,7 @@ def test_trust_outside_zero_to_one_is_refused():
 
 def test_a_sheaf_refuses_what_is_not_an_edge_and_what_comes_after_closing():
     s = sn.Sheaf([2, 3])
-    for call in (lambda: s.add_edge(0, 0), lambda: s.add_edge(0, 2), lambda: s.add_edge(-1, 1),
+    for call in (lambda: s.add_edge(0, 2), lambda: s.add_edge(-1, 1),
                  lambda: s.add_edge(0, 1),  # an identity between R^2 and R^3
                  lambda: s.add_edge(0, 1, map_u=np.ones((2, 3))),  # a map with the wrong number of columns
                  lambda: s.add_edge(0, 1, map_u=np.ones((1, 2)), map_v=np.ones((2, 3))),  # two different edge stalks
@@ -598,3 +598,10 @@ def test_the_test_only_library_must_be_this_users_own(tmp_path, monkeypatch):
     os.symlink(loose, link)
     with pytest.raises(RuntimeError):
         native_build.private(link, "library", "sheaf")
+
+
+def test_a_loop_is_an_edge_as_the_standard_allows():
+    with sn.Sheaf([1]) as s:
+        assert s.add_edge(0, 0, map_v=np.array([[2.0]])) == 0
+        assert s.laplacian().tolist() == [[1.0]]          # (2 - 1)^2
+        assert s.sections() == {"h0": 0, "h1": 0}

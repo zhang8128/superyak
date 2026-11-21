@@ -583,11 +583,12 @@ static double *copied(const double *m, int64_t count) {
 }
 
 /* An edge from u to v whose stalk has dimension dim. map_u is dim by dim(u) and map_v is dim by dim(v), row by row;
- * NULL is the identity, which needs dim to equal that vertex's dimension. Returns the edge's index. */
+ * NULL is the identity, which needs dim to equal that vertex's dimension. u may equal v: a loop, which the sheaf
+ * standard allows; its Laplacian block sums to (map_v - map_u)^T (map_v - map_u). Returns the edge's index. */
 int32_t sheaf_add_edge(void *handle, int32_t u, int32_t v, int32_t dim, const double *map_u, const double *map_v,
                        double weight) {
     Sheaf *s = (Sheaf *)handle;
-    if (!s || u < 0 || v < 0 || u >= s->nv || v >= s->nv || u == v) return SHEAF_EARG;
+    if (!s || u < 0 || v < 0 || u >= s->nv || v >= s->nv) return SHEAF_EARG;
     if (dim < 1 || dim > SHEAF_MAX_STALK || !(weight >= 0.0) || !(weight <= SHEAF_MAX_MAGNITUDE)) return SHEAF_EARG;
     if ((!map_u && dim != s->vdim[u]) || (!map_v && dim != s->vdim[v])) return SHEAF_EARG;
     if (map_u && !bounded(map_u, (int64_t)dim * s->vdim[u])) return SHEAF_EARG;

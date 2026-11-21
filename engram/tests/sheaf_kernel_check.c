@@ -217,7 +217,14 @@ static void check_refusals(void) {
     CHECK(sheaf_new(0, dims) == NULL && sheaf_new(1, big) == NULL && sheaf_new(2, NULL) == NULL, "a sheaf that should be refused");
     void *s = sheaf_new(2, dims);
     CHECK(s, "no sheaf");
-    CHECK(sheaf_add_edge(s, 0, 0, 2, NULL, NULL, 1.0) == SHEAF_EARG, "a loop");
+    {
+        int32_t one[1] = {1};
+        double twice[1] = {2.0}, l1[1] = {0.0};
+        void *loop = sheaf_new(1, one);
+        CHECK(loop && sheaf_add_edge(loop, 0, 0, 1, NULL, twice, 1.0) == 0, "a loop is an edge");
+        CHECK(sheaf_laplacian(loop, l1) == 0 && l1[0] == 1.0, "a loop whose head map doubles has Laplacian (2 - 1)^2");
+        sheaf_free(loop);
+    }
     CHECK(sheaf_add_edge(s, 0, 2, 2, NULL, NULL, 1.0) == SHEAF_EARG && sheaf_add_edge(s, -1, 1, 2, NULL, NULL, 1.0) == SHEAF_EARG, "a vertex that is not there");
     CHECK(sheaf_add_edge(s, 0, 1, 1, NULL, NULL, 1.0) == SHEAF_EARG, "an identity between different dimensions");
     CHECK(sheaf_add_edge(s, 0, 1, 2, NULL, NULL, -0.5) == SHEAF_EARG && sheaf_add_edge(s, 0, 1, 2, NULL, NULL, NAN) == SHEAF_EARG, "a weight under 0 or not a number");
