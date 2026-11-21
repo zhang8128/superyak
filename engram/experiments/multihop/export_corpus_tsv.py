@@ -60,7 +60,7 @@ def export(corpus_path, docs_path, links_path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Export a frozen corpus to docs.tsv and links.tsv for corpus-index")
     parser.add_argument("--corpus", required=True, help="a frozen corpus SQLite file")
     parser.add_argument("--docs", required=True, help="docs.tsv to write")
     parser.add_argument("--links", required=True, help="links.tsv to write")

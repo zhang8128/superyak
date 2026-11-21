@@ -181,6 +181,54 @@ uncovered: their gold articles appear to have been deleted or renamed since 2017
   2.5 s without them). The hop adds almost nothing on top: its link ranking is restricted to a few hundred titles.
 - **Next:** the same arms with models answering, then a corpus whose questions weren't built from its links.
 
+## The open test on the whole dev set, with a Rust index (2026-11-21, on the Mac, 698 s)
+
+`corpus-index` (`engram/native/corpus_index`, Rust, std only) is a BM25 index with the link graph, built from corpus
+v0 by `export_corpus_tsv.py`. `hotpot_open_rs.py` scores the same arms and gold mapping as `hotpot_open.py`, with
+picks from one `corpus-index query` process. Rust follows Andy's direction of 11-21 to build new components in C or
+Rust where practical.
+
+**Checked against SQLite first, on the same 100 questions:** the same 7 BM25 hits and 17 hop hits, on the same
+questions. The picks are close but not identical, because FTS5 scores title and text as two columns with its own
+idf, while the index scores them as one field:
+- BM25: the same two picks in order on 89 of 100, and at least one pick shared on all 100.
+- Hop: the same two picks in order on 94, and at least one pick shared on 98.
+
+**All 7,405 dev questions:** 7,255 are covered.
+- 150 are uncovered: at least one gold article is missing from the corpus.
+- 28 of the covered questions have one gold article, because their two 2017 titles now redirect to the same
+  article. Both scripts count a pick of that one article as a hit.
+- Strictly on the 7,227 with two gold articles: BM25 486 and hop 1,280.
+
+| Both gold among the 2 picked | BM25 | Hop | Hop-only / BM25-only | Hop - BM25, points (95% CI) |
+|---|---|---|---|---|
+| All covered (7,255) | 490 (6.8%) | 1,286 (17.7%) | 995 / 199 | +11.0 (+10.1 to +11.9) |
+| Bridge (5,793) | 356 (6.1%) | 1,281 (22.1%) | 994 / 69 | +16.0 (+14.9 to +17.0) |
+| Comparison (1,462) | 134 (9.2%) | 5 (0.3%) | 1 / 130 | -8.8 (-10.3 to -7.4) |
+
+Every row is in `results/openall-rs-enwiki-20261101-2026-11-21.jsonl`.
+
+**How to read it:**
+- **The 100-question sample was representative.** It gave 7.3% and 17.7%; the whole set gives 6.8% and 17.7%. The
+  paired interval is now 1.8 points wide instead of 15.8.
+- **The split by kind is sharp.**
+  - On bridge questions the hop is 3.6 times BM25.
+  - On comparison questions the hop almost never finds both articles. My reading, not checked: its second pick
+    follows a link out of the first, while a comparison's two subjects rarely link to each other.
+  - That is the router's premise (issue #12), here measured on all of Wikipedia rather than the distractor set.
+- **The digest is not checked.** `hotpot_open_rs.py` reads titles from the corpus file without opening it by its
+  expected digest, as `hotpot_open.py` does. The index was built from the file the 100-question run verified
+  (`adb91daf...`), and that file's modification time is earlier than the verified run.
+
+**Cost:**
+- **Build:** the export takes 1 minute and the index build 289 s, at 3.8 GB peak memory. The index is 2.6 GB:
+  7,245,115 articles, 3.59 million terms, 370 million postings and 43.9 million links.
+- **Queries:** about 0.09 s a question, with the Python title maps the whole run peaks at 8.3 GB. SQLite's FTS5
+  took about 19 s a question.
+- **Speedup:** the first Rust query path took 1.06 s a question, because common words fill a hash map with
+  millions of entries. A dense score array and a partial top-k selection give byte-identical picks on 40 full-corpus
+  questions, and a test holds them to the first path on 1,500 random queries.
+
 ## The open test, with models answering (2026-11-21, on the Mac)
 
 `hotpot_open_answers.py` gives each model the 2 articles each arm picked from the whole corpus, read from corpus v0
