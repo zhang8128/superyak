@@ -1,16 +1,11 @@
 """Issue #8's open test: the two arms over a frozen corpus, on a hand-made one."""
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-ATLAS = Path(__file__).resolve().parents[2] / "atlas"
-if not (ATLAS / "workbench" / "research_corpus.py").exists():
-    pytest.skip("atlas isn't beside engram here", allow_module_level=True)
-sys.path.insert(0, str(ATLAS))
+from tests.multihop_atlas import loaded_from_atlas, research_corpus
 
-from workbench.research_corpus import FrozenCorpus, build  # noqa: E402
+FrozenCorpus, build = research_corpus().FrozenCorpus, research_corpus().build
 from experiments.multihop.hotpot_open import current_title, evaluate, pick_bm25, pick_hop  # noqa: E402
 
 MANIFEST = {"id": "t", "name": "T", "snapshot": "2026-11-07", "question_derived": False}
@@ -68,3 +63,8 @@ def test_evidence_reads_the_picks_in_order_and_skips_a_missing_title(corpus):
     got = evidence(corpus, ["Ann Vale", "No Such Page", "Lotus (band)"])
     assert [t for t, _ in got] == ["Ann Vale", "Lotus (band)"]
     assert got[0][1] == "Ann Vale grew up in Leeds in 1970."
+
+
+def test_no_module_from_atlas_workbench_is_left_loaded():
+    # research_poc.atlas_bridge refuses its frozen snapshot beside one (CI, 11-21: 16 bridge tests errored).
+    assert loaded_from_atlas() == []
