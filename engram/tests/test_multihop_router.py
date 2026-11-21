@@ -14,3 +14,9 @@ def test_the_split_is_seeded_disjoint_and_complete():
     a, b = split(10)
     assert a | b == set(range(10)) and not a & b and len(a) == 5
     assert split(10) == (a, b)
+
+
+def test_the_model_classifier_reads_one_word():
+    from experiments.multihop.hotpot_router_fresh import parse_kind
+    assert parse_kind("Comparison") == "comparison" and parse_kind("comparison.") == "comparison"
+    assert parse_kind("bridge") == "bridge" and parse_kind("") == "bridge"

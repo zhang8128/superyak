@@ -227,3 +227,32 @@ paragraphs. Rows are in `results/router-2026-11-21.json`.
   are comparisons. The 332 misrouted bridge questions give back most of the gain.
 - **This holdout is now spent.** A better classifier (a small model, say) is fixed first and scored on fresh held-out
   questions, from HotpotQA's train split, never on this half again.
+
+## The router on fresh held-out questions (2026-11-21, on the Mac)
+
+`hotpot_router_fresh.py` draws 2,000 questions by seed from HotpotQA's train split (train-00000 at revision 1908d6af,
+sha256 `76d3bb30...2e68`), which nothing here had looked at, and routes with the dev half's fitted choice (bridge to
+the hop, comparison to BM25). The classifiers: the word rule, and nemotron-mini zero-shot.
+
+- **Run 1** (seed 20261121, prompt c1, the instruction as system prompt): the 4B model answered the questions instead
+  of classifying them ("no", "yes", "American"), so the model router equalled the hop. A failure to follow the
+  instruction, not a measure of classifying. Rule router: +0.95 points (95% CI -0.14 to +2.04). Oracle router: +3.80
+  (+2.96 to +4.64).
+- **Run 2** (seed 20261122, a new unseen sample; prompt c2, the instruction in the user message, declared as a retry
+  of the prompt's form only):
+
+| 2,000 fresh questions, both gold among 2 picked | Count | Against the hop alone, 95% CI |
+|---|---|---|
+| BM25 alone | 519 | |
+| Hop alone | 1,044 | |
+| Router by the model (85% agree with the label) | 1,015 | -1.45 points (-2.34 to -0.56) |
+| Router by the word rule (88% agree) | 1,021 | -1.15 points (-2.15 to -0.15) |
+| Router that knows the true type | 1,082 | +1.90 points (+1.30 to +2.50) |
+
+**How to read it, across the three held-out samples:**
+- **The weight per approach and kind is real but small.** Knowing the kind is worth +1.9 to +3.8 points over the hop
+  alone.
+- **With classifiers right 85 to 88% of the time, routing doesn't pay, and it can cost.** A bridge question sent to BM25
+  loses more than a comparison sent there gains.
+- **So by the rule written before the run,** the approach-by-kind graph adds nothing yet over the single best approach.
+  It would need a classifier above about 95%, or kinds whose arms differ more than these two do.
