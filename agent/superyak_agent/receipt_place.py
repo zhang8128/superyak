@@ -23,7 +23,14 @@ _roots_memo: dict = {}    # checkout -> (its canonical path, its git common dir,
 
 def _git(args, cwd, until, monotonic):
     """`git <args>` in `cwd`, stopped at `until`: (returncode, stdout), or None when git is missing, fails to start or is
-    late. Every call of one classifying shares its one deadline (the code reader's 4)."""
+    late. Every call of one classifying shares its one deadline (the code reader's 4).
+
+    Only subcommands that never read the index may be called here: today `worktree list`, `rev-parse --git-common-dir`
+    and `rev-parse --show-toplevel`. `cwd` can be inside a nested repository anyone could plant, and git reads that
+    repository's own config. A command that reads the index, such as `status` or `diff`, can run that config's
+    `core.fsmonitor`, which is a program of the planter's choosing. These three don't (checked by Serenity's section 2
+    reader, which saw `core.fsmonitor` fire for `git status`, its control, and for none of these). An alias can't stand
+    in for a built-in such as `rev-parse`."""
     left = until - monotonic()
     if left <= 0:
         return None
