@@ -233,3 +233,24 @@ def test_the_digest_covers_the_manifest_and_cannot_be_matched_by_merging_fields(
         with pytest.raises(ValueError):
             FrozenCorpus(copy, digest=expected)
     assert build(two_links, MANIFEST | {"name": "Other"}, tmp_path / "other.sqlite3")["digest"] != expected
+
+
+def test_rank_orders_only_the_given_titles_by_bm25(corpus):
+    provider, _, _ = corpus
+    ranked = provider.rank("band singer Leeds", ["Kestrel (band)", "Lotus (band)", "No Such Page"])
+    assert [p["title"] for p in ranked] == ["Lotus (band)", "Kestrel (band)"]   # never a title outside the list
+    assert len(provider.rank("band", ["Ann Vale", "Kestrel (band)", "Lotus (band)"], limit=2)) == 2
+    assert [p["title"] for p in provider.rank("Leeds", ["Ann Vale", "Kestrel (band)"])] == ["Kestrel (band)"]
+    assert provider.rank("zzzz", ["Ann Vale"]) == []
+    assert provider.rank("band", []) == []
+    with pytest.raises(ValueError):
+        provider.rank("band", ["x"] * 1001)
+    with pytest.raises(ValueError):
+        provider.rank("band", "Ann Vale")
+
+
+def test_rank_is_bm25_order_not_page_order_and_a_wordless_query_is_empty(corpus):
+    provider, _, _ = corpus
+    # Kestrel (page 13) matches both words, Ann Vale (page 12) only "band": BM25 puts the later page first
+    assert [p["title"] for p in provider.rank("Leeds band", ["Ann Vale", "Kestrel (band)"])] == ["Kestrel (band)", "Ann Vale"]
+    assert provider.rank("!!! ???", ["Ann Vale"]) == []

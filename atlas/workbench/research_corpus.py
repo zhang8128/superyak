@@ -184,18 +184,22 @@ class FrozenCorpus:
                 "search_url": f"corpus:{self.manifest['id']}?q={query}", "is_open_access": True,
                 "page_id": page_id, "rev_id": rev_id}
 
-    def search(self, query: str, cursor: str = "*", limit: int = 5) -> dict:
+    @staticmethod
+    def _match(query: str) -> tuple[list[str], str]:
         if not isinstance(query, str) or not query.strip() or len(query) > 2000:
             raise ValueError("query must be nonblank and at most 2000 characters")
+        words = list(dict.fromkeys(_WORD.findall(query.lower())))[:64]
+        return words, " OR ".join('"' + word.replace('"', '""') + '"' for word in words)
+
+    def search(self, query: str, cursor: str = "*", limit: int = 5) -> dict:
+        words, match = self._match(query)
         if not isinstance(cursor, str) or not (cursor == "*" or re.fullmatch(r"\d{1,9}", cursor)):
             raise ValueError("cursor must be '*' or an offset")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 25:
             raise ValueError("limit must be between 1 and 25")
         offset = 0 if cursor == "*" else int(cursor)
-        words = list(dict.fromkeys(_WORD.findall(query.lower())))[:64]
         if not words:
             return {"papers": [], "next_cursor": None, "skipped": []}
-        match = " OR ".join('"' + word.replace('"', '""') + '"' for word in words)
         rows = self._db.execute(
             "SELECT p.page_id, p.rev_id, p.title, p.text FROM passages_fts f JOIN passages p ON p.rowid = f.rowid "
             "WHERE passages_fts MATCH ? ORDER BY bm25(passages_fts), p.page_id LIMIT ? OFFSET ?",
@@ -203,6 +207,22 @@ class FrozenCorpus:
         papers = [self._paper(*row, query="+".join(words)) for row in rows[:limit]]  # never the raw query text
         next_cursor = str(offset + limit) if len(rows) > limit else None
         return {"papers": papers, "next_cursor": next_cursor, "skipped": []}
+
+    def rank(self, query: str, titles: list[str], limit: int = 25) -> list[dict]:
+        """The papers among ``titles`` that match ``query``, best BM25 first, never one outside the list: for
+        choosing which of an article's links to follow."""
+        words, match = self._match(query)
+        if not isinstance(titles, list) or len(titles) > 1000 or not all(isinstance(t, str) for t in titles):
+            raise ValueError("titles must be a list of at most 1000 strings")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if not words or not titles:
+            return []
+        rows = self._db.execute(
+            "SELECT p.page_id, p.rev_id, p.title, p.text FROM passages_fts f JOIN passages p ON p.rowid = f.rowid "
+            f"WHERE passages_fts MATCH ? AND p.title IN ({','.join('?' * len(titles))}) "
+            "ORDER BY bm25(passages_fts), p.page_id LIMIT ?", (match, *titles, limit)).fetchall()
+        return [self._paper(*row, query="+".join(words)) for row in rows]
 
     def read(self, paper: dict) -> dict:
         prefix = f"corpus:{self.manifest['id']}:"
