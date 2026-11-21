@@ -9,7 +9,7 @@ import re
 import sqlite3
 import subprocess
 import types
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 import pytest
 from superyak_peer import lessons
@@ -197,6 +197,23 @@ def old_hook_requests(glob):
             {'ship': 'tardis', 'prompt': 'should I run make check first'}]
 
 
+class _NamedSix:
+    """main's receipt insert gives six values unnamed; this tree's table has a seventh column, `place` (receipt-place
+    spec 3, "Old writers": a peer from before the change is never run on an upgraded store). For main's run here alone
+    the six are named, so it writes what it always wrote, and `place` stays NULL, as for any request without one."""
+    SIX = 'INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)'
+    NAMED = 'INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle) VALUES(?,?,?,?,?,?)'
+
+    def __init__(self, db):
+        self._db = db
+
+    def execute(self, sql, *args):
+        return self._db.execute(self.NAMED if sql == self.SIX else sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 def answered(module, store, clock, socket, raw, monkeypatch):
     """One request through `module`'s read_request and query, with receipt ids drawn 1, 2, 3...: (the answer's bytes,
     the note, the receipts and query rows written, each row's reask or None). The rows are removed after, so each run
@@ -207,6 +224,13 @@ def answered(module, store, clock, socket, raw, monkeypatch):
         patch.setattr(module, 'uid', lambda: next(drawn))
         if module is not lessons:   # main's step 4, in the store main's query opens
             patch.setattr(Store, '_lessons_answer', module.Lessons._lessons_answer)
+            real = Store.transaction
+
+            @contextmanager
+            def named(self, *a, **k):
+                with real(self, *a, **k) as db:
+                    yield _NamedSix(db)
+            patch.setattr(Store, 'transaction', named)
         answer, note = module.query(module.read_request(raw), store.data_dir, socket, clock=lambda: clock[0],
                                     monotonic=lambda: 0.0)
     with store.transaction() as db:

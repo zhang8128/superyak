@@ -521,6 +521,11 @@ def seen_ok(seen):
             and all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen))
 
 
+PLACES = ('superyak', 'other')  # receipt-place spec 2: a kind, not a path
+PLACE_LABELS = (('superyak', 'In Superyak sessions'), ('other', 'In other sessions'),
+                ('unknown', 'Unknown place, including receipts from before this change'))
+
+
 def read_request(raw):
     """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else.
 
@@ -549,7 +554,10 @@ def read_request(raw):
         raise ValueError('budget_ms')
     if budget is not None:
         budget = min(budget, BUDGET_CAP_MS)  # 10**309 is past a float, and the deadlines below are floats
-    request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget,
+    place = value.get('place')  # receipt-place spec 2: exactly one of two words, or absent; stored and nothing more
+    if 'place' in value and (type(place) is not str or place not in PLACES):
+        raise ValueError('place')  # the field's name, never what was sent
+    request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget, 'place': place,
                'window_seen': set(window_seen), 'own': value.get('own', False), 'reask': value.get('reask', False)}
     if 'prompt' in value:
         if not isinstance(value['prompt'], str) or len(value['prompt']) > PROMPT_CHARS:
@@ -1077,6 +1085,13 @@ def describe_outcomes(rows, counts):
     lines.append(f"Coverage: {counts['outcomes']} outcomes on {counts['receipts']} receipts. Helped {counts['helped']}, "
                  f"misled {counts['misled']}, unused {counts['unused']}. Verified repeats: {counts['verified_repeats']} "
                  f"in {queries} queries ({rate} per 100).")
+    if 'by_place' in counts:  # receipt-place spec 4: the split, below the line it keeps
+        for name, label in PLACE_LABELS:
+            g = counts['by_place'][name]
+            lines.append(f"{label}: {g['outcomes']} outcome{'' if g['outcomes'] == 1 else 's'} on {g['receipts']} "
+                         f"receipt{'' if g['receipts'] == 1 else 's'}. Helped {g['helped']}, misled {g['misled']}, "
+                         f"unused {g['unused']}.")
+        lines.append('Verified repeats are counted over all places: a query keeps no place.')
     return '\n'.join(lines)
 
 
@@ -1573,8 +1588,10 @@ class Lessons:
                 now = self.clock()
                 reached = [(found, key, entry) for found, key, entry in kept if key is not None and entry in answer['lessons']]
                 for found, key, entry in reached:  # a receipt only for a first reach shown
-                    db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
-                                                                                    None if entry['match'] == 'words' else entry['match']))
+                    db.execute('INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle, place) '
+                               'VALUES(?,?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
+                                                         None if entry['match'] == 'words' else entry['match'],
+                                                         request.get('place')))
                 db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown, reask) VALUES(?,?,?,?,?)',
                            (now, ship['id'], nearest, len(reached), int(reask)))
                 return answer
@@ -1731,6 +1748,14 @@ class Lessons:
                       **{word: by_word.get(word, 0) for word in OUTCOMES},
                       'queries': one('SELECT count(*) FROM lesson_queries WHERE reask=0'),  # a re-ask counts nowhere
                       'verified_repeats': one("SELECT count(*) FROM lesson_repeats WHERE how='receipt'")}
+            counts['by_place'] = {}  # receipt-place spec 4: receipts and outcomes only, over the whole store
+            for name, where, args in (('superyak', 'place = ?', ('superyak',)), ('other', 'place = ?', ('other',)),
+                                      ('unknown', 'place IS NULL', ())):
+                words = dict(db.execute(f'SELECT o.outcome, count(*) FROM lesson_outcomes o JOIN lesson_receipts r '
+                                        f'ON r.id=o.receipt_id WHERE r.{where} GROUP BY o.outcome', args).fetchall())
+                counts['by_place'][name] = {
+                    'receipts': db.execute(f'SELECT count(*) FROM lesson_receipts WHERE {where}', args).fetchone()[0],
+                    'outcomes': sum(words.values()), **{word: words.get(word, 0) for word in OUTCOMES}}
         return rows, counts
 
     def _lessons_add_gate(self, db, key, new_ids):
@@ -1778,10 +1803,12 @@ class Lessons:
         return carried
 
 
+RECEIPT_PLACE = "place TEXT CHECK(place IN ('superyak','other'))"   # receipt-place spec 3: NULL is unknown
+
 LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES peers(peer_id), recorded REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
+CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL, ''' + RECEIPT_PLACE + ''');
 CREATE TABLE IF NOT EXISTS lessons_addable(contact_id TEXT PRIMARY KEY REFERENCES remote_contacts(id), code_digest TEXT NOT NULL, typed_by TEXT, listed REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
 CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL, reask INTEGER NOT NULL DEFAULT 0);
