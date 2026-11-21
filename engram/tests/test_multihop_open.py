@@ -61,3 +61,10 @@ def test_gold_titles_map_through_redirects_and_coverage_is_counted(corpus, tmp_p
 def test_hotpotqa_titles_are_unescaped_before_mapping():
     assert current_title("Merck &amp; Co.", None) == "Merck & Co."
     assert current_title("S&amp;M (song)", None) == "S&M (song)"
+
+
+def test_evidence_reads_the_picks_in_order_and_skips_a_missing_title(corpus):
+    from experiments.multihop.hotpot_open_answers import evidence
+    got = evidence(corpus, ["Ann Vale", "No Such Page", "Lotus (band)"])
+    assert [t for t, _ in got] == ["Ann Vale", "Lotus (band)"]
+    assert got[0][1] == "Ann Vale grew up in Leeds in 1970."

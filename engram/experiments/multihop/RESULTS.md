@@ -178,3 +178,31 @@ uncovered: their gold articles appear to have been deleted or renamed since 2017
 - **Cost:** a full-question BM25 query over the whole corpus took about 19 s (common words have huge posting lists;
   2.5 s without them). The hop adds almost nothing on top: its link ranking is restricted to a few hundred titles.
 - **Next:** the same arms with models answering, then a corpus whose questions weren't built from its links.
+
+## The open test, with models answering (2026-11-21, on the Mac)
+
+`hotpot_open_answers.py` gives each model the 2 articles each arm picked from the whole corpus, read from corpus v0
+by digest, with prompt v2 and thinking off, as in the distractor runs. The 100 questions are the same; every answer
+is in `results/open100-answers-2026-11-21.jsonl`. "No evidence" is the v2 closed-book run above.
+
+| Exact matches out of 100 (mean F1) | No evidence | BM25's picks | Hop's picks |
+|---|---|---|---|
+| nemotron-mini (about 4B) | 23 | 32 (0.43) | 34 (0.43) |
+| qwen3.6:27b-mlx | 22 | 25 (0.40) | 29 (0.45) |
+
+**Paired, exact match, 95% CI:**
+
+| Comparison | Difference |
+|---|---|
+| Hop against BM25, small model | +2 (-4.8 to +8.8) |
+| Hop against BM25, large model | +4 (-0.8 to +8.8) |
+| Hop against no evidence, small model | +11 (+1.8 to +20.2) |
+| Small with the hop against large with BM25 | +9 (+0.6 to +17.4) |
+
+**How to read it:**
+- **Retrieval's gain shrinks again at the answer.** The hop's +10.4 points of both-gold becomes 2 to 4 answers within
+  a model, and neither difference clears zero. With 2 picks from 7.2 million, an arm often brings one useful article,
+  not both.
+- **Small with the hop still beats large with BM25** here, just: +9 (CI +0.6 to +17.4). As in the distractor runs, the
+  27B scores below the 4B with the same evidence in this setup (25 against 32 with BM25), so it's not a test of size.
+- **Evidence still helps a small model clearly** (+11 over closed-book).
