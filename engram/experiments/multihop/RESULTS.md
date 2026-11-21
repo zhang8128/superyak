@@ -167,7 +167,9 @@ uncovered; the picks don't depend on the gold, so the counts below are recompute
 | Bridge (85) | 6 | 17 |
 | Comparison (11) | 1 | 0 |
 
-Paired, hop against BM25: 13 hop-only, 3 BM25-only, **+10.4 points (95% CI +2.5 to +18.3)**. Four questions stay
+Paired, hop against BM25: 13 hop-only, 3 BM25-only, **+10.4 points (95% CI +2.5 to +18.3)**. The saved
+`results/open100-enwiki-20261101-2026-11-21.jsonl` holds the first run's rows, gold still escaped (93 covered, 6
+and 16); the table's counts are recomputed from its picks with `html.unescape` (Rio Grande's read, aa0d2d04). Four questions stay
 uncovered: their gold articles appear to have been deleted or renamed since 2017.
 
 **How to read it:**
