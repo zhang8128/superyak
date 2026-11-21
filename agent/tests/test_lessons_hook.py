@@ -1004,3 +1004,64 @@ def test_the_hooks_records_are_known_by_every_part_of_their_shape(tmp_path, reco
     path = tmp_path / 't.jsonl'
     path.write_text(json.dumps(record(forged())) + '\n')
     assert lh.transcript_ids(str(path), deadline=float('inf')) == []
+
+
+# ---- the receipt-place spec: start and failure send a place, to the default query only, never at a prompt --------
+
+from superyak_agent import receipt_place as rp  # noqa: E402
+
+
+@pytest.fixture
+def placed(rail, monkeypatch):
+    """A checkout of its own for the hook to tell, the rail's stub standing for the default query, and a folder
+    outside it."""
+    checkout = rail.root / 'superyak'
+    checkout.mkdir()
+    for args in (['init', '-q', '-b', 'rail'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x']):
+        subprocess.run(['git', *args], cwd=checkout, check=True, capture_output=True)
+    monkeypatch.setattr(rp, 'CHECKOUT', checkout)
+    monkeypatch.setattr(rp, '_roots_memo', {})
+    stub = json.loads(rail.settings.read_text())['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: stub)
+    (rail.root / 'elsewhere').mkdir()
+    return checkout
+
+
+def test_session_start_and_a_failure_send_the_cwd_s_place_to_the_default_query(rail, placed):
+    rail.answers(*SERENITY)
+    rail.run('SessionStart', cwd=str(placed))
+    rail.run('SessionStart', session='s2', cwd=str(rail.root / 'elsewhere'))
+    rail.run('PostToolUseFailure', session='s3', cwd=str(placed), **failure())
+    assert [r.get('place') for r in rail.sent()] == ['superyak', 'other', 'superyak']
+
+
+def test_no_cwd_sends_no_place(rail, placed):
+    rail.answers(*SERENITY)
+    rail.run('PostToolUseFailure', **failure())
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_configured_query_is_sent_no_place(rail, placed, monkeypatch):
+    monkeypatch.setattr(lh, 'default_query', lambda: ['/somewhere/else/python', '-m', 'superyak_peer.lessons', 'query'])
+    rail.answers(*SERENITY)
+    assert rail.run('SessionStart', cwd=str(placed)) == [A, B, C]           # its lessons still show
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_prompt_sends_no_place(rail, placed):
+    rail.answers(*SERENITY)
+    rail.run('UserPromptSubmit', prompt='a prompt', cwd=str(placed))
+    sent = rail.sent()
+    assert sent and all('place' not in r for r in sent) and rail.state_files() == []
+
+
+def test_a_classifying_that_runs_out_of_time_sends_no_place_and_the_lessons_still_show(rail, placed, monkeypatch):
+    slow = rail.root / 'slow-bin'
+    slow.mkdir()
+    (slow / 'git').write_text('#!/bin/sh\nsleep 30\n')
+    (slow / 'git').chmod(0o700)
+    monkeypatch.setenv('PATH', f'{slow}:{os.environ["PATH"]}')
+    rail.answers(*SERENITY)
+    begun = time.monotonic()
+    assert rail.run('SessionStart', cwd=str(placed)) == [A, B, C]
+    assert time.monotonic() - begun < lh.LIMITS['SessionStart'] and [('place' in r) for r in rail.sent()] == [False]

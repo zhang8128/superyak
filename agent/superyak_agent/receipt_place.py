@@ -26,8 +26,8 @@ def _git(args, cwd, deadline, monotonic):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env['GIT_OPTIONAL_LOCKS'] = '0'
     try:
-        done = subprocess.run(['git', *args], cwd=cwd, capture_output=True, timeout=left, stdin=subprocess.DEVNULL,
-                              env=env)
+        done = subprocess.run(['git', *args], cwd=cwd, capture_output=True, timeout=left, input=b'',
+                              env=env)    # an empty pipe for stdin: DEVNULL opens /dev/null for writing
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return done.returncode, done.stdout
@@ -63,8 +63,10 @@ def _own_top_level(folder, deadline, monotonic):
     return bool(top) and os.path.realpath(top) == folder
 
 
-def place_of(cwd, deadline, monotonic=time.monotonic, checkout=CHECKOUT):
-    """The kind of `cwd`: "superyak", "other" or None (see the module's docstring)."""
+def place_of(cwd, deadline, monotonic=time.monotonic, checkout=None):
+    """The kind of `cwd`: "superyak", "other" or None (see the module's docstring). `checkout` is the installed one,
+    this module's own, unless a test names another."""
+    checkout = CHECKOUT if checkout is None else checkout
     if not isinstance(cwd, str) or not cwd or not os.path.isabs(cwd):
         return None
     try:
