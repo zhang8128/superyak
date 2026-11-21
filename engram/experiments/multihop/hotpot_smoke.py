@@ -32,8 +32,16 @@ except ImportError:  # pragma: no cover
 SEED = 20261121
 COUNT = 10
 OLLAMA = "http://127.0.0.1:11434/api/chat"
-SYSTEM = ("Answer the question with a short phrase only: a name, a number, a date, or yes or no. "
-          "No explanation. If paragraphs are given, use them.")
+PROMPTS = {
+    # v1, the first runs': it lists "yes or no" among the answer forms, and a 27B model then said "No" to wh-questions.
+    "v1": ("Answer the question with a short phrase only: a name, a number, a date, or yes or no. "
+           "No explanation. If paragraphs are given, use them."),
+    # v2: yes or no only for a yes/no question, and a best answer when the paragraphs fall short.
+    "v2": ("Answer with the shortest phrase that answers the question, such as a name, a number or a date. "
+           "Answer yes or no only if the question is a yes/no question. No explanation. If paragraphs are given, "
+           "use them; if they don't contain the answer, still give your best answer."),
+}
+SYSTEM = PROMPTS["v1"]
 
 
 def normalize(text: str) -> str:
@@ -66,9 +74,9 @@ def prompt(q: Question, picks: list[int] | None) -> str:
     return f"Paragraphs:\n{evidence}\n\nQuestion: {q.question}"
 
 
-def ask(model: str, text: str, timeout: float = 300) -> tuple[str, float, dict]:
+def ask(model: str, text: str, timeout: float = 300, system: str = SYSTEM) -> tuple[str, float, dict]:
     body = json.dumps({"model": model, "stream": False, "think": False,
-                       "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
+                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}],
                        "options": {"temperature": 0, "seed": SEED, "num_predict": 64}}).encode()
     request = urllib.request.Request(OLLAMA, data=body, headers={"Content-Type": "application/json"})
     start = time.perf_counter()
@@ -84,7 +92,7 @@ def sample(rows: list[dict], count: int = COUNT) -> list[tuple[Question, str]]:
     return [(from_row(rows[i]), rows[i]["answer"]) for i in chosen]
 
 
-def run(rows: list[dict], models: list[str], out, count: int = COUNT) -> dict:
+def run(rows: list[dict], models: list[str], out, count: int = COUNT, prompt_version: str = "v1") -> dict:
     questions = sample(rows, count)
     all_corpus = {t: x for row in rows for t, x in from_row(row).paragraphs}
     bm25 = BM25({t: t + " " + x for t, x in all_corpus.items()})   # the same IDF as hotpot_retrieval
@@ -94,8 +102,8 @@ def run(rows: list[dict], models: list[str], out, count: int = COUNT) -> dict:
     for model in models:
         for q, gold in questions:
             for arm, pick in arms.items():
-                answer, took, usage = ask(model, prompt(q, pick(q)))
-                row = {"model": model, "arm": arm, "id": q.qid, "type": q.kind, "gold": gold, "answer": answer,
+                answer, took, usage = ask(model, prompt(q, pick(q)), system=PROMPTS[prompt_version])
+                row = {"model": model, "prompt": prompt_version, "arm": arm, "id": q.qid, "type": q.kind, "gold": gold, "answer": answer,
                        "em": exact(answer, gold), "f1": round(f1(answer, gold), 4), "seconds": round(took, 2)} | usage
                 out.write(json.dumps(row) + "\n")
                 out.flush()
@@ -104,7 +112,7 @@ def run(rows: list[dict], models: list[str], out, count: int = COUNT) -> dict:
                 cell["f1"] += row["f1"]
                 cell["seconds"] += took
     return {"questions": [q.qid for q, _ in questions], "types": dict(Counter(q.kind for q, _ in questions)),
-            "seed": SEED, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / count, 3),
+            "seed": SEED, "prompt": prompt_version, "per_model": {m: {a: {"em": c["em"], "f1": round(c["f1"] / count, 3),
                                                 "seconds": round(c["seconds"], 1)} for a, c in arms_.items()}
                                         for m, arms_ in totals.items()}}
 
@@ -115,11 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--count", type=int, default=COUNT)
+    parser.add_argument("--prompt", choices=sorted(PROMPTS), default="v1")
     args = parser.parse_args(argv)
     import pyarrow.parquet as pq
     rows = pq.read_table(args.parquet).to_pylist()
     with open(args.out, "w") as out:
-        summary = run(rows, args.models, out, args.count)
+        summary = run(rows, args.models, out, args.count, args.prompt)
     print(json.dumps(summary, indent=1))
     return 0
 

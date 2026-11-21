@@ -97,3 +97,34 @@ scoring are unchanged. Each answer is in `results/smoke100-2026-11-21.jsonl`.
   the next controls.
 - **Cost:** the large model took 8.6 times as long for the same calls.
 - **Still the distractor setting:** both arms choose among 10 paragraphs. #8's corpus v0 is the open test.
+
+## Control: the prompt fixed, and a second large model (2026-11-21, on the Mac, 1,094 s)
+
+Prompt `v2` allows yes or no only for a yes/no question, and asks for a best answer when the paragraphs fall short.
+The questions, seed and scoring are the same; gemma4:31b is added. Each answer is in
+`results/smoke100-v2-2026-11-21.jsonl`.
+
+| Exact matches out of 100 (mean F1) | No evidence | BM25 | Hop | Gold | Model time |
+|---|---|---|---|---|---|
+| nemotron-mini (about 4B) | 23 (0.34) | 46 (0.55) | 50 (0.63) | 68 (0.83) | 44 s |
+| qwen3.6:27b-mlx | 22 (0.34) | 38 (0.53) | 45 (0.61) | 64 (0.83) | 381 s |
+| gemma4:31b | 19 (0.34) | 37 (0.50) | 41 (0.57) | 63 (0.80) | 668 s |
+
+**Paired, exact match, 95% CI:**
+
+| Comparison | Difference |
+|---|---|
+| Hop against BM25, small / qwen / gemma | +4 (-3.8 to +11.8) / +7 (+1.3 to +12.7) / +4 (-1.5 to +9.5) |
+| Small with the hop against qwen with BM25 | +12 (+4.0 to +20.0) |
+| Small with the hop against gemma with BM25 | +13 (+5.3 to +20.7) |
+| Small against qwen / gemma, all given the gold paragraphs | +4 (-3.8 to +11.8) / +5 (-3.1 to +13.1) |
+
+**How to read it:**
+- **The prompt fix worked and changed nothing that mattered.** qwen's "No" to wh-questions fell from 9 to 1 with BM25's
+  evidence, but its score stayed at 38, so those answers were wrong either way.
+- **A second large model gives the same picture.** Given the gold paragraphs, neither 27-31B model beats the 4B one,
+  and all three sit near F1 0.83. On this task, with two paragraphs to read, reading isn't what limits the answer.
+  Retrieval is.
+- **So small with the hop beating large with BM25 holds up here (+12, +13).** It's a statement about this setting:
+  short answers, two paragraphs, thinking off, lexical scoring. It isn't evidence that a graph makes up for model size
+  on harder reading. Thinking on, and a corpus where both arms search, are the next tests.
