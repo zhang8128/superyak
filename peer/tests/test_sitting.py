@@ -5,6 +5,7 @@ import signal
 import subprocess
 
 import pytest
+from fastapi.testclient import TestClient
 
 from superyak_peer.sitting import (FIRST_UNIT, OPTIONAL_UNITS, OTHER_UNITS, PROBES, PROBES_OPEN, Interrupted, Sitting,
                                    Stopped, run_command)
@@ -566,9 +567,29 @@ def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_pu
         ('systemctl', '--user', 'restart', 'superyak-engram-publisher.service'))
 
 
-def test_open_connector_routes_are_the_apps_real_answers_to_an_anonymous_get(home):
-    client = public_client(home.app)
+def sitting_client(app):
+    """The sitting's own probe as the app sees it after uvicorn's proxy headers: curl to 127.0.0.1 with the public host
+    and X-Forwarded-Proto: https, so the scheme is https, the host is the public one and the client is local."""
+    return TestClient(app, base_url=PUBLIC_ORIGIN, client=('127.0.0.1', 50000))
+
+
+def test_open_connector_routes_are_the_apps_real_answers_to_the_sittings_own_probe(home):
+    client = sitting_client(home.app)
     assert {path: str(client.get(path).status_code) for path in PROBES_OPEN} == PROBES_OPEN
+
+
+def test_closed_connector_routes_are_the_apps_real_answers_to_the_sittings_own_probe(tmp_path):
+    from superyak_peer.app import create_app
+    closed = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', PUBLIC_ORIGIN])
+    client = sitting_client(closed)
+    assert {path: str(client.get(path).status_code) for path in PROBES} == PROBES
+
+
+def test_the_public_lane_answers_token_differently_so_the_probe_must_be_the_sittings(home):
+    # Through Funnel a wrong method on a public route is 404; the sitting asks from 127.0.0.1 and gets the app's 405.
+    # The first PROBES_OPEN was pinned through the public lane and said 404, which the live lighthouse refuted (11-21).
+    assert public_client(home.app).get('/token').status_code == 404
+    assert sitting_client(home.app).get('/token').status_code == 405
 
 
 @pytest.mark.parametrize("command, expected", [

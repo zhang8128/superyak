@@ -28,13 +28,15 @@ OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormh
 OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder', 'superyak-engram-publisher')
 ENGRAM_UNITS = {'superyak-embedder': 'the embedder', 'superyak-engram-publisher': 'the publisher'}  # on engram/.venv
 # The connector's routes exist only when the lighthouse runs with --public-origin, which is its deploy (Andy's act,
-# 11-21). Closed, every one is 404 on the public host. Open, each refuses an anonymous GET in its own way, and
-# test_sitting pins PROBES_OPEN to the app's real answers. The sitting reads the lighthouse unit's own command line to
-# know which to expect, so a sitting neither reverts a deployed connector nor lets a closed one open by accident.
+# 11-21). Closed, every one is 404. Open, each refuses an anonymous GET in its own way. test_sitting pins both sets to
+# the app's real answers to the sitting's own probe. The sitting reads the lighthouse unit's own command line to know
+# which to expect, so a sitting neither reverts a deployed connector nor lets a closed one open by accident.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
-PROBES_OPEN = {'/mcp': '405', '/token': '404', '/api/connected-apps': '401', '/api/connected-apps/notice': '401',
-               '/api/admin/connected-apps': '401'}  # /token has no GET route, so it's 404 either way
+# Open, as the sitting asks: from 127.0.0.1 with the public host. /token is POST only, so a GET is the app's 405 here,
+# though Funnel's public lane answers it 404 (the live lighthouse showed both on 11-21).
+PROBES_OPEN = {'/mcp': '405', '/token': '405', '/api/connected-apps': '401', '/api/connected-apps/notice': '401',
+               '/api/admin/connected-apps': '401'}
 _PUBLIC_ORIGIN_FLAG = re.compile(r'(?:^|[\s;=])--public-origin(?:[\s=]|$)')
 HEALTH_WAIT = ('--max-time', '5', '--retry', '60', '--retry-connrefused', '--retry-delay', '1', '--retry-max-time', '90')
 PROBE_WAIT = ('--max-time', '10')
