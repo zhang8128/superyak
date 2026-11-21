@@ -82,11 +82,10 @@ Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied
   there were 31, all delivering the same 3 Pi memories of 11-04, so the gap is in what's shared, not in use (lesson
   26). Measure: distinct memories delivered across machines, never the count of crossings; recalls logged helped or
   misled; and no embed in the publisher's log waiting past its asker.
-- T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
-  C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
-  oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
-  from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
-  1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
+- T3 (goal 1): the n-category kernel stays C (Andy, 11-14, at the Pi: new native code is Rust, C++ only for CUDA or
+  HPC). `tardis/ncat-cpp` stays a branch. Measure: the one comparison on #2, the store built from the Pi's recall log
+  against count-ranked places at equal budget; if cells don't beat counts, the native line stops. (Tardis's proposal
+  under this file's rule, 11-21; Andy can veto it.)
 - T4 (goal 4): `two-people.md` kept true at every train (each label and number checked against main), for R6's first
   real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3), once Andy has tried replies read
   back. Measure: the guide's checks after each train, and R6's walk getting through.
