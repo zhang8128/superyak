@@ -10,8 +10,8 @@ homes for people. Andy, 2026-11-19: "another layer of the internet, from schools
 
 ## Up next
 
-Someone outside Andy's ships asks a lighthouse a scoped question and gets an answer with a receipt. This is the
-lead's line; the five goals in [docs/goals.md](docs/goals.md) stand unchanged.
+Someone outside Andy's ships asks a lighthouse a scoped question and gets an answer with a receipt. This is v2's
+line (proposed by Serenity); the five goals in [docs/goals.md](docs/goals.md) stand unchanged.
 
 The rail is measured by the distinct things it carried between machines, never by its trips (Tardis's lesson 26).
 On 2026-11-20 it had carried 3 memories.
@@ -22,7 +22,7 @@ On 2026-11-20 it had carried 3 memories.
 | --- | --- | --- |
 | The room: a turn that forgets, judged by a frozen check | `v2/crates` (Rust, 37,104 lines), branch `v2` | Works on one machine. Not on main. Talks to no other machine |
 | Memory outside the room | `engram/` (Python, 60,144 lines) | Live on every machine |
-| The graph | `engram/ncat_kernel.c` (C, 822 lines) with `engram/ncat*.py` | Live, little used. A C++20 port waits on `tardis/ncat-cpp` |
+| The graph | `engram/ncat_kernel.c` (C, 822 lines) with `engram/ncat*.py` | Live, little used. Stays C (Andy, 11-14); `tardis/ncat-cpp` stays a branch |
 | Paths into roads | `engram/ncat_routes.py`, on `v2` only | Ran in one rehearsal. Parked |
 | The agreement for sharing | `lighthouse/` (protocol v0.1, a TypeScript kit), `engram/lighthouse_protocol.py`, `atlas/workbench/lighthouse_wire.py` | Used by Engram's recall crossing. Kit untouched since 2026-09-11 |
 | The station: where ships and people meet | `peer/` (26,886 lines) and `agent/` (9,516) | Live on the Pi: nine `superyak-*` services running there on 2026-11-20, by `systemctl --user list-units`. Its own API for rooms; `peer/superyak_peer/crossing.py` carries the protocol's recall and read frames between peers |
@@ -66,13 +66,16 @@ Rules 2 and 6 stay on trust, and 5 is each ship's to do and report in its reflec
 
 ## Decided on 2026-11-20
 
-By Serenity, as lead. Andy can veto each. None of these is law.
+None of these is law, and Andy can veto each. Rio Grande leads the ships (Andy, 10-27; revision 2's section 8).
 
-1. The August protocol is the one agreement. Its first new use is a walk sealed as a Claim.
-2. The four lab folders move under `lab/`. Nothing is deleted.
-3. The kernel's C++ port is adopted after its gate and a read (Andy's request on issue #2, 2026-11-07).
-4. In practice Tardis's branches merge in trains under section 2, as 67 had by this date. The law's own line
-   (section 7, "until Andy decides how such branches merge") waits for its revision 2.
+1. Proposed by Serenity under section 8: the August protocol is the one agreement. Its first new use is a walk
+   sealed as a Claim.
+2. Proposed by Serenity under section 8: the four lab folders move under `lab/`. Nothing is deleted.
+3. Andy's word, 11-14 at the Pi's terminal: the n-category kernel stays C, new native code is Rust, and C++ is only
+   for CUDA or HPC. `tardis/ncat-cpp` stays a branch unless he says otherwise. (His 11-07 request for C++ on issue
+   #2 came before it.)
+4. Tardis's branches merge in trains under section 2, on Andy's 10-27 word, and Defiant's on his 11-09 word. Law
+   revision 2's draft (layer 263d19b8) writes both into section 2 for him to sign.
 
 ## Where the detail is
 
