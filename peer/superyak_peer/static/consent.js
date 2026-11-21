@@ -47,8 +47,9 @@ function show(...nodes) {
 
 // Every route this page posts to answers JSON. Anything else is something in the way, like a portal's page, a proxy's
 // error or an answer cut short, so it reads as a lost connection whatever its status, as the app's api() does
-// (fix:a-200-that-isnt-the-home-reads-as-sent). A 200 of some other page used to read as signed in, and the page was
-// left on "Signing in..." with nothing more said (fix:consent-page-reads-any-200-as-the-home).
+// (fix:a-200-that-isnt-the-home-reads-as-sent), except a home still marked busy after the one wait, which reads as busy.
+// A 200 of some other page used to read as signed in, and the page was left on "Signing in..." with nothing more said
+// (fix:consent-page-reads-any-200-as-the-home).
 async function post(path, body) {
   try {
     let response;

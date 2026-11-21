@@ -205,3 +205,65 @@ def test_a_dropped_attachment_body_says_lost_and_the_saved_files_address_is_free
             page.evaluate('() => { Response.prototype.blob = () => Promise.reject(new TypeError("network error")); }')
             page.get_by_role('link', name='Download attachment 1').click()
             expect(page.get_by_role('status')).to_have_text('Connection lost. Try again when this home is reachable.')
+
+
+# ---- the merge reader's S1 on be6d3f13: a page still marked busy reads as busy whatever its body ------------------------
+
+NOT_AN_OBJECT = {
+    'html': ('text/html', '<html><body>Gateway</body></html>'),
+    'list': ('application/json', '[]'),
+    'null': ('application/json', 'null'),
+    'cut': ('application/json', '{"error": "This ho'),
+}
+
+
+def answering_with(log, answers):
+    """A route handler that gives each request its own (status, marked, body kind) in turn; the rest go on."""
+    def handle(route):
+        log.append(route.request.method)
+        if len(log) > len(answers):
+            return route.fallback()
+        status, marked, kind = answers[len(log) - 1]
+        content_type, body = NOT_AN_OBJECT[kind]
+        headers = {'retry-after': '0', **({'x-superyak-busy': '1'} if marked else {})}
+        route.fulfill(status=status, content_type=content_type, body=body, headers=headers)
+    return handle
+
+
+BUSY_LINE = 'Your home is busy just now. Try again in a moment.'
+LOST_LINE = 'The connection to your home was lost. Try again.'
+
+
+def consent_answers_case(home, path, answers, shown, asked):
+    from test_browser import CONSENT_ORIGIN, sign_in_to_consent
+    log, landed, errors = [], [], []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            start_connecting(page, home)
+            if path == 'decision':
+                sign_in_to_consent(page)
+            page.route(lambda url: url.startswith(f'{CONSENT_ORIGIN}/authorize/{path}'), answering_with(log, answers))
+            if path == 'decision':
+                page.get_by_role('button', name='Deny').click()
+            else:
+                consent_sign_in(page)
+            expect(page.get_by_text(shown)).to_be_visible()
+            page.wait_for_timeout(1500)  # past any second wait
+    assert (len(log), errors, landed) == (asked, [], [])
+
+
+@pytest.mark.parametrize('path', ['signin', 'decision'])
+@pytest.mark.parametrize('kind', sorted(NOT_AN_OBJECT))
+def test_a_consent_page_still_marked_busy_after_its_wait_says_busy_whatever_the_body(connector_home, path, kind):
+    """Two marked 503s whose bodies aren't a JSON object (a portal's page, a list, null, an answer cut short): the page
+    waited once, the home still says it did nothing, so it's busy, not lost (consent.js's post(), merge be6d3f13)."""
+    consent_answers_case(connector_home, path, [(503, True, kind), (503, True, kind)], BUSY_LINE, 2)
+
+
+@pytest.mark.parametrize('path', ['signin', 'decision'])
+@pytest.mark.parametrize('kind', ['html', 'list'])
+def test_a_consent_page_busy_then_answered_with_no_object_says_lost(connector_home, path, kind):
+    """A marked 503, then a 200 that isn't a JSON object: no yes can be read and the home may have acted, so it's lost
+    (main's rule, 9b72e5d2), and nothing is asked a third time."""
+    consent_answers_case(connector_home, path, [(503, True, 'html'), (200, False, kind)], LOST_LINE, 2)
