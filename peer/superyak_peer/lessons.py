@@ -1573,8 +1573,8 @@ class Lessons:
                 now = self.clock()
                 reached = [(found, key, entry) for found, key, entry in kept if key is not None and entry in answer['lessons']]
                 for found, key, entry in reached:  # a receipt only for a first reach shown
-                    db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, now, ship['id'], found.id, found.author,
-                                                                                    None if entry['match'] == 'words' else entry['match']))
+                    db.execute('INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle) VALUES(?,?,?,?,?,?)',
+                               (key, now, ship['id'], found.id, found.author, None if entry['match'] == 'words' else entry['match']))
                 db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown, reask) VALUES(?,?,?,?,?)',
                            (now, ship['id'], nearest, len(reached), int(reask)))
                 return answer
