@@ -206,3 +206,24 @@ is in `results/open100-answers-2026-11-21.jsonl`. "No evidence" is the v2 closed
 - **Small with the hop still beats large with BM25** here, just: +9 (CI +0.6 to +17.4). As in the distractor runs, the
   27B scores below the 4B with the same evidence in this setup (25 against 32 with BM25), so it's not a test of size.
 - **Evidence still helps a small model clearly** (+11 over closed-book).
+
+## The first approach-by-kind router (issue #12's smallest adapter, 2026-11-21, on the Mac, 8 s)
+
+`hotpot_router.py` gives each question a predicted kind from a word rule fixed before scoring, splits HotpotQA's
+7,405 dev questions 50/50 by seed, picks on the development half the better arm for each predicted kind (it chose
+the hop for bridge and BM25 for comparison), and scores once on the held-out half. Verifier: HotpotQA's gold
+paragraphs. Rows are in `results/router-2026-11-21.json`.
+
+| Held-out (3,703), both gold among 2 picked | Count | Against the hop alone, 95% CI |
+|---|---|---|
+| BM25 alone | 918 | |
+| Hop alone | 1,808 | |
+| Router by the word rule | 1,835 | +0.73 points (-0.07 to +1.53) |
+| Router that knows the true type | 1,938 | +3.51 points (+2.92 to +4.10) |
+
+**How to read it:**
+- **The weight is real; the classifier isn't good enough yet.** Knowing the kind is worth +3.5 points over the best single
+  arm. The rule matches HotpotQA's label on 89% of held-out questions, but only 659 of the 991 it calls comparisons
+  are comparisons. The 332 misrouted bridge questions give back most of the gain.
+- **This holdout is now spent.** A better classifier (a small model, say) is fixed first and scored on fresh held-out
+  questions, from HotpotQA's train split, never on this half again.
