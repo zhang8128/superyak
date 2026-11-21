@@ -4,11 +4,13 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::fs::File;
 use std::io::{self, BufRead, BufWriter, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use corpus_index::{DocRecord, Index};
+use corpus_index::Index;
 
 fn parse_opts(args: &[String]) -> HashMap<String, String> {
     let mut map = HashMap::new();
@@ -25,50 +27,12 @@ fn parse_opts(args: &[String]) -> HashMap<String, String> {
     map
 }
 
-/// `docs.tsv`: one line per document, `page_id\ttitle\ttext`. Read as bytes and lossy-decoded so
-/// a stray non-UTF-8 byte in a huge export can't crash the build.
-fn read_docs(path: &str) -> Result<Vec<DocRecord>, String> {
-    let data = fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
-    let text = String::from_utf8_lossy(&data);
-    let mut docs = Vec::new();
-    for (lineno, line) in text.lines().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let mut parts = line.splitn(3, '\t');
-        let page_id_s = parts.next().unwrap_or("");
-        let title = parts.next().unwrap_or("").to_string();
-        let body = parts.next().unwrap_or("").to_string();
-        let page_id: u64 = page_id_s
-            .parse()
-            .map_err(|_| format!("{path} line {}: bad page id {:?}", lineno + 1, page_id_s))?;
-        docs.push(DocRecord { page_id, title, text: body });
-    }
-    Ok(docs)
-}
-
-/// `links.tsv`: one line per link, `src_page_id\tdst_page_id`.
-fn read_links(path: &str) -> Result<Vec<(u64, u64)>, String> {
-    let data = fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
-    let text = String::from_utf8_lossy(&data);
-    let mut links = Vec::new();
-    for (lineno, line) in text.lines().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let mut parts = line.splitn(2, '\t');
-        let src_s = parts.next().unwrap_or("");
-        let dst_s = parts.next().unwrap_or("");
-        let src: u64 = src_s
-            .parse()
-            .map_err(|_| format!("{path} line {}: bad src page id {:?}", lineno + 1, src_s))?;
-        let dst: u64 = dst_s
-            .parse()
-            .map_err(|_| format!("{path} line {}: bad dst page id {:?}", lineno + 1, dst_s))?;
-        links.push((src, dst));
-    }
-    Ok(links)
-}
+/// `docs.tsv` and `links.tsv` are each streamed from disk twice (`Index::build_from_paths`),
+/// never fully read into memory, and the index is streamed straight to `--out` through a
+/// `BufWriter` (`Index::write_to`), never fully materialized as a second in-memory copy before
+/// writing -- so peak memory stays well under the input corpus's size rather than some multiple
+/// of it. 256 KiB is a plain sequential-read buffer size, not tuned to anything.
+const BUILD_READ_BUFFER: usize = 256 * 1024;
 
 fn cmd_build(opts: &HashMap<String, String>) -> Result<(), String> {
     let docs_path = opts.get("docs").ok_or("missing --docs")?;
@@ -76,16 +40,18 @@ fn cmd_build(opts: &HashMap<String, String>) -> Result<(), String> {
     let out_path = opts.get("out").ok_or("missing --out")?;
 
     let start = Instant::now();
-    let docs = read_docs(docs_path)?;
-    let links = read_links(links_path)?;
-    let (index, stats) = Index::build(&docs, &links);
-    let bytes = index.to_bytes();
-    fs::write(out_path, &bytes).map_err(|e| format!("writing {out_path}: {e}"))?;
+    let (index, stats) =
+        Index::build_from_paths(Path::new(docs_path), Path::new(links_path), BUILD_READ_BUFFER)?;
+    let file = File::create(out_path).map_err(|e| format!("writing {out_path}: {e}"))?;
+    let mut writer = BufWriter::new(file);
+    index.write_to(&mut writer).map_err(|e| format!("writing {out_path}: {e}"))?;
+    writer.flush().map_err(|e| format!("writing {out_path}: {e}"))?;
     let seconds = start.elapsed().as_secs_f64();
 
     println!(
-        "{{\"docs\":{},\"terms\":{},\"postings\":{},\"links_kept\":{},\"links_dropped\":{},\"seconds\":{:.3}}}",
-        stats.docs, stats.terms, stats.postings, stats.links_kept, stats.links_dropped, seconds
+        "{{\"docs\":{},\"terms\":{},\"postings\":{},\"links_kept\":{},\"links_dropped\":{},\"edges\":{},\"seconds\":{:.3}}}",
+        stats.docs, stats.terms, stats.postings, stats.links_kept, stats.links_dropped,
+        index.edge_count(), seconds
     );
     Ok(())
 }

@@ -1,43 +1,44 @@
 //! The little-endian binary index format: a thin `ByteWriter`/`ByteReader` pair so `index.rs`
-//! doesn't repeat bounds-checking at every field. A short, malformed, or truncated file is
-//! reported as an `Err(String)`, never a panic.
+//! doesn't repeat bounds-checking (reading) or error plumbing (writing) at every field. A short,
+//! malformed, or truncated file is reported as an `Err(String)`, never a panic.
+//!
+//! `ByteWriter` is generic over `std::io::Write`: the same field-by-field writes serialize to an
+//! in-memory `Vec<u8>` (`Index::to_bytes`, used by the unit tests) or stream straight to a
+//! `BufWriter<File>` (`Index::write_to`, used by the CLI's `build`), so the file is written in one
+//! pass without ever holding a second, fully-serialized copy of the whole index in memory.
+
+use std::io::{self, Write};
 
 pub const MAGIC: [u8; 4] = *b"CIX1";
 pub const VERSION: u32 = 1;
 
-pub struct ByteWriter {
-    pub buf: Vec<u8>,
+pub struct ByteWriter<W: Write> {
+    inner: W,
 }
 
-impl Default for ByteWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ByteWriter {
-    pub fn new() -> Self {
-        Self { buf: Vec::new() }
+impl<W: Write> ByteWriter<W> {
+    pub fn new(inner: W) -> Self {
+        Self { inner }
     }
 
-    pub fn u16(&mut self, v: u16) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+    pub fn u16(&mut self, v: u16) -> io::Result<()> {
+        self.inner.write_all(&v.to_le_bytes())
     }
 
-    pub fn u32(&mut self, v: u32) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+    pub fn u32(&mut self, v: u32) -> io::Result<()> {
+        self.inner.write_all(&v.to_le_bytes())
     }
 
-    pub fn u64(&mut self, v: u64) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+    pub fn u64(&mut self, v: u64) -> io::Result<()> {
+        self.inner.write_all(&v.to_le_bytes())
     }
 
-    pub fn f64(&mut self, v: f64) {
-        self.buf.extend_from_slice(&v.to_le_bytes());
+    pub fn f64(&mut self, v: f64) -> io::Result<()> {
+        self.inner.write_all(&v.to_le_bytes())
     }
 
-    pub fn bytes(&mut self, v: &[u8]) {
-        self.buf.extend_from_slice(v);
+    pub fn bytes(&mut self, v: &[u8]) -> io::Result<()> {
+        self.inner.write_all(v)
     }
 }
 
@@ -87,13 +88,16 @@ mod tests {
 
     #[test]
     fn round_trips_every_field_kind() {
-        let mut w = ByteWriter::new();
-        w.u16(12);
-        w.u32(345);
-        w.u64(6789);
-        w.f64(1.5);
-        w.bytes(b"hello");
-        let mut r = ByteReader::new(&w.buf);
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut w = ByteWriter::new(&mut buf);
+            w.u16(12).unwrap();
+            w.u32(345).unwrap();
+            w.u64(6789).unwrap();
+            w.f64(1.5).unwrap();
+            w.bytes(b"hello").unwrap();
+        }
+        let mut r = ByteReader::new(&buf);
         assert_eq!(r.u16().unwrap(), 12);
         assert_eq!(r.u32().unwrap(), 345);
         assert_eq!(r.u64().unwrap(), 6789);

@@ -1,7 +1,18 @@
 //! The index itself: building it from docs + links, writing/reading the binary format, and
 //! answering a BM25 query plus its one-hop pick.
 //!
-//! Binary layout (all little-endian), written by [`Index::to_bytes`] and read back by
+//! Two build paths produce byte-for-byte the same [`Index`] (see
+//! `streaming_build_from_paths_matches_the_in_memory_build_byte_for_byte` below): [`Index::build`]
+//! takes already-parsed slices, for small in-memory fixtures; [`Index::build_from_paths`] streams
+//! `docs.tsv` and `links.tsv` from disk -- each exactly twice -- and allocates the postings and
+//! link-edge arrays once, at their exact final size, from counts gathered in a first pass. The
+//! CLI's `build` uses the streaming path; its peak memory is dominated by the postings array
+//! (sized exactly, no growth slack) rather than by the input files' size. The format itself (the
+//! layout below) and its version are unchanged by this: it was always a flat, exactly-allocated
+//! layout on disk, independent of how construction got there.
+//!
+//! Binary layout (all little-endian), written by [`Index::write_to`] (streamed) or
+//! [`Index::to_bytes`] (collected into one `Vec<u8>`, for tests) and read back by
 //! [`Index::from_bytes`]:
 //!
 //! ```text
@@ -28,6 +39,9 @@
 //! ```
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufReader, Write};
+use std::path::Path;
 
 use crate::bm25::{idf, term_contribution};
 use crate::format::{ByteReader, ByteWriter, MAGIC, VERSION};
@@ -166,37 +180,215 @@ impl Index {
         (index, stats)
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut w = ByteWriter::new();
-        w.bytes(&MAGIC);
-        w.u32(VERSION);
-        w.u64(self.doc_count);
-        w.f64(self.avg_doc_len);
-        for i in 0..self.doc_count as usize {
-            w.u64(self.page_ids[i]);
-            w.u32(self.doc_lens[i]);
+    /// The same algorithm as [`Index::build`], but streaming `docs_path` and `links_path` from
+    /// disk -- each read exactly twice -- instead of requiring every document's text and a
+    /// growable postings list per term to sit in memory at once.
+    ///
+    /// Pass 1 over `docs.tsv` builds the vocabulary (term -> document frequency), each doc's
+    /// page id and length, and the page-id -> doc-index map, without keeping any text or per-term
+    /// postings. The vocabulary is then sorted once (as `build` already does) and each term's
+    /// exact postings range is fixed by a prefix sum over its document frequency, so the postings
+    /// array can be allocated once, at its final size -- a flat `Vec<(u32, u16)>`, not a `Vec`
+    /// per term. Pass 2 re-reads `docs.tsv`, retokenizes each doc, and writes each (doc, term)
+    /// pair directly into its term's reserved slot (tracked by a per-term write cursor); because
+    /// pass 2 visits docs in increasing doc-index order, each term's postings come out already
+    /// sorted by doc index, with no separate sort needed. `links.tsv` gets the same treatment:
+    /// one pass counts each source doc's raw out-degree (to size one flat edges array exactly),
+    /// a second pass fills it, and a final linear pass sorts, dedupes and compacts each source
+    /// doc's edges in place within that same array (no second buffer) to match `build`'s
+    /// sort-then-dedup adjacency rows exactly.
+    ///
+    /// `buf_capacity` is each file's internal read buffer size, in bytes (the CLI passes a
+    /// multi-KB buffer; a test can pass something tiny to force many refills deterministically,
+    /// including mid-line, regardless of how long a single line is).
+    pub fn build_from_paths(docs_path: &Path, links_path: &Path, buf_capacity: usize)
+            -> Result<(Index, BuildStats), String> {
+        // ---- docs pass 1: vocabulary (term -> df), page ids, doc lengths, page_id -> doc idx ----
+        let mut page_ids: Vec<u64> = Vec::new();
+        let mut doc_lens: Vec<u32> = Vec::new();
+        let mut df: HashMap<String, u32> = HashMap::new();
+        let mut page_id_to_idx: HashMap<u64, u32> = HashMap::new();
+        let mut local_counts: HashMap<String, u32> = HashMap::new(); // cleared and reused per doc
+
+        stream_file_lines(docs_path, buf_capacity, |line| {
+            let (page_id, title, text) = parse_doc_line(line)?;
+            let idx = page_ids.len() as u32;
+            page_ids.push(page_id);
+            page_id_to_idx.entry(page_id).or_insert(idx);
+
+            let combined = combined_text(title, text);
+            let len = count_terms(&combined, &mut local_counts);
+            doc_lens.push(len);
+            for term in local_counts.keys() {
+                // `.get_mut` first avoids cloning `term` for every occurrence; a term is only
+                // ever cloned the first time it's seen, when it enters the vocabulary.
+                if let Some(count) = df.get_mut(term) {
+                    *count += 1;
+                } else {
+                    df.insert(term.clone(), 1);
+                }
+            }
+            Ok(())
+        })?;
+
+        let n = page_ids.len();
+        let total_len: u64 = doc_lens.iter().map(|&l| l as u64).sum();
+        let avg_doc_len = if n > 0 { total_len as f64 / n as f64 } else { 0.0 };
+
+        // ---- sort the vocabulary by term bytes, fix each term's exact postings range ----
+        let mut vocab: Vec<VocabEntry> = df
+            .into_iter()
+            .map(|(term, doc_freq)| VocabEntry { term, doc_freq, postings_offset: 0 })
+            .collect();
+        vocab.sort_by(|a, b| a.term.cmp(&b.term));
+        let mut running = 0u64;
+        for entry in &mut vocab {
+            entry.postings_offset = running;
+            running += entry.doc_freq as u64;
         }
-        w.u64(self.vocab.len() as u64);
+        let postings_count = running as usize;
+
+        // ---- docs pass 2: fill the exactly-sized, flat postings array ----
+        let mut postings: Vec<(u32, u16)> = vec![(0u32, 0u16); postings_count];
+        let mut cursor: Vec<u32> = vec![0u32; vocab.len()];
+        let mut local_counts2: HashMap<String, u32> = HashMap::new();
+        let mut doc_idx: u32 = 0;
+
+        stream_file_lines(docs_path, buf_capacity, |line| {
+            let (_page_id, title, text) = parse_doc_line(line)?;
+            let combined = combined_text(title, text);
+            count_terms(&combined, &mut local_counts2);
+            for (term, &count) in local_counts2.iter() {
+                let tf = count.min(u16::MAX as u32) as u16;
+                if let Ok(vi) = vocab.binary_search_by(|v| v.term.as_str().cmp(term.as_str())) {
+                    let off = vocab[vi].postings_offset as usize;
+                    let c = cursor[vi] as usize;
+                    postings[off + c] = (doc_idx, tf);
+                    cursor[vi] += 1;
+                }
+            }
+            doc_idx += 1;
+            Ok(())
+        })?;
+
+        // ---- links pass A: count each source doc's raw out-degree (both ends must resolve) ----
+        let mut raw_degree: Vec<u32> = vec![0u32; n];
+        let mut links_kept = 0usize;
+        let mut links_dropped = 0usize;
+        stream_file_lines(links_path, buf_capacity, |line| {
+            let (src, dst) = parse_link_line(line)?;
+            match (page_id_to_idx.get(&src), page_id_to_idx.get(&dst)) {
+                (Some(&s), Some(_)) => {
+                    raw_degree[s as usize] += 1;
+                    links_kept += 1;
+                }
+                _ => links_dropped += 1,
+            }
+            Ok(())
+        })?;
+
+        let mut raw_offsets: Vec<u64> = Vec::with_capacity(n + 1);
+        raw_offsets.push(0);
+        for &d in &raw_degree {
+            raw_offsets.push(raw_offsets.last().unwrap() + d as u64);
+        }
+        let raw_total = *raw_offsets.last().unwrap() as usize;
+
+        // ---- links pass B: fill the exactly-sized raw edges array ----
+        let mut raw_edges: Vec<u32> = vec![0u32; raw_total];
+        let mut fill_cursor: Vec<u32> = vec![0u32; n];
+        stream_file_lines(links_path, buf_capacity, |line| {
+            let (src, dst) = parse_link_line(line)?;
+            if let (Some(&s), Some(&d)) = (page_id_to_idx.get(&src), page_id_to_idx.get(&dst)) {
+                let pos = raw_offsets[s as usize] as usize + fill_cursor[s as usize] as usize;
+                raw_edges[pos] = d;
+                fill_cursor[s as usize] += 1;
+            }
+            Ok(())
+        })?;
+
+        // ---- compact in place: sort + dedup each source doc's raw edges, matching `build`'s
+        //      per-row sort_unstable()+dedup(), shifting each row left onto the row before it so
+        //      the same Vec ends up holding exactly the final (deduped) edges, with no second
+        //      allocation ----
+        let mut final_degree: Vec<u32> = vec![0u32; n];
+        let mut compacted = 0usize;
+        for i in 0..n {
+            let start = raw_offsets[i] as usize;
+            let end = raw_offsets[i + 1] as usize;
+            raw_edges[start..end].sort_unstable();
+            let deduped_len = dedup_in_place(&mut raw_edges[start..end]);
+            final_degree[i] = deduped_len as u32;
+            if compacted != start {
+                raw_edges.copy_within(start..start + deduped_len, compacted);
+            }
+            compacted += deduped_len;
+        }
+        raw_edges.truncate(compacted);
+        let csr_edges = raw_edges;
+        let mut csr_offsets: Vec<u64> = Vec::with_capacity(n + 1);
+        csr_offsets.push(0);
+        for &d in &final_degree {
+            csr_offsets.push(csr_offsets.last().unwrap() + d as u64);
+        }
+
+        let stats = BuildStats { docs: n, terms: vocab.len(), postings: postings.len(), links_kept, links_dropped };
+        let index = Index {
+            doc_count: n as u64,
+            avg_doc_len,
+            page_ids,
+            doc_lens,
+            vocab,
+            postings,
+            csr_offsets,
+            csr_edges,
+        };
+        Ok((index, stats))
+    }
+
+    /// Writes the same bytes [`Index::to_bytes`] would return, but through any `Write`, one field
+    /// at a time -- so the CLI's `build` can stream straight to a `BufWriter<File>` instead of
+    /// materializing the whole (at full corpus scale, multi-gigabyte) index as a second in-memory
+    /// copy before writing it out.
+    pub fn write_to<W: Write>(&self, out: W) -> io::Result<()> {
+        let mut w = ByteWriter::new(out);
+        w.bytes(&MAGIC)?;
+        w.u32(VERSION)?;
+        w.u64(self.doc_count)?;
+        w.f64(self.avg_doc_len)?;
+        for i in 0..self.doc_count as usize {
+            w.u64(self.page_ids[i])?;
+            w.u32(self.doc_lens[i])?;
+        }
+        w.u64(self.vocab.len() as u64)?;
         for v in &self.vocab {
             let bytes = v.term.as_bytes();
-            w.u32(bytes.len() as u32);
-            w.bytes(bytes);
-            w.u32(v.doc_freq);
-            w.u64(v.postings_offset);
+            w.u32(bytes.len() as u32)?;
+            w.bytes(bytes)?;
+            w.u32(v.doc_freq)?;
+            w.u64(v.postings_offset)?;
         }
-        w.u64(self.postings.len() as u64);
+        w.u64(self.postings.len() as u64)?;
         for &(doc_idx, tf) in &self.postings {
-            w.u32(doc_idx);
-            w.u16(tf);
+            w.u32(doc_idx)?;
+            w.u16(tf)?;
         }
-        w.u64(self.csr_edges.len() as u64);
+        w.u64(self.csr_edges.len() as u64)?;
         for &off in &self.csr_offsets {
-            w.u64(off);
+            w.u64(off)?;
         }
         for &e in &self.csr_edges {
-            w.u32(e);
+            w.u32(e)?;
         }
-        w.buf
+        Ok(())
+    }
+
+    /// The same bytes `write_to` streams, collected into one `Vec<u8>` -- convenient for the unit
+    /// tests' tiny fixtures; writing to a `Vec<u8>` cannot fail.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.write_to(&mut buf).expect("writing to an in-memory Vec<u8> cannot fail");
+        buf
     }
 
     pub fn from_bytes(buf: &[u8]) -> Result<Index, String> {
@@ -384,6 +576,97 @@ impl Index {
     }
 }
 
+/// `title + " " + text`, the same combination `build` tokenizes.
+fn combined_text(title: &str, text: &str) -> String {
+    let mut combined = String::with_capacity(title.len() + 1 + text.len());
+    combined.push_str(title);
+    combined.push(' ');
+    combined.push_str(text);
+    combined
+}
+
+/// Clears `into`, tokenizes `text`, and counts each token's occurrences into it; returns the
+/// token count (the doc's length for BM25's normalization). Shared by both docs passes so they
+/// can't drift apart on what counts as a term or a doc's length.
+fn count_terms(text: &str, into: &mut HashMap<String, u32>) -> u32 {
+    into.clear();
+    let mut len = 0u32;
+    for tok in tokenize(text) {
+        len += 1;
+        *into.entry(tok).or_insert(0) += 1;
+    }
+    len
+}
+
+/// `page_id\ttitle\ttext`.
+fn parse_doc_line(line: &str) -> Result<(u64, &str, &str), String> {
+    let mut parts = line.splitn(3, '\t');
+    let page_id_s = parts.next().unwrap_or("");
+    let title = parts.next().unwrap_or("");
+    let text = parts.next().unwrap_or("");
+    let page_id: u64 = page_id_s.parse().map_err(|_| format!("bad page id {page_id_s:?}"))?;
+    Ok((page_id, title, text))
+}
+
+/// `src_page_id\tdst_page_id`.
+fn parse_link_line(line: &str) -> Result<(u64, u64), String> {
+    let mut parts = line.splitn(2, '\t');
+    let src_s = parts.next().unwrap_or("");
+    let dst_s = parts.next().unwrap_or("");
+    let src: u64 = src_s.parse().map_err(|_| format!("bad src page id {src_s:?}"))?;
+    let dst: u64 = dst_s.parse().map_err(|_| format!("bad dst page id {dst_s:?}"))?;
+    Ok((src, dst))
+}
+
+/// Calls `f` once per line of the file at `path` (split on `\n`, a trailing `\r` trimmed, blank
+/// lines skipped), decoding each line with `String::from_utf8_lossy` so one invalid-UTF-8 line
+/// can't stop the read. Reads via `read_until`, so a single line longer than `buf_capacity` is
+/// still read whole, across as many internal buffer refills as it takes -- the read buffer is
+/// reused across lines, not one allocation per line, and the file is never read into memory at
+/// once. An error from `f` or from the read itself is reported with the file and line number.
+fn stream_file_lines(path: &Path, buf_capacity: usize, mut f: impl FnMut(&str) -> Result<(), String>)
+        -> Result<(), String> {
+    let file = File::open(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut reader = BufReader::with_capacity(buf_capacity.max(64), file);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut lineno = 0usize;
+    loop {
+        buf.clear();
+        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
+            .map_err(|e| format!("reading {} line {}: {e}", path.display(), lineno + 1))?;
+        if n == 0 {
+            break;
+        }
+        lineno += 1;
+        while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
+            buf.pop();
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf);
+        f(&line).map_err(|e| format!("{} line {}: {}", path.display(), lineno, e))?;
+    }
+    Ok(())
+}
+
+/// In-place dedup of consecutive equal elements in an already-sorted slice (the same rule as
+/// `Vec::dedup`, usable on a mutable sub-slice of a larger buffer). Returns the deduped length;
+/// the caller is responsible for treating only `slice[..len]` as live afterward.
+fn dedup_in_place(slice: &mut [u32]) -> usize {
+    if slice.is_empty() {
+        return 0;
+    }
+    let mut write = 1;
+    for read in 1..slice.len() {
+        if slice[read] != slice[write - 1] {
+            slice[write] = slice[read];
+            write += 1;
+        }
+    }
+    write
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +808,76 @@ mod tests {
         let result = index.query("anything", 2);
         assert!(result.bm25.is_empty());
         assert!(result.hop.is_empty());
+    }
+
+    /// A unique scratch directory under the OS temp dir, for the tests below that need real
+    /// files on disk (`build_from_paths` streams from paths, not slices). Not an RAII guard:
+    /// each test removes its own directory when done.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("corpus-index-unit-{tag}-{}-{}", std::process::id(), n));
+        std::fs::create_dir_all(&dir).expect("creating a scratch temp dir");
+        dir
+    }
+
+    #[test]
+    fn streaming_build_from_paths_matches_the_in_memory_build_byte_for_byte() {
+        let (docs, links) = fixture();
+        let (in_memory, in_memory_stats) = Index::build(&docs, &links);
+
+        let dir = temp_dir("equivalence");
+        let docs_path = dir.join("docs.tsv");
+        let links_path = dir.join("links.tsv");
+        let mut docs_text = String::new();
+        for d in &docs {
+            docs_text.push_str(&format!("{}\t{}\t{}\n", d.page_id, d.title, d.text));
+        }
+        std::fs::write(&docs_path, docs_text).unwrap();
+        let mut links_text = String::new();
+        for &(src, dst) in &links {
+            links_text.push_str(&format!("{src}\t{dst}\n"));
+        }
+        std::fs::write(&links_path, links_text).unwrap();
+
+        let (streamed, streamed_stats) = Index::build_from_paths(&docs_path, &links_path, 4096)
+            .expect("streaming build over a tiny fixture must succeed");
+
+        assert_eq!(streamed_stats.docs, in_memory_stats.docs);
+        assert_eq!(streamed_stats.terms, in_memory_stats.terms);
+        assert_eq!(streamed_stats.postings, in_memory_stats.postings);
+        assert_eq!(streamed_stats.links_kept, in_memory_stats.links_kept);
+        assert_eq!(streamed_stats.links_dropped, in_memory_stats.links_dropped);
+        assert_eq!(
+            in_memory.to_bytes(), streamed.to_bytes(),
+            "build_from_paths must produce byte-for-byte the same index.bin as build"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn streaming_build_handles_a_line_far_larger_than_the_read_buffer() {
+        let dir = temp_dir("bigline");
+        let docs_path = dir.join("docs.tsv");
+        let links_path = dir.join("links.tsv");
+
+        // One doc whose text is tens of thousands of bytes -- far longer than the internal read
+        // buffer below -- so `build_from_paths` must cross hundreds of buffer refills mid-line,
+        // in both of its passes over this file, without truncating or corrupting it.
+        let long_text = "needle ".repeat(5000) + "haystack";
+        std::fs::write(&docs_path, format!("1\tBig Doc\t{long_text}\n")).unwrap();
+        std::fs::write(&links_path, "").unwrap();
+
+        let (index, stats) = Index::build_from_paths(&docs_path, &links_path, 8)
+            .expect("a tiny read buffer must still read the whole long line");
+        assert_eq!(stats.docs, 1);
+        // "needle" occurs 5000 times and "haystack" once, both inside the single long line; both
+        // must be in the vocabulary, which they can only be if the whole line was read.
+        let result = index.query("needle haystack", 1);
+        assert_eq!(result.bm25, vec![1]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
