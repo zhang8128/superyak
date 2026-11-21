@@ -128,3 +128,23 @@ The questions, seed and scoring are the same; gemma4:31b is added. Each answer i
 - **So small with the hop beating large with BM25 holds up here (+12, +13).** It's a statement about this setting:
   short answers, two paragraphs, thinking off, lexical scoring. It isn't evidence that a graph makes up for model size
   on harder reading. Thinking on, and a corpus where both arms search, are the next tests.
+
+## Control: thinking on, given the gold paragraphs (2026-11-21, on the Mac, 2,340 s)
+
+This run asks the question the earlier tables left open: if the large model reasons before answering, does it beat the
+small one once both have the right evidence? qwen3.6:27b-mlx, with thinking on (`--think`, up to 8,192 tokens) and
+prompt v2, answered the same 100 questions given the 2 gold paragraphs. Its answers are in
+`results/think-gold100-2026-11-21.jsonl`.
+
+| Against thinking qwen (69 exact, F1 0.845) | Exact match, 95% CI | F1, 95% CI |
+|---|---|---|
+| qwen, thinking off (64) | +5 (-0.1 to +10.1) | +1.3 (-1.4 to +3.9) |
+| nemotron-mini, thinking off (68) | +1 (-4.9 to +6.9) | +1.2 (-2.7 to +5.0) |
+| gemma4:31b, thinking off (63) | +6 (+0.6 to +11.4) | +4.1 (+0.1 to +8.2) |
+
+- **No clear separation.** Thinking adds a few points for the 27B, but doesn't separate it from the 4B. Given the right two
+  paragraphs, every model and mode tried sits between 63 and 69 exact and near F1 0.83.
+- **The cost:** 546 thinking tokens on average and 23 s a question, against 0.4 s for the 4B.
+- **So in this setting retrieval is the limit, not the reader.** That's why better retrieval (the hop) helps a small
+  model more than a large model helps itself. Whether that holds where reading is harder, with a corpus to search
+  rather than 10 paragraphs, is #8's corpus v0.
