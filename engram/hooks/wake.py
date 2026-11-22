@@ -20,7 +20,7 @@ HOOK_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT = HOOK_DIR.parent
 sys.path.insert(0, str(SOURCE_ROOT))
 sys.path.insert(0, str(HOOK_DIR))
-from harness import bind_session, emit, read_context, stamp_registry
+from harness import bind_session, emit, binding, default_instance as harness_default_instance, read_context, stamp_registry
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -29,9 +29,14 @@ DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
 
+_binding_notice = None      # set when this folder's binding was passed over: the orientation says so
+
+
 def _load_instance_config():
     """Load instance config from project root .engram/config.toml if present."""
-    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
+    global _binding_notice
+    _binding_notice = None
+    default_instance = harness_default_instance()
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
         return default_instance, None
@@ -39,10 +44,8 @@ def _load_instance_config():
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return (
-            config.get("instance") or default_instance,
-            config.get("session_context"),
-        )
+        name, _binding_notice = binding(config.get("instance"), default_instance)
+        return name, config.get("session_context")
     except Exception:
         return default_instance, None
 
@@ -212,6 +215,10 @@ def wake():
             lines.append(f"# Engram ({instance_name}) — Memory Orientation")
         else:
             lines.append("# Engram — Memory Orientation")
+        if _binding_notice:
+            used = f"the {instance_name} store" if instance_name else "the default store"
+            lines.append("")
+            lines.append(f"Note: {_binding_notice}. This session uses {used}.")
         lines.append("")
         lines.append(f"You have {episodes} episodes, {semantics} semantics, {instincts_count} instincts.")
         lines.append("")

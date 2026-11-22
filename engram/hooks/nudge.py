@@ -29,7 +29,7 @@ SOURCE_ROOT = HOOK_DIR.parent
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
 sys.path.insert(0, str(SOURCE_ROOT))
 sys.path.insert(0, str(HOOK_DIR))
-from harness import emit, read_context, stamp_registry
+from harness import emit, binding, default_instance as harness_default_instance, read_context, stamp_registry
 
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
@@ -47,7 +47,7 @@ HARNESS_NOTICES = ("<task-notification>",)
 
 
 def _load_instance_config():
-    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
+    default_instance = harness_default_instance()
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
         return default_instance
@@ -55,7 +55,7 @@ def _load_instance_config():
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return config.get("instance") or default_instance
+        return binding(config.get("instance"), default_instance)[0]
     except Exception:
         return default_instance
 

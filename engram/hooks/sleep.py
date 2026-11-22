@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import clear_session_binding, read_context
+from harness import clear_session_binding, binding, default_instance as harness_default_instance, read_context
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -146,7 +146,7 @@ def auto_capture_outcomes(conn, session_id) -> int:
 
 
 def _load_instance_config():
-    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
+    default_instance = harness_default_instance()
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
         return default_instance
@@ -154,7 +154,7 @@ def _load_instance_config():
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return config.get("instance") or default_instance
+        return binding(config.get("instance"), default_instance)[0]
     except Exception:
         return default_instance
 
