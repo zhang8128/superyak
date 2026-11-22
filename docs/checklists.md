@@ -272,11 +272,13 @@ it too, since the words are a literal piece of the command. Its long form:
 - Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
   partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
   same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
-- The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named:
-  engram's test_knowledge.py, TestKuzuFulltextIndices' two tests and TestBoundedKuzuDriver's one. The Pi's kernel
-  uses 16 KB pages (`getconf PAGESIZE`), and Kuzu 0.11.3 can't release a frame on them (`ops:kuzu-on-16k-pages`).
-  A failure counts as known only after the same test fails the same way on main, on the same machine; read this
-  line before re-deriving one (Rio Grande, 2026-10-29, re-derived the Kuzu three).
+- The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named.
+  Engram's three real-Kuzu tests (test_knowledge.py: TestKuzuFulltextIndices' two, TestBoundedKuzuDriver's one) skip
+  on the Pi with the page-size reason since dfba2c3e, where they used to fail. The Pi's kernel uses 16 KB pages
+  (`getconf PAGESIZE`) and Kuzu 0.11.3 can't release a frame on them, so the knowledge graph is off there
+  (`ops:kuzu-on-16k-pages`). A failure counts as known only after the same test fails the same way on main, on the
+  same machine; read this line before re-deriving one (Rio Grande re-derived the Kuzu three on 2026-10-29, and again
+  on 2026-11-22).
 - Several branches may merge as a train, each with its own section 2 verdict from the approver the law names and,
   where it changes safety code, each partner's yes. Each reviewed head is merged `--no-ff`, in order, on a branch
   from main, and each merge is clean: no conflict and no hand edit. A branch whose merge stops leaves the train,
