@@ -646,7 +646,7 @@ def test_the_puller_keeps_the_words_of_an_atlas_row_it_refuses(atlas_peers):
     pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
     raw = envelope_from_pi(atlas_peers, {'package': package(uri(tardis_fed), uri(tardis_fed))},
                            event_id='a' * 32)  # issued as the receiver's: refused
-    owed, got = {'acks': [], 'refused': []}, defaultdict(int)
+    owed, got = {'ack': [], 'refused': []}, defaultdict(int)
     tardis_fed._take_pulled(pi_fed.identity.peer_id, [raw.decode()], owed, got)
     assert owed['refused'] == [{'event_id': 'a' * 32, 'code': 400}]
     with tardis.reading() as db:
@@ -703,3 +703,51 @@ def test_atlas_received_writes_nothing_from_an_unpaired_origin(atlas_peers, tmp_
     out = tmp_path / 'received'
     main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
     assert list(out.glob('*.json')) == []
+
+
+# --- 7. the old puller, the lessons views and restore's reconcile (test 3's pull path, A1, A7) -----------------------
+
+def test_an_old_puller_refuses_only_the_atlas_row_and_takes_the_rest(atlas_peers, monkeypatch):
+    from collections import defaultdict
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    refuse_atlas_at(tardis_fed, monkeypatch)
+    atlas = envelope_from_pi(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))}, event_id='a' * 32)
+    pi.create_room(pi_ids['andy'], 'Pulled with it', [pi_ids['contact']])
+    pi_fed.collect()
+    [roster] = rows(pi, 'room.roster')[-1:]
+    with pi.transaction() as db:
+        room_raw = pi_fed._prepare_in(db, roster['id'])
+    owed, got = {'ack': [], 'refused': []}, defaultdict(int)
+    tardis_fed._take_pulled(pi_fed.identity.peer_id, [atlas.decode(), room_raw.decode()], owed, got)
+    assert owed['refused'] == [{'event_id': 'a' * 32, 'code': 400}]
+    assert owed['ack'] == [roster['id']]
+
+
+def test_both_lessons_views_say_that_listing_a_peer_opens_atlas_sends(atlas_peers):
+    from superyak_peer.lessons import describe_peer_room, describe_station_room
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    room = atlas_peers['room']
+    station = describe_station_room(pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id]))
+    assert ("Listing a peer here also lets this peer's ships send it Atlas publications, to its typed-code contacts."
+            in station.splitlines())
+    other = describe_peer_room(tardis.record_lessons_room(atlas_peers['key']))
+    assert (f"Recording this room also lets this peer's ships send Atlas publications to peer "
+            f"{pi_fed.identity.peer_id[:12]}, to its typed-code contacts.") in other.splitlines()
+
+
+def test_restores_reconcile_deletes_what_an_unpaired_peer_delivered(tmp_path, capsys):
+    from test_restore import peer_rows, peer_station, reconcile, staged
+    store, peers = peer_station(tmp_path)
+    with store.transaction() as db:
+        recipient = db.execute("SELECT id FROM users WHERE kind!='system' LIMIT 1").fetchone()[0]
+        for origin in (peers['cut'], peers['kept']):
+            db.execute('INSERT INTO atlas_received VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (origin, recipient, 'd' * 64, 'publication', 'actor', 'key', 'e' * 32, 'f' * 64, 1.0, '{}'))
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peers['cut'],))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    import sqlite3
+    with sqlite3.connect(copy) as db:
+        assert [r[0] for r in db.execute('SELECT origin FROM atlas_received')] == [peers['kept']]
