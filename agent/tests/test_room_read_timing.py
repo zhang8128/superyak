@@ -542,6 +542,33 @@ def test_a_signal_while_the_numbers_print_doesnt_lose_them(monkeypatch, capsys, 
     assert code == 0 and 'resolved' in out and 'n=1 ok=1' in out and ' b ' in out
 
 
+def test_a_signal_whose_stop_is_swallowed_still_stops_the_run(monkeypatch, capsys, tmp_path):
+    """A signal can land in code that swallows what it raises, such as Popen.__del__ ("Exception ignored in"). The
+    first signal also sets the rest to be ignored, so the run must still stop: CI timed out on a second SIGTERM that
+    did nothing (test_two_signals_close_together_still_print, 11-22)."""
+    loaded = module()
+    saved = {caught: signal.getsignal(caught) for caught in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    reads = []
+
+    def a_read_whose_cleanup_swallows_the_stop(*_):
+        reads.append(1)
+        if len(reads) == 1:
+            try:
+                loaded.stop_on_signal()  # as the handler runs when the signal lands in a __del__
+            except BaseException:
+                pass                     # and as __del__ swallows it
+        return loaded.Read(200, 0, 1.0, 2.0, 3.0, 2048, '1.2.3.4')
+    monkeypatch.setattr(loaded, 'read_once', a_read_whose_cleanup_swallows_the_stop)
+    try:
+        code = loaded.main(['--room', ROOM, '--runs', '50', '--gap-ms', '0', '--station-file',
+                            station_file(tmp_path, 'https://s.example')])
+    finally:
+        for caught, handler in saved.items():
+            signal.signal(caught, handler)
+    out = capsys.readouterr().out
+    assert len(reads) == 1 and 'stopped by a signal' in out and code == 1
+
+
 def test_the_gap_falls_between_reads_only(curl_shim, tmp_path):
     env, _, _, _ = curl_shim
     started = time.monotonic()
