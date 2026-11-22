@@ -23,18 +23,24 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
    - nothing of a person's leaves without their consent;
    - no unfixed security hole is described anywhere public;
    - the public route is live with "a login in front of everything".
+6. **The north star: the environment measurably helps a finite mind.** Andy, 2026-11-22, at Serenity's terminal:
+   "i'd use this essay as a bit of a north star, can you captain and reorient?" His essay's tests, in our words, are
+   in [north-star.md](north-star.md). Measure: each test's row there moves only with a run fixed before it ran, its
+   numbers and its failures. Goals 1 to 5 are read in its light: the rail is the record outside the loop (1), the
+   community is a research community (3), outside use is people using it (4), and 2 and 5 are the floor it stands on.
 
-## Serenity (the Mac): memory, the Mac, and partner reviews
+## Serenity (the Mac): the north star, research, and partner reviews
 
-- S1 (goal 1): write the Mac's lessons, and lay them when the room opens. **Drafted 2026-10-27; waiting for
-  the room.**
-- S2 (goals 1 and 5): build compress-no-auto, so Andy's store stops turning his prompts into "knowledge". Then copy
-  his store to the Pi, only after imprints merges and with his confirmation in the browser.
-- S3 (goal 2): merge chat paging, and measure it from the Mac after deploy.
-- S4 (goal 4): spec the connector, so a scientist or doctor in Claude or ChatGPT can use their own home. Read-only
-  first, with nothing clinical going to a cloud model.
-- S5 (goals 3 and 5): give an explicit yes or no on partners' safety code within one check-in cycle of it being
-  ready.
+Refreshed 2026-11-22 toward goal 6, on Andy's word that day. The 10-27 lines (lessons drafted, compress-no-auto, chat
+paging, the connector spec) are done or superseded; the connector went live on 11-21.
+- S1 (goal 6): north-star test 1, one environment end to end, with a retraction, against a hybrid baseline. Measure: a
+  run fixed in a commit before it runs, on held-out questions with matched evidence, reporting accuracy, source
+  support, calibration and cost, failures included.
+- S2 (goal 6): tests 2 and 3, the strong baselines and small against large, on S1's harness.
+- S3 (goal 6): test 7, an evidence auditor on Atlas (which sources are independent, what would count against a
+  conclusion), after #12's negative router result.
+- S4 (goal 4): the connector is live; a sign-in by an invited person who isn't Andy, before the README promises it.
+- S5 (goals 3 and 5): an explicit yes or no on partners' safety code within one check-in cycle, naming the head's CI.
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
