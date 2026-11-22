@@ -68,6 +68,13 @@ def _url_key(parts) -> str:
     return "url:" + urlunsplit(("https", host, path, parts.query, ""))
 
 
+def strong_url(key: str) -> bool:
+    """Amendment 3: a url key is strong only when it names a path or a query. A bare site root names a publisher, not
+    a work, so it can't prove two sources the same; it is kept for display and for a notice's report."""
+    rest = key[len("url:https://"):]
+    return "/" in rest or "?" in rest
+
+
 def source_key(record: dict) -> dict:
     """An Atlas source's keys: a strong url key (always), a strong DOI key when one is found, and a weak title key."""
     parts = urlsplit(record["url"])
@@ -92,8 +99,8 @@ def compare_sources(a: dict, b: dict) -> str:
     same_title = title_a is not None and title_a == title_b
     if a["doi"] and b["doi"] and a["doi"] != b["doi"]:
         return "unclear" if same_title else "distinct"          # rules 2 and 1: a DOI decides
-    strong_a = {a["url"], a["doi"]} - {None}
-    strong_b = {b["url"], b["doi"]} - {None}
+    strong_a = {a["url"] if strong_url(a["url"]) else None, a["doi"]} - {None}
+    strong_b = {b["url"] if strong_url(b["url"]) else None, b["doi"]} - {None}
     if strong_a & strong_b or (a["title"] is not None and a["title"] == b["title"]):
         return "match"                                           # rule 3
     if same_title:
@@ -315,10 +322,10 @@ def validate_notice(notice, publications):
     return notice
 
 
-def _how(local, gathered):
+def how_matched(local, gathered):
     if local["doi"] and local["doi"] == gathered["doi"]:
         return "doi"
-    if local["url"] == gathered["url"]:
+    if strong_url(local["url"]) and local["url"] == gathered["url"]:
         return "url"
     return "title"
 
@@ -365,7 +372,7 @@ def apply_notice(notice, *, store, own, publications, corrections=()):
         local = source_key(source)
         for keys in gathered.values():
             if compare_sources(local, keys) == "match":
-                matched.setdefault(source["id"], _how(local, keys))
+                matched.setdefault(source["id"], how_matched(local, keys))
     # 3. its own claims whose roots, followed through their chains, include a gathered source
     held = _held_claims(publications)
     reached = {c["payload"]["sentence"]["record_id"]: _roots_through_chain(c, own["snapshot"], held)
