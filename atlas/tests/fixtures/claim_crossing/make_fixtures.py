@@ -410,7 +410,7 @@ def build_notices(published):
                 "grounded_after": after, "path": path}
 
     expected = {
-        "N1": {"holding": [], "matched": [{"source_id": "t-lean-copy-a-1", "by": "doi"}],
+        "N1": {"holding": [], "unclear": [], "matched": [{"source_id": "t-lean-copy-a-1", "by": "doi"}],
                "through_chain": ["T-lean-copy-a"],
                "impact": {"retracted": ["t-lean-copy-a-1"], "items": [
                    item("T-lean-copy-a", "Lean claim A a", "unsupported", True, False,
@@ -418,18 +418,18 @@ def build_notices(published):
                    item("T-lean-a", "Lean claim B a", "still supported", True, True,
                         ["t-lean-copy-a-1", "T-lean-copy-a", "T-lean-a"])]},
                "corrected": [], "outcome": "reported"},
-        "N2": {"holding": [], "matched": [{"source_id": "t-pub-doi-a-1", "by": "title"}], "through_chain": [],
+        "N2": {"holding": [], "unclear": [], "matched": [{"source_id": "t-pub-doi-a-1", "by": "title"}], "through_chain": [],
                "impact": {"retracted": ["t-pub-doi-a-1"], "items": [
                    item("T-pub-doi-a", "Pub-DOI claim T a", "unsupported", True, False,
                         ["t-pub-doi-a-1", "T-pub-doi-a"])]},
                "corrected": [], "outcome": "reported"},
-        "N3": {"holding": [], "matched": [], "through_chain": [], "impact": None, "corrected": [],
+        "N3": {"holding": [], "unclear": [], "matched": [], "through_chain": [], "impact": None, "corrected": [],
                "outcome": "no impact"},
-        "N4": {"holding": [], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
+        "N4": {"holding": [], "unclear": [], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
                "through_chain": ["T-copied-a"], "impact": None,
                "corrected": [{"record_id": "T-copied-a", "verdict": "built on the corrected record"}],
                "outcome": "reported"},
-        "N5": {"holding": ["N4"], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
+        "N5": {"holding": ["N4"], "unclear": [], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
                "through_chain": ["T-copied-a"],
                "impact": {"retracted": ["t-copied-a-1"], "items": [
                    item("T-copied-a", "Copied claim a", "unsupported", True, False, ["t-copied-a-1", "T-copied-a"])]},

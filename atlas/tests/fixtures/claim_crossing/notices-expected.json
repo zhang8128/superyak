@@ -43,7 +43,8 @@
   "outcome": "reported",
   "through_chain": [
    "T-lean-copy-a"
-  ]
+  ],
+  "unclear": []
  },
  "N2": {
   "corrected": [],
@@ -74,7 +75,8 @@
    }
   ],
   "outcome": "reported",
-  "through_chain": []
+  "through_chain": [],
+  "unclear": []
  },
  "N3": {
   "corrected": [],
@@ -82,7 +84,8 @@
   "impact": null,
   "matched": [],
   "outcome": "no impact",
-  "through_chain": []
+  "through_chain": [],
+  "unclear": []
  },
  "N4": {
   "corrected": [
@@ -102,7 +105,8 @@
   "outcome": "reported",
   "through_chain": [
    "T-copied-a"
-  ]
+  ],
+  "unclear": []
  },
  "N5": {
   "corrected": [],
@@ -137,6 +141,7 @@
   "outcome": "reported",
   "through_chain": [
    "T-copied-a"
-  ]
+  ],
+  "unclear": []
  }
 }

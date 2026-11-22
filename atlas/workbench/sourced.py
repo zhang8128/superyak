@@ -372,13 +372,19 @@ def apply_notice(notice, *, store, own, publications, corrections=()):
                     if (s, r) not in gathered:
                         gathered[(s, r)] = k
                         joined = True
-    # 2. its own sources that match any gathered one, each named with how it matched
-    matched = {}
+    # 2. its own sources that match any gathered one, each named with how it matched; and (amendment 4) those that
+    # match none but are "unclear" against one, each named with the gathered record, so "no impact" is never said of
+    # a source that may be the same work
+    matched, unclear = {}, []
     for source in store.export_bundle()["sources"]:
         local = source_key(source)
-        for keys in gathered.values():
-            if compare_sources(local, keys) == "match":
-                matched.setdefault(source["id"], how_matched(local, keys))
+        results = [(ref, compare_sources(local, keys)) for ref, keys in sorted(gathered.items())]
+        for ref, result in results:
+            if result == "match":
+                matched.setdefault(source["id"], how_matched(local, gathered[ref]))
+        if source["id"] not in matched:
+            unclear += [{"source_id": source["id"], "with": {"snapshot": ref[0], "record_id": ref[1]}}
+                        for ref, result in results if result == "unclear"]
     # 3. its own claims whose roots, followed through their chains, include a gathered source
     held = _held_claims(publications)
     reached = {c["payload"]["sentence"]["record_id"]: _roots_through_chain(c, own["snapshot"], held)
@@ -399,6 +405,8 @@ def apply_notice(notice, *, store, own, publications, corrections=()):
     report = {"notice": notice["digest"],
               "gathered": [{"snapshot": s, "record_id": r} for s, r in sorted(gathered)],
               "matched": [{"source_id": i, "by": matched[i]} for i in sorted(matched)],
+              "unclear": sorted(unclear, key=lambda u: (u["source_id"], u["with"]["snapshot"], u["with"]["record_id"])),
               "through_chain": through_chain, "impact": impact, "corrected": corrected}
-    report["outcome"] = "reported" if (matched or through_chain or corrected) else "no impact"
+    report["outcome"] = ("reported" if (matched or through_chain or corrected) else
+                         "unclear" if unclear else "no impact")
     return report                                                                # 6: nothing written

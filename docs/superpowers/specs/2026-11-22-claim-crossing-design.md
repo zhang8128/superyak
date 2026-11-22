@@ -213,13 +213,23 @@ A notice is a Claim under the new profile, with `sentenceMediaType` `application
 2. **Matches its own sources:** it computes `source_key` over every source in its own store, and collects every local
    id that matches any gathered source. Duplicates within a store are all collected, and each is named with how it
    matched.
+   - **Amendment 4 (the build, 2026-11-22; board item `spec:claim-notice-lists-unclear-sources`):** a local source
+     that matches no gathered source but compares "unclear" with one (rule 2 or rule 4) is listed under `unclear`,
+     once per gathered record it's unclear against, with that record's Snapshot and id. It gets no impact (step 4
+     runs on matched ids only), since nothing shows it's the same work. But the report's outcome is then "unclear",
+     not "no impact", which would claim more than the rule knows. The outcome is "reported" when step 2's matches,
+     step 3 or step 5 found anything; "unclear" when only this list did; and "no impact" when nothing did. **Why:** a
+     planted case. Without the correction N4, the retraction N5 (by the corrected record's new DOI) matches nothing
+     of Tardis's, yet Tardis's `t-copied-a-1` carries the old DOI and the same title: rule 2's "unclear". The report
+     said "no impact" for a source that is the same work. The five planted reports are unchanged except for an empty
+     `unclear` list, derived by hand: in each, every source unclear against one gathered record matches another.
 3. **Lists its claims reached through a chain:** every local claim whose roots, followed through its chain, include
    a gathered source. These are listed with the verdict "reached through its chain", separate from step 4's output.
    A copy whose own local source is keyed another way is caught here.
 4. **For a retraction,** calls `retraction_impact(step 2's ids)`, when there is at least one. Its items, each with its
    verdict and `path`, are the report's main part. It follows `supports` and `challenges`, so a belief built on a
    retracted source is reported even when it isn't a root. With no ids and nothing from step 3, the report is "no
-   impact".
+   impact", or "unclear" when step 2 listed an unclear source (amendment 4).
 5. **For a correction,** steps 1 to 3 run as for a retraction, and then (D6):
    - each local claim whose roots, followed through its chain, include `old`'s record is "built on the corrected
      record";

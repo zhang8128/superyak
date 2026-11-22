@@ -45,7 +45,7 @@ def test_each_notice_gives_its_expected_report(tmp_path, name):
     report = apply_notice(notices[name], store=tardis_store(tmp_path), own=load("tardis.json"),
                           publications=held_publications(), corrections=[notices[h] for h in expected["holding"]])
     assert report["notice"] == notices[name]["digest"]
-    for field in ("matched", "through_chain", "impact", "corrected", "outcome"):
+    for field in ("matched", "unclear", "through_chain", "impact", "corrected", "outcome"):
         assert report[field] == expected[field], (name, field)
 
 
@@ -59,12 +59,18 @@ def test_applying_a_notice_changes_nothing(tmp_path, name):
     assert store.export_bundle() == before
 
 
-def test_the_retraction_by_a_new_doi_misses_the_old_record_without_the_correction(tmp_path):
-    # N5 reaches t-copied-a-1, keyed by the old DOI, only through the held correction N4 (step 1).
+def test_without_the_correction_the_old_record_is_unclear_not_no_impact(tmp_path):
+    # N5 matches t-copied-a-1, keyed by the old DOI, only through the held correction N4 (step 1). Without N4 the two
+    # DOIs differ and the titles agree, so the comparison says "unclear" (rule 2): the report lists it, and its outcome
+    # is "unclear", never "no impact" (amendment 4).
     notices = load("notices.json")
     report = apply_notice(notices["N5"], store=tardis_store(tmp_path), own=load("tardis.json"),
                           publications=held_publications(), corrections=[])
-    assert report["matched"] == [] and report["outcome"] == "no impact"
+    corrected = load("pi-corrected.json")["snapshot"]["digest"]["value"]
+    assert report["matched"] == [] and report["through_chain"] == [] and report["impact"] is None
+    assert report["unclear"] == [{"source_id": "t-copied-a-1",
+                                  "with": {"snapshot": corrected, "record_id": "pi-copied-a-1-v2"}}]
+    assert report["outcome"] == "unclear"
 
 
 def _reseal(notice):
