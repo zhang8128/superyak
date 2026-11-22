@@ -125,11 +125,28 @@ def _short(response, raw):
     return declared is not None and declared.isdigit() and len(raw) < int(declared)
 
 
-def send_pinned(card, prepare, *, gate=None, timeout=TIMEOUT):
+class RowTimeout(Exception):
+    """An atlas push's write or answer that ran past its own scaled deadline (claim-crossing transport T1, N5). It is
+    the row's, whatever the exception was: the watchdog's shutdown surfaces as BrokenPipeError, SSLError or
+    RemoteDisconnected as often as TimeoutError. A fault before that deadline is raised as itself, the peer's."""
+    def __init__(self, error):
+        super().__init__(f'{type(error).__name__} past the write deadline')
+        self.error = error
+
+
+ROW_DEADLINE_SLACK = 0.05  # a socket timeout set to the deadline can fire a hair before it
+
+
+def write_seconds(size):
+    """Transport T1: an atlas push's write and answer get today's 3 s plus its body at the pull's rate."""
+    return TIMEOUT + size / PULL_RATE
+
+
+def send_pinned(card, prepare, *, gate=None, timeout=TIMEOUT, scaled=False):
     url = _dialable(card)
     deadline = time.monotonic()+timeout
     conn = http.client.HTTPSConnection(url.hostname, url.port or 443, timeout=timeout)
-    timer = None
+    timer, written_by = None, None
     try:
         wire = conn.sock = _pinned_socket(card, url, deadline)
         timer = _expire(wire, deadline)
@@ -139,6 +156,16 @@ def send_pinned(card, prepare, *, gate=None, timeout=TIMEOUT):
             body = prepare()
             if time.monotonic() >= deadline:
                 raise TimeoutError('Peer deadline exceeded')
+            if not scaled:
+                conn.request('POST', '/federation/events', body=body, headers={'Content-Type':'application/json'})
+        if scaled:
+            # Claim-crossing transport T1: connect and the pinned handshake had today's deadline, and failing there is
+            # the peer's (N1). The write and the answer get their own, scaled to the body, outside the gate (N2): prepare
+            # has committed the envelope, and a hold committing now meets an attempt in flight, as after any write.
+            timer.cancel()
+            written_by = time.monotonic() + write_seconds(len(body))
+            timer = _expire(wire, written_by)
+            wire.settimeout(max(.001, written_by - time.monotonic()))
             conn.request('POST', '/federation/events', body=body, headers={'Content-Type':'application/json'})
         response = conn.getresponse()
         raw = response.read(PEER_REPLY+1)
@@ -155,6 +182,12 @@ def send_pinned(card, prepare, *, gate=None, timeout=TIMEOUT):
         if result.get('ok') is not True:
             raise PeerAnswer(response.status, 'Peer did not acknowledge delivery')
         return result
+    except PeerAnswer:
+        raise
+    except Exception as error:
+        if written_by is not None and time.monotonic() >= written_by - ROW_DEADLINE_SLACK:
+            raise RowTimeout(error) from error  # N5: decided by the clock, not by the exception's class
+        raise
     finally:
         if timer:
             timer.cancel()

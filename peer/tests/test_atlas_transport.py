@@ -274,3 +274,225 @@ def test_the_pi_refuses_a_payload_over_one_mib_before_queueing(atlas_peers):
     _, pi_fed, _, _, tardis_fed, _ = parts(atlas_peers)
     refused_at_pi(atlas_peers, 'An atlas payload is at most 1 MiB',
                   payload=package(uri(pi_fed), uri(tardis_fed), pad=ONE_MIB))
+
+
+# --- 4. no stall, no hidden outage, no held gate (T1: R1, N1, N2, N5, A3) -------------------------------------------
+
+def rows(store, *actions):
+    with store.reading() as db:
+        return [dict(r) for r in db.execute('SELECT * FROM outbox WHERE action IN (%s) ORDER BY event_seq'
+                                            % ','.join('?' * len(actions)), actions)]
+
+
+def recording(net, src, dst, *, fail_atlas=None):
+    """A sync from src to dst in process that records each action it sends, and can make an atlas send fail."""
+    order = []
+    def send(card, prepare):
+        raw = prepare()
+        action = json.loads(raw)['action']
+        order.append(action)
+        if fail_atlas and action.startswith('atlas.'):
+            raise fail_atlas
+        return net['peers'][dst][1].receive(raw)
+    return order, lambda: net['peers'][src][1].sync_once(send=send)
+
+
+def test_an_atlas_row_goes_after_the_rooms_in_a_pass(atlas_peers):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    pi.create_room(pi_ids['andy'], 'Later room', [pi_ids['contact']])  # queued after the atlas row
+    order, run = recording(atlas_peers, 'pi', 'tardis')
+    run()
+    assert order.index('room.roster') < order.index('atlas.publication')
+
+
+def test_one_atlas_row_per_peer_in_each_pass(atlas_peers):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    for title in ('one', 'two'):
+        body = package(uri(pi_fed), uri(tardis_fed))
+        body['snapshot']['payload']['title'] = title
+        pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', body)
+    order, run = recording(atlas_peers, 'pi', 'tardis')
+    run()
+    assert order.count('atlas.publication') == 1
+    run()
+    assert order.count('atlas.publication') == 2
+    assert len(received(tardis, t_ids['tardis'])) == 2
+
+
+def test_a_write_past_its_deadline_is_the_rows_alone_and_waits_its_own_backoff(atlas_peers):
+    from superyak_peer.transport import RowTimeout
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    order, run = recording(atlas_peers, 'pi', 'tardis', fail_atlas=RowTimeout(BrokenPipeError()))
+    run()
+    [row] = rows(pi, 'atlas.publication')
+    assert row['status'] == 'failed' and row['next_attempt'] >= atlas_peers['clock'][0] + 60
+    with pi.reading() as db:
+        peer = db.execute('SELECT failing_since, next_attempt FROM peer_delivery WHERE peer_id=?',
+                          (tardis_fed.identity.peer_id,)).fetchone()
+    assert peer['failing_since'] is None and peer['next_attempt'] is None  # the peer isn't failing
+    pi.create_room(pi_ids['andy'], 'After the timeout', [pi_ids['contact']])
+    run()
+    assert order.count('atlas.publication') == 1  # not due again yet
+    assert order[-1] == 'room.roster' and rows(pi, 'room.roster')[-1]['status'] == 'delivered'
+    atlas_peers['clock'][0] += 61
+    order2, run2 = recording(atlas_peers, 'pi', 'tardis')
+    run2()
+    assert order2 == ['atlas.publication'] and rows(pi, 'atlas.publication')[0]['status'] == 'delivered'
+
+
+def test_a_failure_before_the_write_deadline_is_the_peers_as_today(atlas_peers):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    order, run = recording(atlas_peers, 'pi', 'tardis', fail_atlas=ConnectionResetError())
+    run()
+    with pi.reading() as db:
+        peer = db.execute('SELECT failing_since FROM peer_delivery WHERE peer_id=?',
+                          (tardis_fed.identity.peer_id,)).fetchone()
+    assert peer['failing_since'] is not None
+
+
+def test_check_delivery_now_makes_a_waiting_atlas_row_due(atlas_peers):
+    from superyak_peer.transport import RowTimeout
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    _, run = recording(atlas_peers, 'pi', 'tardis', fail_atlas=RowTimeout(TimeoutError()))
+    run()
+    pi_fed.make_due()
+    order, run2 = recording(atlas_peers, 'pi', 'tardis')
+    run2()
+    assert order == ['atlas.publication']
+
+
+# --- send_pinned's two phases, over real TLS (N1, N2, N5) -----------------------------------------------------------
+
+def tls_server(tmp_path, handler_body):
+    """A TLS listener serving this test's own identity certificate, whose POST handler is `handler_body(handler)`."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import ssl
+    import threading
+    from superyak_peer.identity import PeerIdentity
+    identity = PeerIdentity.load_or_create(tmp_path / 'listener')
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            handler_body(self)
+
+        def log_message(self, *args):
+            pass
+    srv = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(identity.cert_path, identity.key_path)
+    srv.socket = context.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    card = identity.card(f'https://127.0.0.1:{srv.server_address[1]}', {'id': 'u1', 'name': 'listener'})
+    return srv, card
+
+
+def ack(handler):
+    body = b'{"ok":true,"duplicate":false}'
+    handler.send_response(200)
+    handler.send_header('Content-Length', str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def test_a_slow_reader_gets_the_scaled_write_deadline(tmp_path):
+    import time
+    from superyak_peer.transport import send_pinned
+    def slow(handler):
+        left = int(handler.headers['Content-Length'])
+        while left:
+            left -= len(handler.rfile.read(min(left, 32 * 1024)))
+            time.sleep(0.25)  # about 128 KiB a second
+        ack(handler)
+    srv, card = tls_server(tmp_path, slow)
+    body = b'{"pad":"' + b'x' * (512 * 1024) + b'"}'
+    try:
+        start = time.monotonic()
+        assert send_pinned(card, lambda: body, scaled=True)['ok']
+        assert time.monotonic() - start > 3  # past today's 3 s, inside 3 s + 512 KiB / 64 KiB a second
+    finally:
+        srv.shutdown()
+
+
+def test_a_stalled_reader_past_the_write_deadline_is_a_row_timeout_whatever_surfaces(tmp_path):
+    import time
+    from superyak_peer.transport import RowTimeout, send_pinned
+    def stalled(handler):
+        time.sleep(8)
+    srv, card = tls_server(tmp_path, stalled)
+    body = b'{"pad":"' + b'x' * (32 * 1024) + b'"}'  # 3 s + 0.5 s at PULL_RATE
+    try:
+        start = time.monotonic()
+        with pytest.raises(RowTimeout):
+            send_pinned(card, lambda: body, scaled=True)
+        assert 3.4 < time.monotonic() - start < 6
+    finally:
+        srv.shutdown()
+
+
+def test_an_unreachable_peer_is_a_peer_failure_even_for_an_atlas_row(tmp_path):
+    import socket
+    from superyak_peer.identity import PeerIdentity
+    from superyak_peer.transport import RowTimeout, send_pinned
+    probe = socket.socket()
+    probe.bind(('127.0.0.1', 0))
+    port = probe.getsockname()[1]
+    probe.close()  # nothing listens there now
+    card = PeerIdentity.load_or_create(tmp_path / 'gone').card(f'https://127.0.0.1:{port}', {'id': 'u1', 'name': 'x'})
+    with pytest.raises(Exception) as caught:
+        send_pinned(card, lambda: b'{}', scaled=True)
+    assert not isinstance(caught.value, RowTimeout)
+
+
+def test_the_gate_is_free_while_an_atlas_push_writes(tmp_path):
+    import threading
+    import time
+    from superyak_peer.transport import send_pinned
+    reading = threading.Event()
+    def slow(handler):
+        reading.set()
+        left = int(handler.headers['Content-Length'])
+        while left:
+            left -= len(handler.rfile.read(min(left, 32 * 1024)))
+            time.sleep(0.2)
+        ack(handler)
+    srv, card = tls_server(tmp_path, slow)
+    gate = threading.Lock()
+    body = b'{"pad":"' + b'x' * (256 * 1024) + b'"}'
+    done = []
+    sender = threading.Thread(target=lambda: done.append(send_pinned(card, lambda: body, gate=gate, scaled=True)))
+    try:
+        sender.start()
+        assert reading.wait(5)
+        assert gate.acquire(timeout=0.5)  # a store transaction would get the gate now
+        gate.release()
+        sender.join(20)
+        assert done and done[0]['ok']
+    finally:
+        srv.shutdown()
+
+
+def test_a_room_push_keeps_the_gate_through_its_write_as_today(tmp_path):
+    import threading
+    from superyak_peer.transport import send_pinned
+    reading, release = threading.Event(), threading.Event()
+    def held(handler):
+        reading.set()
+        release.wait(5)
+        handler.rfile.read(int(handler.headers['Content-Length']))
+        ack(handler)
+    srv, card = tls_server(tmp_path, held)
+    gate = threading.Lock()
+    body = b'{"pad":"' + b'x' * (4 * 1024 * 1024) + b'"}'  # bigger than the socket buffers, so the write blocks
+    sender = threading.Thread(target=lambda: send_pinned(card, lambda: body, gate=gate, timeout=10))
+    try:
+        sender.start()
+        assert reading.wait(5)
+        assert not gate.acquire(timeout=0.5)
+        release.set()
+        sender.join(15)
+    finally:
+        srv.shutdown()

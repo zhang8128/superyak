@@ -50,9 +50,11 @@ def classify(error):
     """Spec §7's one outcome table: (the row's status, the peer's effect, the words to keep). The effect is 'neutral',
     'failure' or 'reset'; the words are the row's last_error when it's refused, the peer's last_problem on a failure.
     Anything the table doesn't name is a failure, so an unknown fault retries and is never terminal."""
-    from .transport import PinMismatch, PeerAnswer
+    from .transport import PinMismatch, PeerAnswer, RowTimeout
     if isinstance(error, Obsolete):
         return 'withdrawn', 'neutral', None
+    if isinstance(error, RowTimeout):  # claim-crossing transport T1: an atlas write past its own deadline is the row's
+        return 'failed', 'neutral', str(error)
     if isinstance(error, Local):
         inner = error.error
         if isinstance(inner, sqlite3.OperationalError):  # locked, busy, I/O, full: nobody's fault (check 3 SF2)
@@ -560,17 +562,23 @@ class Federation:
         queue or a peer in backoff never fills the page a live peer needs. Each row's outcome comes from classify. On a
         peer's first failure in the pass its other rows wait for the next one. A Problem from an in-process `send=`
         arrives as the PeerAnswer HTTP would give (plan SF7)."""
-        from .transport import send_pinned, PeerAnswer
+        from .transport import send_pinned, PeerAnswer, RowTimeout
         result = {'delivered':0, 'withdrawn':0, 'failed':0, 'refused':0, 'pending':0}
         if not self._sync_lock.acquire(blocking=False):
             return {**result, 'busy':True}
         try:
             self.collect()
             work = self._due_rows(limit)
-            failing = set()
+            failing, atlas_sent = set(), set()
             for row in work:
                 if row['row_peer'] in failing:
                     continue  # its peer failed in this pass: it waits for the next one
+                atlas = row['action'].startswith('atlas.')
+                if atlas:  # claim-crossing transport T1 (A3): one atlas row per peer in a pass
+                    if row['row_peer'] in atlas_sent:
+                        continue
+                    atlas_sent.add(row['row_peer'])
+                row_timeout = False
                 try:
                     card = json.loads(row['card'])
                     prepare = lambda key=row['id']: self._prepared(key)
@@ -580,14 +588,17 @@ class Federation:
                         except Problem as answer:
                             raise PeerAnswer(answer.status, answer.message) from None
                     else:
-                        send_pinned(card, prepare, gate=self.store.dispatch_gate)
+                        send_pinned(card, prepare, gate=self.store.dispatch_gate, scaled=atlas)
                     status, effect, words = 'delivered', 'reset', None
                 except Exception as error:  # noqa: BLE001 - every outcome is classify's; nothing escapes a pass
                     status, effect, words = classify(error)
+                    row_timeout = isinstance(error, RowTimeout)
                 now = self.store.clock()
+                # an atlas row past its own write deadline waits its own backoff, and its peer isn't failing (T1, N1)
+                wait = now + min(3600, 60 * 2 ** min(row['attempts'], 6)) if row_timeout else 0
                 with self.store.transaction() as db:
-                    db.execute("UPDATE outbox SET status=?, attempts=attempts+1, next_attempt=0, last_error=? WHERE id=? "
-                               "AND status IN ('pending','failed')", (status, words if status == 'refused' else None, row['id']))
+                    db.execute("UPDATE outbox SET status=?, attempts=attempts+1, next_attempt=?, last_error=? WHERE id=? "
+                               "AND status IN ('pending','failed')", (status, wait, words if status == 'refused' else None, row['id']))
                     status = db.execute('SELECT status FROM outbox WHERE id=?', (row['id'],)).fetchone()[0]
                     self._peer_outcome(db, row['row_peer'], effect, words, now)
                     if status == 'delivered':
@@ -608,8 +619,10 @@ class Federation:
                 "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
                 "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
                 "WHERE status IN ('pending','failed') AND peer_delivery.mode='push' "
-                "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) ORDER BY event_seq, outbox.id LIMIT ?",
-                (self.store.clock(), min(100, max(1, limit))))]
+                "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) "
+                "AND (outbox.action NOT LIKE 'atlas.%' OR outbox.next_attempt<=?) "  # transport T1: an atlas row's own wait
+                "ORDER BY (outbox.action LIKE 'atlas.%'), event_seq, outbox.id LIMIT ?",  # and atlas rows last (R1)
+                (self.store.clock(), self.store.clock(), min(100, max(1, limit))))]
 
     def _pending_count(self):
         """sync_once's pending count: every row still waiting, for any peer."""
@@ -995,6 +1008,7 @@ class Federation:
         nothing itself."""
         with self.store.transaction() as db:
             db.execute('UPDATE peer_delivery SET next_attempt=NULL')
+            db.execute("UPDATE outbox SET next_attempt=0 WHERE action LIKE 'atlas.%' AND status='failed'")  # transport T1
             db.execute("INSERT INTO peer_meta VALUES('sync_requests', '1') "
                        "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER) + 1")
 
