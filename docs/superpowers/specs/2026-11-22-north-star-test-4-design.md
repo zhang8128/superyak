@@ -158,7 +158,8 @@ it keys its record. So it's labelled **"argued, checked"**, and it serves three 
    - **Per pair:** the mean over the trap's 100 worlds of the difference between the two policies' trap effects, with a
      95% bootstrap CI over worlds: 10,000 resamples, `numpy.random.default_rng(20261130)`, and the percentile
      interval by `numpy.quantile`'s default (linear) method at 0.025 and 0.975. One resample matrix of world indices
-     per trap is drawn once, and every pair shares it (review 2, advisory 4).
+     per trap is drawn once, from a fresh `default_rng(20261130)` for each trap, and every pair in that trap shares
+     it (review 2, advisory 4; review 3, advisory 1).
    - **The pairs:** each adaptive policy against fixed and against random, and adaptive by name against adaptive by
      content.
    - **Naming is reported beside the ceiling, never inside it:** per trap and policy, named on exposure, the false-name
