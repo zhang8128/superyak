@@ -136,7 +136,77 @@ raised by which turn, counts as naming it), and the number of worlds. Serenity's
 named if a `cycle` flag for that state is raised by its second visit. This section is the fresh implementer's whole
 brief, beside "The contract", and the reviewer checks it for fitting to "The policies".
 
-*(To be written by Serenity.)*
+*Written by Serenity from the four traps as row 4 states them. Each trap changes one mechanic of a shared base world,
+and its twin undoes exactly that change. No rule reads a policy's state, flags or choices beyond the approach a turn
+took; a world never reads flags.*
+
+**Seeds.** A world is built from `numpy.random.SeedSequence([20261129, trap, D, k, w])`, where `trap` is 1 to 4 in the
+order below and `w` is the world's index. A world and its twin come from one seed. These seeds are disjoint from the
+policies' seeds.
+
+**The base world** (shared by every trap and every twin), with depth `D` and `k` options per state:
+- **The pool:** `P = 2k` ideas. Each has a `content`, the first 16 hex digits of sha256 of `f"{seed}:{i}"`, and a
+  canonical `name`, drawn without replacement from this fixed list of 64 neutral words, in this order: amber, basin,
+  cedar, delta, ember, fjord, garnet, harbor, iris, jasper, kestrel, lantern, meadow, nectar, onyx, pepper, quarry,
+  raven, saffron, timber, umber, velvet, willow, xenon, yarrow, zephyr, acorn, birch, cobalt, dune, elm, flint, grove,
+  heron, indigo, juniper, kelp, lichen, maple, nickel, oak, pine, quartz, reed, slate, thistle, upland, vale, walnut,
+  yew, zinc, alder, bramble, clover, dahlia, egret, fern, gorse, hazel, ivy, jade, kiln, lupin, moss.
+- **The key:** one pool idea, drawn by the seed. It's the idea that advances.
+- **States:** levels `L0` to `L{D-1}`, and the goal `G`. The run starts at `L0`.
+- **Options at a level:** the key plus `k − 1` other pool ideas drawn without replacement, in a seeded random order, each
+  under its canonical name. A level's options are fixed when the world is built, not when it's reached.
+- **`step(Li, key)`** moves to the next level, or to `G` from the last, with verdict pass. **`step(Li, other)`** stays
+  at `Li` with verdict fail. Every entry's `summary` says "worked" on a pass and "failed" on a fail. `observation` is
+  `None`.
+- **`recovered(state)`** is `state == "G"`.
+- **`budget`** is `2·D·k` turns, about twice what a blind search needs, chosen without reference to any policy.
+
+**The four traps,** each with its twin and its naming rule:
+
+1. **Cycle (long cycles).** At a level `c`, drawn from 1 to `D − 2`, one non-key option there is the lure, drawn by the
+   seed.
+   - `step(Lc, lure)` passes and moves into a loop of three states `C1`, `C2`, `C3`. Each offers `Lc`'s option set in
+     a fresh seeded order.
+   - At a loop state, the lure passes and moves to the next loop state, and from `C3` back to `Lc`. The key passes and
+     moves to `L{c+1}`. Any other option fails and stays.
+   - So the lure looks like progress at every step and returns to where it began.
+   - **Twin:** identical, except that `step(C3, lure)` moves to `L{c+1}`, so the lure's route is real, if longer.
+   - **The budget,** in both twins, is `2·D·k + 3`.
+   - **Named** if a `cycle` flag naming `Lc` is raised by the policy call made on the run's second arrival at `Lc`.
+2. **A failed idea back under a new name.** One non-key idea, the returner, is drawn from level 0's options. It's placed
+   in every level's options, replacing one other non-key idea where it isn't already there. It fails everywhere.
+   - **In the trapped world,** from level 1 on, the returner appears under a new name at each level, taken from the
+     unused words of the list in order, with its content unchanged.
+   - **Twin:** the returner keeps its canonical name at every level.
+   - **Named** if, once the run has tried the returner, a `repeat` flag naming its content is raised by the first policy
+     call at which it's offered under a different name. A run that never tries it isn't exposed, and is counted apart.
+3. **A misleading summary.** Half the pool's `2k − 1` non-key ideas, rounded down (at least one), drawn by the seed,
+   are the misled ideas.
+   - Any turn that takes a misled idea has verdict fail, as in the base, but `summary.says` is "worked".
+   - **Twin:** summaries agree with verdicts.
+   - **Named** if, for the first turn `t` whose summary disagrees with its verdict, a `contradiction` flag naming `t` is
+     raised by the policy call just after turn `t`.
+4. **An observation that invalidates a map.** At a break level `m`, drawn from 2 to `D − 2`, a second idea, the new key,
+   is drawn from the non-key pool. It's placed in the options of every level from `m` on, replacing one other non-key
+   idea where it isn't already there.
+   - **In the trapped world,** the entry of the turn that first arrives at `Lm` carries
+     `observation = {"invalidates": [key content]}`. From then on, at levels `m` and above, the old key fails and stays,
+     and the new key passes and advances.
+   - **Twin:** no observation. The old key keeps advancing, and the new key is an ordinary failing option.
+   - **Named** if a `premise` flag naming that turn is raised by the policy call just after it.
+
+**How many:** `D` of 4 and 8, `k` of 3 and 5, and 25 worlds per combination. That's 100 worlds per trap, each in
+trapped and twin form, so 800 worlds in all, each run with every policy at 20 policy seeds.
+
+**What the world half's own tests must show** (with a trivial policy and an oracle written for them, never Tardis's):
+- **the oracle,** which knows the key, the lure, the returner and the break, recovers within `budget` in both twins of
+  every world;
+- each twin differs from its trapped world only in the mechanic its trap names;
+- a world is identical when rebuilt from its seed;
+- every naming rule fires on a hand-built run that raises the right flag at the right call, and doesn't fire one call
+  later.
+
+**Scored beside each naming rule:** the same flag raised in the twin counts as a false name, and is reported.
 
 ## Decided in draft 2
 
