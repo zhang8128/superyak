@@ -1,0 +1,147 @@
+{
+ "N1": {
+  "corrected": [],
+  "holding": [],
+  "impact": {
+   "items": [
+    {
+     "grounded_after": false,
+     "grounded_before": true,
+     "id": "T-lean-copy-a",
+     "kind": "claim",
+     "path": [
+      "t-lean-copy-a-1",
+      "T-lean-copy-a"
+     ],
+     "title": "Lean claim A a",
+     "verdict": "unsupported"
+    },
+    {
+     "grounded_after": true,
+     "grounded_before": true,
+     "id": "T-lean-a",
+     "kind": "claim",
+     "path": [
+      "t-lean-copy-a-1",
+      "T-lean-copy-a",
+      "T-lean-a"
+     ],
+     "title": "Lean claim B a",
+     "verdict": "still supported"
+    }
+   ],
+   "retracted": [
+    "t-lean-copy-a-1"
+   ]
+  },
+  "matched": [
+   {
+    "by": "doi",
+    "source_id": "t-lean-copy-a-1"
+   }
+  ],
+  "outcome": "reported",
+  "through_chain": [
+   "T-lean-copy-a"
+  ],
+  "unclear": []
+ },
+ "N2": {
+  "corrected": [],
+  "holding": [],
+  "impact": {
+   "items": [
+    {
+     "grounded_after": false,
+     "grounded_before": true,
+     "id": "T-pub-doi-a",
+     "kind": "claim",
+     "path": [
+      "t-pub-doi-a-1",
+      "T-pub-doi-a"
+     ],
+     "title": "Pub-DOI claim T a",
+     "verdict": "unsupported"
+    }
+   ],
+   "retracted": [
+    "t-pub-doi-a-1"
+   ]
+  },
+  "matched": [
+   {
+    "by": "title",
+    "source_id": "t-pub-doi-a-1"
+   }
+  ],
+  "outcome": "reported",
+  "through_chain": [],
+  "unclear": []
+ },
+ "N3": {
+  "corrected": [],
+  "holding": [],
+  "impact": null,
+  "matched": [],
+  "outcome": "no impact",
+  "through_chain": [],
+  "unclear": []
+ },
+ "N4": {
+  "corrected": [
+   {
+    "record_id": "T-copied-a",
+    "verdict": "built on the corrected record"
+   }
+  ],
+  "holding": [],
+  "impact": null,
+  "matched": [
+   {
+    "by": "doi",
+    "source_id": "t-copied-a-1"
+   }
+  ],
+  "outcome": "reported",
+  "through_chain": [
+   "T-copied-a"
+  ],
+  "unclear": []
+ },
+ "N5": {
+  "corrected": [],
+  "holding": [
+   "N4"
+  ],
+  "impact": {
+   "items": [
+    {
+     "grounded_after": false,
+     "grounded_before": true,
+     "id": "T-copied-a",
+     "kind": "claim",
+     "path": [
+      "t-copied-a-1",
+      "T-copied-a"
+     ],
+     "title": "Copied claim a",
+     "verdict": "unsupported"
+    }
+   ],
+   "retracted": [
+    "t-copied-a-1"
+   ]
+  },
+  "matched": [
+   {
+    "by": "doi",
+    "source_id": "t-copied-a-1"
+   }
+  ],
+  "outcome": "reported",
+  "through_chain": [
+   "T-copied-a"
+  ],
+  "unclear": []
+ }
+}

@@ -2,7 +2,7 @@
 (docs/superpowers/specs/2026-11-22-claim-crossing-design.md, revision 6, 84fafe71: "A source's keys")."""
 import pytest
 
-from workbench.sourced import compare_sources, source_key
+from workbench.sourced import compare_sources, how_matched, source_key
 
 
 def src(url, title="A study of X", year=2024, citation="", source_id="S1"):
@@ -51,7 +51,8 @@ def test_the_doi_key_from_a_doi_org_url(url, doi):
 def test_a_doi_org_path_that_is_not_a_doi_gives_no_doi_key(url):
     key = source_key(src(url))
     assert key["doi"] is None
-    assert key["url"].startswith("url:https://doi.org")  # it keeps its url key, so it still has a strong key
+    assert key["url"].startswith("url:https://doi.org")  # it keeps its url key; a path makes it strong, the bare root
+    # is weak (amendment 3, test_a_root_only_url_is_weak below)
 
 
 # --- the DOI key from the citation, only when the url gave none
@@ -172,3 +173,39 @@ def test_two_revisions_of_one_page_have_two_url_keys_and_match():
 def test_a_missing_title_key_never_matches():
     assert compare(src(URL_A, title="—?!"), src(URL_B, title="—?!")) == "distinct"
     assert compare(src(DOI_1, title="—?!"), src(DOI_2, title="—?!")) == "distinct"  # rule 1, not rule 2
+
+
+# --- amendment 3: a url key with neither a path nor a query names a site, not a work, so it is weak
+
+ROOTS = ["https://journal.example", "https://journal.example/", "https://journal.example/#top",
+         "https://journal.example:8443/", "http://www.journal.example:80/", "https://doi.org/"]
+
+
+@pytest.mark.parametrize("root", ROOTS)
+def test_a_root_only_url_is_weak(root):
+    # two different works cited only by one site's root don't match by it ...
+    assert compare(src(root, title="One"), src(root, title="Two")) == "distinct"
+    # ... while their title and year still can, and rule 4 still sees a year apart
+    assert compare(src(root, title="One"), src(root, title="One")) == "match"
+    assert compare(src(root, title="One", year=2023), src(root, title="One", year=2024)) == "unclear"
+    assert source_key(src(root))["url"] is not None  # it keeps its url key, for display and for a notice's report
+
+
+def test_a_root_url_with_a_query_names_one_page_and_stays_strong():
+    page = "https://en.wikipedia.org/?curid=123"
+    assert compare(src(page, title="One"), src(page, title="Two")) == "match"
+
+
+def test_known_limit_a_root_with_only_a_tracking_query_stays_strong():
+    # recorded in amendment 3 as a limit, not a rule: change it only when a real crossing shows it
+    tracked = "https://journal.example/?utm_source=feed"
+    assert compare(src(tracked, title="One"), src(tracked, title="Two")) == "match"
+
+
+def test_a_match_by_a_shared_root_url_is_named_by_title():
+    a, b = source_key(src("https://journal.example/", title="One")), source_key(src("https://journal.example", title="One"))
+    assert compare_sources(a, b) == "match" and how_matched(a, b) == "title"
+    a, b = source_key(src(URL_A, title="One")), source_key(src(URL_A, title="Two"))
+    assert how_matched(a, b) == "url"
+    a, b = source_key(src(DOI_1, title="One")), source_key(src(URL_A, title="Two", citation="doi:10.5555/superyak-fixture-p1"))
+    assert how_matched(a, b) == "doi"

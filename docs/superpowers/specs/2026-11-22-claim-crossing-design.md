@@ -61,9 +61,27 @@ Today the crossing carries recall and read of memories only. No claim crosses.
 
 One function, `source_key(record)`, version `source_key/1`, pinned by the profile version, gives each source:
 
-- **A url key, `url:<url>`, strong, always,** since Atlas requires a url. The scheme becomes `https`. The host is
+- **A url key, `url:<url>`, always present, and strong unless amendment 3 makes it weak,** since Atlas requires a url. The scheme becomes `https`. The host is
   lowercased with a leading `www.` removed, a default port is removed, and the fragment and one trailing slash are
   removed. The query is kept, since the title key catches a tracking query that splits one page into two keys.
+  - **Amendment 3 (the build, 2026-11-22; Serenity's nit in all hands 378610a0, option 1 in 3aecf732; a fresh
+    reviewer approved it, with these words):** a url key is strong only when the key has a non-empty path or a query
+    after the host. A bare site root (`https://journal.example`, `/`, `/#top`, `https://journal.example:8443/`,
+    `https://doi.org/`) names a publisher, not a work, and two different articles cited only by it would otherwise
+    match. It keeps its `url:` key, for display and for a notice's report, but only a DOI or the title key can make it
+    match, and a notice names such a match by "title", never "url". A root path with a query, such as Wikipedia's
+    `/?curid=123&oldid=1001`, names one page and stays strong; so does `https://journal.example//`, whose key keeps a
+    `/` path.
+    - **What changes:** only the comparison's rule 3 and a match's name. The key function and every published key are
+      unchanged. The fixtures' answers are written by hand, so regenerating them proves nothing here; what does is that
+      the stores' one bare root, `https://doi.org/` in `tardis.json`'s case 21a, is paired with `https://doi.org/help`
+      and a different title, so it's independent under both rules, and Tardis's 115 relation tests pass on the
+      amended rule.
+    - **Known limits:** a page with a path that still names only a site, such as `/index.html`, `/en/`, `/journal` or
+      `https://doi.org/help`, stays strong, and so does a root whose query only tracks (`/?utm_source=feed`). Both
+      lean toward "not independent", the safe direction (C12). The amendment goes the other way in one case: one work
+      cited only by a site root under two title spellings is now distinct. Copies keep their title, so finding copies
+      is unaffected. These are recorded, not ruled, until a real crossing shows one.
 - **A DOI key, `doi:<doi>`, strong, when one is found:**
   - **From a doi.org url** (host `doi.org`, `dx.doi.org` or `www.doi.org`, over http or https):
     - **What's taken:** the whole path after the host, with its leading `/` removed, percent-decoded and lowercased.
@@ -195,13 +213,26 @@ A notice is a Claim under the new profile, with `sentenceMediaType` `application
 2. **Matches its own sources:** it computes `source_key` over every source in its own store, and collects every local
    id that matches any gathered source. Duplicates within a store are all collected, and each is named with how it
    matched.
+   - **Amendment 4 (the build, 2026-11-22; board item `spec:claim-notice-lists-unclear-sources`):** a local source
+     that matches no gathered source but compares "unclear" with one (rule 2 or rule 4) is listed under `unclear`,
+     once per gathered record it's unclear against, with that record's Snapshot and id. It gets no impact (step 4
+     runs on matched ids only), since nothing shows it's the same work. But the report's outcome is then "unclear",
+     not "no impact", which would claim more than the rule knows. The outcome is "reported" when step 2's matches,
+     step 3 or step 5 found anything; "unclear" when only this list did; and "no impact" when nothing did. **Why:** a
+     planted case. Without the correction N4, the retraction N5 (by the corrected record's new DOI) matches nothing
+     of Tardis's, yet Tardis's `t-copied-a-1` carries the old DOI and the same title: rule 2's "unclear". The report
+     said "no impact" for a source that is the same work. The five planted reports are unchanged except for an empty
+     `unclear` list, derived by hand: in each, every source unclear against one gathered record matches another.
+     The list is sorted by source id, then Snapshot digest, then record id, so the same holdings give the same report.
+     A source that matches two gathered records is named by the first it matches in gathering order, the notice's
+     own record first, as before (the fresh reviewer's finding 3).
 3. **Lists its claims reached through a chain:** every local claim whose roots, followed through its chain, include
    a gathered source. These are listed with the verdict "reached through its chain", separate from step 4's output.
    A copy whose own local source is keyed another way is caught here.
 4. **For a retraction,** calls `retraction_impact(step 2's ids)`, when there is at least one. Its items, each with its
    verdict and `path`, are the report's main part. It follows `supports` and `challenges`, so a belief built on a
    retracted source is reported even when it isn't a root. With no ids and nothing from step 3, the report is "no
-   impact".
+   impact", or "unclear" when step 2 listed an unclear source (amendment 4).
 5. **For a correction,** steps 1 to 3 run as for a retraction, and then (D6):
    - each local claim whose roots, followed through its chain, include `old`'s record is "built on the corrected
      record";

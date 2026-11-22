@@ -190,3 +190,17 @@ def test_a_carried_claim_must_name_its_carried_snapshot():
     with pytest.raises(ValueError, match="carried"):
         publish_sourced(bundle(), config(issuer="urn:superyak:fixture:tardis",
                                          carried=[{"claim": pi["claims"][0], "snapshot": other["snapshot"]}]))
+
+
+def test_a_carried_claim_must_have_its_snapshot_s_issuer():
+    # the transport reviewer's R2: a claim sealed under one issuer, carried with another issuer's Snapshot, is refused
+    pi = publish_sourced(bundle(), config())
+    forged = _reseal(pi["claims"][0], issuer="urn:superyak:fixture:tardis")
+    with pytest.raises(ValueError, match="carried claim's issuer"):
+        publish_sourced(bundle(), config(issuer="urn:superyak:fixture:tardis",
+                                         carried=[{"claim": forged, "snapshot": pi["snapshot"]}]))
+    tardis = deepcopy(publish_sourced(bundle(), config(issuer="urn:superyak:fixture:tardis",
+                                                       carried=[{"claim": pi["claims"][0], "snapshot": pi["snapshot"]}])))
+    tardis["carried"][0]["claim"] = forged
+    with pytest.raises(ValueError, match="carried claim's issuer"):
+        validate_sourced(tardis)

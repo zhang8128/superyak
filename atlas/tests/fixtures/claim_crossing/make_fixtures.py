@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from workbench.lighthouse_wire import digest
-from workbench.sourced import SOURCED_PROFILE, SOURCED_SENTENCE, publish_sourced
+from workbench.sourced import SOURCED_PROFILE, SOURCED_SENTENCE, publish_sourced, seal_notice
 
 HERE = Path(__file__).resolve().parent
 AT = "2026-11-22T00:00:00Z"
@@ -360,11 +360,93 @@ def build():
     return published, expected
 
 
+def _corrected_pi(published):
+    """The Pi's later publication: P-copied-a now cites a corrected record with a changed DOI, under a new local
+    source id (D10), its lineage naming the frozen Pi Snapshot. The frozen stores are untouched."""
+    old = published["pi"]["snapshot"]["payload"]["model"]
+    record = next(i for i in old["items"] if i["id"] == "P-copied-a")
+    source = {"id": "pi-copied-a-1-v2", "title": "Copied source a", "url": f"https://doi.org/{D}-copied-a-v2",
+              "year": 2024, "citation": ""}
+    item = {"id": record["id"], "kind": "claim", "title": record["title"], "summary": record["summary"],
+            "status": "source_reported", "evidence": [{"source_id": source["id"], "locator": "p1"}]}
+    bundle = {"schema_version": 1, "title": "Planted store: pi, corrected", "sources": [source], "items": [item],
+              "relations": []}
+    return publish_sourced(bundle, {
+        "issuer": issuer("pi"), "name": "Planted pi, corrected", "origin": "urn:superyak:fixture:pi:collection",
+        "context": context("pi"), "item_ids": [item["id"]], "issued_at": "2026-11-22T01:00:00Z",
+        "lineage": [published["pi"]["snapshot"]["digest"]]})
+
+
+def build_notices(published):
+    """Five source notices the Pi issues, and the report Tardis must make of each (spec: "Notices, and how they're
+    applied", steps 1 to 6), derived by hand before apply_notice exists."""
+    corrected = _corrected_pi(published)
+    pi_snapshot = published["pi"]["snapshot"]
+
+    def source_of(snapshot, record_id):
+        return next(x for x in snapshot["payload"]["model"]["sources"] if x["id"] == record_id)
+
+    def retraction(snapshot, record_id, reason):
+        return seal_notice({"notice": "retraction", "record_id": record_id,
+                            "keys": source_of(snapshot, record_id)["keys"], "reason": reason},
+                           [snapshot], issuer("pi"), context("pi"), AT)
+
+    notices = {
+        "N1": retraction(pi_snapshot, "pi-lean-a-1", "The fictional study was withdrawn."),
+        "N2": retraction(pi_snapshot, "pi-pub-doi-a-1", "The fictional publisher page was retracted."),
+        "N3": retraction(pi_snapshot, "pi-half-a-1", "No other store holds this source."),
+        "N4": seal_notice({"notice": "correction",
+                           "old": {"snapshot": pi_snapshot["digest"], "record_id": "pi-copied-a-1",
+                                   "keys": source_of(pi_snapshot, "pi-copied-a-1")["keys"]},
+                           "new": {"snapshot": corrected["snapshot"]["digest"], "record_id": "pi-copied-a-1-v2",
+                                   "keys": source_of(corrected["snapshot"], "pi-copied-a-1-v2")["keys"]},
+                           "reason": "The fictional DOI was registered wrongly."},
+                          [pi_snapshot, corrected["snapshot"]], issuer("pi"), context("pi"), AT),
+        "N5": retraction(corrected["snapshot"], "pi-copied-a-1-v2", "The corrected fictional record was withdrawn."),
+    }
+
+    def item(record_id, title, verdict, before, after, path):
+        return {"id": record_id, "kind": "claim", "title": title, "verdict": verdict, "grounded_before": before,
+                "grounded_after": after, "path": path}
+
+    expected = {
+        "N1": {"holding": [], "unclear": [], "matched": [{"source_id": "t-lean-copy-a-1", "by": "doi"}],
+               "through_chain": ["T-lean-copy-a"],
+               "impact": {"retracted": ["t-lean-copy-a-1"], "items": [
+                   item("T-lean-copy-a", "Lean claim A a", "unsupported", True, False,
+                        ["t-lean-copy-a-1", "T-lean-copy-a"]),
+                   item("T-lean-a", "Lean claim B a", "still supported", True, True,
+                        ["t-lean-copy-a-1", "T-lean-copy-a", "T-lean-a"])]},
+               "corrected": [], "outcome": "reported"},
+        "N2": {"holding": [], "unclear": [], "matched": [{"source_id": "t-pub-doi-a-1", "by": "title"}], "through_chain": [],
+               "impact": {"retracted": ["t-pub-doi-a-1"], "items": [
+                   item("T-pub-doi-a", "Pub-DOI claim T a", "unsupported", True, False,
+                        ["t-pub-doi-a-1", "T-pub-doi-a"])]},
+               "corrected": [], "outcome": "reported"},
+        "N3": {"holding": [], "unclear": [], "matched": [], "through_chain": [], "impact": None, "corrected": [],
+               "outcome": "no impact"},
+        "N4": {"holding": [], "unclear": [], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
+               "through_chain": ["T-copied-a"], "impact": None,
+               "corrected": [{"record_id": "T-copied-a", "verdict": "built on the corrected record"}],
+               "outcome": "reported"},
+        "N5": {"holding": ["N4"], "unclear": [], "matched": [{"source_id": "t-copied-a-1", "by": "doi"}],
+               "through_chain": ["T-copied-a"],
+               "impact": {"retracted": ["t-copied-a-1"], "items": [
+                   item("T-copied-a", "Copied claim a", "unsupported", True, False, ["t-copied-a-1", "T-copied-a"])]},
+               "corrected": [], "outcome": "reported"},
+    }
+    return corrected, notices, expected
+
+
 def write(target: Path = HERE) -> None:
     published, expected = build()
     for store, package in published.items():
         (target / f"{store}.json").write_text(json.dumps(package, indent=1, sort_keys=True) + "\n")
     (target / "expected.json").write_text(json.dumps(expected, indent=1, sort_keys=True) + "\n")
+    corrected, notices, reports = build_notices(published)
+    (target / "pi-corrected.json").write_text(json.dumps(corrected, indent=1, sort_keys=True) + "\n")
+    (target / "notices.json").write_text(json.dumps(notices, indent=1, sort_keys=True) + "\n")
+    (target / "notices-expected.json").write_text(json.dumps(reports, indent=1, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
