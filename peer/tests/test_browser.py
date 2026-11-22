@@ -3262,6 +3262,23 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
             assert page.evaluate("announcer.textContent") == ""
 
 
+NEXT_FRAMES = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))"
+
+
+@pytest.mark.parametrize("switch", ["bindEditorIdentity({ ...state.me, id: 'the-next-account' })", "showLogin()"])
+def test_an_announcement_still_waiting_for_its_frame_is_not_said_to_the_next_account(browser_peer, switch):
+    # announce() writes in the next animation frame, and a hidden tab holds its frames back. An announcement made just
+    # before the account changes must not be spoken after it: CI saw the Mark notice land after the switch (7 runs).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate(f"announce('Room X is kept away from ships and connected apps on this home.'); {switch}")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == ""
+            page.evaluate("announce('A later announcement')")  # the announcer still works after the switch
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "A later announcement"
+
+
 @pytest.mark.parametrize("press, route, confirm", [
     ("^Mark this room$", "cloud", None),
     ("^Remove .* from this room", "participants/**", confirm_remove),
