@@ -1,5 +1,8 @@
 # Resume here — medical lighthouse / aDNA
 
+**This file is history. It stops at 2026-10-15.** Start from [MAP.md](MAP.md). What follows is kept because its
+notes on the station's units, its backups and the wormhole still describe what runs.
+
 **City of AI: Superyak run by its agents (current; rewritten 2026-10-12, brought up to date 2026-10-15):** Andy told the Pi's Claude Code session
 (ship `rio-grande`, workspace `~/superyak`) to take ownership of Superyak and build more helpful tools. The goal is
 a city of AI that runs with very little human involvement: people make the law, and ships do the work. Andy answers
@@ -203,10 +206,6 @@ each with `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`.
   `test_stampede_experiment.py::test_deadline_bounded_concurrency_and_call_budget`
   fails after `test_stampede_cluster.py`. Store setup exceeds its 0.25 s cell
   budget, so no request is made.
-- Kairos said on Oct 2 that TACC, MIT, Anthropic, Stanley, CZI and the Wilhelm
-  Foundation will run this on a supercomputer (600 nodes, 4 GPUs each; name
-  uncertain, "Florent?"), with collaborators in their own Claude Code sessions.
-  The Stampede3 details above are still pending; don't invent them.
 - Left untouched: untracked `.claude/` and two spec drafts in
   `engram/docs/superpowers/specs/` (2026-09-29 inheritance reading, 2026-09-30
   reading decay).
