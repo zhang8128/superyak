@@ -1,0 +1,265 @@
+{
+ "N1": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "8aba3bb807f4dce717c7f247a2670c0c0137bc42983ec55c7b7b020ec6f39a90"
+  },
+  "id": "urn:superyak:fixture:pi:claim:459b7c2b8bf3b13fdf7aac81052e09b2eeb4df94eab7de27c9f91186dbb93808",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Claim",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "provenance": [],
+   "sentence": {
+    "keys": {
+     "doi": "doi:10.5555/superyak-fixture-lean-a-a",
+     "fn": "source_key/1",
+     "title": "title:lean source a a:2024",
+     "url": "url:https://doi.org/10.5555/superyak-fixture-lean-a-a"
+    },
+    "notice": "retraction",
+    "reason": "The fictional study was withdrawn.",
+    "record_id": "pi-lean-a-1"
+   },
+   "sentenceMediaType": "application/vnd.superyak.source-notice+json",
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   },
+   "snapshotDigests": [
+    {
+     "algorithm": "sha-256",
+     "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.claim+json",
+  "protocolVersion": "0.1"
+ },
+ "N2": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "10b7fb65f31c2388126c4387592511a301112a11697c1d0edf1d53c952b21bc0"
+  },
+  "id": "urn:superyak:fixture:pi:claim:a8d65851eb188dd0a67c340dd95bd08f61258843585c24a9357b11685bfd6135",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Claim",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "provenance": [],
+   "sentence": {
+    "keys": {
+     "doi": null,
+     "fn": "source_key/1",
+     "title": "title:publisher or doi a:2024",
+     "url": "url:https://journal.example/pub-doi/a/1"
+    },
+    "notice": "retraction",
+    "reason": "The fictional publisher page was retracted.",
+    "record_id": "pi-pub-doi-a-1"
+   },
+   "sentenceMediaType": "application/vnd.superyak.source-notice+json",
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   },
+   "snapshotDigests": [
+    {
+     "algorithm": "sha-256",
+     "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.claim+json",
+  "protocolVersion": "0.1"
+ },
+ "N3": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "ca4636578956248b13280363ae7c5cf8bb7be3eb0175b030bc61e62835e95b2f"
+  },
+  "id": "urn:superyak:fixture:pi:claim:5b5afa86dc8bc94052c92203c074f24b158a0dc635866304a28d4219cf994a30",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Claim",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "provenance": [],
+   "sentence": {
+    "keys": {
+     "doi": null,
+     "fn": "source_key/1",
+     "title": "title:half source a:2024",
+     "url": "url:https://journal.example/half/a/1"
+    },
+    "notice": "retraction",
+    "reason": "No other store holds this source.",
+    "record_id": "pi-half-a-1"
+   },
+   "sentenceMediaType": "application/vnd.superyak.source-notice+json",
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   },
+   "snapshotDigests": [
+    {
+     "algorithm": "sha-256",
+     "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.claim+json",
+  "protocolVersion": "0.1"
+ },
+ "N4": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "4fff4021fea283cd3431473b725466547d5bfb745fe4fbf88868cbeb65146087"
+  },
+  "id": "urn:superyak:fixture:pi:claim:ac3a9944b8f0ecfaf2148c95f4cca7e0c52a56c46591a1a1c87c62dcf5d31110",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Claim",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "provenance": [],
+   "sentence": {
+    "new": {
+     "keys": {
+      "doi": "doi:10.5555/superyak-fixture-copied-a-v2",
+      "fn": "source_key/1",
+      "title": "title:copied source a:2024",
+      "url": "url:https://doi.org/10.5555/superyak-fixture-copied-a-v2"
+     },
+     "record_id": "pi-copied-a-1-v2",
+     "snapshot": {
+      "algorithm": "sha-256",
+      "value": "3f8ddb5a77af998579f9c87881b3ef21bfdc2ae0018def0a134140ca86ac01bd"
+     }
+    },
+    "notice": "correction",
+    "old": {
+     "keys": {
+      "doi": "doi:10.5555/superyak-fixture-copied-a",
+      "fn": "source_key/1",
+      "title": "title:copied source a:2024",
+      "url": "url:https://doi.org/10.5555/superyak-fixture-copied-a"
+     },
+     "record_id": "pi-copied-a-1",
+     "snapshot": {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    },
+    "reason": "The fictional DOI was registered wrongly."
+   },
+   "sentenceMediaType": "application/vnd.superyak.source-notice+json",
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   },
+   "snapshotDigests": [
+    {
+     "algorithm": "sha-256",
+     "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+    },
+    {
+     "algorithm": "sha-256",
+     "value": "3f8ddb5a77af998579f9c87881b3ef21bfdc2ae0018def0a134140ca86ac01bd"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.claim+json",
+  "protocolVersion": "0.1"
+ },
+ "N5": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "720a0d69d88172182670bbeb933ce873e11e839bcfbc7c18f7c8fa8203b3764b"
+  },
+  "id": "urn:superyak:fixture:pi:claim:3dfc3807e5a4c2dcb4ac90e2cc138fc6064a4473e93bf2ca6995b916e1a73cec",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Claim",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "provenance": [],
+   "sentence": {
+    "keys": {
+     "doi": "doi:10.5555/superyak-fixture-copied-a-v2",
+     "fn": "source_key/1",
+     "title": "title:copied source a:2024",
+     "url": "url:https://doi.org/10.5555/superyak-fixture-copied-a-v2"
+    },
+    "notice": "retraction",
+    "reason": "The corrected fictional record was withdrawn.",
+    "record_id": "pi-copied-a-1-v2"
+   },
+   "sentenceMediaType": "application/vnd.superyak.source-notice+json",
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   },
+   "snapshotDigests": [
+    {
+     "algorithm": "sha-256",
+     "value": "3f8ddb5a77af998579f9c87881b3ef21bfdc2ae0018def0a134140ca86ac01bd"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.claim+json",
+  "protocolVersion": "0.1"
+ }
+}

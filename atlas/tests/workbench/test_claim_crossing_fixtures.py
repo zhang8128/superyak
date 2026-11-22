@@ -15,7 +15,8 @@ from workbench.lighthouse_wire import authorize  # noqa: E402
 from workbench.sourced import validate_sourced  # noqa: E402
 
 FIXTURES = Path(make_fixtures.__file__).resolve().parent
-FILES = [f"{store}.json" for store in make_fixtures.STORES] + ["expected.json"]
+FILES = [f"{store}.json" for store in make_fixtures.STORES] + ["expected.json", "pi-corrected.json", "notices.json",
+                                                                  "notices-expected.json"]
 ANSWERS = {"copied", "unknown", "same sources", "overlapping", "independent"}
 
 

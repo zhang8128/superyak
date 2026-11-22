@@ -247,3 +247,145 @@ def validate_sourced(package):
     for entry in _list(package["carried"]):
         _carried(entry)
     return package
+
+
+# --- source notices, and how they're applied (spec: "Notices, and how they're applied") -------------------------
+
+NOTICE_SENTENCE = "application/vnd.superyak.source-notice+json"
+
+
+def seal_notice(sentence, snapshots, issuer, context, issued_at):
+    """A retraction or a correction, as a Claim under the sourced profile naming the Snapshots it refers to."""
+    return _artifact("Claim", _uri(issuer), issued_at, {
+        "profile": SOURCED_PROFILE, "signature": SOURCED_SIGNATURE, "context": context,
+        "sentenceMediaType": NOTICE_SENTENCE, "sentence": deepcopy(sentence),
+        "snapshotDigests": [s["digest"] for s in snapshots], "provenance": []})
+
+
+def _snapshots(publications):
+    held = {}
+    for package in publications:
+        held[package["snapshot"]["digest"]["value"]] = package["snapshot"]
+        for entry in package.get("carried", []):
+            held[entry["snapshot"]["digest"]["value"]] = entry["snapshot"]
+    return held
+
+
+def _held_claims(publications):
+    held = {}
+    for package in publications:
+        for claim in package["claims"]:
+            held[claim["digest"]["value"]] = (claim, package["snapshot"])
+        for entry in package.get("carried", []):
+            held[entry["claim"]["digest"]["value"]] = (entry["claim"], entry["snapshot"])
+    return held
+
+
+def _notice_records(notice):
+    """[(snapshot digest value, record id, keys)] a notice refers to: one for a retraction, old and new for a
+    correction."""
+    sentence = notice["payload"]["sentence"]
+    if sentence.get("notice") == "retraction":
+        [snapshot] = notice["payload"]["snapshotDigests"]
+        return [(snapshot["value"], sentence["record_id"], sentence["keys"])]
+    if sentence.get("notice") == "correction":
+        return [(sentence[side]["snapshot"]["value"], sentence[side]["record_id"], sentence[side]["keys"])
+                for side in ("old", "new")]
+    raise ValueError("A notice is a retraction or a correction")
+
+
+def validate_notice(notice, publications):
+    """Refuses a notice that isn't under the sourced profile, names a Snapshot or record the receiver doesn't hold, or
+    carries keys that don't match its record, recomputed (D7)."""
+    verify(notice, "Claim")
+    payload = notice["payload"]
+    if payload["profile"] != SOURCED_PROFILE or payload["sentenceMediaType"] != NOTICE_SENTENCE:
+        raise ValueError("A notice isn't under the sourced profile")
+    named = {d["value"] for d in payload["snapshotDigests"]}
+    snapshots = _snapshots(publications)
+    for snapshot, record_id, keys in _notice_records(notice):
+        if snapshot not in named or snapshot not in snapshots:
+            raise ValueError("A notice names a snapshot it doesn't list, or one the receiver doesn't hold")
+        sources = {s["id"]: s for s in snapshots[snapshot]["payload"]["model"]["sources"]}
+        if record_id not in sources:
+            raise ValueError("A notice names a record its snapshot doesn't hold")
+        plain = {k: v for k, v in sources[record_id].items() if k != "keys"}
+        if keys != source_key(plain):
+            raise ValueError("A notice carries keys that don't match its record")
+    return notice
+
+
+def _how(local, gathered):
+    if local["doi"] and local["doi"] == gathered["doi"]:
+        return "doi"
+    if local["url"] == gathered["url"]:
+        return "url"
+    return "title"
+
+
+def _roots_through_chain(claim, snapshot, held):
+    """(snapshot digest value, source id) of every source the claim cites in its own Snapshot, and of every source the
+    Claims its `provenance` reaches cite in theirs, transitively."""
+    seen, roots, stack = set(), set(), [(claim, snapshot)]
+    while stack:
+        current, snapshot = stack.pop()
+        record_id = current["payload"]["sentence"]["record_id"]
+        for item in snapshot["payload"]["model"]["items"]:
+            if item["id"] == record_id:
+                roots |= {(snapshot["digest"]["value"], e["source_id"]) for e in item["evidence"]}
+        for ref in current["payload"]["provenance"]:
+            if ref["value"] not in seen and ref["value"] in held:
+                seen.add(ref["value"])
+                stack.append(held[ref["value"]])
+    return roots
+
+
+def apply_notice(notice, *, store, own, publications, corrections=()):
+    """The report a receiver makes of a source notice, steps 1 to 6. It never writes: a status change is the
+    receiving owner's own act, through set_status."""
+    validate_notice(notice, publications)
+    for correction in corrections:
+        validate_notice(correction, publications)
+    # 1. the sources it means: the notice's own, and every source a held correction joins to one, transitively,
+    # joined by Snapshot and record id, never by key (D8).
+    gathered = {(s, r): k for s, r, k in _notice_records(notice)}
+    joined = True
+    while joined:
+        joined = False
+        for correction in corrections:
+            records = _notice_records(correction)
+            if any((s, r) in gathered for s, r, _ in records):
+                for s, r, k in records:
+                    if (s, r) not in gathered:
+                        gathered[(s, r)] = k
+                        joined = True
+    # 2. its own sources that match any gathered one, each named with how it matched
+    matched = {}
+    for source in store.export_bundle()["sources"]:
+        local = source_key(source)
+        for keys in gathered.values():
+            if compare_sources(local, keys) == "match":
+                matched.setdefault(source["id"], _how(local, keys))
+    # 3. its own claims whose roots, followed through their chains, include a gathered source
+    held = _held_claims(publications)
+    reached = {c["payload"]["sentence"]["record_id"]: _roots_through_chain(c, own["snapshot"], held)
+               for c in own["claims"]}
+    through_chain = sorted(r for r, roots in reached.items() if roots & set(gathered))
+    sentence = notice["payload"]["sentence"]
+    impact, corrected = None, []
+    if sentence["notice"] == "retraction" and matched:
+        impact = store.retraction_impact(sorted(matched))                       # 4
+    if sentence["notice"] == "correction":                                       # 5
+        old = (sentence["old"]["snapshot"]["value"], sentence["old"]["record_id"])
+        new = (sentence["new"]["snapshot"]["value"], sentence["new"]["record_id"])
+        for record_id in sorted(reached):
+            if old in reached[record_id]:
+                corrected.append({"record_id": record_id, "verdict": "built on the corrected record"})
+            elif new in reached[record_id]:
+                corrected.append({"record_id": record_id, "verdict": "on the corrected record"})
+    report = {"notice": notice["digest"],
+              "gathered": [{"snapshot": s, "record_id": r} for s, r in sorted(gathered)],
+              "matched": [{"source_id": i, "by": matched[i]} for i in sorted(matched)],
+              "through_chain": through_chain, "impact": impact, "corrected": corrected}
+    report["outcome"] = "reported" if (matched or through_chain or corrected) else "no impact"
+    return report                                                                # 6: nothing written
