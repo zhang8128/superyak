@@ -199,6 +199,7 @@ only-include = [
     "tests/test_lessons_own.py",
     "tests/test_lessons_repeats.py",
     "tests/test_lessons_room.py",
+    "tests/test_lessons_receipt_insert.py",
     "tests/test_lessons_timing.py",
     "tests/test_listener.py",
     "tests/test_login.py",
