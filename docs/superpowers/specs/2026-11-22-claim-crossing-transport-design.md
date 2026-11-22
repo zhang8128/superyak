@@ -1,7 +1,8 @@
 # Claims that cross between peers: the transport (north-star test 5, Tardis's half)
 
-Revision 4, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. Under station law section 3,
-a fresh reviewer approves it in Andy's place, and Andy can veto. Rio Grande is its partner reader.
+Revision 4, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. **Approved under station law
+section 3** by a fresh reviewer, after four checks, each posted whole in all hands. Andy can veto. Rio Grande is its
+partner reader.
 
 - **Revision 1 (09923aef)** went to a fresh reviewer, who approved it with seven required changes and twelve advisory
   ones (all hands 82edc797). Rio Grande's partner read asked for two more and a small one (9c1afb0e).
@@ -12,6 +13,8 @@ a fresh reviewer approves it in Andy's place, and Andy can veto. Rio Grande is i
 - **This revision, 4, makes N5 and all five advisories.** It also cites the two checks Rio Grande moved into
   `sourced.py` at 08d40fa2. Where an advisory number appears twice, the section it lands in says which check it's
   from.
+- **Its fourth check approved it,** finding N5 fixed and every advisory taken. It asked for one correction, which is
+  made here: the receive's 2 s bound is `store.bounded(2)`, so it covers the gate too.
 
 This is the follow-up that [the claim-crossing spec](2026-11-22-claim-crossing-design.md) (revision 6, 84fafe71, with
 amendments 1 and 2) leaves to a transport: "who sent what: a sender comes from the crossing's authenticated peer, never
@@ -182,9 +185,13 @@ envelope, *before* the write. So a store transaction, such as `ask`'s on tardis-
   - **A passing storage fault,** `sqlite3.OperationalError` (locked, busy, I/O or full), answers 503. That's
     peer-scoped, as it is for every row today, so the row is retried. Atlas rows go last, so a 503 doesn't hold back
     room messages in the pass.
-  - **An atlas receive waits at most about 2 s for the store,** through `transaction(wait=...)` (`db.py:179`), not the
-    Store's 30 s. So a busy store answers 503 well inside the sender's write deadline, rather than showing there as
-    the row's timeout.
+  - **An atlas receive waits at most 2 s for the store,** inside `store.bounded(2)` (`db.py:196-211`).
+    - That bounds the dispatch gate as well as SQLite's busy wait. `transaction(wait=...)` alone would bound only
+      SQLite, and on the Pi the gate is the likelier wait (`db.py:184`) (the approving check's correction).
+    - Its `GateTimeout` (`dispatch.py:16`) answers 503, as `OperationalError` does.
+
+    So a busy store answers 503 well inside the sender's write deadline, rather than showing there as the row's
+    timeout.
   - **Nothing escapes as a 500.**
 - **What the receiver keeps,** beside each payload:
   - **the signed envelope, exactly as it arrived (RG2);**
@@ -366,7 +373,7 @@ Nothing is a score, and a failure is a result.
      as a `BrokenPipeError` mid-write and a `RemoteDisconnected` at the answer, not only through `socket.timeout`
      (N5).
    - A reset before the write deadline stays a peer failure (N5).
-   - A receiver whose store is locked answers 503 within its 2 s wait.
+   - A receiver whose store is locked, or whose dispatch gate is held, answers 503 within its 2 s bound.
    - An unreachable peer with only an atlas row queued still gets `failing_since` and `last_problem` (N1).
    - A store transaction completes while a throttled atlas push is writing (N2).
    - Two atlas rows to one peer go in two passes (A3).
