@@ -93,11 +93,22 @@ function formatDate(value) {
   }
 }
 
+let announceFrame = 0;
 function announce(message) {
   announcer.textContent = "";
-  requestAnimationFrame(() => {
+  cancelAnimationFrame(announceFrame);
+  announceFrame = requestAnimationFrame(() => {
+    announceFrame = 0;
     announcer.textContent = message;
   });
+}
+
+// Empties the announcer and drops an announcement still waiting for its frame. A hidden tab holds its frames back, so
+// words announced just before the account changed would otherwise be said to the next person on this browser.
+function hushAnnouncer() {
+  cancelAnimationFrame(announceFrame);
+  announceFrame = 0;
+  announcer.textContent = "";
 }
 
 // What was pressed says it's working, on a slow link only. It's on the thing pressed and not on main: aria-busy on main would
@@ -180,7 +191,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; announcer.textContent = ""; forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.room = null; state.selectedChatId = null; state.composerNote = null; state.unsentIn = null; clearPressed(); state.flash = null; state.transitionNote = null; hushAnnouncer(); forgetRevisions(); state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.roomAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -300,11 +311,12 @@ function demoChoices() {
 
 function showLogin(message = "") {
   dataLoadSequence++;
-  announcer.textContent = "";  // the next person on this browser is here, and a room's title isn't theirs
+  hushAnnouncer();  // the next person on this browser is here, and a room's title isn't theirs
   roomDrawn = null;
   state.me = null;
   state.home = null;
   state.room = null;  // the next person on this browser starts from the route, and no timer asks about this room for them
+  clearPressed();  // after state.room, so its composer line draws nothing; a slow press's "Opening…" isn't said here
   state.roomGone = null;
   clearDialogs();
   app.innerHTML = `<main class="login-page" id="main-content">

@@ -3262,6 +3262,45 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
             assert page.evaluate("announcer.textContent") == ""
 
 
+NEXT_FRAMES = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))"
+
+
+@pytest.mark.parametrize("switch", ["bindEditorIdentity({ ...state.me, id: 'the-next-account' })", "showLogin()"])
+def test_an_announcement_still_waiting_for_its_frame_is_not_said_to_the_next_account(browser_peer, switch):
+    # announce() writes in the next animation frame, and a hidden tab holds its frames back. An announcement made just
+    # before the account changes must not be spoken after it: CI saw the Mark notice land after the switch (7 runs).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate(f"announce('Room X is kept away from ships and connected apps on this home.'); {switch}")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == ""
+            page.evaluate("announce('A later announcement')")  # the announcer still works after the switch
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "A later announcement"
+
+
+def test_a_slow_press_that_ends_in_sign_in_says_nothing_on_the_sign_in_page(browser_peer):
+    # A press's "Opening…" waits PRESSED_AFTER_MS before it is said. A 401 inside its work reaches showLogin() first,
+    # and the waiting timer must not then speak on the sign-in page (Serenity's nit, all hands 4c03a5a0).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("whilePressed('#main-content', 'Opening…', () => new Promise((done) => setTimeout(done, 2000))); showLogin()")
+            page.wait_for_timeout(600)  # past PRESSED_AFTER_MS (300)
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == ""
+            assert page.locator(".pressed-note").count() == 0
+
+
+def test_the_same_account_still_hears_an_announcement_made_just_before_a_rebind(browser_peer):
+    # bindEditorIdentity runs on every sign-in read, so it hushes only when the account changes: a save's message
+    # announced just before a read of the same account is still said (Serenity's check, all hands 987096f3).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("announce('Saved.'); bindEditorIdentity(state.me)")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "Saved."
+
+
 @pytest.mark.parametrize("press, route, confirm", [
     ("^Mark this room$", "cloud", None),
     ("^Remove .* from this room", "participants/**", confirm_remove),
