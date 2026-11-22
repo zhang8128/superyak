@@ -37,6 +37,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 try:
@@ -530,6 +531,7 @@ def _run_arms(sample: list[dict], *, corpus_path, index_path, bin_path, capped_s
     """All seven arms, for every question in ``sample``: the shared retrieval (one batched query for the
     base pool, a second only if some question's G pool exceeds it), each arm's rerank and reader call, and
     the truncation accounting for the three cross-encoder arms."""
+    started = time.perf_counter()
     corpus = CorpusLookup.open(corpus_path)
 
     def query(items, k):
@@ -542,8 +544,27 @@ def _run_arms(sample: list[dict], *, corpus_path, index_path, bin_path, capped_s
     pools = compute_pools(query, corpus, items)
 
     rows: dict[str, dict] = {arm: {} for arm in ARMS}
-    usage: dict[str, dict] = {arm: {"calls": 0, "prompt_tokens": 0, "eval_tokens": 0, "seconds": 0.0}
+    # The spec's cost measure: the reader's calls, tokens and seconds, and each rerank's work (embeddings for
+    # a dense arm, pairs for a cross arm) and wall time. E has no rerank, so its three stay at zero.
+    usage: dict[str, dict] = {arm: {"calls": 0, "prompt_tokens": 0, "eval_tokens": 0, "seconds": 0.0,
+                                    "embeddings": 0, "pairs": 0, "rerank_seconds": 0.0}
                              for arm in ARMS}
+
+    def dense(arm: str, question_text: str, candidates: list[dict]) -> list[dict]:
+        def counting_embed(texts, prefix="search_document"):
+            usage[arm]["embeddings"] += len(texts)
+            return embed_fn(texts, prefix=prefix)
+        start = time.perf_counter()
+        leads = dense_rerank(question_text, candidates, counting_embed, top=B_TOP)
+        usage[arm]["rerank_seconds"] += time.perf_counter() - start
+        return leads
+
+    def cross(arm: str, question_text: str, candidates: list[dict]) -> list[dict]:
+        start = time.perf_counter()
+        leads = cross_rerank(question_text, candidates, cross_rerank_fn, top=B_TOP)
+        usage[arm]["rerank_seconds"] += time.perf_counter() - start
+        usage[arm]["pairs"] += len(candidates)
+        return leads
     truncation = {"b_cross": {"pairs": 0, "truncated": 0}, "g_cross": {"pairs": 0, "truncated": 0},
                  "w_cross": {"pairs": 0, "truncated": 0}}
 
@@ -557,15 +578,15 @@ def _run_arms(sample: list[dict], *, corpus_path, index_path, bin_path, capped_s
 
         arm_leads = {
             "e": _leads_for(corpus, pool["hop"]),
-            "b_dense": dense_rerank(q["question"], b_candidates, embed_fn, top=B_TOP),
-            "g_dense": dense_rerank(q["question"], g_candidates, embed_fn, top=B_TOP),
-            "w_dense": dense_rerank(q["question"], w_candidates, embed_fn, top=B_TOP),
+            "b_dense": dense("b_dense", q["question"], b_candidates),
+            "g_dense": dense("g_dense", q["question"], g_candidates),
+            "w_dense": dense("w_dense", q["question"], w_candidates),
         }
         for name, candidates in (("b_cross", b_candidates), ("g_cross", g_candidates), ("w_cross", w_candidates)):
             pairs = [(q["question"], f"{c['title']} {c['text']}") for c in candidates]
             truncation[name]["pairs"] += len(pairs)
             truncation[name]["truncated"] += count_truncated_pairs(cross_tokenizer, pairs)
-            arm_leads[name] = cross_rerank(q["question"], candidates, cross_rerank_fn, top=B_TOP)
+            arm_leads[name] = cross(name, q["question"], candidates)  # timed apart from the truncation count
 
         pool_ids_by_arm = {"e": pool["hop"], "b_dense": bm25_top, "b_cross": bm25_top,
                           "g_dense": pool["g_pool"], "g_cross": pool["g_pool"],
@@ -592,7 +613,7 @@ def _run_arms(sample: list[dict], *, corpus_path, index_path, bin_path, capped_s
 
     summary = summarize2(sample, rows, usage, truncation, both_gold_primary=both_gold_primary)
     return {"sample": [q["id"] for q in sample], "rows": rows, "usage": usage,
-           "truncation": truncation, "summary": summary}
+           "truncation": truncation, "summary": summary, "wall_seconds": time.perf_counter() - started}
 
 
 def run_smoke(plan: dict, *, corpus_path, index_path, bin_path=DEFAULT_CORPUS_INDEX_BIN, capped_sh=None,

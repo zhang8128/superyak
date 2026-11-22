@@ -745,3 +745,54 @@ class TestRunSmokeEndToEnd:
             for name in ("b_cross", "g_cross", "w_cross"):
                 assert data["truncation"][name]["pairs"] >= 1
         assert result["comparison"]["summary"]["primary_both_gold"] is None  # one question: below the minimum too
+
+    def test_usage_counts_each_reranks_work_and_its_wall_time(self, real_index, corpus_path, tmp_path):
+        """The spec's cost measure: per arm, the embeddings and cross-encoder pairs computed and the rerank's
+        wall time, beside the reader's calls. The first build recorded only the reader's. The fakes sleep, so
+        a timer that never ran can't pass."""
+        import time as _time
+        bin_path, index_path = real_index
+        bridge_q = {"id": "q0", "question": "Where did the singer of the band Lotus grow up?", "answer": "Leeds",
+                   "answer_lead_index": 1, "answer_class": "name",
+                   "gold_leads": [{"page_id": 1, "rev_id": 1, "title": "Lotus (band)"},
+                                 {"page_id": 2, "rev_id": 2, "title": "Ann Vale"}]}
+        plan = {"model": "fake", "questions": [bridge_q],
+                "comparison_questions": [{**bridge_q, "id": "c0", "type": "comparison"}]}
+        seen = {"texts": 0, "docs": 0}
+
+        def slow_embed(texts, prefix="search_document"):
+            _time.sleep(0.02)
+            seen["texts"] += len(texts)
+            return fake_embed(texts, prefix)
+
+        def slow_rerank(query, documents):
+            _time.sleep(0.02)
+            seen["docs"] += len(documents)
+            return fake_rerank(query, documents)
+
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        result = ns2.run_smoke(
+            plan, corpus_path=corpus_path, index_path=index_path, bin_path=bin_path, capped_sh=None,
+            count=1, model="fake", ask_fn=fake_ask, embed_fn=slow_embed, cross_rerank_fn=slow_rerank,
+            cross_tokenizer=FakeTokenizer(), workdir=workdir,
+        )
+        embeddings = pairs = 0
+        for stratum in ("bridge", "comparison"):
+            usage = result[stratum]["usage"]
+            assert usage["e"]["embeddings"] == 0 and usage["e"]["pairs"] == 0
+            assert usage["e"]["rerank_seconds"] == 0.0
+            for arm in ("b_dense", "g_dense", "w_dense"):
+                assert usage[arm]["embeddings"] >= 2  # the question and at least one candidate
+                assert usage[arm]["pairs"] == 0
+                assert usage[arm]["rerank_seconds"] >= 0.04  # two embed calls, 0.02 s each
+                embeddings += usage[arm]["embeddings"]
+            for arm in ("b_cross", "g_cross", "w_cross"):
+                assert usage[arm]["embeddings"] == 0
+                assert usage[arm]["pairs"] == result[stratum]["truncation"][arm]["pairs"] >= 1
+                assert usage[arm]["rerank_seconds"] >= 0.02
+                pairs += usage[arm]["pairs"]
+            assert result[stratum]["wall_seconds"] >= 6 * 0.02
+            assert result[stratum]["summary"]["cost"]["g_dense"]["embeddings"] == usage["g_dense"]["embeddings"]
+        assert embeddings == seen["texts"]
+        assert pairs == seen["docs"]
