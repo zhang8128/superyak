@@ -662,6 +662,9 @@ class TestBuildPlanAndRunPlan:
         assert "pooled_gain_n_minus_o" in summary["ceiling"]
         assert summary["checks"]["n_identical_between_c_and_d"] is True
         assert summary["checks"]["p_on_c_equals_o_max_abs_diff"] == pytest.approx(0.0, abs=1e-9)
+        assert "auditor_helps" in summary["inference_at_all"]
+        assert "D" in summary["detection"] and "A_false_flag_rate" in summary["detection"]
+        assert "s_p_half" in summary["per_cell"]
 
 
 # -------------------------------------------------------------------------------------

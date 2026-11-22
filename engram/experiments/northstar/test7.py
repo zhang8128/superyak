@@ -632,10 +632,12 @@ def summarize(plan: dict, results: dict) -> dict:
     the P-on-C-equals-O / C-and-D-give-identical-N checks."""
     gain_n_minus_i: dict = {}
     gain_n_minus_o: dict = {}
+    gain_n_minus_phalf: dict = {}
     err_i_on_d: dict = {}
     err_p_on_c: dict = {}
     gain_i_minus_n_a: dict = {}
     gain_i_minus_n_a_high_bias = None
+    false_flag_rate_a_by_cell: dict = {}
     detection_by_cell = {}
     p_equals_o_max_diff = 0.0
     n_identical_c_d = True
@@ -649,6 +651,7 @@ def summarize(plan: dict, results: dict) -> dict:
             rows = cell_results.get("A", [])
             diffs = [r["consensus_error"]["I_all"] - r["consensus_error"]["N_all"] for r in rows]
             gain_i_minus_n_a[key] = diffs
+            false_flag_rate_a_by_cell[key] = false_flag_rate_a(rows)
             if (cell.get("K"), cell.get("M"), cell.get("rho"), cell.get("b")) == (6, 60, 0.9, 8.0):
                 gain_i_minus_n_a_high_bias = diffs
             continue
@@ -659,6 +662,8 @@ def summarize(plan: dict, results: dict) -> dict:
                                if not np.isnan(r["consensus_error"]["N"])]
         gain_n_minus_o[key] = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_d
                                if not np.isnan(r["consensus_error"]["N"])]
+        gain_n_minus_phalf[key] = [r["consensus_error"]["N"] - r["consensus_error"]["P_half"] for r in rows_c
+                                   if not np.isnan(r["consensus_error"]["N"])]
         err_i_on_d[key] = [r["consensus_error"]["I"] for r in rows_d]
         err_p_on_c[key] = [r["consensus_error"]["P"] for r in rows_c]
         detection_by_cell[key] = detection_rates(rows_d)
@@ -678,15 +683,21 @@ def summarize(plan: dict, results: dict) -> dict:
     dnh_pooled = do_no_harm(gain_i_minus_n_a)
     dnh_high_bias = do_no_harm({"K6_M60_rho0.9_b8": gain_i_minus_n_a_high_bias}) \
         if gain_i_minus_n_a_high_bias is not None else None
+    # "Inference at all": I against N on D, paired; "the auditor helps" if the interval excludes 0 in
+    # I's favour (its lower end is above 0).
+    inference_at_all = bootstrap_pooled_mean_ci(gain_n_minus_i)
+    inference_at_all["auditor_helps"] = bool(inference_at_all["ci95"][0] > 0.0)
 
     return {
         "primary": primary,
         "gap_delta": delta,
         "ceiling": ceiling,
         "do_no_harm": {"pooled": dnh_pooled, "high_bias_corner": dnh_high_bias},
-        "detection": detection_by_cell,
+        "inference_at_all": inference_at_all,
+        "detection": {"D": detection_by_cell, "A_false_flag_rate": false_flag_rate_a_by_cell},
         "per_cell": {
             "s_i": per_cell_ratios(gain_n_minus_i, gain_n_minus_o),
+            "s_p_half": per_cell_ratios(gain_n_minus_phalf, gain_n_minus_o),
         },
         "checks": {
             "p_on_c_equals_o_max_abs_diff": p_equals_o_max_diff,
