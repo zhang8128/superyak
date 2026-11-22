@@ -1,13 +1,16 @@
 # North-star test 5, Measure 3: real collections, crossed, against a blind audit
 
-**Draft, revision 3, 2026-11-22. Tardis. Not yet fixed.** It's fixed only after three things: Rio Grande's and
+**Draft, revision 4, 2026-11-22. Tardis. Not yet fixed.** It's fixed only after three things: Rio Grande's and
 Serenity's reads, a fresh reviewer's approval under station law section 3, and a commit of its final text. Nothing
 below changes after the first search starts. A finding during the run is reported; it doesn't change this page.
 
 - **Revision 1 (b89f6871):** Rio Grande's and Serenity's reads (83fe41a3, 53b478e5).
 - **Revision 2 (f1ab0280):** made those (RG1 to RG5, S1 to S5). Rio Grande's re-read held them and added the false-merge
   cost (b5b0f5c8). The fresh reviewer asked for a revision, with ten required findings and ten advisory ones (0705b345).
-- **This revision makes them all,** named V1 to V10 and VA1 to VA10, with Rio Grande's as RG6.
+- **Revision 3 (121fef50)** made them all, named V1 to V10 and VA1 to VA10, with Rio Grande's as RG6. Rio Grande gave
+  its yes on its parts (cbd02b27). The reviewer's re-check approved it with six named changes and six advisories
+  (03ac0652), and Serenity's watcher raised three points (e95d65a8).
+- **This revision makes those,** named W1 to W6, WA1 to WA6 and SW1 to SW3.
 
 **The source of each part:**
 - **The measure:** the claim-crossing spec on main, "Measure", item 3.
@@ -17,7 +20,7 @@ below changes after the first search starts. A finding during the run is reporte
   Serenity's audit conditions (8279b775, 1d212bf9).
 
 **Names:** the collections are T (built on Tardis) and P (built on the Pi). The first publications are T1 and P1, and
-the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and the trivial arms U0 and O1.
+the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and the trivial arms U0, O1 and I1.
 
 **This page amends two parent specs (V10):**
 - **The claim-crossing spec's Measure 3,** which says "It's never a score". This page adds one scored primary. Item 3's
@@ -25,6 +28,9 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   copied, same-sources or overlapping pair side by side.
 - **The transport spec's Measure 3 pairs.** It fixes C1's union. The primary here scores every T1 × P1 cross pair, which
   is a superset, and C1's union is also reported.
+- **The transport spec's receiving pipeline (WA5).** If the git fallback runs (below), `received()` can't, since no
+  envelope crossed. So it's replaced by `validate_sourced` on each committed file. That's this page's third
+  amendment.
 
 ## Why
 
@@ -48,7 +54,8 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   - REL is expected to answer **distinct by DOI**, under rule 1, with two DOIs and different titles, not unclear;
   - the audit is expected to say SAME, by the medRxiv link.
 
-  So, if both sides cite it, it's a *dangerous error REL shares with B1 and B2*, reported as such.
+  So, if both sides cite it, it's a *dangerous error REL shares with B1, B2 and B3*, since its titles differ too (WA6),
+  reported as such.
 - **The Surgisphere papers:**
   - the *Lancet* registry paper on hydroxychloroquine is in scope;
   - the *NEJM* one (10.1056/NEJMoa2007621) is about ACE inhibitors, ARBs and statins, so it's likely out of scope.
@@ -70,9 +77,12 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   - **The year** is Crossref's `issued` year, or PubMed's.
   - **The url** is the builder's, logged.
   - **The citation** includes the item's own DOI whenever one exists.
-- **The freeze check:** a committed script, `engram/experiments/northstar/measure3_freeze.py`, checks every source
-  against Crossref and PubMed at the freeze. It lists every deviation, and the freeze waits until there are none or each
-  one is explained in the log.
+- **The freeze check (W5, WA4):** `measure3.freeze_check()`, in the committed `measure3.py`, checks every source against
+  Crossref and PubMed at the freeze.
+  - **Every deviation is corrected** before the freeze, never explained away.
+  - **Only an item with no Crossref or PubMed record** keeps the builder's fields, and such items are listed.
+  - **It also checks that `source_key`'s DOI key equals the item's own DOI.** That catches a second DOI in a citation,
+    or a doi.org url to another version.
 - **Search, with each ship's own queries:**
   - each query is logged verbatim, with a UTC time, in `queries.log`, which names each source's url and the result it
     came from (V2);
@@ -98,8 +108,8 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
      side runs `atlas-received`, `atlas-verify`, `received(..., trusted_origins=origins.json)` and `held_claims`;
    - **the run that's scored** is the one on Tardis, receiving P. The Pi's run must give identical answers, and any
      difference is reported (V4);
-   - **if there's no pairing by 2026-12-06,** the methods run from the committed files in git instead, and the transport
-     facts are reported as not run (VA7).
+   - **if there's no pairing by 2026-12-06,** the methods run from the committed files in git instead, each passing
+     `validate_sourced` first (WA5), and the transport facts are reported as not run (VA7).
 
 ## The audit (Serenity owns it)
 
@@ -107,18 +117,25 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   - a verbatim prompt, committed with this page;
   - the two frozen first publications, their sources without `keys` (VA5);
   - access to the external record.
-- **Each source is resolved to one identity first (V5):**
-  - a DOI or a PMID, with its version links from named sources: Crossref's `relation` (`is-preprint-of`,
-    `has-preprint`), the medRxiv/bioRxiv API's published DOI, and PubMed's linked preprint;
-  - or UNCLEAR, with its reason.
-- **Then each cross source pair's label is derived mechanically from the two identities:**
-  - **SAME:** one identity, or two linked as versions;
-  - **UNCLEAR:** either identity is UNCLEAR, or the two are unlinked DOIs that share a normalised title or a trial
-    registration number;
+- **Each source is resolved to one canonical identity first (V5, W4):**
+  - **its DOI** whenever one exists, with PubMed's article ids mapping a PMID to it;
+  - **its PMID** otherwise;
+  - **or UNCLEAR,** with its reason.
+- **Version classes (W4):** the transitive closure of the named version links: Crossref's `relation` (`is-preprint-of`,
+  `has-preprint`), the medRxiv/bioRxiv API's published DOI, and PubMed's linked preprint. A class is named by its
+  lowest DOI. "Identity" in the most-shared rule, the notice reach and the overlap count means this class.
+- **Then each cross source pair's label is derived mechanically from the two classes:**
+  - **SAME:** one class;
+  - **UNCLEAR:** either identity is UNCLEAR, or two unlinked classes with **the same title (case and punctuation
+    ignored) and the same first author**, or a shared trial registration. The registration comes from PubMed's DataBank
+    or Crossref's `clinical-trial-number` (W3). This uses none of REL's machinery: a generic title shared by two
+    different first authors stays DIFFERENT, so REL's rule-2 failure, and B3's false merge there, are scored;
   - **DIFFERENT:** anything else.
+  - **How many decided pairs the registration rule removes** is reported beside the primary (SW3).
 - **Every identity carries its evidence:** the records looked up, the link, or the reason.
 - **The seal (VA5):** a named file, `measure3-audit.json`, holds the identities, their evidence and the derived labels.
-  Its sha256 goes in a commit and is posted in all hands before any method's output exists.
+  Its sha256 goes in a commit and is posted in all hands before any method runs: REL, B1, B2, B3, U0, O1 or I1. Serenity's
+  spot check runs only after that (SW2).
 - **The sealed labels stand:** the primary scores them alone.
 - **Serenity's spot check:** she isn't blind to the rule, so it never changes a label. She checks:
   - every SAME and every UNCLEAR label;
@@ -149,10 +166,12 @@ Each answers every T1 × P1 pair from the frozen first publications:
 - **B2, exact DOI or strong url:** also on equal url keys where `strong_url` holds (VA3).
 - **B3, keys and title (VA2):** a match on DOI, on a strong url, or on equal title and year. There's no DOI-decides rule
   and no unclear. It shows whether REL's ordered rules, not titles alone, are what win.
-- **U0** always answers unknown, and **O1** always answers overlapping (V1).
+- **U0** always answers unknown, **O1** always answers overlapping (V1), and **I1** always answers independent (W2).
 
-For B1, B2 and B3: a record pair with every cross source pair a match is same sources; one with any match is
-overlapping; and one with none is independent.
+For B1, B2 and B3, using the truth's own wording (W1):
+- a record pair where every source of each record matches one of the other's is same sources;
+- one with any match is overlapping;
+- one with none is independent.
 
 ## Measures, fixed
 
@@ -168,22 +187,31 @@ overlapping; and one with none is independent.
 - **The reading, against B2:**
   - **"The structure helps on real data"** only if all three hold:
     1. REL's cost is below B2's, with the **lower bound** of the 95% interval of `cost(B2) − cost(REL)` above 0;
-    2. the point estimate stays above 0 with the most-shared identity's pairs dropped;
-    3. REL's cost is below U0's and O1's.
-  - **"Too little overlap to test" (V8)** if there are fewer than 3 shared identities, or fewer than 10 decided
+    2. the point estimate stays above 0 with each of the three most-shared identities' pairs dropped in turn;
+    3. REL's cost is below U0's, O1's and I1's (W2).
+  - **"Too little overlap to test" (V8),** checked first (WA3): fewer than 3 shared identities, or fewer than 10 decided
     not-independent pairs.
+  - **"Keys and titles help; the ordered rules aren't shown to" (W6),** if REL meets 1 to 3 against B2 but its cost isn't
+    below B3's on the point estimate.
   - **Otherwise, "no measured gain".** With a few hundred pairs, that may mean the run was too small to see one, which
     is said beside it.
-- **The bootstrap (V6):** 10,000 replicates from `numpy.random.default_rng(20261126)`.
-  - **Each replicate** draws T's records with replacement to T's size, then P's to P's size, separately.
+- **The bootstrap (V6, WA1):** 10,000 replicates from `numpy.random.default_rng(20261126)`.
+  - **Each replicate** draws `rng.integers(0, n_T, n_T)` over T's record ids in sorted order, then
+    `rng.integers(0, n_P, n_P)` over P's, separately.
   - **A pair** between a T record drawn k_t times and a P record drawn k_p times counts k_t × k_p times.
   - **The interval** is `numpy.quantile` at 0.025 and 0.975 of the difference of totals.
-- **The most-shared identity (V7):** the audit identity in the most decided pairs where it holds a SAME, with ties to
-  the lowest DOI or PMID. Every pair in which either record cites it is dropped, nothing else is recomputed, and the
-  point estimate is judged.
+- **Clustering by record, and its limit (SW1):** records that rest on one landmark trial aren't independent of each
+  other, so a record-clustered interval can be too narrow. The two checks below answer that, since clustering by
+  connected components of the claim–source graph would likely make one giant cluster, around the trials most records
+  cite.
+  - **The most-shared identities (V7, SW1):** take the three version classes in the most decided pairs where they hold
+    a SAME, with ties to the lowest DOI. For each in turn, every pair in which either record cites it is dropped, nothing
+    else is recomputed, and the point estimate must stay above 0 all three times. That's condition 2.
+  - **A component-clustered bootstrap** is a secondary whenever the graph has at least 10 components, and its interval
+    is reported beside the primary's.
 - **Secondary:**
   - **for every method:** its answer × truth matrix, and the break-even abstention weight
-    `(DE_B2 − DE_REL) / ABS_REL` (VA1);
+    `(DE_B2 + 0.5·FM_B2 − DE_REL − 0.5·FM_REL) / ABS_REL`, or "none" when `ABS_REL` is 0 (VA1, WA2);
   - **REL:** its unknowns with their reasons;
   - **the remaining pairs:** the undecided ones, counted; review-against-trial pairs reported apart, since identity
     isn't evidential independence (VA4); and C1's union;
@@ -203,11 +231,11 @@ overlapping; and one with none is independent.
 ## The analysis, pinned before the first search (V9)
 
 `engram/experiments/northstar/measure3.py` and its tests are committed and passing before anyone searches. It holds:
-- B1, B2, B3, U0 and O1;
+- B1, B2, B3, U0, O1 and I1;
 - the truth derivation from the audit file;
 - the cost, the bootstrap and the most-shared rule;
 - `side_by_side()`;
-- the freeze check.
+- `freeze_check()`.
 
 They're tested on the planted stores (f51cdebd's fixtures), including:
 - a hand-made audit file;
