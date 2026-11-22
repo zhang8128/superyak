@@ -99,3 +99,143 @@ def compare_sources(a: dict, b: dict) -> str:
     if same_title:
         return "unclear"                                         # rule 4: one title, different years
     return "distinct"                                            # rule 5
+
+
+# --- the sourced publication (spec: "The sourced publication") -------------------------------------------------
+
+from copy import deepcopy  # noqa: E402
+
+from .lighthouse import _bundle, _context, _keys, _list, _record_content, _text, _uri  # noqa: E402
+from .lighthouse_wire import digest, seal, verify  # noqa: E402
+
+SOURCED_PROFILE = {"id": "urn:superyak:profile:atlas-sourced", "version": "1"}
+SOURCED_SIGNATURE = {"id": "urn:superyak:atlas-sourced", "version": "1"}
+SOURCED_SENTENCE = "application/vnd.superyak.atlas-sourced-claim+json"
+SOURCED_FORMAT = "atlas-sourced-publication"
+ACTIONS = ["read", "link_overlap", "retain", "reshare"]
+
+
+def _artifact(kind, issuer, issued_at, payload):
+    return seal(kind, issuer, f"{issuer}:{kind.lower()}:{digest(payload)['value']}", issued_at, payload)
+
+
+def _crossing_item(record, issuer):
+    """An item as it crosses: no provenance map (sessions and paths), and no reviewer's name. A reviewed record names
+    the publishing lighthouse instead, and keeps its time; any other has both fields empty (spec C3, D4)."""
+    item = {key: deepcopy(value) for key, value in record.items() if key != "provenance"}
+    if item["status"] == "reviewed":
+        item["reviewed_by"] = issuer
+    else:
+        item["reviewed_by"] = item["reviewed_at"] = ""
+    return item
+
+
+def _keyed(source):
+    return {**deepcopy(source), "keys": source_key(source)}
+
+
+def publish_sourced(bundle, config):
+    """What lighthouse.publish makes, under the sourced profile: each source carries its keys, each Claim names its
+    Snapshot and, for a copy, the Claims it was copied from (config["copied_from"]: item id -> digest references)."""
+    _keys(config, {"issuer", "name", "origin", "context", "item_ids", "issued_at"}, {"rules", "copied_from", "lineage"})
+    issuer = _uri(config["issuer"])
+    _uri(config["origin"])
+    _text(config["name"])
+    _context(config["context"])
+    ids = _list(config["item_ids"])
+    if not ids or len(set(ids)) != len(ids):
+        raise ValueError("Select one or more distinct item IDs explicitly")
+    normalized = _bundle(bundle)
+    selected = set(ids)
+    if selected - {item["id"] for item in normalized["items"]}:
+        raise ValueError("Unknown selected item ID")
+    copied_from = config.get("copied_from", {})
+    if set(copied_from) - selected:
+        raise ValueError("copied_from names an item that isn't selected")
+    items = sorted((i for i in normalized["items"] if i["id"] in selected), key=lambda i: i["id"])
+    relations = sorted((r for r in normalized["relations"] if {r["subject"], r["object"]} <= selected),
+                       key=lambda r: r["id"])
+    referenced = {e["source_id"] for record in items + relations for e in record["evidence"]}
+    sources = [_keyed(s) for s in sorted((s for s in normalized["sources"] if s["id"] in referenced),
+                                          key=lambda s: s["id"])]
+    model = {"schema_version": 1, "origin": config["origin"], "title": normalized["title"], "sources": sources,
+             "items": [_crossing_item(i, issuer) for i in items], "relations": deepcopy(relations)}
+    snapshot = _artifact("Snapshot", issuer, config["issued_at"], {
+        "profile": SOURCED_PROFILE, "signature": SOURCED_SIGNATURE, "context": config["context"], "model": model,
+        "lineage": list(config.get("lineage", []))})
+    claims = []
+    for record in model["items"]:
+        provenance = list(copied_from.get(record["id"], []))
+        claims.append(_artifact("Claim", issuer, config["issued_at"], {
+            "profile": SOURCED_PROFILE, "signature": SOURCED_SIGNATURE, "context": config["context"],
+            "sentenceMediaType": SOURCED_SENTENCE,
+            "sentence": {"origin": model["origin"], "record_id": record["id"],
+                         "content_digest": digest(_record_content(record, model["sources"]))},
+            "snapshotDigests": [snapshot["digest"]], "provenance": provenance}))
+    policy = _artifact("ConnectionPolicy", issuer, config["issued_at"], {"rules": deepcopy(config.get("rules", []))})
+    descriptor = _artifact("LighthouseDescriptor", issuer, config["issued_at"], {
+        "name": config["name"], "protocolVersions": ["0.1"], "profiles": [SOURCED_PROFILE], "actions": ACTIONS,
+        "artifactEndpoints": [{"kind": a["kind"], "locator": a["id"]} for a in [snapshot, *claims, policy]]})
+    return {"format": SOURCED_FORMAT, "version": 1, "descriptor": descriptor, "snapshot": snapshot,
+            "claims": claims, "policy": policy, "carried": []}
+
+
+def validate_sourced(package):
+    """Refuses a sourced publication whose artifacts, keys, content digests, snapshot names or crossing rules don't
+    hold. The receiver recomputes every key from its record (spec: "A strong key proves sameness")."""
+    _keys(package, {"format", "version", "descriptor", "snapshot", "claims", "policy", "carried"})
+    if package["format"] != SOURCED_FORMAT or package["version"] != 1:
+        raise ValueError("Unsupported sourced publication format")
+    descriptor = verify(package["descriptor"], "LighthouseDescriptor")
+    snapshot = verify(package["snapshot"], "Snapshot")
+    policy = verify(package["policy"], "ConnectionPolicy")
+    claims = [verify(c, "Claim") for c in _list(package["claims"])]
+    issuer = _uri(descriptor["issuer"])
+    if any(a["issuer"] != issuer for a in [snapshot, policy, *claims]):
+        raise ValueError("Publication issuers disagree")
+    declaration, state = descriptor["payload"], snapshot["payload"]
+    if (declaration["profiles"] != [SOURCED_PROFILE] or declaration["actions"] != ACTIONS
+            or state["profile"] != SOURCED_PROFILE or state["signature"] != SOURCED_SIGNATURE):
+        raise ValueError("Unsupported publication profile")
+    model = state["model"]
+    _keys(model, {"schema_version", "origin", "title", "sources", "items", "relations"})
+    for source in _list(model["sources"]):
+        if "keys" not in source:
+            raise ValueError("A source carries no keys")
+        plain = {k: v for k, v in source.items() if k != "keys"}
+        if source["keys"] != source_key(plain):
+            raise ValueError(f"Source {plain.get('id')!r} carries keys that don't match its record")
+    for item in _list(model["items"]):
+        if "provenance" in item:
+            raise ValueError("An item carries its provenance map")
+        expected = issuer if item.get("status") == "reviewed" else ""
+        if item.get("reviewed_by") != expected:
+            raise ValueError("An item carries a reviewer's name")
+    _bundle({"schema_version": 1, "title": model["title"],
+             "sources": [{k: v for k, v in s.items() if k != "keys"} for s in model["sources"]],
+             "items": model["items"], "relations": model["relations"]})
+    records = {item["id"]: item for item in model["items"]}
+    found = set()
+    for claim in claims:
+        payload = claim["payload"]
+        if payload["profile"] != SOURCED_PROFILE or payload["sentenceMediaType"] != SOURCED_SENTENCE:
+            raise ValueError("A claim isn't under the sourced profile")
+        if payload["snapshotDigests"] != [snapshot["digest"]]:
+            raise ValueError("A claim names another snapshot")
+        record_id = payload["sentence"]["record_id"]
+        if record_id not in records or record_id in found:
+            raise ValueError("A claim names no record of its snapshot, or one twice")
+        if payload["sentence"]["content_digest"] != digest(_record_content(records[record_id], model["sources"])):
+            raise ValueError("A claim's content digest doesn't match its record")
+        found.add(record_id)
+    if found != set(records):
+        raise ValueError("The claims don't cover the snapshot's records")
+    expected_endpoints = [{"kind": a["kind"], "locator": a["id"]} for a in [snapshot, *claims, policy]]
+    if declaration["artifactEndpoints"] != expected_endpoints:
+        raise ValueError("Descriptor references do not match publication artifacts")
+    for carried in _list(package["carried"]):
+        _keys(carried, {"claim", "snapshot"})
+        foreign, held = verify(carried["claim"], "Claim"), verify(carried["snapshot"], "Snapshot")
+        if foreign["payload"]["snapshotDigests"] != [held["digest"]]:
+            raise ValueError("A carried claim doesn't name its carried snapshot")
+    return package
