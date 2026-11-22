@@ -1,6 +1,6 @@
 # Agents that get stuck: fixed, random and adaptive exploration against four traps (north-star test 4)
 
-Draft 2, 2026-11-22. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
+Draft 3, 2026-11-22. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
 fresh reviewer approves it in Andy's place, and Andy can veto. The shape was agreed in all hands (Tardis 816233f1;
 Serenity f60bbed1, 51f449fe and 49bf4b90; Tardis eadcff61).
 
@@ -8,6 +8,12 @@ Serenity f60bbed1, 51f449fe and 49bf4b90; Tardis eadcff61).
   structure, with three required changes, R1 to R3. Serenity's watcher run added the ceiling point, R4 (d9e5c80d).
 - **Draft 2** makes all four and closes the three open questions as Serenity answered them: Thompson stays, seeded;
   `premise` drops counts; 20 seeds, with the number of worlds per trap fixed in "The worlds".
+- **Draft 2 with "The worlds" (bdf0eba5)** went to a fresh reviewer: REVISE, with nine required changes, V1 to V9
+  (`docs/superpowers/reviews/2026-11-22-north-star-test-4-review-1.md`, 8180d090; all hands 9f2fda21).
+- **Draft 3** makes exactly those nine, in the reviewer's words wherever it gave them. **V2 to V5 change "The
+  policies",** which draft 2 fixed by hash (8b56bd8e…b48b1d). Each change is a reading the reviewer showed the text
+  already forced, or one it required, never a choice made from a world rule or from its numbers. The re-check reads
+  that section's diff for exactly this. "The worlds" is unchanged.
 
 ## The question
 
@@ -60,6 +66,29 @@ therefore moves from Serenity to a fresh implementer, and Serenity's rules becom
 
 Flags change nothing in the world. Whether a flag counts as naming the trap is the world's frozen naming rule.
 
+**The exact forms (V1, V2):**
+- **An entry's `state`** is the state's id after the step. A run starts at `"L0"`, and the start counts as the first
+  arrival there.
+- **`turn`** counts from 1, and the runner writes it.
+- **`verdict`** is `"pass"` or `"fail"`.
+- **An option** is a dict `{"name": str, "content": str}`. A policy returns `(index, flags)`, where `index` points into
+  `options` and `flags` is a list of one-key dicts as above. The values of `repeat` are content strings, of `cycle`
+  state ids, and of `contradiction` and `premise` turn numbers.
+- **What the policy is given:** the runner calls the policy with the record so far, the options of the current state
+  (the state of the record's last entry, or `"L0"` for an empty record), and the run's seed.
+- **An arrival** is an entry whose state differs from the state before it: the previous entry's, or `"L0"` for the
+  first entry.
+- **"The call just after turn t"** is the call made with a record of length t. **"The call on an arrival"** is the
+  one whose record ends with that arrival.
+- **A naming rule** is `named(world, record, flags_per_call) -> True | False | None`, where `flags_per_call[i]` is the
+  flags of the call made with a record of length i. None means the run wasn't exposed, or the call the rule names
+  doesn't exist.
+- **A false name (V2)** is the trap's flag raised at any call of a twin run, for all four traps. It's reported beside
+  each naming rule.
+- **The runner and the scorer** are written by a third fresh agent, from "The contract" and "Stage A" alone. It reads
+  neither half's code nor the other sections. The runner calls a world and a policy, logs every call's flags, and
+  applies `recovered`, the budget and the naming rules.
+
 **Twins and the oracle (R2):** each trapped world has an untrapped twin: the same seed, states and approaches, with
 only the trap removed. The world half's own tests include an **oracle policy** that knows the solution, and they show
 that the oracle recovers within `budget` in both twins. A world where the oracle can't recover is a broken world, not
@@ -68,20 +97,29 @@ a stuck agent, and is fixed before any policy runs.
 **A run** is one policy in one world for at most `budget` turns. It stops at the first turn whose state passes
 `recovered`. It's scored on recovered (yes or no), turns to recovery, and trap named (yes or no, by the naming rule in "The
 worlds"). Each policy runs in both twins, so a recovery lost to a trap shows as the difference between them.
-Turns used and distinct contents tried are reported as activity, never scored.
+Activity is reported beside them, never scored: turns used, and distinct contents tried, in runs that recover and in
+runs that don't. So "only generates activity" reads as many distinct contents tried in a run that doesn't recover.
 
 ## The policies: what each computes, said before any world exists
 
-- **Fixed:** the options in the order the world lists them, the first not yet tried by name, then from the top again.
-  It reads nothing else in the record and raises no flags.
-- **Random:** a uniform draw over the options, from `numpy.random.default_rng(seed)`, with no memory and no flags.
-- **Adaptive by name:** Thompson sampling, seeded from the run's seed, with a Beta(1, 1) prior per approach
-  **name**. Successes and failures are
-  counted from `verdict` only, never from `summary`. It raises `cycle` on a revisited state, `contradiction` when a
-  summary disagrees with its verdict, and `premise` on an observation, after which it drops the counts of the named
-  contents.
-- **Adaptive by content:** the same, keyed by **content**. It also raises `repeat` when an option's content has been
-  tried under another name.
+- **Fixed (V4):** the first option, in the world's order, with the fewest tries by name in the whole record. That's a
+  round robin by name. It reads nothing else in the record and raises no flags.
+- **Random (V3):** each call builds its own generator, `numpy.random.default_rng([seed, len(record)])`, and draws one
+  index uniformly over the options. It has no memory and raises no flags.
+- **Adaptive by name:** Thompson sampling with a Beta(1, 1) prior per approach **name**. Successes and failures are
+  counted from `verdict` only, never from `summary`. **Each call (V3)** builds its own generator,
+  `numpy.random.default_rng([seed, len(record), 1])`, takes one Beta(1 + passes, 1 + fails) draw per option in
+  `options` order, and picks the largest.
+- **Its flags (V2, V5):**
+  - `cycle` is raised at the call on any arrival at a state after the first arrival there;
+  - `contradiction` is raised once, at the call just after the turn whose `summary.says` disagrees with its
+    `verdict`;
+  - `premise` is raised once, at the call just after the turn whose entry carries an observation.
+- **The `premise` drop (V5):** from that call on, every entry whose content the observation names is dropped from the
+  counts, the observation's own turn included. By name, those entries leave their names' counts.
+- **Adaptive by content:** the same, keyed by **content**. It also raises `repeat` at every call for each option whose
+  content has been tried under a different name from the one it's offered under now.
+- **Seeds (V3):** the policy seeds are 0 to 19, and a world and its twin run with the same seed.
 
 **What follows from this, argued before any run:**
 - The renamed-idea trap separates the two adaptive keys by construction: by name, a renamed failed idea is a fresh
@@ -91,20 +129,29 @@ Turns used and distinct contents tried are reported as activity, never scored.
   the summary text.
 - A cycle hurts fixed only if the world's order revisits the state, and random in expectation by the share of its
   draws that do. Whether adaptive escapes depends on whether the cycle's approaches fail their checks.
+- **Fixed keys by name too (V4),** so a renamed failed idea is untried to it. The reviewer's simulation of the spec as
+  written found fixed recovering in 52 of 100 renamed worlds, against 100 of their twins. That's the reviewer's
+  figure, not stage A's.
 
 ## Stage A: argued, checked
 
 Stage A has row 6's property: with planted tables and no model, each policy's behaviour at each trap follows from how
 it keys its record. So it's labelled **"argued, checked"**, and it serves three ends:
-1. **The ceiling, measured first (R4):** per trap, the share of worlds where the pair that matters differs **in
-   outcome**, meaning recovery or a counted naming flag, over 20 seeds per world. Two policies picking different
-   approaches doesn't count. The pairs that matter are each adaptive policy against fixed and against random, and for
-   the renamed idea, adaptive by name against adaptive by content. Thompson's seeds add spread, so the ceiling is
-   reported per seed as well as pooled.
+1. **The ceiling, measured first (V6):**
+   - **The trap effect:** per policy and world, the recovery rate in the trapped world minus the rate in its twin, over
+     the 20 paired seeds.
+   - **Per pair:** the mean over the trap's 100 worlds of the difference between the two policies' trap effects, with a
+     95% bootstrap CI over worlds: 10,000 resamples, `numpy.random.default_rng(20261130)`, percentile interval.
+   - **The pairs:** each adaptive policy against fixed and against random, and adaptive by name against adaptive by
+     content.
+   - **Naming is reported beside the ceiling, never inside it:** per trap and policy, named on exposure, the false-name
+     rate in the twins, and the runs not exposed.
+   - Two policies picking different approaches doesn't count.
 2. **The scorer's test:** every world's recovery check and naming rule, run against every policy.
-3. **Choosing B's traps:** a trap goes to stage B only if its ceiling is above zero, or if its effect is on what a
-   real turn reads (the summary trap), which stage A can't see. The spec names which applies to each trap before A
-   runs.
+3. **Choosing B's traps (V7):** a trap goes to stage B if any pair's CI from point 1 excludes zero. The summary trap
+   goes by the reads clause instead: its effect is on what a real turn reads, which stage A can't see. Named now:
+   the cycle, the renamed idea and the map-breaking observation go by the CI rule, and the summary trap goes to B by
+   the reads clause.
 
 ## Stage B: the measurement (sketched here, pre-registered later)
 
@@ -113,8 +160,11 @@ it keys its record. So it's labelled **"argued, checked"**, and it serves three 
   `summary` and any `observation` in the record's structured form. A planted trap may overwrite them, as the world
   says.
 - **The budget is turns,** meaning model calls. Tokens and wall time are recorded beside them, never scored.
-- **The size** comes from stage A's separations, so B is sized before it runs. v2's stage 2 pilot needed 481 items
-  against a ceiling of 40, and B stops by the same rule if it can't be afforded.
+- **The size (V8):** B's size is fixed in its pre-registration, from a pilot. A's separations come from planted tables
+  and don't bound B. v2's stage 2 pilot needed 481 items against a ceiling of 40, and B stops by the same rule if it
+  can't be afforded.
+- **What a real turn works on** when the approaches are planted digests, and what its frozen check checks, are fixed in
+  B's pre-registration. This sketch doesn't decide them.
 - **Content-keying on real text** needs a rule for when two written approaches are one idea. B's pre-registration
   fixes it, and it isn't decided here.
 - **Where B runs:** on the Pi or on Tardis. v2's whole suite passes on both: on Tardis at v2 7a78136e, on 2026-11-22,
@@ -128,6 +178,18 @@ it keys its record. So it's labelled **"argued, checked"**, and it serves three 
   unlike real work.
 - Stage B's agents read the record's text, so its results depend on how a summary is written, not only on the
   policy.
+- **(V9a)** In A, "trap named" is fixed by the definitions: every exposed adaptive run names the trap, and fixed and
+  random never do.
+- **(V9b)** The base world uses one key at every level. That rewards keying that ignores the state, which is how all
+  four policies key.
+- **(V9c)** The cycle is a three-state detour, and every loop state offers the key. So it doesn't test long cycles.
+- **(V9d)** The renamed trap's only effect on recovery falls on fixed, which also keys by name. So the trap separates
+  the two adaptive keys only through the `repeat` flag.
+- **(V9e)** Trap 4's twin removes both the change and the observation, so no form shows whether the observation
+  itself helps.
+- **A disclosed coupling (the reviewer's advisory 1):** Serenity answered the `premise` question before writing trap
+  4, and trap 4's observation names exactly what `premise` drops. The flags map one-to-one onto row 4's traps by
+  design, which is why naming is fixed by the definitions.
 
 ## The worlds (Serenity writes this section; R1, R2, R3)
 
