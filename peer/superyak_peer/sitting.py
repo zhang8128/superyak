@@ -27,9 +27,17 @@ OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormh
 # lighthouses from this checkout's engram code, after the embedder it may ask (train 1109 went public on Nov 4's code).
 OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder', 'superyak-engram-publisher')
 ENGRAM_UNITS = {'superyak-embedder': 'the embedder', 'superyak-engram-publisher': 'the publisher'}  # on engram/.venv
-# The connector isn't deployed (a person's act), so its routes stay closed on the public host.
+# The connector's routes exist only when the lighthouse runs with --public-origin, which is its deploy (Andy's act,
+# 11-21). Closed, every one is 404. Open, each refuses an anonymous GET in its own way. test_sitting pins both sets to
+# the app's real answers to the sitting's own probe. The sitting reads the lighthouse unit's own command line to know
+# which to expect, so a sitting neither reverts a deployed connector nor lets a closed one open by accident.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
+# Open, as the sitting asks: from 127.0.0.1 with the public host. /token is POST only, so a GET is the app's 405 here,
+# though Funnel's public lane answers it 404 (the live lighthouse showed both on 11-21).
+PROBES_OPEN = {'/mcp': '405', '/token': '405', '/api/connected-apps': '401', '/api/connected-apps/notice': '401',
+               '/api/admin/connected-apps': '401'}
+_PUBLIC_ORIGIN_FLAG = re.compile(r'(?:^|[\s;=])--public-origin(?:[\s=]|$)')
 HEALTH_WAIT = ('--max-time', '5', '--retry', '60', '--retry-connrefused', '--retry-delay', '1', '--retry-max-time', '90')
 PROBE_WAIT = ('--max-time', '10')
 SETTLE_SECONDS = 15  # a unit that dies at import reads active for a moment after its restart
@@ -128,6 +136,12 @@ class Sitting:
                        *(f'--property={p}' for p in props))[1]
         return dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
 
+    def expected_probes(self):
+        """PROBES_OPEN when the lighthouse unit's command line has --public-origin, else PROBES. A command line
+        that can't be read expects the connector closed, so an open one then fails the check."""
+        command = self.unit(FIRST_UNIT, 'ExecStart').get('ExecStart', '')
+        return PROBES_OPEN if _PUBLIC_ORIGIN_FLAG.search(command) else PROBES
+
     def http(self, path, wait):
         return self.run('curl', '-s', *wait, '-o', '/dev/null', '-w', '%{http_code}', '-H', f'Host: {self.host}',
                         '-H', 'X-Forwarded-Proto: https', f'http://127.0.0.1:{self.port}{path}')[1]
@@ -224,9 +238,12 @@ class Sitting:
         self.note(f'health HTTP {health}')
         if health != '200':
             failed.append(f'health answered {health}')
-        probes = {path: self.http(path, PROBE_WAIT) for path in PROBES}
-        self.note('closed routes: ' + ', '.join(f'{path} {code}' for path, code in probes.items()))
-        failed += [f'{path} answered {code}, not {PROBES[path]}' for path, code in probes.items() if code != PROBES[path]]
+        expected = self.expected_probes()
+        probes = {path: self.http(path, PROBE_WAIT) for path in expected}
+        self.note(('open' if expected is PROBES_OPEN else 'closed') + ' connector routes: '
+                  + ', '.join(f'{path} {code}' for path, code in probes.items()))
+        failed += [f'{path} answered {code}, not {expected[path]}' for path, code in probes.items()
+                   if code != expected[path]]
         if self.optional is None:  # a caller that skipped preconditions (a test, a put-back of one)
             self.choose_optional()
         for name in (*OTHER_UNITS, *self.optional):
