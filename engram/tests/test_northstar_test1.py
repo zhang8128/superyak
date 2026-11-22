@@ -828,6 +828,66 @@ class TestSummarize:
         assert summary["secondary_e_vs_e_all"]["e_calls"] == 1
 
 
+class TestSummarizeByClass:
+    """The coordinator's per-class report: the primary and secondary computed within each substitution
+    class, plus "clean_classes" (year and person together -- the substitutions that keep their kind)."""
+
+    def _sample(self):
+        return [
+            {"id": "y0", "arm": "corrected", "answer_class": "year"},
+            {"id": "y1", "arm": "corrected", "answer_class": "year"},
+            {"id": "p0", "arm": "corrected", "answer_class": "person"},
+            {"id": "p1", "arm": "corrected", "answer_class": "person"},
+            {"id": "o0", "arm": "corrected", "answer_class": "other_name"},
+            {"id": "o1", "arm": "corrected", "answer_class": "other_name"},
+        ]
+
+    def test_by_class_groups_corrected_questions_and_clean_classes_merges_year_and_person(self):
+        sample = self._sample()
+        ids = [q["id"] for q in sample]
+        before_e = {qid: {"answer": "wrong", "em": False} for qid in ids}  # E never reasked, always wrong
+        after_b = {qid: {"answer": "right", "em": True} for qid in ids}    # B-all and E-all always right
+        e_all = {qid: {"answer": "right", "em": True} for qid in ids}
+
+        summary = ns.summarize(sample, before_e, after_b, {}, after_b, e_all, {}, set(), {})
+        by_class = summary["by_class"]
+
+        assert set(by_class) == {"year", "person", "other_name", "clean_classes"}
+        # Every id disagrees with B-all/E-all the same way (always wrong against always right), so every
+        # bucket's CI is the same zero-variance -100-point gap; only n and the ids behind it differ.
+        same_gap = {"points": -100.0, "ci95": [-100.0, -100.0]}
+        for cls, n in (("year", 2), ("person", 2), ("other_name", 2)):
+            assert by_class[cls]["n"] == n
+            assert by_class[cls]["primary"]["diff_ci"] == {"n": n, **same_gap}
+            assert by_class[cls]["primary"]["verdict"] == "fails"  # more than 5 points under, every bucket
+            assert by_class[cls]["primary"]["e_calls"] == 0        # nothing reasked anywhere
+            assert by_class[cls]["secondary_e_vs_e_all"]["em_ci"] == {"n": n, **same_gap}
+        assert by_class["clean_classes"]["n"] == 4
+        assert by_class["clean_classes"]["primary"]["diff_ci"] == {"n": 4, **same_gap}
+        # clean_classes is exactly year's and person's ids, nothing from other_name.
+        assert by_class["clean_classes"]["ids"] == ["p0", "p1", "y0", "y1"]
+
+    def test_by_class_is_none_for_a_class_with_fewer_than_two_but_other_classes_still_compute(self):
+        sample = [{"id": "y0", "arm": "corrected", "answer_class": "year"},
+                 {"id": "p0", "arm": "corrected", "answer_class": "person"},
+                 {"id": "p1", "arm": "corrected", "answer_class": "person"}]
+        rows = {qid: {"answer": "a", "em": True} for qid in ("y0", "p0", "p1")}
+        summary = ns.summarize(sample, rows, rows, {}, rows, rows, {}, set(), {})
+        by_class = summary["by_class"]
+        assert by_class["year"]["n"] == 1 and by_class["year"]["primary"] is None
+        assert by_class["person"]["n"] == 2 and by_class["person"]["primary"] is not None
+        assert by_class["clean_classes"]["n"] == 3  # year's one id plus person's two, still combined
+
+    def test_a_class_absent_from_the_sample_is_simply_absent_from_by_class(self):
+        sample = [{"id": "o0", "arm": "corrected", "answer_class": "other_name"},
+                 {"id": "o1", "arm": "corrected", "answer_class": "other_name"}]
+        rows = {qid: {"answer": "a", "em": True} for qid in ("o0", "o1")}
+        summary = ns.summarize(sample, rows, rows, {}, rows, rows, {}, set(), {})
+        assert set(summary["by_class"]) == {"other_name", "clean_classes"}
+        assert summary["by_class"]["clean_classes"]["n"] == 0
+        assert summary["by_class"]["clean_classes"]["primary"] is None
+
+
 # =====================================================================================
 # build_plan end to end, on the planted corpus (no model calls)
 # =====================================================================================

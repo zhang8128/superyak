@@ -865,31 +865,53 @@ def _usage(prior: dict | None, new: dict, seconds: float = 0.0) -> dict:
     return out
 
 
+def _primary_and_secondary(ids: list[str], e_final: dict, after_b: dict, e_all: dict, reask_ids) -> tuple:
+    """The primary (E against B-all, paired em CI and calls, through ``primary_verdict``) and the secondary
+    (E against E-all, revision 4: what provenance targeting saves apart from how well E retrieves) over
+    exactly ``ids`` -- ``(None, None)`` below ``paired_ci``'s own minimum of two rows."""
+    if len(ids) < 2:
+        return None, None
+    rows = [{"e": e_final[qid]["em"], "b_all": after_b[qid]["em"], "e_all": e_all[qid]["em"]} for qid in ids]
+    em_ci = paired_ci(rows, lambda r: r["e"], lambda r: r["b_all"])
+    e_calls = sum(1 for qid in ids if qid in reask_ids)
+    b_calls = len(ids)  # B-all re-asks every question after the correction
+    primary = primary_verdict(em_ci, e_calls, b_calls)
+    secondary = {"em_ci": paired_ci(rows, lambda r: r["e"], lambda r: r["e_all"]),
+                "e_calls": e_calls, "e_all_calls": len(ids)}
+    return primary, secondary
+
+
 def summarize(sample: list[dict], before_e: dict, before_b: dict, after_e: dict, after_b: dict,
              e_all: dict, closed_book: dict, reask_ids, usage: dict) -> dict:
     """The measures computed the same way regardless of sample size (10 for a smoke, 800 for the full run):
-    the primary (E against B-all on the corrected half, paired em CI and calls, through `primary_verdict`),
-    the secondary (E against E-all, revision 4: what provenance targeting saves, apart from how well E
-    retrieves), controls left unchanged, and stale answers read beside closed book."""
+    the primary (E against B-all on the corrected half) and the secondary (E against E-all, revision 4),
+    both overall and ``by_class`` (year, person, other_name, and person+year together as "clean_classes" --
+    the coordinator's label for the substitutions that keep their kind), controls left unchanged, and stale
+    answers read beside closed book."""
     corrected_ids = sorted(q["id"] for q in sample if q["arm"] == "corrected")
     control_ids = sorted(q["id"] for q in sample if q["arm"] == "control")
     e_final = {qid: (after_e[qid] if qid in reask_ids else before_e[qid]) for qid in before_e}
 
-    primary = secondary = None
-    if len(corrected_ids) >= 2:
-        corrected_rows = [{"e": e_final[qid]["em"], "b_all": after_b[qid]["em"]} for qid in corrected_ids]
-        em_ci = paired_ci(corrected_rows, lambda r: r["e"], lambda r: r["b_all"])
-        e_calls_corrected = sum(1 for qid in corrected_ids if qid in reask_ids)
-        b_calls_corrected = len(corrected_ids)  # B-all re-asks every question after the correction
-        primary = primary_verdict(em_ci, e_calls_corrected, b_calls_corrected)
+    ids_by_class: dict[str, list[str]] = {}
+    for q in sample:
+        if q["arm"] == "corrected":
+            ids_by_class.setdefault(q.get("answer_class"), []).append(q["id"])
 
-        e_all_rows = [{"e": e_final[qid]["em"], "e_all": e_all[qid]["em"]} for qid in corrected_ids]
-        secondary = {"em_ci": paired_ci(e_all_rows, lambda r: r["e"], lambda r: r["e_all"]),
-                    "e_calls": e_calls_corrected, "e_all_calls": len(corrected_ids)}
+    by_class = {}
+    for cls, ids in ids_by_class.items():
+        ids = sorted(ids)
+        primary, secondary = _primary_and_secondary(ids, e_final, after_b, e_all, reask_ids)
+        by_class[cls] = {"n": len(ids), "ids": ids, "primary": primary, "secondary_e_vs_e_all": secondary}
+    clean_ids = sorted(ids_by_class.get("year", []) + ids_by_class.get("person", []))
+    clean_primary, clean_secondary = _primary_and_secondary(clean_ids, e_final, after_b, e_all, reask_ids)
+    by_class["clean_classes"] = {"n": len(clean_ids), "ids": clean_ids, "primary": clean_primary,
+                                 "secondary_e_vs_e_all": clean_secondary}
+
+    primary, secondary = _primary_and_secondary(corrected_ids, e_final, after_b, e_all, reask_ids)
 
     return {
         "corrected_ids": corrected_ids, "control_ids": control_ids,
-        "primary": primary, "secondary_e_vs_e_all": secondary,
+        "primary": primary, "secondary_e_vs_e_all": secondary, "by_class": by_class,
         "controls": controls_unchanged(before_b, after_b, control_ids),
         "stale_answers": stale_answers(before_e, e_final, corrected_ids, closed_book),
         "cost": usage,
@@ -1082,8 +1104,10 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     redirects = sqlite3.connect(f"file:{args.redirects}?mode=ro", uri=True)
     plan = build_plan(rows, excluded, corpus, redirects, target=args.target, min_qualifying=args.min_qualifying)
     if args.out:
+        # sort_keys so the file is byte-identical across runs over the same inputs (no timestamp or other
+        # run-varying field is written anywhere in `plan`) -- a deterministic pre-registration artifact.
         with open(args.out, "w", encoding="utf-8") as handle:
-            json.dump(plan, handle, indent=1)
+            json.dump(plan, handle, indent=1, sort_keys=True)
     summary = {k: v for k, v in plan.items() if k not in ("questions", "overlay")}
     summary["first_substitutes"] = [
         {"id": q["id"], "class": q["answer_class"], "answer": q["answer"], "substitute": q["substitute"]}
