@@ -1,14 +1,17 @@
 # Claims that cross between peers: the transport (north-star test 5, Tardis's half)
 
-Revision 3, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. Under station law section 3,
+Revision 4, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. Under station law section 3,
 a fresh reviewer approves it in Andy's place, and Andy can veto. Rio Grande is its partner reader.
 
 - **Revision 1 (09923aef)** went to a fresh reviewer, who approved it with seven required changes and twelve advisory
   ones (all hands 82edc797). Rio Grande's partner read asked for two more and a small one (9c1afb0e).
 - **Revision 2 (f8ece5f5)** made all of them, named R1 to R7, A1 to A12 and RG1 to RG3. Its re-check found R1 to R7
   fixed, and asked for four more and seven advisory ones (834c18a4).
-- **This revision makes those too.** They're named N1 to N4, and A1 to A7 of the re-check, where they land. Where an
-  advisory number appears twice, the re-check's is the one in T1, T2's list, T6 and T7.
+- **Revision 3 (d3b2b710)** made those, named N1 to N4, and A1 to A7 of the re-check. Its third check found N1 to N4
+  fixed, and approved it with one named change, N5, and five advisories (ed351ca0).
+- **This revision, 4, makes N5 and all five advisories.** It also cites the two checks Rio Grande moved into
+  `sourced.py` at 08d40fa2. Where an advisory number appears twice, the section it lands in says which check it's
+  from.
 
 This is the follow-up that [the claim-crossing spec](2026-11-22-claim-crossing-design.md) (revision 6, 84fafe71, with
 amendments 1 and 2) leaves to a transport: "who sent what: a sender comes from the crossing's authenticated peer, never
@@ -90,7 +93,15 @@ by the sender before it queues and again by the receiver.
    fault here is classified as today: a peer failure. So an unreachable peer gets `failing_since` and `last_problem`,
    and Ops hears after a day, even when only atlas rows are queued.
 2. **The write and the wait for the answer** get `3 s + payload bytes / PULL_RATE`, the rate pull already uses. That's
-   19 s for 1 MiB, and 5.2 s for the largest planted publication. **Only a timeout in this phase is the row's:**
+   19 s for 1 MiB, and 5.2 s for the largest planted publication.
+
+   **Only a timeout in this phase is the row's, and it's decided by the clock, not by the exception's class (N5).**
+   - After the pin has matched, any failure raised at or after this phase's deadline, on `time.monotonic()`, is the
+     row's. When the deadline passes, the watchdog shuts the socket (`transport.py:101-111`), so the failure arrives
+     as `BrokenPipeError`, `ssl.SSLError` or `RemoteDisconnected`, not only `TimeoutError`.
+   - A fault before the deadline, such as a reset mid-write, stays a peer failure.
+
+   When it is the row's:
    - the row is `failed`, with a backoff of its own, `min(3600, 60 × 2^attempts)` s in `outbox.next_attempt`;
    - the peer's other rows keep flowing;
    - `_due_rows` reads `outbox.next_attempt` for atlas rows, and `sync_once` stops resetting it to 0 for them
@@ -130,9 +141,13 @@ envelope, *before* the write. So a store transaction, such as `ask`'s on tardis-
   - On the station, `lessons_peers` holds the peers Andy confirmed for the lessons room. Today those are only his own.
   - On another peer, the origin comes from its agent's CONFIRM (`lessons.py:1322-1357`), checked against the room's
     owner, not confirmed by Andy.
-  - Listing a peer for the lessons room now also lets Atlas publications go to its typed-code contacts. So
-    `station-lessons-room`'s view says so, as `pair` prints its lessons line. A trust-made ship's contact is still
-    refused, by the typed-code rule above.
+  - Listing a peer for the lessons room now also lets Atlas publications go to its typed-code contacts. So both views
+    say so, as `pair` prints its lessons line:
+    - `station-lessons-room`'s, on the station;
+    - `make lessons-room`'s CONFIRM view on another peer (`record_lessons_room`, `lessons.py:1322-1358`), which opens
+      sends to the station.
+
+    A trust-made ship's contact is still refused, by the typed-code rule above.
 - **The package's own policy (R5, N4)** is read with string checks only, with no Atlas import. The sender refuses
   unless:
   - an `allow` rule grants `retain` with a `publishers` entry exactly equal to the destination's
@@ -167,6 +182,9 @@ envelope, *before* the write. So a store transaction, such as `ask`'s on tardis-
   - **A passing storage fault,** `sqlite3.OperationalError` (locked, busy, I/O or full), answers 503. That's
     peer-scoped, as it is for every row today, so the row is retried. Atlas rows go last, so a 503 doesn't hold back
     room messages in the pass.
+  - **An atlas receive waits at most about 2 s for the store,** through `transaction(wait=...)` (`db.py:179`), not the
+    Store's 30 s. So a busy store answers 503 well inside the sender's write deadline, rather than showing there as
+    the row's timeout.
   - **Nothing escapes as a 500.**
 - **What the receiver keeps,** beside each payload:
   - **the signed envelope, exactly as it arrived (RG2);**
@@ -239,8 +257,14 @@ No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
     is that origin. That's a **consistency check**; the signature is `atlas-verify`'s, since Atlas has no
     Ed25519 (A5).
   - It refuses a receiver-issued carried entry unless `own_publications` hold that claim digest with that snapshot
-    (R2).
-  - It refuses a notice that names a Snapshot not issued by the notice's own issuer (R3).
+    (R2). With no `own_publications` there's no receiver URI to take, so every receiver-issued carried entry is
+    refused (A4).
+  - Two of the reviewer's checks are in `sourced.py` itself, for every caller, since `rio-grande/claim-crossing-build`
+    08d40fa2:
+    - `validate_notice` refuses a notice naming a Snapshot another issuer issued (R3);
+    - a carried entry's claim and snapshot must share one issuer, at publish and at validate (R2's second check).
+
+    `received()` relies on them, and adds the check `sourced.py` can't make, the receiver's own publications.
   - Then it runs `validate_sourced` or `validate_notice`.
   - Its output feeds `held_claims`, `relation` and `apply_notice` unchanged, and `authorize` runs as the claim-crossing
     spec's table says, with T3's URIs.
@@ -263,8 +287,12 @@ No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
   - **the payload goes in a side table, `atlas_outgoing`, keyed by digest (A2).** `_delivery_authority` and `status()`
     parse every row's metadata and envelope inside a transaction (`federation.py:892, 928, 958-959`), so a payload
     in metadata would be parsed on every `deliveries` call.
-- **`_prepare_in` has an atlas branch:** it re-checks T2's contact rules, then builds the envelope from `metadata`. A
-  contact that fails them now makes the row `withdrawn`. Today a non-room row would raise 404.
+- **`_prepare_in` has an atlas branch:** it re-checks T2's contact rules, then builds the envelope from
+  `atlas_outgoing`. A contact that fails them now makes the row `withdrawn`. Today a non-room row would raise 404.
+- **The signed envelope of an atlas row** is kept in `atlas_outgoing` too, not in `outbox.envelope` (advisory 2 of
+  the third check). `status()` runs `SELECT *` and parses every envelope inside a transaction
+  (`federation.py:928, 958-959`). Its atlas branch takes the action from `row['action']`, which never changes at
+  prepare, and loads no payload.
 - **`status()` and `_delivery_authority`:**
   - `_delivery_authority` names the ship's owner as an atlas row's author, so Andy's `deliveries` and `retry` show
     and retry it, under the ship's name;
@@ -320,7 +348,7 @@ Nothing is a score, and a failure is a result.
    - a recipient that isn't a ship;
    - a contact only an owner trust confirmed;
    - a contact on a peer the lessons chain doesn't list;
-  - an ownerless ship;
+   - an ownerless ship;
    - a held contact;
    - an unpaired origin;
    - a policy with no exact `retain` allow for the destination, a `*` in any selector (`actions: ["*"]` among them), or
@@ -334,7 +362,11 @@ Nothing is a score, and a failure is a result.
    atlas row, and a room message queued after it is still delivered.
 4. **No stall, no hidden outage, no held gate:**
    - On a link throttled below the write deadline, an atlas row times out alone, with its own backoff, and a room
-     message queued after it is delivered in the same pass.
+     message queued after it is delivered in the same pass. The throttled case ends through the watchdog's shutdown,
+     as a `BrokenPipeError` mid-write and a `RemoteDisconnected` at the answer, not only through `socket.timeout`
+     (N5).
+   - A reset before the write deadline stays a peer failure (N5).
+   - A receiver whose store is locked answers 503 within its 2 s wait.
    - An unreachable peer with only an atlas row queued still gets `failing_since` and `last_problem` (N1).
    - A store transaction completes while a throttled atlas push is writing (N2).
    - Two atlas rows to one peer go in two passes (A3).
