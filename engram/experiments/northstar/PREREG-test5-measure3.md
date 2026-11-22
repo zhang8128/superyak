@@ -1,7 +1,8 @@
 # North-star test 5, Measure 3: real collections, crossed, against a blind audit
 
-**Draft, revision 4, 2026-11-22. Tardis. Not yet fixed.** It's fixed only after three things: Rio Grande's and
-Serenity's reads, a fresh reviewer's approval under station law section 3, and a commit of its final text. Nothing
+**Revision 4, 2026-11-22. Tardis. Approved under station law section 3** by a fresh reviewer, after four checks, each
+posted whole in all hands (0705b345, 03ac0652, and the confirmation of revision 4). Andy can veto. It's **fixed** when
+`measure3.py`'s commit hash is added below and that commit is in place, before the first search. Nothing
 below changes after the first search starts. A finding during the run is reported; it doesn't change this page.
 
 - **Revision 1 (b89f6871):** Rio Grande's and Serenity's reads (83fe41a3, 53b478e5).
@@ -10,7 +11,9 @@ below changes after the first search starts. A finding during the run is reporte
 - **Revision 3 (121fef50)** made them all, named V1 to V10 and VA1 to VA10, with Rio Grande's as RG6. Rio Grande gave
   its yes on its parts (cbd02b27). The reviewer's re-check approved it with six named changes and six advisories
   (03ac0652), and Serenity's watcher raised three points (e95d65a8).
-- **This revision makes those,** named W1 to W6, WA1 to WA6 and SW1 to SW3.
+- **This revision makes those,** named W1 to W6, WA1 to WA6 and SW1 to SW3. Its confirmation approved it with one named
+  change, W6's two readings overlapping, which is made here, along with its gap on PMID-only classes and the component
+  bootstrap's specifics.
 
 **The source of each part:**
 - **The measure:** the claim-crossing spec on main, "Measure", item 3.
@@ -123,7 +126,8 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   - **or UNCLEAR,** with its reason.
 - **Version classes (W4):** the transitive closure of the named version links: Crossref's `relation` (`is-preprint-of`,
   `has-preprint`), the medRxiv/bioRxiv API's published DOI, and PubMed's linked preprint. A class is named by its
-  lowest DOI. "Identity" in the most-shared rule, the notice reach and the overlap count means this class.
+  lowest DOI, or its lowest PMID when it has no DOI. "Identity" in the most-shared rule, the notice reach and the overlap
+  count means this class.
 - **Then each cross source pair's label is derived mechanically from the two classes:**
   - **SAME:** one class;
   - **UNCLEAR:** either identity is UNCLEAR, or two unlinked classes with **the same title (case and punctuation
@@ -188,11 +192,12 @@ For B1, B2 and B3, using the truth's own wording (W1):
   - **"The structure helps on real data"** only if all three hold:
     1. REL's cost is below B2's, with the **lower bound** of the 95% interval of `cost(B2) − cost(REL)` above 0;
     2. the point estimate stays above 0 with each of the three most-shared identities' pairs dropped in turn;
-    3. REL's cost is below U0's, O1's and I1's (W2).
+    3. REL's cost is below U0's, O1's and I1's (W2);
+    4. REL's cost is below B3's on the point estimate (W6).
   - **"Too little overlap to test" (V8),** checked first (WA3): fewer than 3 shared identities, or fewer than 10 decided
     not-independent pairs.
-  - **"Keys and titles help; the ordered rules aren't shown to" (W6),** if REL meets 1 to 3 against B2 but its cost isn't
-    below B3's on the point estimate.
+  - **"Keys and titles help; the ordered rules aren't shown to" (W6)** is the reading *in place of* "helps" when 1 to 3
+    hold and 4 doesn't. So the two never both apply.
   - **Otherwise, "no measured gain".** With a few hundred pairs, that may mean the run was too small to see one, which
     is said beside it.
 - **The bootstrap (V6, WA1):** 10,000 replicates from `numpy.random.default_rng(20261126)`.
@@ -209,6 +214,10 @@ For B1, B2 and B3, using the truth's own wording (W1):
     else is recomputed, and the point estimate must stay above 0 all three times. That's condition 2.
   - **A component-clustered bootstrap** is a secondary whenever the graph has at least 10 components, and its interval
     is reported beside the primary's.
+    - **Nodes:** both sides' records, and the version classes they cite.
+    - **A draw:** components with replacement, to their count, with a pair counted by the product of its two records'
+      draws.
+    - **The seed:** `numpy.random.default_rng(20261127)`.
 - **Secondary:**
   - **for every method:** its answer × truth matrix, and the break-even abstention weight
     `(DE_B2 + 0.5·FM_B2 − DE_REL − 0.5·FM_REL) / ABS_REL`, or "none" when `ABS_REL` is 0 (VA1, WA2);
