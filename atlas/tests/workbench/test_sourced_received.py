@@ -155,3 +155,11 @@ def test_a_notice_naming_another_issuers_snapshot_is_refused(stores):
                          {"id": f"{uri('pi')}:context", "path": ["research"]}, AT)
     with pytest.raises(ValueError, match="another issuer"):
         received(kept("pi", "tardis", notice, kind="notice"), [tardis], received_publications=[pi])
+
+
+def test_a_file_from_an_origin_the_caller_does_not_trust_is_refused(stores):
+    pi, tardis = stores
+    file = kept("pi", "tardis", pi)
+    assert received(file, [tardis], trusted_origins=[PEER["pi"]])["origin"] == PEER["pi"]
+    with pytest.raises(ValueError, match="not one this store's peer had paired"):
+        received(file, [tardis], trusted_origins=[PEER["third"]])
