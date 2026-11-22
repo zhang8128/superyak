@@ -36,7 +36,8 @@ all 432 C/D cells, since every one passed the 0.1σ ceiling gate.
 | Do no harm, I − N in A, pooled | +0.0032σ | +0.0029σ to +0.0035σ (within ±0.05σ) |
 | Do no harm at the high-bias corner | +0.0013σ | +0.0007σ to +0.0019σ (within ±0.05σ) |
 
-- **Primary, as pre-registered: "the record can't be replaced by this inference."** The interval's upper end, 0.010,
+- **Primary, as pre-registered: "the record can't be replaced by this inference"**, inference from the reported values
+  alone. The interval's upper end, 0.010,
   is far under 0.5. The sensitivity set (the fixture's 158 cut cells) reads the same: S_I = 0.026 (0.024 to 0.028).
 - **By copier noise τ and copied share q,** S_I is:
   - **0.098 at τ = 0.5 and q = 0.5,** low copier noise and much copied, the only regime where inference recovers
@@ -58,8 +59,13 @@ all 432 C/D cells, since every one passed the 0.1σ ceiling gate.
   auditor. Copying moves conclusions a lot (the oracle's gain is 1.1σ). A kept record recovers all of it by
   construction, and even a half-kept record recovers 45%. Inference recovers under 1%, and about 10% only where the
   copier adds little noise and copies much.
-  - That's the essay's claim in a measured form: provenance has to be *kept* by the environment, because the reasoner
-    can't rebuild it afterwards.
+  - That's the essay's claim in a measured form, scoped: provenance has to be *kept* by the environment, because a
+    reasoner can't rebuild it afterwards *from the reported values alone*.
+  - **Scope (Rio Grande, all hands a03b7308):** the auditor saw only the reported values, where a copier shows only
+    as agreement in error. Real copying usually leaves more: the same wording, the same citation list, a later date,
+    the same rounding. An auditor reading those traces would likely recover more than 0.9%. So the result is
+    **"value-only inference can't replace a kept record"**, and inference from richer traces is untested. Measure 3's
+    real collections could probe it.
 - **What it doesn't show:**
   - **P is the oracle by construction,** so the gap is an upper bound on a real record's worth. P½ is one step towards
     a real, imperfect record, not a model of one.
