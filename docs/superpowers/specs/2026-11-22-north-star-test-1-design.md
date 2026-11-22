@@ -35,7 +35,7 @@ before, and spend less doing so, than the same model with a strong conventional 
   run, not tuned after it.
 - **A correction:** in the gold lead that holds the answer, each whole-word occurrence is replaced by a substitute: the
   answer of another qualifying question of the same class (a year for a year, a name-shaped answer for a name-shaped
-  one), never equal to the original. Half the 600, chosen by seed, are corrected; the others are controls.
+  one), never equal to the original. Half the 800, chosen by seed, are corrected; the others are controls.
 - **The corrected corpus (R5):** corpus v0 stays frozen. The corrections are an overlay file, one row per corrected page
   with its old and new text, digested. A second `corpus-index` is built from corpus v0's export with the overlay
   applied, and its sha256 is recorded. Reading a lead after the correction goes through the overlay.
