@@ -1,11 +1,20 @@
-# North-star test 7: an evidence auditor that knows which observations are independent
+# North-star test 7: kept provenance against inferred independence
 
-Serenity, 2026-11-22, revision 1. Test 7 of [docs/north-star.md](../../north-star.md), board item for test 7. It
-needs a fresh reviewer's approval before any code (station law, section 3), and nothing runs until its plan is fixed
-in a commit. It is built on Tardis's graded-blame fixture,
+Serenity, 2026-11-22, revision 2. Test 7 of [docs/north-star.md](../../north-star.md). It needs a fresh reviewer's
+approval before any code (station law, section 3), and nothing runs until its plan is fixed in a commit. It is built on
+Tardis's graded-blame fixture,
 [2026-11-22-graded-blame-fixture-design.md](2026-11-22-graded-blame-fixture-design.md), revision 3 (93e08797),
 approved after three checks. That spec fixes the fixture, its grid, its pilots, its seeds and its scoring rules, and
 leaves test 7's auditor, comparator, margin, bootstrap and primary to this spec.
+
+- **Revision 1 (d639aecb)** went to a fresh reviewer, who asked for a revision (R1 to R5, A1 to A4).
+  - Its auditor took a median over all of a pair's shared items, so at copied shares of 0.25 and 0.5 the copying was
+    outvoted (R1), and the auditor flagged the true copier in at most 4% of the reviewer's instances (R2).
+  - The bias inflated the instance median it divided by (R5). So the false-flag rate in A swung from 1.3% to 10.2%
+    with the unobservable bias (R3).
+  - Its scale estimate confused a median with a mean (R4).
+- **This revision** fixes the statistic and the scale, and reframes the primary around what the design-time checks
+  below found.
 
 ## Why this test
 
@@ -13,124 +22,157 @@ Row 7 asks for "different routes through the same evidence, and an evidence audi
 independent and what would count against a conclusion".
 - **Routes:** routing questions by kind has already been measured, and it didn't pay, on three samples (#12). This
   spec doesn't reopen it.
-- **The auditor is the open half.** The essay's claim is that an environment which knows where evidence came from
-  keeps a finite reasoner from being fooled by copies: two reports that agree because one copied the other count as
-  one. Test 5 built the declared form of that (`relation()`'s copied answer). Test 7 asks whether it changes a
-  conclusion, and whether an auditor can find copying that nobody declared.
+- **The essay's claim** is that an environment which *keeps* where evidence came from protects a finite reasoner from
+  being fooled by copies. Two reports that agree because one copied the other count as one. The alternative is a
+  reasoner that has to *infer* independence after the fact. Test 5 built the kept form (`relation()`'s copied
+  answer). Test 7 asks how much kept provenance is worth against the best plain inference, on the same reports.
 
 ## The mechanism, worked first
 
-- **Why copying moves a conclusion:** take K = 4 on an item all four report. The naive median of [honest, honest,
-  bad, copy of bad] is the mean of one honest report and one biased one, so it moves about halfway to the bias.
-  Counting the copied pair once gives the median of [honest, honest, bad], which is honest. So the auditor's value
-  shows in the consensus on items that are both biased and copied, and hardly anywhere else.
-- **Why an undeclared copier can be found:** the copier repeats the bad source's report plus its own noise τ·σ. For
-  that pair, the bias cancels in their squared difference, leaving about τ²σ². For any pair with one honest member,
-  the squared difference carries the bias and both noises. So agreement in error shows as a pair difference far
-  below the instance's typical one, with no σ needed.
-- **What no auditor can beat:** collapse from the truth labels (the oracle) sets the ceiling. If the oracle's gain is
-  small, no auditor can matter, and the test stops there (below).
+- **Why copying moves a conclusion:** take K = 4 on an item all four report. The median of [honest, honest, bad, copy
+  of bad] is the mean of one honest report and one biased one, so it moves about halfway to the bias. Counting the
+  pair once gives the median of [honest, honest, bad], which is honest. So kept or inferred independence shows in
+  the consensus on items that are both biased and copied.
+- **When undeclared copying can be seen at all:**
+  - On a copied item, the pair's difference has noise τσ, against √2·σ for two independent reports. So with τ well
+    under √2, copying shows on every copied item as unusually close agreement.
+  - With τ at or above √2 it shows only on biased copied items, where the bias cancels within the pair. There, at
+    K = 4, an item all four report is symmetric: [honest, honest] against [bad, copy], two pairs each agreeing inside
+    itself. Nothing in the reports says which pair is the copy.
+  - So in part of the grid no auditor, plain or clever, can recover what a kept record says.
+- **Design-time checks** (not a run; design seeds, disjoint from any plan's; scripts in
+  `engram/experiments/northstar/design/test7/`; `sim.py` is the first reviewer's toy fixture):
+  - **The reviewer's statistic** (median over shared items) found the copier in 0% to 4% of instances. A residual
+    correlation against the median of the other reports did no better, and flagged honest pairs in up to 100% of
+    instances at b = 8, because the bad report shifts the others' consensus that both honest residuals are measured
+    from.
+  - **The statistic chosen below**, a pair's lower quartile, kept A's false-flag rate at 2% to 10% across b of 2 and
+    8, against 0% to 35% for the median statistic. It found the copier in 20% to 32% of instances at τ = 0.5, q = 0.5
+    and M = 60 with ρ = 0.9, and in at most 8% elsewhere. At τ = 1 or q = 0.25 it found it in at most 3%.
+  - So inference recovers copying only where the copier adds little noise, copies much and shares many items. That
+    shapes the primary.
 
 ## Design
 
 ### The fixture
 
-As 93e08797 fixes it: conditions A (no copier), C (a declared copier) and D (an undeclared copier), from shared base
-instances; the grid axes, the pilots and the cut; N = 500 instances per kept cell; and seeds from
-`numpy.random.SeedSequence` keyed by cell and instance. This spec narrows nothing further.
+As 93e08797 fixes it: conditions A (no copier), C (a declared copier) and D (the same copying, undeclared), from
+shared base instances; its grid axes, pilots and cut; N = 500 instances per kept cell; and seeds from
+`numpy.random.SeedSequence` keyed by cell and instance. **C and D have identical reports on every base instance**, and
+differ only in whether each copied report names its source. That pairing is what the primary uses. This spec narrows
+no cell: where inference fails is part of the result.
 
-**Who builds it:** the fixture's generator follows 93e08797, and Tardis builds it, since that spec is Tardis's. This
-spec's code (the auditor, the arms and the scoring) is Serenity's, written in Python against the generator's output.
-Each reads the other's code before the plan is fixed. Python, not Rust: it's an experiment harness on a numpy
-fixture, and a new native component would add nothing here.
+**Who builds it:** the fixture's generator follows 93e08797, and Tardis builds it. This spec's code (the auditor, the
+arms and the scoring) is Serenity's, in Python against the generator's output. Each reads the other's before the plan
+is fixed. Python, not Rust: it's an experiment harness on a numpy fixture.
 
 ### The consensus
 
-Every arm takes each item's consensus as the median of the reports it counts. The median is the fixture's pilot
-method, and it's robust to one biased report, so double counting is what breaks it.
+Every arm takes each item's consensus as the median of the reports it counts.
 
-### The auditor
+### The auditor (inferred independence)
 
-- **Its statistic:** for each pair of sources sharing at least 3 items, d(i, j) is the median over those items of
-  (x_i − x_j)², the fixture's plain pilot detector. The pair's ratio is r(i, j) = d(i, j) / the median of d over all
-  of the instance's eligible pairs. It's scale-free, needs no σ, and uses no truth.
-- **Its flag:** every pair with r below a threshold θ is marked dependent.
-- **θ is fixed on calibration instances,** from a seed disjoint from the pilots' and the run's: 500 instances of
-  condition A for each combination of K, M and ρ, which a real auditor can count. θ is the 5th percentile of the
-  smallest r per instance, so 5% of A instances flag a pair. It is pooled over b and s, which an auditor can't
-  observe. The θ values go in the plan.
-- **Its collapse:** on the items both members of a flagged pair report, their two reports become one, their mean. The
-  pair counts once, and every other report is kept. This follows 93e08797's rule that collapse uses the method's own
-  answer and never the truth.
-- **"What would count against a conclusion":** for each item, the auditor reports its consensus, the number of
-  independent reports supporting it after collapse, and whether the conclusion *rests on dependent reports*: whether
-  undoing the collapse moves the consensus by more than half its own scale, ŝ = √(median pair d / 2). (For two honest
-  sources, d is about 2σ², so ŝ estimates σ.)
+- **Its statistic:** for each pair of sources sharing at least 4 items, ℓ(i, j) is the 25th percentile over those items
+  of (x_i − x_j)². The reference is ℓ̄, the median of ℓ over the instance's eligible pairs, and the pair's ratio is
+  r(i, j) = ℓ(i, j) / ℓ̄.
+  - A lower quartile reads a copied share of 0.25 or more, where a median is outvoted (R1).
+  - Every pair's lower quartile comes mostly from unbiased items when s ≤ 0.5. So ℓ̄ is close to the honest level,
+    and the bias barely moves the reference (R5).
+  - It is scale-free, needs no σ, and uses no truth.
+- **Its flag:** every pair with r below θ is marked dependent.
+- **θ:** fixed on calibration instances of A, from a seed disjoint from the pilots' and the run's. That's 500 per
+  combination of K, M and ρ, which an auditor can count, pooled over b and s, which it can't. θ is the 5th percentile
+  of the smallest r per instance.
+  - The plan records θ, and on the calibration seeds, the false-flag rate per (b, s) (R3).
+  - The design check's spread was 2% to 10%. The realised rate on the run's A instances is reported per cell.
+- **Its collapse:** on the items both members of a flagged pair report, their two reports become one, their mean.
+  Every other report is kept. That follows 93e08797's rule that collapse uses the method's own answer, never the
+  truth.
+- **"What would count against a conclusion":** for each item, the auditor reports:
+  - its consensus;
+  - the number of independent reports supporting it after collapse;
+  - whether the conclusion *rests on dependent reports*: whether undoing the collapse moves the consensus by more than
+    0.5ŝ.
+
+  ŝ = √(ℓ̄ / (2 × 0.1015)), since for two independent reports with noise σ, the 25th percentile of (x_i − x_j)² is
+  2σ² × 0.1015, the χ²₁ lower quartile (R4).
 
 ### The arms
 
-| Arm | What it counts | In |
+| Arm | What it counts | Run on |
 | --- | --- | --- |
-| N, naive | every report | A, C, D |
-| P, provenance | every report, with pairs `relation()` answers copied collapsed (declared chains) | C, and D, where it finds nothing |
-| I, the auditor | every report, with the auditor's flagged pairs collapsed | A, C, D |
-| O, the oracle | every report, with the truth's copier pair collapsed on its copied items | C, D |
+| N, naive | every report | A, C, D (N on C equals N on D, the reports being identical) |
+| P, kept provenance | every report, with pairs `relation()` answers copied collapsed on their copied items | C |
+| I, inferred | every report, with the auditor's flagged pairs collapsed | A, C, D |
+| O, the oracle | every report, with the truth's copier pair collapsed on its copied items | C and D (equal) |
 
 ### Measures, fixed before the run
 
-- **The scored items:** in C and D, the *copied biased items*: those where the bad source's report carries the bias
-  and the copier copied it, as the truth records. The truth only selects and scores, and is never an input.
-- **Consensus error:** |consensus − true value| / σ, averaged per instance over its scored items. An instance with
-  none is excluded and counted.
-- **Primary, condition D:** I against N, consensus error on the copied biased items, paired by instance, pooled over
-  the kept D cells, each cell weighted equally.
-  - The bootstrap resamples instances within cells, 10,000 replicates, seed 2026112207, with percentile 95% intervals.
-  - **The auditor earns its place** if the interval for N − I excludes 0 in I's favour, and I recovers at least half
-  the oracle's gain: (N − I) / (N − O) ≥ 0.5 as a point estimate, its interval reported.
-  - An interval excluding 0 with a ratio under 0.5 is "helps, under half the ceiling". An interval straddling 0 is "no
-  measured gain".
-- **Do no harm, condition A (with no copier):** I against N, consensus error over all items the bad source reports.
-  The interval for I − N must lie within ±0.05σ, the tie band. If it doesn't, false collapses cost honest
-  conclusions, and that's reported as a failure whatever D shows.
+- **The scored items:** in C and D, the *copied biased items*, those where the bad source's report carries the bias
+  and the copier copied it, per the truth. The truth only selects and scores. An instance with no scored item is
+  excluded and counted.
+- **Consensus error:** |consensus − true value| / σ, averaged per instance over its scored items.
+- **Primary, kept against inferred:** on each base instance, I on D against P on C. Their reports are identical, so
+  the difference is only whether a record of the copying was kept.
+  - The paired difference Δ = I_D − P_C in consensus error, pooled over the kept cells, each cell weighted equally.
+  - The bootstrap resamples base instances within cells: 10,000 replicates, seed 2026112207, percentile 95%
+    intervals.
+  - **Kept provenance earns its place** if Δ's interval excludes 0 in P's favour and Δ ≥ 0.1σ as a point estimate.
+    An interval excluding 0 with Δ under 0.1σ is "helps, under the margin". An interval straddling 0 is "inference
+    does as well".
+- **Do no harm, A (no copier):** I against N, consensus error over all items the bad source reports. The interval
+  for I − N must lie within ±0.05σ. If it doesn't, false collapses cost honest conclusions, and that's reported as a
+  failure.
 - **Secondary:**
-  - **C:** P against N and against O. Declared provenance should recover nearly all of the ceiling: a check that test
-    5's `relation()` changes a conclusion. Also I against P in C: inference against declaration.
-  - **Detection, in D:** the share of instances with the copier pair flagged; the share with an honest pair flagged;
-    and in A, the realised false-flag rate on the run's seeds, against the 5% fixed on calibration.
+  - **Each arm against the ceiling:** N − P on C, and N − I on D, each against N − O, as ratios of pooled mean gains
+    with bootstrap intervals. They're reported only where the pooled N − O is at least 0.1σ, and per cell
+    descriptively.
+  - **Inference at all:** I against N on D, paired, with its interval. "The auditor helps" if it excludes 0 in I's
+    favour.
+  - **Detection, D:** the share of instances with the copier pair flagged; the share with an honest pair flagged; and
+    the number of honest pairs flagged per such instance (A4). In A: the realised false-flag rate per cell, against
+    the 5% fixed on calibration (A1).
   - **Blame,** with 93e08797's rules: the bad source ranked first by mean absolute deviation from each arm's
     consensus, ties as 1/t, and a copier first scored apart.
   - **"What would count against":** against the truth, where the oracle's collapse moves the consensus by more than
-    0.5σ, the auditor's "rests on dependent reports" flag gives a recall and a precision, in D.
-  - Per-cell results, descriptive only.
+    0.5σ, the "rests on dependent reports" flag's recall and precision in D, and P's equivalent in C.
+  - **Where inference fails:** every measure by τ and q, so the regime where kept provenance is the only way is
+    visible.
 
 ### The ceiling, counted before the plan is fixed
 
-On the fixture's pilot seeds, with no auditor run: the oracle's gain N − O on copied biased items in each kept D cell,
-and the share of those items whose naive consensus is off by more than 0.5σ at all.
-- **If the pooled N − O is under 0.1σ,** double counting barely moves these conclusions, no auditor can matter, and
-  the test stops with that as its result. The cells are not changed to make it matter.
-- The counts go in the plan, beside the θ values.
+On the fixture's pilot seeds, with no auditor run: the oracle's gain N − O on copied biased items in each kept cell,
+and the share of those items whose naive consensus is off by more than 0.5σ.
+- **If the pooled N − O is under 0.1σ,** double counting barely moves these conclusions, neither kept nor inferred
+  provenance can matter, and the test stops with that as its result.
+- The counts go in the plan, beside θ, the calibration false-flag rates and the auditor's pilot detection rates per
+  kept cell.
 
 ### What would count against
 
-- I no better than N in D: the auditor can't find undeclared copying well enough to change a conclusion.
-- I worse than N in A: it collapses honest pairs and costs honest conclusions.
-- P short of O in C: declared provenance doesn't carry into the conclusion.
+- **Kept provenance against inference:** inference does as well as the record (Δ ≈ 0). Then keeping provenance isn't
+  worth its cost on this kind of data.
+- **Kept provenance against the ceiling:** P short of O in C. Then the record doesn't carry into the conclusion.
+- **Do no harm:** I worse than N in A. Then the auditor costs honest conclusions.
 
 Each is reported as found.
 
 ### Known limits, stated before the run
 
-- **Planted data:** one bad source, one copier, Gaussian noise. Real copying can be partial, chained or transformed,
-  and real crossings are counted when test 5's Measure 3 runs.
-- **One detector:** the plain pair statistic. A stronger detector could do better. This tests whether a plain auditor
-  pays, not the best possible one.
-- **The median consensus only.** The mean is worse under double counting, so the median is the harder test for the
-  auditor.
+- **Planted data:** one bad source, one copier, Gaussian noise. Real copying can be partial, chained or transformed.
+  Real crossings are counted when test 5's Measure 3 runs.
+- **One plain detector:** the lower-quartile pair statistic. A stronger one could narrow Δ where copying is visible
+  at all. Where τ ≥ √2 at K = 4, the symmetry argument above says no detector can.
+- **P is favoured by construction:** declared chains are exact in C. Real records can be wrong or missing. So Δ is
+  an upper bound on what kept provenance is worth, and the spec says so beside every reading of it.
+- **The median consensus only.**
 - **Routes,** the row's other half, stay with #12's result.
 
 ## Code (after approval)
 
-`engram/experiments/northstar/test7.py` and its tests: the auditor's statistic, flag, calibration and collapse; the
-four arms; the scoring, tested against hand-made instances that pin which items each measure scores and which answer
-it compares against; and `plan` (the ceiling counts, θ, the kept cells, seeds), `run` and `rescore`, as tests 1 and 2.
+`engram/experiments/northstar/test7.py` and its tests:
+- the auditor's statistic, flag, calibration, collapse and ŝ;
+- the four arms;
+- the scoring, tested against hand-made instances that pin which items each measure scores and which answer it
+  compares against;
+- `plan` (the ceiling counts, θ, calibration rates, the kept cells and seeds), `run` and `rescore`, as tests 1 and 2.
