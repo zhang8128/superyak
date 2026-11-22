@@ -61,19 +61,27 @@ Today the crossing carries recall and read of memories only. No claim crosses.
 
 One function, `source_key(record)`, version `source_key/1`, pinned by the profile version, gives each source:
 
-- **A url key, `url:<url>`, strong, always,** since Atlas requires a url. The scheme becomes `https`. The host is
+- **A url key, `url:<url>`, always present, and strong unless amendment 3 makes it weak,** since Atlas requires a url. The scheme becomes `https`. The host is
   lowercased with a leading `www.` removed, a default port is removed, and the fragment and one trailing slash are
   removed. The query is kept, since the title key catches a tracking query that splits one page into two keys.
-  - **Amendment 3 (the build, 2026-11-22; Serenity's nit in all hands 378610a0, option 1 in 3aecf732):** a url key is
-    strong only when it names a path or a query. A bare site root, an empty path or `/` with no query (so
-    `https://journal.example/#top`, `https://journal.example:8443/` and `https://doi.org/`), names a publisher, not a
-    work. Two different articles cited only by it would otherwise match. It keeps its `url:` key, for display and for a
-    notice's report, but only a DOI or the title key can make it match. A root path with a query, such as Wikipedia's
-    `/?curid=123&oldid=1001`, names one page and stays strong. The key function and every published key are
-    unchanged: only the comparison's rule 3 and the name a notice gives a match ("url" only for a strong url) change.
-    So the frozen stores, the 50 pairs and the five notice reports are byte for byte the same. **Known limit:** a root
-    whose query only tracks, such as `/?utm_source=feed`, stays strong; it's recorded, not ruled, until a real crossing
-    shows it.
+  - **Amendment 3 (the build, 2026-11-22; Serenity's nit in all hands 378610a0, option 1 in 3aecf732; a fresh
+    reviewer approved it, with these words):** a url key is strong only when the key has a non-empty path or a query
+    after the host. A bare site root (`https://journal.example`, `/`, `/#top`, `https://journal.example:8443/`,
+    `https://doi.org/`) names a publisher, not a work, and two different articles cited only by it would otherwise
+    match. It keeps its `url:` key, for display and for a notice's report, but only a DOI or the title key can make it
+    match, and a notice names such a match by "title", never "url". A root path with a query, such as Wikipedia's
+    `/?curid=123&oldid=1001`, names one page and stays strong; so does `https://journal.example//`, whose key keeps a
+    `/` path.
+    - **What changes:** only the comparison's rule 3 and a match's name. The key function and every published key are
+      unchanged. The fixtures' answers are written by hand, so regenerating them proves nothing here; what does is that
+      the stores' one bare root, `https://doi.org/` in `tardis.json`'s case 21a, is paired with `https://doi.org/help`
+      and a different title, so it's independent under both rules, and Tardis's 115 relation tests pass on the
+      amended rule.
+    - **Known limits:** a page with a path that still names only a site, such as `/index.html`, `/en/`, `/journal` or
+      `https://doi.org/help`, stays strong, and so does a root whose query only tracks (`/?utm_source=feed`). Both
+      lean toward "not independent", the safe direction (C12). The amendment goes the other way in one case: one work
+      cited only by a site root under two title spellings is now distinct. Copies keep their title, so finding copies
+      is unaffected. These are recorded, not ruled, until a real crossing shows one.
 - **A DOI key, `doi:<doi>`, strong, when one is found:**
   - **From a doi.org url** (host `doi.org`, `dx.doi.org` or `www.doi.org`, over http or https):
     - **What's taken:** the whole path after the host, with its leading `/` removed, percent-decoded and lowercased.

@@ -76,7 +76,8 @@ def strong_url(key: str) -> bool:
 
 
 def source_key(record: dict) -> dict:
-    """An Atlas source's keys: a strong url key (always), a strong DOI key when one is found, and a weak title key."""
+    """An Atlas source's keys: a url key (always; strong unless a bare site root, amendment 3), a strong DOI key when
+    one is found, and a weak title key."""
     parts = urlsplit(record["url"])
     doi = _doi_from_url(parts)
     if doi is None:
