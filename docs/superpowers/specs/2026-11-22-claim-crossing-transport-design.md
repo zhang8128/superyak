@@ -208,7 +208,9 @@ The receiver also refuses an atlas row, with a 400 in its own words, when either
 - **its lessons chain doesn't list the origin**, as T2's sender rule reads it: "That peer isn't listed for this peer's
   lessons room";
 - **the sending contact has no current typed code here** (`code_current` on the receiver's row for the origin and the
-  actor): "The sending contact has no current typed code here".
+  actor): "The sending contact has no current typed code here". The actor is the sender's word (RG3). So this proves
+  only that the origin has a typed contact here and named it, never which of its ships sent (the amendment's check,
+  advisory 1).
 
 T2 checked these at the sender only. A paired but unlisted peer could then fill a ship's `atlas_received` up to the
 quota and feed `relation()`.
@@ -217,7 +219,9 @@ The quota counts bytes, `length(CAST(envelope AS BLOB))`. SQLite's `length()` of
 `canonical()` keeps UTF-8, so counting characters would have let about four times the cap through (Serenity).
 
 `atlas-received`'s files are named `<origin[:16]>-<event_id>.json`, since an event id is unique only per origin (Rio
-Grande). Beside them it writes `origins.json`, `{"paired": [...]}`, the peers paired at export.
+Grande). Beside them it writes `origins.json`, `{"paired": [...]}`, the peers paired *and listed* at export. It writes
+only those peers' rows, so a peer dropped from the lessons chain stops feeding `relation()` at once (the amendment's
+check, advisory 2).
 
 ### T4. A policy passed on (E3)
 
@@ -276,7 +280,8 @@ No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
 - **`superyak_peer atlas-verify FILE`** checks that a copied file's signature still covers its payload, and that the
   key's SHA-256 is the issuer's peer id. So source identity survives a copy (RG2).
 - **On the Atlas side, a new `atlas/workbench/sourced_received.py`:**
-  - `received(file, own_publications)` takes the receiver's own URI from the issuer of `own_publications`, its caller's,
+  - `received(file, own_publications, *, received_publications=(), trusted_origins=None)` takes the receiver's own
+    URI from the issuer of `own_publications`, its caller's,
     not from the file (A6). It checks T3's binding against `delivered.origin`, and that the SHA-256 of the file's key
     is that origin. That's a **consistency check**; the signature is `atlas-verify`'s, since Atlas has no
     Ed25519 (A5).
