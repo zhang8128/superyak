@@ -479,6 +479,12 @@ class Federation:
                     action = 'layer.withdraw'
             else:
                 action = 'layer.withdraw'
+        elif action.startswith('atlas.'):  # claim-crossing transport T7: its own envelope, kept in atlas_outgoing
+            from .atlas_transport import prepare as prepare_atlas
+            raw = prepare_atlas(self, db, row, contact)
+            if raw is None:
+                raise Obsolete()
+            return raw
         elif action == 'room.reply':
             try:
                 inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
@@ -1021,14 +1027,20 @@ class Federation:
                     raise Problem(409, 'Event ID already used')
                 return {'ok':True, 'duplicate':True}
             try:
-                self._apply(db, value)
+                applied = self._apply(db, value)
             except (TypeError, KeyError, AttributeError, ValueError):
                 raise Problem(400, 'Invalid event payload') from None
             db.execute('INSERT INTO receipts VALUES(?,?,?,?)', (origin,value['event_id'],digest,self.store.clock()))
-            return {'ok':True, 'duplicate':False}
+            from .atlas_transport import DUPLICATE
+            return {'ok':True, 'duplicate':applied is DUPLICATE}  # an atlas payload this ship holds (transport T6)
 
     def _apply(self, db, e):
         action, p, origin, rid, revision = e['action'], e['payload'], e['origin'], e['resource_id'], e['revision']
+        if action.startswith('atlas.'):  # claim-crossing transport T3, T6
+            from .atlas_transport import ACTIONS, apply as apply_atlas
+            if action not in ACTIONS:
+                raise Problem(400, 'Unknown peer action')
+            return apply_atlas(self, db, e)
         if action == 'room.reply':
             return self._reply(db, e)
         if action not in ('layer.release','layer.withdraw','room.roster','room.message','room.withdraw'):
