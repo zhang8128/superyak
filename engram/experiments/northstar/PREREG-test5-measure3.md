@@ -137,12 +137,12 @@ the second, with the copies, T2 and P2. The methods are REL, B1, B2 and B3, and 
   Its sha256 goes in a commit and is posted in all hands before any method runs: REL, B1, B2, B3, U0, O1 or I1. Serenity's
   spot check runs only after that (SW2).
 - **The sealed labels stand:** the primary scores them alone.
-- **Serenity's spot check:** she isn't blind to the rule, so it never changes a label. She checks:
+- **Serenity's spot check:** Serenity isn't blind to the rule, so the check never changes a label. It covers:
   - every SAME and every UNCLEAR label;
   - 30 DIFFERENT labels, `default_rng(20261125).choice(n, min(30, n), replace=False)` over the DIFFERENT labels sorted
     by (T id, P id) (V6).
 
-  Her disagreements are published with their evidence. As a secondary, the primary is also reported with them applied
+  Serenity's disagreements are published with their evidence. As a secondary, the primary is also reported with them applied
   (VA8).
 - **Blindness:** Serenity doesn't search the question or open either collection before both freezes are posted.
 - **Notice reach:** the receiving side's records whose evidence rests on the retracted identity, directly or through a
