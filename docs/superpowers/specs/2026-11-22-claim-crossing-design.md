@@ -1,12 +1,14 @@
 # Claims that cross with their sources' identity (north-star test 5, Rio Grande's half)
 
-Revision 3, 2026-11-22. Rio Grande (the Pi). Board item `north:5-two-lighthouses-keep-source-identity`. Under station
+Revision 4, 2026-11-22. Rio Grande (the Pi). Board item `north:5-two-lighthouses-keep-source-identity`. Under station
 law section 3, a fresh reviewer approves it in Andy's place, and Andy can veto.
 
 - **Revision 1 (e3fc031f)** went to a fresh reviewer, who asked for a revision with ten findings (all hands 1d808ee0).
 - **Revision 2 (9044070d)** answered those, F1 to F10. Its re-check approved it with six required changes and six
   advisory ones (bbf3c93b).
-- **This revision** makes all twelve, named C1 to C12 below.
+- **Revision 3 (696e9605)** made all twelve, named C1 to C12 below. Its second re-check approved it with five required
+  changes and five advisory ones (512c6253).
+- **This revision** makes all ten, named D1 to D10 below.
 
 ## Why
 
@@ -60,11 +62,17 @@ One function, `source_key(record)`, version `source_key/1`, pinned by the profil
   lowercased with a leading `www.` removed, a default port is removed, and the fragment and one trailing slash are
   removed. The query is kept, since the title key catches a tracking query that splits one page into two keys.
 - **A DOI key, `doi:<doi>`, strong, when one is found:**
-  - **From a doi.org url** (host `doi.org`, `dx.doi.org` or `www.doi.org`, over http or https): the whole path after
-    the host, with its leading `/` removed, percent-decoded and lowercased. Its query and fragment are not part of it.
-    The path is taken whole, never through the regex, so `%3C` and `%3E`, `<` and `>`, stay in it (C5).
-  - **From the citation,** only when the url gave none: the first match of `10\.\d{4,9}/[-._;()/:A-Za-z0-9]+`, case
-    insensitive, after percent-decoding.
+  - **From a doi.org url** (host `doi.org`, `dx.doi.org` or `www.doi.org`, over http or https):
+    - **What's taken:** the whole path after the host, with its leading `/` removed, percent-decoded and lowercased.
+      Its query and fragment are not part of it.
+    - **Cleaning:** an optional leading `doi:` and one trailing `/` are removed (D5).
+    - **The check:** it's a DOI key only when what's left starts with `10.` and a digit. So `https://doi.org/` and
+      `https://doi.org/help` give no DOI key.
+    - **Why it's taken whole:** the path never goes through the regex, so `%3C` and `%3E`, `<` and `>`, stay in it
+      (C5).
+  - **From the citation,** only when the url gave none: the first match of `10\.\d{4,9}/[-._;()/:<>A-Za-z0-9]+`,
+    case insensitive, after percent-decoding. `<` and `>` are in the class, so a SICI DOI in a citation is kept whole
+    and keys equal to its url form (D3).
     - **Stripping:** remove trailing `.`, `,`, `;` and `:`, and a closing `)` or `]` with no opening partner in the
       match. Do it repeatedly until none is left, so `doi:10.5555/x.)` gives `10.5555/x`.
     - **Then lowercase it.**
@@ -75,11 +83,17 @@ One function, `source_key(record)`, version `source_key/1`, pinned by the profil
 
 **Comparing two sources gives one of three results:**
 
-- **Match:** any of one source's strong keys equals any of the other's. Or their title keys are equal and they are not
-  two different DOIs.
-- **Unclear:** both have DOI keys and the DOIs differ, but their title keys are equal. A preprint and its journal
-  version look like this, and so do two editorials of one year (C7).
-- **Distinct:** anything else. No strong key is shared, and the title keys differ, or one is missing.
+These are checked in order, and the first that holds wins (D1):
+
+1. **Distinct by DOI:** both have DOI keys, the DOIs differ, and their title keys differ or one is missing. A DOI
+   decides, so this holds even when they share a url, such as one proceedings PDF holding two papers.
+2. **Unclear:** both have DOI keys, the DOIs differ, and their title keys are equal. A preprint and its journal
+   version look like this, and so do two editorials of one year (C7).
+3. **Match:** any of one source's strong keys equals any of the other's, or their title keys are equal.
+4. **Distinct:** anything else. No strong key is shared, and the title keys differ, or one is missing.
+
+Two different DOI keys are never a match, whatever else is equal. When only one side has a DOI (C6), rules 1 and 2
+don't apply.
 
 A strong key proves sameness, never difference. The receiver recomputes every key from the record, and refuses a
 publication whose keys don't match its own computation.
@@ -102,7 +116,10 @@ names how each source matched ("by url", "by DOI", "by title"), so a person can 
   - `reviewed_at`, which becomes `""` too.
 
   A `reviewed` record crosses with `reviewed_by` set to the publishing issuer's URI, which names a lighthouse, not a
-  person, and its `reviewed_at` kept. Both pass `normalize_item`. So no person's name crosses (C3).
+  person, and its `reviewed_at` kept. Both pass `normalize_item`. So no **reviewer's** name crosses (C3).
+- **Other names do cross (D4).** Citations carry published authors' names, as bibliographic data. `summary`, evidence
+  notes and `context` are free text and could hold anything. A publication crosses only under its owner's ledger
+  (below). The fixtures' authors and texts are fictional.
 - **`lineage`** names the issuer's previous sourced Snapshot of the same collection, if there is one.
 - **Each Claim:**
   - its sentence is `{"origin", "record_id", "content_digest"}`, as `publish`'s is;
@@ -139,8 +156,10 @@ For a pair of claims, A from one store and B from the other, the first rule that
 
 **Stated limit (C10):** the answer reads the two claims' own provenance only. If Tardis's B is supported, through a
 relation in Tardis's store, by Tardis's copy of the Pi's A, and B cites its own source, then (A, B) is independent.
-B's own evidence is independent of A's, even though B leans on a copy of A. Notice reports do follow `supports`, so
-a retraction under A still reaches B. A planted case pins this.
+B's own evidence is independent of A's, even though B leans on a copy of A. A retraction under A reaches B through
+`retraction_impact`'s `supports`, when step 2 matches the copy's own local source. Step 3 alone doesn't follow
+relations (D9). A planted case pins both: the copy matched in step 2, so B is reached, and a copy whose local source
+is keyed another way, so only the copy is reached, through step 3.
 
 ## Notices, and how they're applied (C2)
 
@@ -156,9 +175,11 @@ A notice is a Claim under the new profile, with `sentenceMediaType` `application
 
 **Applying a notice is a report, never a write.** The receiver:
 
-1. **Gathers the sources it means:** the notice's source, plus every source joined to it by a correction notice the
-   receiver holds, through `old` and `new`, transitively. So a retraction by a new DOI reaches records keyed by the
-   old one.
+1. **Gathers the sources it means.** That's the notice's source, plus every source joined to it by a correction notice
+   the receiver holds, transitively. **Joined** means the same Snapshot and record id as a correction's `old` or `new`,
+   never a key match, so a generic title can't cascade (D8). A retraction by a new DOI then reaches records keyed by
+   the old one. The receiver first recomputes each notice's `keys` from the Snapshot it names, and refuses a notice
+   whose keys don't match (D7).
 2. **Matches its own sources:** it computes `source_key` over every source in its own store, and collects every local
    id that matches any gathered source. Duplicates within a store are all collected, and each is named with how it
    matched.
@@ -169,26 +190,37 @@ A notice is a Claim under the new profile, with `sentenceMediaType` `application
    verdict and `path`, are the report's main part. It follows `supports` and `challenges`, so a belief built on a
    retracted source is reported even when it isn't a root. With no ids and nothing from step 3, the report is "no
    impact".
-5. **For a correction,** reports every local claim whose roots, followed through its chain, include `old`'s record.
-   Each is "built on the corrected record". Atlas can't tell revisions apart, so this comes from the artifacts.
+5. **For a correction,** steps 1 to 3 run as for a retraction, and then (D6):
+   - each local claim whose roots, followed through its chain, include `old`'s record is "built on the corrected
+     record";
+   - each that includes `new`'s record is "on the corrected record".
+
+   Atlas can't tell revisions apart, so this comes from the artifacts. A corrected record gets a new local source id
+   in the store that corrects it, since Atlas sources can't be changed in place, and `import_bundle` refuses a
+   conflicting source id (D10).
 6. **Changes nothing.** A status change is the receiving owner's own act, through `set_status`, with the owner as
    actor and the notice's digest in the reason. That act writes the earlier belief into the audit history.
 
 ## Authorization (C11)
 
-Every step goes through `lighthouse_wire.authorize` and the receiver's ConnectionPolicy, for the publisher, this
-profile and the media type:
+Every step goes through `lighthouse_wire.authorize`, with this profile and the artifact's media type. For each action,
+the table says whose policy is evaluated, and who goes in the request's `publisher` field (D2):
 
-| Action | What it allows |
-| --- | --- |
-| `read` | read a publication or a notice |
-| `link_overlap` | compute answers and comparisons against the receiver's own claims |
-| `retain` | keep a copy, or a carried Claim, in the receiver's store |
-| `reshare` | publish a copy onward |
+| Action | What it allows | Whose policy | `publisher` in the request |
+| --- | --- | --- | --- |
+| `read` | read a publication or a notice | the receiver's | the artifact's issuer |
+| `link_overlap` | compute answers and comparisons against the receiver's own claims | the receiver's | the artifact's issuer |
+| `retain` | keep a copy, or a carried Claim, in the receiver's store | the original publisher's | the receiver |
+| `reshare` | publish a copy onward | the original publisher's | the store that would republish |
 
-A notice needs `read` for its media type. Acting on it is the owner's act, above. Consent isn't transitive: "copied
-twice through `third`" needs `third` to allow the first store `reshare`, and the first store to allow the second
-store `read`. The fixtures' policies grant exactly the actions each case uses, and one case refuses `reshare`.
+So `read` and `link_overlap` are the receiver's choice of whom to listen to, as in `overlap`. `retain` and `reshare`
+are the original publisher's consent to how its claims are kept and passed on, so the receiver asks with the
+publisher's own policy, which travels in the publication.
+
+A notice needs `read`. Acting on it is the owner's act, above. Consent isn't transitive: "copied twice through
+`third`" needs `third`'s policy to allow the first store `reshare`, and the second store's policy to allow `read` of
+the first store's publication. The fixtures' policies grant exactly the actions each case uses, and one case has
+`third`'s policy refuse `reshare`.
 
 `verify` checks only a digest, and an issuer names itself. So on a real crossing, who sent a publication or a notice
 must come from the transport's authenticated peer (follow-up, below), never from the artifact alone.
@@ -239,8 +271,12 @@ isn't decided. They're shown, and the notice reports show what a notice would do
   - a publisher url against a DOI with the same title and year;
   - http against https;
   - `www.` against none.
-- **Different, not merged:** two SICI-style DOIs from one issue, `…(199806)49:8<693::…` and `…49:8<701::…`, are two
-  different sources (C5).
+- **Different, not merged:**
+  - two SICI-style DOIs from one issue, `…(199806)49:8<693::…` and `…49:8<701::…`, are two different sources, once
+    in url form and once in citation form (C5, D3);
+  - one SICI DOI in url form on one side and citation form on the other is the same source (D3);
+  - two papers sharing one proceedings url, with different DOIs and titles, are distinct by DOI (D1);
+  - `https://doi.org/` and `https://doi.org/help` give no DOI key (D5).
 - **Overlapping:** one source shared, by key or by title, and one source each.
 - **Independent:**
   - disjoint DOIs with different titles;
