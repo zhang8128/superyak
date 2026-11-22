@@ -17,20 +17,25 @@ before, and spend less doing so, than the same model with a strong conventional 
 - Local models through Ollama on the Mac: nemotron-mini (about 4B), qwen3.6:27b-mlx; prompt v2 from `hotpot_smoke`.
 - HotpotQA's distractor train split (train-00000, revision 1908d6af), whose fresh draws nothing here has scored for answers.
 
-## Design (revision 2: the fresh reviewer's six findings, R1 to R6, and power)
+## Design (revision 3: the fresh reviewer's six findings, R1 to R6, power, and the re-check's three changes)
 
 ### Questions and corrections
 
 - **Pool:** HotpotQA train-00000 less the 3,926 ids of the two fresh router samples (41,298 questions).
-- **Qualifying rule:** a bridge question whose two gold leads are both in corpus v0, and whose answer occurs, as a whole
-  word, in exactly one of them. The reviewer's check of 200 fresh draws found 44 to 45% qualify (R1).
-- **Draw:** the pool in an order fixed by a new seed, taking the first **600 that qualify**. The count of draws needed
-  is reported. The run needs at least 400 qualifying; below that it stops and the spec is revised.
-- **Power:** half are corrected, so about 300 paired questions. With 20% discordant pairs that gives a 95% interval
-  about ±5 points on a paired difference. That's stated before the run, not tuned after it.
+- **Qualifying rule:** a bridge question whose two gold leads are both in corpus v0, whose answer occurs, as a whole
+  word, in exactly one of them, and whose answer is a bare four-digit year or name-shaped (every word capitalised,
+  letters, spaces, periods, hyphens and apostrophes only). The re-check found a third of otherwise qualifying answers
+  are dates, amounts, counts or common-noun phrases, which a year-or-name substitute would garble. Those are left out,
+  not mis-substituted. Of the reviewer's 200 fresh draws, 59 qualify this way (about 30%).
+- **Draw:** the pool in an order fixed by a new seed, taking the first **800 that qualify**, about 2,700 draws. The count
+  of draws needed is reported. The run needs at least 500 qualifying; below that it stops and the spec is revised.
+- **Power:** half are corrected, so about 400 paired questions. With 20% discordant pairs that gives a 95% interval
+  about ±4.4 points on a paired difference. That's close to the 5-point margin, so an interval that straddles the
+  margin is reported as borderline, not as a pass or a fail, and the follow-up run doubles N. That's stated before the
+  run, not tuned after it.
 - **A correction:** in the gold lead that holds the answer, each whole-word occurrence is replaced by a substitute: the
-  answer of another qualifying question of the same type (four digits for a year, else a capitalised name), never
-  equal to the original. Half the 600, chosen by seed, are corrected; the others are controls.
+  answer of another qualifying question of the same class (a year for a year, a name-shaped answer for a name-shaped
+  one), never equal to the original. Half the 600, chosen by seed, are corrected; the others are controls.
 - **The corrected corpus (R5):** corpus v0 stays frozen. The corrections are an overlay file, one row per corrected page
   with its old and new text, digested. A second `corpus-index` is built from corpus v0's export with the overlay
   applied, and its sha256 is recorded. Reading a lead after the correction goes through the overlay.
@@ -68,9 +73,12 @@ Atlas's sources are immutable, and `retraction_impact` only reads. So test1.py h
 
   E succeeds if it is within 5 points of B-all's exact match while using under 60% of its calls. The interval is
   reported either way.
+- **Read beside the primary:** the retrieval gap before the correction, meaning each arm's source support and exact
+  match on all 800. E's evidence path (BM25 and one hop) may simply retrieve less than B's dense rerank. Then a miss
+  reads as a retrieval gap, not as provenance failing, and the two are reported apart.
 - **Targeting:** of the corrected questions, how many E asks again (its claim cited the corrected lead); of the
   controls, how many it asks again (should be none).
-- **Before the correction:** exact match and F1 on all 600; source support (both gold leads among those cited).
+- **Before the correction:** exact match and F1 on all 800; source support (both gold leads among those cited).
 - **Stale answers:** after the correction, how often each arm still gives the old answer, read beside the closed-book
   arm's.
 - **Controls:** answers unchanged where they were right.
