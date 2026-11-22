@@ -1,14 +1,15 @@
 # Graded blame: test 6's graded half, and one planted fixture for test 7
 
 Revision 3, 2026-11-22. Tardis, goal line T2 (test 6), board item `north:6-structure-earns-its-place`. Serenity's
-design read is in all hands e29b0698 and d8c84d6f. Under station law section 3, a fresh reviewer approves it in Andy's
-place, and Andy can veto.
+design read is in all hands e29b0698 and d8c84d6f. **Approved under station law section 3** by a fresh reviewer, after
+three checks, each posted whole in all hands (0052fc00, 8f3e299c, and the approval). Andy can veto.
 
 - **Revision 1 (a889f48b)** went to a fresh reviewer, who asked for a revision with seven required findings and six
   advisory ones (all hands 0052fc00).
 - **Revision 2 (6528617b)** made them, named R1 to R7 and A1 to A6. Test 6's graded half is closed by argument and a
   property check, and the fixture is for test 7. The reviewer's re-check approved it with four named changes.
-- **This revision makes those,** named N1 to N4, with the re-check's advisories.
+- **This revision makes those,** named N1 to N4, with the re-check's advisories. Its third check approved it, finding
+  all four fixed, with one nit, the C and D pilot's floor, which is made here.
 
 ## Why
 
@@ -114,9 +115,10 @@ answers. It's built so every condition shares a base instance (A2).
   - **for A,** the plain median scored by mean absolute deviation;
   - **for C and D,** a plain copier detector with no structure and no σ: the pair with the smallest median squared
     difference over at least 3 shared items (N4).
-- **The cut:** a cell is kept where its pilot's share, of the bad source first in A and of the copier pair found in C
-  and D, is between 1.5/K and 0.9. That's a floor relative to chance at 1/K, and the same rule for both pilots.
-  Serenity's spec may narrow the τ and q cells further.
+- **The cut:** a cell is kept where its pilot's share is between 1.5 times chance and 0.9. Chance is 1/K for the bad
+  source first in A, and 1/C(K,2) for the copier pair found in C and D (the approving check's nit: at τ = 1.5 a copied
+  pair's difference varies more than an honest pair's, so a floor of 1.5/K would cut the hard cells an auditor might
+  reach). Serenity's spec may narrow the τ and q cells further.
 - **The estimand is the kept cells,** and the dropped cells are reported as a sensitivity check (A1).
 - **The commit:** the kept grid, the seeds and N = 500 per cell are fixed in a commit before any method runs on the
   run's seeds.
