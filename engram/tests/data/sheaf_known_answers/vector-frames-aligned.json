@@ -1,0 +1,95 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Three stores hold the same thing, each in its own coordinates: b's are a's turned a quarter, c's a half. With each edge's map turning one store's coordinates into the other's, the same data glues: the stores agree.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     1
+    ],
+    [
+     -1,
+     0
+    ]
+   ]
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     1
+    ],
+    [
+     -1,
+     0
+    ]
+   ]
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     -1,
+     0
+    ],
+    [
+     0,
+     -1
+    ]
+   ]
+  }
+ ],
+ "local": {
+  "a": [
+   1,
+   0
+  ],
+  "b": [
+   0,
+   1
+  ],
+  "c": [
+   -1,
+   0
+  ]
+ },
+ "expect": {
+  "dim_h0": 2,
+  "dim_h1": 2,
+  "glued": true,
+  "residual_edges": [],
+  "residuals": [
+   0,
+   0,
+   0
+  ],
+  "distance_squared": 0
+ }
+}

@@ -1,0 +1,78 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Two routes from a to c. Along a-b-c nothing turns; along a-c the data turns a quarter. The routes differ by I - R^T, whose Frobenius norm is 2.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     -1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  }
+ ],
+ "faces": [
+  {
+   "a": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     1
+    ]
+   ],
+   "b": [
+    [
+     2,
+     1
+    ]
+   ]
+  }
+ ],
+ "expect": {
+  "dim_h0": 0,
+  "dim_h1": 0,
+  "holonomy_frobenius": [
+   2
+  ]
+ }
+}

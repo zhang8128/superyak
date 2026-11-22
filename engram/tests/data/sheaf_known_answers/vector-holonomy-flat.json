@@ -1,0 +1,69 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "The same two routes with identity maps: they agree, so the holonomy is zero.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "faces": [
+  {
+   "a": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     1
+    ]
+   ],
+   "b": [
+    [
+     2,
+     1
+    ]
+   ]
+  }
+ ],
+ "expect": {
+  "dim_h0": 2,
+  "dim_h1": 2,
+  "holonomy_frobenius": [
+   0
+  ]
+ }
+}

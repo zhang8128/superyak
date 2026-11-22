@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+import sheaf_native
+
 logger = logging.getLogger(__name__)
 
 _EPS = 1e-12
@@ -87,6 +89,40 @@ def cohesion_energy(sheaf: LocalSheaf) -> dict:
             "fiedler": fiedler.tolist(), "worst_edges": worst, "n": n}
 
 
+def _one_sign(f: np.ndarray) -> np.ndarray:
+    """An eigenvector's sign is the routine's own. Fix it as the kernel does (the largest entry is positive), so both
+    backends name the same part first."""
+    if len(f) and f[int(np.argmax(np.abs(f)))] < 0:
+        return -f
+    return f
+
+
+def measure(X, variance_threshold: float = 0.90, max_dim: int = 8, backend: str | None = None) -> dict:
+    """One summary's cohesion from its episode matrix (a row for each episode).
+
+    Returns energy, lambda2, fiedler, n, and worst: up to ten (i, j, residual) by row. The C kernel
+    (``sheaf_kernel.c``) does the work wherever it loads, and ``build_local_sheaf`` with ``cohesion_energy`` below
+    does it otherwise. The two are kept equal: the numpy code is the kernel's oracle
+    (tests/test_sheaf_kernel.py). ``backend`` names one of them ('native' or 'numpy').
+    """
+    n = 0 if X is None else len(X)
+    if n and sheaf_native.chosen(backend):
+        try:
+            res = sheaf_native.cohesion(X, variance_threshold, max_dim)
+            return {"energy": res["energy"], "lambda2": res["lambda2"], "fiedler": res["fiedler"],
+                    "worst": res["worst"], "n": n}
+        except sheaf_native.SheafKernelError as error:
+            if sheaf_native.insisted(backend):
+                raise
+            logger.info("the sheaf kernel declined %d episodes (%s); numpy takes this one", n, error)
+    res = cohesion_energy(build_local_sheaf("", list(range(n)), X, variance_threshold, max_dim))
+    fiedler = res["fiedler"]
+    if res["worst_edges"]:  # an eigenvector; with an isolated episode the +1 and -1 are already the answer
+        fiedler = _one_sign(np.array(fiedler)).tolist()
+    return {"energy": res["energy"], "lambda2": res["lambda2"], "fiedler": fiedler,
+            "worst": res["worst_edges"], "n": n}
+
+
 @dataclass
 class Verdict:
     semantic_id: str
@@ -130,11 +166,11 @@ def persistence_check(parts_idx: list[list[int]], X: np.ndarray,
 def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
                      dl_cost: float = 0.15, variance_threshold: float = 0.90,
                      max_dim: int = 8, min_part: int = 2,
-                     persistence_cfg=None) -> Verdict:
-    ls = build_local_sheaf(semantic_id, episode_ids, X, variance_threshold, max_dim)
-    res = cohesion_energy(ls)
+                     persistence_cfg=None, backend: str | None = None) -> Verdict:
+    res = measure(X, variance_threshold, max_dim, backend)
+    worst_edges = [(episode_ids[i], episode_ids[j], r) for i, j, r in res["worst"]]
     no_split = Verdict(semantic_id, False, [], [], res["energy"], [], 0.0,
-                       dl_cost, False, res["worst_edges"], persistence_band=None)
+                       dl_cost, False, worst_edges, persistence_band=None)
     if res["energy"] == 0.0 or not res["fiedler"]:
         return no_split
     f = np.array(res["fiedler"])
@@ -151,9 +187,7 @@ def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
     parts_idx = [idx["a"], idx["b"]]
     part_energies = []
     for pi in parts_idx:
-        sub = build_local_sheaf(semantic_id, [episode_ids[i] for i in pi],
-                                X[pi], variance_threshold, max_dim)
-        part_energies.append(cohesion_energy(sub)["energy"])
+        part_energies.append(measure(X[pi], variance_threshold, max_dim, backend)["energy"])
     n_assigned = sum(len(pi) for pi in parts_idx)
     weighted_after = sum((len(pi) / n_assigned) * e
                          for pi, e in zip(parts_idx, part_energies))
@@ -165,7 +199,7 @@ def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
         [[episode_ids[i] for i in pi] for pi in parts_idx],
         [episode_ids[i] for i in idx["amb"]],
         res["energy"], part_energies, gain, dl_cost,
-        p_checked, res["worst_edges"], p_band,
+        p_checked, worst_edges, p_band,
     )
 
 
@@ -293,11 +327,9 @@ def measure_each(storage, cfg, *, max_episodes: int | None = None, skips: list |
         ids, X = _episode_matrix(storage.conn, r[0])
         if len(ids) < cfg.min_episodes:
             continue  # episodes lacking vectors shrink the neighbourhood
-        ls = build_local_sheaf(r[0], ids, X, cfg.variance_threshold,
-                               cfg.max_subspace_dim)
-        res = cohesion_energy(ls)
+        res = measure(X, cfg.variance_threshold, cfg.max_subspace_dim)
         yield {"semantic_id": r[0], "energy": res["energy"], "n": len(ids),
-               "worst_edges": res["worst_edges"][:3]}
+               "worst_edges": [(ids[i], ids[j], w) for i, j, w in res["worst"][:3]]}
 
 
 def measure_all(storage, cfg, *, max_episodes: int | None = None,
