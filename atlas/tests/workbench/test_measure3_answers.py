@@ -90,3 +90,60 @@ def test_a_package_that_fails_validation_is_refused():
     tardis["snapshot"]["payload"]["model"]["title"] = "edited"
     with pytest.raises(Exception):
         answers(tardis, pi)
+
+
+# --- freeze_check(): the builder rules, checked at the freeze (W5, VA10) ---------------------------------------------
+
+from workbench.measure3_answers import freeze_check  # noqa: E402
+
+
+def collection(n_sources=15, n_items=10, **change):
+    sources = [{"id": f"s{i}", "title": f"Paper {i}", "year": 2021, "url": f"https://doi.org/10.5555/p{i}",
+                "citation": f"doi:10.5555/p{i}"} for i in range(n_sources)]
+    items = [{"id": f"r{i}", "kind": "claim", "title": f"Record {i}", "summary": "x", "status": "source_reported",
+              "evidence": [{"source_id": f"s{i % n_sources}", "locator": "p1"}]} for i in range(n_items)]
+    for key, value in change.items():
+        sid, field = key.split("__")
+        next(s for s in sources if s["id"] == sid)[field] = value
+    return {"schema_version": 1, "title": "T", "sources": sources, "items": items, "relations": []}
+
+
+def registry(sources):
+    """A fake Crossref/PubMed lookup: each source's record, keyed by its id."""
+    return {s["id"]: {"doi": s["citation"][4:], "title": s["title"], "year": s["year"]} for s in sources}
+
+
+def check(bundle, records=None):
+    records = registry(collection()["sources"]) if records is None else records
+    return freeze_check(bundle, lambda source: records.get(source["id"]))
+
+
+def test_a_collection_that_matches_its_records_passes():
+    assert check(collection()) == {"deviations": [], "without_record": []}
+
+
+def test_sizes_and_evidence_are_refused_outside_the_ranges():
+    assert any("sources" in d for d in check(collection(n_sources=14), registry(collection(n_sources=14)["sources"]))["deviations"])
+    assert any("records" in d for d in check(collection(n_items=26))["deviations"])
+    bundle = collection()
+    bundle["items"][0]["evidence"] = []
+    assert any("cites no source" in d for d in check(bundle)["deviations"])
+
+
+def test_a_title_year_or_doi_that_differs_from_the_record_is_a_deviation():
+    got = check(collection(s0__title="My own title", s1__year=2020, s2__citation="see the journal"))["deviations"]
+    assert any("s0" in d and "title" in d for d in got)
+    assert any("s1" in d and "year" in d for d in got)
+    assert any("s2" in d and "DOI" in d for d in got)
+
+
+def test_the_doi_key_must_be_the_items_own():
+    """W5: a doi.org url to another version gives a DOI key that isn't the item's own DOI."""
+    got = check(collection(s3__url="https://doi.org/10.1101/2020.07.15.20151852"))["deviations"]
+    assert any("s3" in d and "DOI key" in d for d in got)
+
+
+def test_an_item_with_no_record_keeps_its_fields_and_is_listed():
+    records = registry(collection()["sources"])
+    del records["s4"]
+    assert check(collection(), records) == {"deviations": [], "without_record": ["s4"]}

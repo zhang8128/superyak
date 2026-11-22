@@ -47,6 +47,41 @@ def answers(t_package, p_package):
             "records": {"T": _records(t_package), "P": _records(p_package)}, "pairs": pairs}
 
 
+SIZES = {"sources": (15, 30), "records": (10, 25)}
+
+
+def freeze_check(bundle, lookup):
+    """The builder rules, checked at the freeze (the page's "The two collections", W5 and VA10). `lookup(source)`
+    returns the item's Crossref or PubMed record, `{"doi", "title", "year"}`, or None when it has none. Every
+    deviation must be corrected before the freeze; an item with no record keeps the builder's fields and is listed."""
+    from .sourced import source_key
+    deviations, without = [], []
+    for what, items in (("sources", bundle["sources"]), ("records", bundle["items"])):
+        low, high = SIZES[what]
+        if not low <= len(items) <= high:
+            deviations.append(f"{len(items)} {what}, outside {low} to {high}")
+    for item in bundle["items"]:
+        if not item.get("evidence"):
+            deviations.append(f"record {item['id']} cites no source")
+    for source in bundle["sources"]:
+        record = lookup(source)
+        if record is None:
+            without.append(source["id"])
+            continue
+        if source["title"] != record["title"]:
+            deviations.append(f"source {source['id']}: title isn't the record's verbatim")
+        if source["year"] != record["year"]:
+            deviations.append(f"source {source['id']}: year {source['year']} isn't the record's {record['year']}")
+        doi = record.get("doi")
+        if doi:
+            if doi.lower() not in source.get("citation", "").lower():
+                deviations.append(f"source {source['id']}: the citation lacks the item's own DOI")
+            key = source_key(source)["doi"]
+            if key != f"doi:{doi.lower()}":
+                deviations.append(f"source {source['id']}: DOI key {key} isn't the item's own doi:{doi.lower()}")
+    return {"deviations": deviations, "without_record": without}
+
+
 def main(argv=None):
     t_path, p_path = (argv if argv is not None else sys.argv[1:])
     with open(t_path) as t, open(p_path) as p:
