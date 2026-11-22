@@ -30,7 +30,7 @@ do as well?
 
 - **The draw:** 800 qualifying questions from HotpotQA's distractor train split (train-00000, revision 1908d6af), with
   test 1's qualifying rule.
-  - Each is a bridge question whose two gold leads are in corpus v0.
+  - Each is a bridge question whose two distinct gold leads are in corpus v0.
   - Its answer occurs, as a whole word, in exactly one of them, the answer-bearing lead.
   - Its answer is a year or name-shaped.
 - **Held out:** the pool excludes the 3,926 fresh-router ids and test 1's 800, drawn in a new seeded order.
@@ -47,20 +47,29 @@ All arms give the same reader (nemotron-mini, temperature 0, prompt v2) two lead
 | G-dense | BM25 top 100 plus the out-links of BM25's top 5 | the same dense rerank |
 | B-cross | BM25 top 100 | cross-encoder rerank, BAAI/bge-reranker-base (fastembed) |
 | G-cross | BM25 top 100 plus the out-links of BM25's top 5 | the same cross-encoder |
+| W-dense | BM25's top N, N being that question's G pool size (revision 2) | the same dense rerank |
+| W-cross | BM25's top N, as for W-dense | the same cross-encoder |
 
 **What each pair isolates:**
-- G against B, under the same reranker, isolates what the link graph adds.
+- G against W, under the same reranker and with pools of the same size per question, isolates what the link graph
+  adds over more BM25 candidates (revision 2, the fresh reviewer's finding 1). Before the run, on test 1's 800, BM25's
+  top 126 held the answer-bearing lead for 51.6%, against the graph pool's 79.8%.
+- G against B, under the same reranker, shows the graph pool against today's B, size difference included.
 - Cross against dense, on the same pool, isolates the reranker.
 - E is test 1's environment, kept for continuity.
 
 ### Measures, fixed before the run
 
-- **Primary:** answer-lead recall at two (the answer-bearing lead among the two leads given to the reader), G-dense
-  against B-dense, paired, with a 95% CI.
+- **Primary (revision 2):** answer-lead recall at two (the answer-bearing lead among the two leads given to the
+  reader), G-dense against W-dense (size-matched), paired, with a 95% CI.
   - The graph earns its place here if the CI's lower end is above 0 and the point estimate is at least 5 points.
   - A CI straddling 0 is "no measured gain".
+- **Power, stated before the run:** about ±3.7 points was test 1's paired half-width at n = 400. At n = 800 the
+  standard error is about 1.3 to 1.9 points if G and W are positively correlated (they share BM25 and the reranker),
+  and about 2.4 if independent. So a true gain of about 4 to 6.7 points is needed for 80% power to clear a lower end
+  above 0. A smaller true gain may well read as "no measured gain".
 - **Secondary:**
-  - the same for G-cross against B-cross;
+  - G-cross against W-cross, and G against B under each reranker;
   - each arm's answer-lead recall at two, both-gold at two, and pool recall (the lead anywhere in its candidates);
   - the reader's exact match and F1 on all 800, by arm, with paired CIs for G against B under each reranker;
   - whether recall gains reach exact match;
@@ -70,7 +79,7 @@ All arms give the same reader (nemotron-mini, temperature 0, prompt v2) two lead
 
 ### What would count against
 
-- G no better than B under either reranker, meaning the graph adds nothing a reranker doesn't already find.
+- G no better than W (size-matched) under either reranker, meaning the graph adds nothing more BM25 candidates don't.
 - Recall gains that don't move exact match, meaning the reader, not retrieval, is the limit.
 - A cross-encoder that wins alone, meaning a better reranker is the cheaper path.
 
@@ -82,11 +91,19 @@ Each is reported as found.
   construction. A second question set not built from links (2WikiMultihopQA or MuSiQue) is test 2b.
 - **Fixed pool rule:** the graph pool's out-links come from five seeds only. Wider expansions are not tried, so the
   result can't be tuned after it.
+- **Cross-encoder truncation:** BAAI/bge-reranker-base reads 512 tokens, and about 10% of answer-bearing leads are
+  longer (by word count, before the question is added). Nomic reads 8,192, so truncation biases cross against dense
+  comparisons, but not G-cross against W-cross. The model is downloaded and its truncation settings read before the
+  plan is fixed. The share of pairs truncated per arm is reported.
 - **No strong graph baselines:** HippoRAG 2 and LightRAG need an LLM extraction pass over the corpus. That is out of
   reach for 7.2 million leads on this hardware, so they're left to a sub-corpus comparison, named here so the gap is
   visible.
 
 ## Code (after approval)
+
+Test 1's exclusion reader expects a `rows` key, and test 1's plan file holds `questions`, so test 2 reads both (the
+reviewer's finding 4).
+
 
 The code extends `engram/experiments/northstar/` with `test2.py` and its tests: the draw, the five arms' candidate and
 choice functions, the scoring, and `plan`/`run`/`rescore` as in test 1. Every run's answers are saved before
