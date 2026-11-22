@@ -325,11 +325,22 @@ The claim-crossing spec's Measure 3 holds. This spec adds what the run's commit 
 - each side's policy (T5);
 - the pairs, the claim-crossing spec's union of three sets.
 
-**The Pi to Tardis** (`rio-grande` to `tardis`) needs nothing new.
+**Amendment 1 (the build, 2026-11-22): both directions need `rio-grande` as a contact on tardis-peer.** Revision 4 said
+the Pi to Tardis needed nothing new. That was wrong.
+- **Why:** `receive()` refuses an envelope whose actor isn't a contact from its origin on the receiving peer
+  (`federation.py:1012-1013`, "Unknown remote participant").
+- **The Pi to Tardis** is sent by `rio-grande`, so tardis-peer must hold it as a contact.
+- **Tardis to the Pi** is addressed to `rio-grande`, so the sender's contact row must name it.
+- **Today:** tardis-peer's only contact is `Andy` (A6).
 
-**Tardis to the Pi** needs `rio-grande` as a contact on tardis-peer (A6). Today its only contact is `Andy`. That's a
-pairing code, and pairing peers is Andy's act (CLAUDE.md). That direction runs once he chooses to pair them. Until
-then, the result reports one direction and says why.
+So one pairing, `rio-grande`'s card typed into tardis-peer, opens both directions. That's a pairing code, and pairing
+peers is Andy's act (CLAUDE.md). Measure 3 runs once he chooses to pair them. Until then, it reports that neither
+direction can run, and why.
+
+T2 also needs the Pi's `tardis` contact to have a current typed code (`contact_current`). Rio Grande checks that on
+the Pi before the run.
+
+This is a correction of what the run needs, not of a rule, so it didn't go back to the reviewer.
 
 **Each direction is reported separately:**
 - the count of each answer, with every unknown's reason;
