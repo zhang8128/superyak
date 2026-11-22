@@ -34,6 +34,9 @@ Rates are each arm's share of questions; differences are paired, in points, with
 - **Primary, as pre-registered: "measured gain under the margin."** G-dense against W-dense on answer-lead recall at two
   is **+4.75 points (3.16 to 6.34)**. The interval is clear of zero, but the point estimate is just under the 5-point
   margin.
+  - **It sits on its margin:** in 65 of the 800 questions, by this page's normalisation (a reader counted 68), the other
+    gold lead's title is itself the answer. Under an either-lead rule, the primary is +5.0 (3.37 to 6.63), which would
+    read "earns its place". The pre-registered rule stands at +4.75. This is how close it is, not a different result.
 - **Secondary:**
   - **G-cross against W-cross: +9.38 points (7.21 to 11.54), "earns its place".** With a cross-encoder, the graph's
     candidates gain twice as much.
@@ -41,6 +44,9 @@ Rates are each arm's share of questions; differences are paired, in points, with
   - **Recall reaches answers:** G-dense against B-dense on exact match is +3.12 points (1.46 to 4.79). G-cross gives
     53.0% exact match against B-dense's 42.9%.
   - **The reranker matters on the same pool:** cross beats dense, B 36.9% against 31.0%, and G 47.1% against 36.0%.
+  - **A cross-encoder alone doesn't win:** W-cross against G-dense is +1.75 (−1.15 to 4.65). So "a better reranker is
+    the cheaper path", one of the pre-registered counts against, isn't found. It's the graph with a cross-encoder that
+    wins.
 - **The pool against the choice:** G's pool holds the answer-bearing lead 78.6% of the time, against W's 47.0% at the
   same size (the pre-spec measure on test 1's questions was 79.8% against 51.6%). Dense reranking turns that 31-point
   pool advantage into 4.75 points at two, and the cross-encoder into 9.4. The loss is still in choosing the two.
@@ -59,11 +65,20 @@ Rates are each arm's share of questions; differences are paired, in points, with
 | B-dense | 89.3% | 70.3% | 84.0% |
 | W-dense | 90.0% | 72.0% | 84.3% |
 | G-dense | 91.3% | 73.0% | 84.7% |
+| B-cross | 89.7% | 70.0% | 85.0% |
+| W-cross | 90.3% | 71.7% | 84.7% |
 | G-cross | 91.3% | 74.0% | 85.7% |
 
-- **Not at ceiling:** W-dense's both-gold at two is 72%, under the 90% ceiling rule, so the stratum reads.
-- **Both-gold first: no measured gain,** G-dense against W-dense +1.0 (−1.53 to 3.53). On answer-lead recall it's +1.33
-  (−0.51 to 3.18), and G-cross against W-cross +1.0 (−0.96 to 2.96): no measured gain on either.
+- **The pre-registered ceiling rule passes:** W-dense's both-gold at two is 72%, under 90%.
+- **But the graph added almost nothing to compare** (Rio Grande, all hands 37677c19). G's pool holds the answer lead
+  94.7% of the time against W's 93.3%, and B's 92.7%, and W-dense's answer-lead recall is already 90.0%. A comparison
+  question names both entities, so keyword search finds them, and links add few new candidates. The ceiling rule tested
+  the both-gold rate, while the mechanism that matters here is the pool.
+- **Both-gold first: no measured difference,** G-dense against W-dense +1.0 (−1.53 to 3.53). On answer-lead recall it's +1.33
+  (−0.51 to 3.18), and G-cross against W-cross +1.0 (−0.96 to 2.96).
+- **So this stratum can't separate construction from usefulness.** The graph adds little to these pools, so there was
+  little for it to help with. It's not evidence that the graph fails where no link was planted. Test 2b, on a set not
+  built from links, still has to carry the claim.
 - **E** gets only 0.7% both-gold here, since a comparison's second entity isn't reached by a link from the first.
 
 ## How to read it
@@ -74,11 +89,14 @@ Rates are each arm's share of questions; differences are paired, in points, with
     cross-encoder.
   - The best arm, graph candidates with a cross-encoder, raises exact match from test 1's baseline of 42.9% to 53.0%,
     at about 2.5 times the reranking time.
-- **What it doesn't show:** that the graph helps where nothing planted the link.
-  - On comparison questions, whose two paragraphs needn't link, the gain vanishes, below the ceiling.
-  - So, as the spec said this case would mean, the bridge gain is open to HotpotQA's construction: its bridge questions
-    were built by following links.
+- **What it doesn't show:** whether the graph helps where nothing planted the link.
+  - HotpotQA's bridge questions were built by following links, so the bridge gain is open to that construction.
+  - The comparison stratum was meant to test it, but there the graph adds almost nothing to the pool (94.7% against
+    93.3%), so it can't separate construction from usefulness either way.
   - **Test 2b, on a question set not built from links (2WikiMultihopQA or MuSiQue), has to carry the claim.**
+- **Limits a reader noted, not rechecked here:** the draw keeps only answer leads with one supporting sentence, which
+  is narrower than the spec's wording; and the tests pinned each scorer but not the summary's pairing (now pinned; see
+  the test commit after this one).
 - **For test 3 (small against large):** the environment arm should be graph candidates with a cross-encoder, the best
   measured here, with test 2b's caution beside it.
 
