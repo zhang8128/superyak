@@ -14,6 +14,10 @@ Serenity f60bbed1, 51f449fe and 49bf4b90; Tardis eadcff61).
   policies",** which draft 2 fixed by hash (8b56bd8e…b48b1d). Each change is a reading the reviewer showed the text
   already forced, or one it required, never a choice made from a world rule or from its numbers. The re-check reads
   that section's diff for exactly this. "The worlds" is unchanged.
+- **Draft 3's re-check (review 2):** APPROVED WITH REQUIRED CHANGES, with one required change: what each half exports,
+  for the runner's brief. It's made in "The contract", along with advisories 1 and 4. Advisory 2, "once for each such
+  turn", would move the policies section's hash again for wording no score depends on, so it isn't taken. Advisory 3
+  keeps the CI rule without a threshold.
 
 ## The question
 
@@ -88,6 +92,17 @@ Flags change nothing in the world. Whether a flag counts as naming the trap is t
 - **The runner and the scorer** are written by a third fresh agent, from "The contract" and "Stage A" alone. It reads
   neither half's code nor the other sections. The runner calls a world and a policy, logs every call's flags, and
   applies `recovered`, the budget and the naming rules.
+- **What each half exports (review 2's required change):**
+  - **(a) The world half** exports `worlds()`, which yields every world with its trap (1 to 4), D, k, w and form
+    (trapped or twin). It also exports `named(...)` as above, and `false_named(world, record, flags_per_call) -> bool`,
+    which is true when the trap's flag appears at any call of a twin run, with any value: `cycle` for trap 1, `repeat`
+    for 2, `contradiction` for 3 and `premise` for 4.
+  - **(b) The policy half** exports `fixed`, `random`, `adaptive_name` and `adaptive_content`, each a function of
+    `(record, options, seed)` that returns `(index, flags)`.
+  - **(c) The policy seeds** are 0 to 19, the same in a world and its twin.
+- **False names are zero by construction** under these definitions. No twin arrives at a state twice, renames a
+  content, has a summary that disagrees with its verdict, or carries an observation. So the false-name rate checks the
+  code, and isn't a finding (review 2, advisory 1).
 
 **Twins and the oracle (R2):** each trapped world has an untrapped twin: the same seed, states and approaches, with
 only the trap removed. The world half's own tests include an **oracle policy** that knows the solution, and they show
@@ -141,7 +156,9 @@ it keys its record. So it's labelled **"argued, checked"**, and it serves three 
    - **The trap effect:** per policy and world, the recovery rate in the trapped world minus the rate in its twin, over
      the 20 paired seeds.
    - **Per pair:** the mean over the trap's 100 worlds of the difference between the two policies' trap effects, with a
-     95% bootstrap CI over worlds: 10,000 resamples, `numpy.random.default_rng(20261130)`, percentile interval.
+     95% bootstrap CI over worlds: 10,000 resamples, `numpy.random.default_rng(20261130)`, and the percentile
+     interval by `numpy.quantile`'s default (linear) method at 0.025 and 0.975. One resample matrix of world indices
+     per trap is drawn once, and every pair shares it (review 2, advisory 4).
    - **The pairs:** each adaptive policy against fixed and against random, and adaptive by name against adaptive by
      content.
    - **Naming is reported beside the ceiling, never inside it:** per trap and policy, named on exposure, the false-name
