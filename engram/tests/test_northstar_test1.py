@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -703,6 +704,116 @@ class TestBCache:
 # Scoring arithmetic
 # =====================================================================================
 
+class TestScoreAfter:
+    """The fix itself, as a pure function: a corrected question's `em` targets the substitute, a control's
+    targets the original, and `stale` is always exact(answer, q["answer"])."""
+
+    def _corrected(self):
+        return {"answer": "1970", "substitute": "1992", "arm": "corrected"}
+
+    def _control(self):
+        return {"answer": "1985", "arm": "control"}
+
+    def test_a_corrected_question_answered_with_the_substitute_is_right_not_stale(self):
+        result = ns.score_after("1992", self._corrected())
+        assert result["em"] is True and result["stale"] is False
+
+    def test_a_corrected_question_answered_with_the_original_is_stale_not_right(self):
+        result = ns.score_after("1970", self._corrected())
+        assert result["em"] is False and result["stale"] is True
+
+    def test_a_corrected_question_answered_with_neither_is_neither(self):
+        result = ns.score_after("2000", self._corrected())
+        assert result["em"] is False and result["stale"] is False
+
+    def test_a_control_question_targets_the_original_for_both_em_and_stale(self):
+        right = ns.score_after("1985", self._control())
+        assert right["em"] is True and right["stale"] is True  # nothing moved: the two checks coincide
+        wrong = ns.score_after("1984", self._control())
+        assert wrong["em"] is False and wrong["stale"] is False
+
+    def test_f1_also_targets_the_substitute_for_a_corrected_question(self):
+        result = ns.score_after("1992", self._corrected())
+        assert result["f1"] == 1.0
+
+
+class TestArmRightStale:
+    def test_counts_right_and_stale_among_the_given_ids_only(self):
+        rows = {"c0": {"em": True, "stale": False}, "c1": {"em": False, "stale": True},
+               "c2": {"em": False, "stale": False}, "other": {"em": True, "stale": True}}
+        result = ns.arm_right_stale(["c0", "c1", "c2"], rows)
+        assert result == {"n": 3, "right": 1, "stale": 1}
+
+    def test_an_id_missing_from_rows_is_not_counted(self):
+        rows = {"c0": {"em": True, "stale": False}}
+        result = ns.arm_right_stale(["c0", "c1"], rows)
+        assert result == {"n": 1, "right": 1, "stale": 0}
+
+
+class TestRescoreAndSlimRun:
+    """`rescore` and `slim_run` on a hand-made `results`-shaped dict carrying the real bug's signature
+    (B-cache's after-row still says "1970", scored right by the old, buggy saved `em`) -- both must read
+    it correctly without any model call, straight from the saved answer strings."""
+
+    def _plan(self):
+        return {"questions": [
+            {"id": "c0", "arm": "corrected", "answer": "1970", "substitute": "1992", "answer_class": "year"},
+            {"id": "k0", "arm": "control", "answer": "1985", "answer_class": "year"},
+        ]}
+
+    def _results(self):
+        return {
+            "reasked_by_e": ["c0"],
+            "usage": {"e": {"calls": 2}},
+            "before": {
+                "e": {"c0": {"answer": "1970", "em": True, "f1": 1.0},
+                     "k0": {"answer": "1985", "em": True, "f1": 1.0}},
+                "b_all": {"c0": {"answer": "1970", "em": True, "f1": 1.0},
+                         "k0": {"answer": "1985", "em": True, "f1": 1.0}},
+            },
+            "after": {
+                # Every row below carries the bug's own (wrong) saved `em`, scored against the original
+                # answer regardless of the correction -- exactly what a saved results.json from before the
+                # fix holds. rescore/slim_run must recompute `em`/`stale` fresh, never trust these.
+                "e": {"c0": {"answer": "1992", "em": False, "f1": 0.0}},
+                "e_all": {"c0": {"answer": "1992", "em": False, "f1": 0.0},
+                         "k0": {"answer": "1985", "em": True, "f1": 1.0}},
+                "b_all": {"c0": {"answer": "1992", "em": False, "f1": 0.0},
+                         "k0": {"answer": "1985", "em": True, "f1": 1.0}},
+                "b_cache": {"c0": {"answer": "1970", "em": True, "f1": 1.0},   # the bug's tell
+                           "k0": {"answer": "1985", "em": True, "f1": 1.0}},
+                "closed_book": {"c0": {"answer": "1970", "em": True, "f1": 1.0}},
+            },
+        }
+
+    def test_rescore_fixes_every_arm_and_computes_the_whole_summary(self):
+        summary = ns.rescore(self._results(), self._plan())
+        assert summary["by_arm"]["b_cache"] == {"n": 1, "right": 0, "stale": 1}   # never right, now
+        assert summary["by_arm"]["e"] == {"n": 1, "right": 1, "stale": 0}         # "1992" is right now
+        assert summary["by_arm"]["e_all"] == {"n": 1, "right": 1, "stale": 0}
+        assert summary["by_arm"]["b_all"] == {"n": 1, "right": 1, "stale": 0}
+        assert summary["by_arm"]["closed_book"] == {"n": 1, "right": 0, "stale": 1}
+        assert summary["targeting"] == {"corrected_reasked": 1, "corrected_total": 1,
+                                        "control_reasked": 0, "control_total": 1}
+
+    def test_slim_run_has_no_lead_texts_and_is_deterministic(self):
+        plan, results = self._plan(), self._results()
+        slim = ns.slim_run(results, plan)
+        dumped = json.dumps(slim, sort_keys=True)
+        assert "text" not in dumped and "leads" not in dumped
+        assert ns.slim_run(results, plan) == slim  # same inputs, same output, every time
+
+        c0 = next(q for q in slim["questions"] if q["id"] == "c0")
+        assert c0["class"] == "year" and c0["arm"] == "corrected" and c0["substitute"] == "1992"
+        assert c0["reasked_by_e"] is True
+        assert c0["arms"]["b_cache"] == {"answer": "1970", "em": False, "stale": True}
+        assert c0["arms"]["e"] == {"answer": "1992", "em": True, "stale": False}
+
+        k0 = next(q for q in slim["questions"] if q["id"] == "k0")
+        assert k0["arm"] == "control" and k0["substitute"] is None and k0["reasked_by_e"] is False
+        assert k0["arms"]["b_cache"] == {"answer": "1985", "em": True, "stale": True}
+
+
 class TestScoring:
     def test_source_support_requires_both_gold_pages_among_cited(self):
         gold = [{"page_id": 1}, {"page_id": 2}]
@@ -783,7 +894,8 @@ class TestScoring:
 
 class TestSummarize:
     def test_primary_and_secondary_are_none_with_fewer_than_two_corrected(self):
-        sample = [{"id": "c1", "arm": "corrected"}, {"id": "k1", "arm": "control"}]
+        sample = [{"id": "c1", "arm": "corrected", "answer": "A", "substitute": "Z"},
+                 {"id": "k1", "arm": "control", "answer": "B"}]
         rows = {"c1": {"answer": "A", "em": True}, "k1": {"answer": "B", "em": True}}
         summary = ns.summarize(sample, rows, rows, {}, rows, {}, {}, set(), {})
         assert summary["primary"] is None
@@ -792,10 +904,11 @@ class TestSummarize:
     def test_primary_and_secondary_count_calls_and_agree_when_answers_match(self):
         # Four corrected questions: E reasks c0 and c1 (retraction_impact named them) and gets them right;
         # c2 and c3 were never reasked, but E's *prior* belief there already matched B-all's after-correction
-        # answer, and E-all (asked fresh on every one) also agrees everywhere -- a zero-variance CI on both
-        # comparisons, so this pins down the call counts `summarize` computes, not just the CI arithmetic
-        # (already covered by TestScoring).
-        sample = [{"id": f"c{i}", "arm": "corrected"} for i in range(4)]
+        # answer (its substitute happens to equal what E already believed), and E-all (asked fresh on every
+        # one) also agrees everywhere -- a zero-variance CI on both comparisons, so this pins down the call
+        # counts `summarize` computes, not just the CI arithmetic (already covered by TestScoring).
+        sample = [{"id": f"c{i}", "arm": "corrected", "answer": f"orig{i}",
+                  "substitute": f"new{i}" if i < 2 else f"right{i}"} for i in range(4)]
         before_e = {"c0": {"answer": "old0", "em": False}, "c1": {"answer": "old1", "em": False},
                    "c2": {"answer": "right2", "em": True}, "c3": {"answer": "right3", "em": True}}
         after_e = {"c0": {"answer": "new0", "em": True}, "c1": {"answer": "new1", "em": True}}
@@ -816,7 +929,8 @@ class TestSummarize:
         assert summary["cost"] == usage
 
     def test_e_calls_only_counts_the_corrected_questions_e_actually_reasked(self):
-        sample = [{"id": "c0", "arm": "corrected"}, {"id": "c1", "arm": "corrected"}]
+        sample = [{"id": "c0", "arm": "corrected", "answer": "a", "substitute": "b"},
+                 {"id": "c1", "arm": "corrected", "answer": "a", "substitute": "b"}]
         before_e = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
         after_b = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
         e_all = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
@@ -834,12 +948,12 @@ class TestSummarizeByClass:
 
     def _sample(self):
         return [
-            {"id": "y0", "arm": "corrected", "answer_class": "year"},
-            {"id": "y1", "arm": "corrected", "answer_class": "year"},
-            {"id": "p0", "arm": "corrected", "answer_class": "person"},
-            {"id": "p1", "arm": "corrected", "answer_class": "person"},
-            {"id": "o0", "arm": "corrected", "answer_class": "other_name"},
-            {"id": "o1", "arm": "corrected", "answer_class": "other_name"},
+            {"id": "y0", "arm": "corrected", "answer_class": "year", "answer": "original", "substitute": "right"},
+            {"id": "y1", "arm": "corrected", "answer_class": "year", "answer": "original", "substitute": "right"},
+            {"id": "p0", "arm": "corrected", "answer_class": "person", "answer": "original", "substitute": "right"},
+            {"id": "p1", "arm": "corrected", "answer_class": "person", "answer": "original", "substitute": "right"},
+            {"id": "o0", "arm": "corrected", "answer_class": "other_name", "answer": "original", "substitute": "right"},
+            {"id": "o1", "arm": "corrected", "answer_class": "other_name", "answer": "original", "substitute": "right"},
         ]
 
     def test_by_class_groups_corrected_questions_and_clean_classes_merges_year_and_person(self):
@@ -868,9 +982,9 @@ class TestSummarizeByClass:
         assert by_class["clean_classes"]["ids"] == ["p0", "p1", "y0", "y1"]
 
     def test_by_class_is_none_for_a_class_with_fewer_than_two_but_other_classes_still_compute(self):
-        sample = [{"id": "y0", "arm": "corrected", "answer_class": "year"},
-                 {"id": "p0", "arm": "corrected", "answer_class": "person"},
-                 {"id": "p1", "arm": "corrected", "answer_class": "person"}]
+        sample = [{"id": "y0", "arm": "corrected", "answer_class": "year", "answer": "a", "substitute": "b"},
+                 {"id": "p0", "arm": "corrected", "answer_class": "person", "answer": "a", "substitute": "b"},
+                 {"id": "p1", "arm": "corrected", "answer_class": "person", "answer": "a", "substitute": "b"}]
         rows = {qid: {"answer": "a", "em": True} for qid in ("y0", "p0", "p1")}
         summary = ns.summarize(sample, rows, rows, {}, rows, rows, {}, set(), {})
         by_class = summary["by_class"]
@@ -879,8 +993,8 @@ class TestSummarizeByClass:
         assert by_class["clean_classes"]["n"] == 3  # year's one id plus person's two, still combined
 
     def test_a_class_absent_from_the_sample_is_simply_absent_from_by_class(self):
-        sample = [{"id": "o0", "arm": "corrected", "answer_class": "other_name"},
-                 {"id": "o1", "arm": "corrected", "answer_class": "other_name"}]
+        sample = [{"id": "o0", "arm": "corrected", "answer_class": "other_name", "answer": "a", "substitute": "b"},
+                 {"id": "o1", "arm": "corrected", "answer_class": "other_name", "answer": "a", "substitute": "b"}]
         rows = {qid: {"answer": "a", "em": True} for qid in ("o0", "o1")}
         summary = ns.summarize(sample, rows, rows, {}, rows, rows, {}, set(), {})
         assert set(summary["by_class"]) == {"other_name", "clean_classes"}
@@ -999,3 +1113,88 @@ class TestRetrievalIntegration:
                      {"title": "Ann Vale", "text": "grew up in Leeds in 1970"}]
         leads = ns.dense_rerank("Leeds 1970 Ann Vale", candidates, fake_embed, top=1)
         assert leads[0]["title"] == "Ann Vale"
+
+
+# =====================================================================================
+# The real bug the full run exposed: every after-correction row scored `exact(answer,
+# q["answer"])` against the ORIGINAL answer, so B-cache's after-EM exactly equalled its
+# before-EM -- it measured staleness, not correctness. Runs the real pipeline end to end
+# (a fake model, the real corpus-index binary, a real Atlas store) on a planted plan, so
+# it exercises the actual row-construction code, not a reimplementation of it.
+# =====================================================================================
+
+def fake_ask_echo_year(model: str, prompt_text: str):
+    """A deterministic fake model: the first four-digit number in its own prompt, or "UNKNOWN" with none.
+    Before a correction the evidence holds the original year; after, the corrected one -- so this model's
+    answer tracks exactly what it was given, with no memory of an earlier turn."""
+    import re
+
+    match = re.search(r"\b\d{4}\b", prompt_text)
+    return (match.group(0) if match else "UNKNOWN"), 0.0, {"prompt_eval_count": 1, "eval_count": 1}
+
+
+def fake_embed_prefers_gold_leads(texts: list[str], prefix: str = "search_document") -> list[list[float]]:
+    """A minimal, test-specific embedder: ``[1 if "leeds" in text else 0, 1 if "bristol" in text else 0]``.
+    This test's corrected question's gold lead ("Ann Vale", "...grew up in Leeds...") and its control's
+    ("Mia Frost", "...grew up in Bristol...") each score a clean, unique 1 on their own axis and 0 on every
+    other candidate's (``cosine``'s zero-norm guard keeps those at similarity 0 against anything), so dense
+    rerank puts the intended lead first regardless of any other candidate's incidental word overlap -- the
+    module-level ``fake_embed``'s bag-of-words-with-baseline let an unrelated planted page ("Sam Lowe",
+    sharing no real words with the query) outrank the actual gold lead, which this test can't afford."""
+    out = []
+    for text in texts:
+        lowered = text.lower()
+        out.append([1.0 if "leeds" in lowered else 0.0, 1.0 if "bristol" in lowered else 0.0])
+    return out
+
+
+class TestAfterCorrectionScoringBug:
+    def _plan(self, corpus):
+        lotus, ann_vale = corpus.by_title("Lotus (band)"), corpus.by_title("Ann Vale")
+        volt, mia_frost = corpus.by_title("Volt (band)"), corpus.by_title("Mia Frost")
+        questions = [
+            {"id": "qc", "question": "In what year did Ann Vale, the singer of the band Lotus, move to Leeds?",
+             "answer": "1970", "answer_class": "year",
+             "gold_leads": [{"page_id": lotus["page_id"], "rev_id": lotus["rev_id"], "title": lotus["title"]},
+                           {"page_id": ann_vale["page_id"], "rev_id": ann_vale["rev_id"],
+                            "title": ann_vale["title"]}],
+             "corrected_lead_index": 1, "arm": "corrected", "substitute": "1992"},
+            {"id": "qk", "question": "In what year was the singer of the band Volt born in Bristol?",
+             "answer": "1985", "answer_class": "year",
+             "gold_leads": [{"page_id": volt["page_id"], "rev_id": volt["rev_id"], "title": volt["title"]},
+                           {"page_id": mia_frost["page_id"], "rev_id": mia_frost["rev_id"],
+                            "title": mia_frost["title"]}],
+             "corrected_lead_index": 1, "arm": "control"},
+        ]
+        qualifying_like = [{"id": "qc", "answer": "1970", "gold_leads": [lotus, ann_vale],
+                           "corrected_lead_index": 1}]
+        overlay = ns.build_overlay(qualifying_like, [0], {0: "1992"})
+        return {"questions": questions, "overlay": overlay, "model": "fake"}
+
+    def test_after_correction_rows_score_against_the_substitute_not_the_original(
+        self, real_index, corpus, corpus_path, atlas_workbench, tmp_path,
+    ):
+        bin_path, index_path = real_index
+        plan = self._plan(corpus)
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        result = ns.run_smoke(
+            plan, corpus_path=corpus_path, index_path=index_path, bin_path=bin_path,
+            store_path=tmp_path / "store.db", capped_sh=None, count=2, model="fake",
+            ask_fn=fake_ask_echo_year, embed_fn=fake_embed_prefers_gold_leads, workdir=workdir,
+        )
+        after = result["after"]
+
+        # The corrected question, answered with the substitute (E-all re-asks everyone on the corrected
+        # index, and the corrected lead now reads "1992"): right, not stale.
+        assert after["e_all"]["qc"]["em"] is True
+        assert after["e_all"]["qc"]["stale"] is False
+
+        # B-cache never re-asks: its cached answer is whatever B-all said *before* the correction, when
+        # "1970" was still correct. Scored against the substitute now, it must never read as right.
+        assert after["b_cache"]["qc"]["em"] is False
+        assert after["b_cache"]["qc"]["stale"] is True
+
+        # The control question never moved: B-cache's unchanged "1985" is still right.
+        assert after["b_cache"]["qk"]["em"] is True
+        assert after["b_cache"]["qk"]["stale"] is True  # trivially, since nothing moved for a control

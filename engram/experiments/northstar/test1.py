@@ -715,6 +715,20 @@ def controls_unchanged(before: dict, after: dict, control_ids) -> dict:
             "right_before": right_before, "stayed_right": right_and_unchanged}
 
 
+def score_after(answer: str, q: dict) -> dict:
+    """The after-correction score for one ``answer`` to question ``q`` (one of ``plan["questions"]``):
+    ``em``/``f1`` against the right answer *now* -- the substitute for a corrected question, the unchanged
+    original for a control -- and ``stale``, always ``exact(answer, q["answer"])``. For a corrected
+    question the two targets differ (``choose_substitutes`` guarantees the substitute is never equal to the
+    original), so ``em`` and ``stale`` can't both be true there; for a control they coincide, since nothing
+    moved. This is the fix for the bug the first full run exposed: every after-row had been scored against
+    ``q["answer"]`` regardless of the correction, so B-cache's after-EM exactly equalled its before-EM
+    (161/400) -- it was measuring staleness, not correctness."""
+    correct_target = q["substitute"] if q["arm"] == "corrected" else q["answer"]
+    return {"em": exact(answer, correct_target), "f1": round(f1(answer, correct_target), 4),
+            "stale": exact(answer, q["answer"])}
+
+
 def stale_answers(before: dict, after: dict, corrected_ids, closed_book: dict) -> dict:
     """After the correction, how often an arm's answer still equals its *pre-correction* answer (plausibly
     stale), read beside how often the closed-book arm (no evidence at all) gives that same old answer."""
@@ -881,16 +895,34 @@ def _primary_and_secondary(ids: list[str], e_final: dict, after_b: dict, e_all: 
     return primary, secondary
 
 
+def arm_right_stale(ids, rows: dict) -> dict:
+    """How many of ``ids`` an arm's ``rows`` (each already scored by ``score_after``) got right, and how
+    many were stale -- the per-arm counts the coordinator's report reads directly."""
+    present = [qid for qid in ids if qid in rows]
+    return {"n": len(present), "right": sum(1 for qid in present if rows[qid]["em"]),
+            "stale": sum(1 for qid in present if rows[qid].get("stale"))}
+
+
 def summarize(sample: list[dict], before_e: dict, before_b: dict, after_e: dict, after_b: dict,
-             e_all: dict, closed_book: dict, reask_ids, usage: dict) -> dict:
+             e_all: dict, closed_book: dict, reask_ids, usage: dict, *, b_cache: dict | None = None) -> dict:
     """The measures computed the same way regardless of sample size (10 for a smoke, 800 for the full run):
     the primary (E against B-all on the corrected half) and the secondary (E against E-all, revision 4),
     both overall and ``by_class`` (year, person, other_name, and person+year together as "clean_classes" --
-    the coordinator's label for the substitutions that keep their kind), controls left unchanged, and stale
-    answers read beside closed book."""
+    the coordinator's label for the substitutions that keep their kind), ``by_arm`` right/stale counts on
+    the corrected half (E, E-all, B-all, B-cache, closed book), controls left unchanged, and stale answers
+    read beside closed book."""
+    b_cache = b_cache or {}
+    by_id = {q["id"]: q for q in sample}
     corrected_ids = sorted(q["id"] for q in sample if q["arm"] == "corrected")
     control_ids = sorted(q["id"] for q in sample if q["arm"] == "control")
-    e_final = {qid: (after_e[qid] if qid in reask_ids else before_e[qid]) for qid in before_e}
+    # E's belief for every question after the correction: the reask's answer where E actually re-asked,
+    # else its original (before-correction) answer carried forward unchanged -- rescored against the right
+    # target either way (the reask's row already is; the carried-forward one needs it, spec: "E's final
+    # answer on a corrected question it didn't re-ask is its before answer, scored against the substitute").
+    e_final = {
+        qid: after_e[qid] if qid in reask_ids else {**row, **score_after(row["answer"], by_id[qid])}
+        for qid, row in before_e.items()
+    }
 
     ids_by_class: dict[str, list[str]] = {}
     for q in sample:
@@ -908,10 +940,22 @@ def summarize(sample: list[dict], before_e: dict, before_b: dict, after_e: dict,
                                  "secondary_e_vs_e_all": clean_secondary}
 
     primary, secondary = _primary_and_secondary(corrected_ids, e_final, after_b, e_all, reask_ids)
+    by_arm = {
+        "e": arm_right_stale(corrected_ids, e_final), "e_all": arm_right_stale(corrected_ids, e_all),
+        "b_all": arm_right_stale(corrected_ids, after_b), "b_cache": arm_right_stale(corrected_ids, b_cache),
+        "closed_book": arm_right_stale(corrected_ids, closed_book),
+    }
+    targeting = {
+        "corrected_reasked": sum(1 for qid in corrected_ids if qid in reask_ids),
+        "corrected_total": len(corrected_ids),
+        "control_reasked": sum(1 for qid in control_ids if qid in reask_ids),
+        "control_total": len(control_ids),
+    }
 
     return {
         "corrected_ids": corrected_ids, "control_ids": control_ids,
-        "primary": primary, "secondary_e_vs_e_all": secondary, "by_class": by_class,
+        "primary": primary, "secondary_e_vs_e_all": secondary, "by_class": by_class, "by_arm": by_arm,
+        "targeting": targeting,
         "controls": controls_unchanged(before_b, after_b, control_ids),
         "stale_answers": stale_answers(before_e, e_final, corrected_ids, closed_book),
         "cost": usage,
@@ -988,8 +1032,7 @@ def _run_arms(plan: dict, sample: list[dict], *, corpus_path, index_path, bin_pa
                 if (lead := corpus.by_page_id(pid)) is not None]
         answer, seconds, info = ask_fn(model, build_prompt(q["question"], leads))
         usage["e_all"] = _usage(usage.get("e_all"), info, seconds)
-        e_all[q["id"]] = {"answer": answer, "em": exact(answer, q["answer"]),
-                          "f1": round(f1(answer, q["answer"]), 4), "seconds": seconds}
+        e_all[q["id"]] = {"answer": answer, "seconds": seconds, **score_after(answer, q)}
 
     # E's targeted reask: only the claims retraction_impact named. The leakage guard (R6) holds here by
     # construction, not by scanning this prompt's text for the prior answer: real evidence can legitimately
@@ -1008,8 +1051,7 @@ def _run_arms(plan: dict, sample: list[dict], *, corpus_path, index_path, bin_pa
         answer, seconds, info = ask_fn(model, prompt_text)
         record_e_claim(store, q["id"], q["question"], answer, leads, attempt=2)
         usage["e"] = _usage(usage["e"], info, seconds)
-        after_e[q["id"]] = {"answer": answer, "em": exact(answer, q["answer"]),
-                            "f1": round(f1(answer, q["answer"]), 4), "seconds": seconds}
+        after_e[q["id"]] = {"answer": answer, "seconds": seconds, **score_after(answer, q)}
 
     # B-all: every question re-asked on the corrected index (never targeted).
     b_reask_picks = query(corrected_index_path, items, B_BM25_K, through_cap=full)
@@ -1020,18 +1062,21 @@ def _run_arms(plan: dict, sample: list[dict], *, corpus_path, index_path, bin_pa
         prompt_text = build_prompt(q["question"], leads)
         answer, seconds, info = ask_fn(model, prompt_text)
         usage["b_all"] = _usage(usage["b_all"], info, seconds)
-        after_b[q["id"]] = {"answer": answer, "em": exact(answer, q["answer"]),
-                            "f1": round(f1(answer, q["answer"]), 4), "seconds": seconds}
+        after_b[q["id"]] = {"answer": answer, "seconds": seconds, **score_after(answer, q)}
 
         if q["id"] in sample_corrected_ids:
             cb_prompt = build_prompt(q["question"], [])
             cb_answer, cb_seconds, cb_info = ask_fn(model, cb_prompt)
             usage["closed_book"] = _usage(usage.get("closed_book"), cb_info, cb_seconds)
-            closed_book[q["id"]] = {"answer": cb_answer, "em": exact(cb_answer, q["answer"]),
-                                    "f1": round(f1(cb_answer, q["answer"]), 4), "seconds": cb_seconds}
+            closed_book[q["id"]] = {"answer": cb_answer, "seconds": cb_seconds, **score_after(cb_answer, q)}
 
-    b_cache_after = b_cache_from(before_b)
-    summary = summarize(sample, before_e, before_b, after_e, after_b, e_all, closed_book, reask_ids, usage)
+    # B-cache, a floor only: the *stored* before-correction answers, rescored against the after-correction
+    # target (never re-asked, so the answer text itself never changes -- only what counts as right does).
+    by_id = {q["id"]: q for q in sample}
+    b_cache_after = {qid: {**row, **score_after(row["answer"], by_id[qid])}
+                     for qid, row in b_cache_from(before_b).items()}
+    summary = summarize(sample, before_e, before_b, after_e, after_b, e_all, closed_book, reask_ids, usage,
+                       b_cache=b_cache_after)
 
     return {
         "sample": [q["id"] for q in sample], "corrected_in_sample": sorted(sample_corrected_ids),
@@ -1042,6 +1087,76 @@ def _run_arms(plan: dict, sample: list[dict], *, corpus_path, index_path, bin_pa
                   "closed_book": closed_book},
         "history_before_correction": history_before, "usage": usage, "summary": summary,
     }
+
+
+# =====================================================================================
+# rescore: recompute the whole summary from a saved run's own answers, no model calls --
+# the fix, applied after the fact to a run made before it existed.
+# =====================================================================================
+
+def _rescore_rows(results: dict, plan: dict) -> dict:
+    """Every row from a saved run's ``results.json``, rescored fresh from its saved ``answer`` string
+    through ``score_after`` -- never read from the saved row's own (possibly wrong) ``em``/``stale``.
+    Shared by ``rescore`` (the summary) and ``slim_run`` (the per-question report), so they can never
+    disagree with each other, or with what a fresh run would have scored."""
+    sample = plan["questions"]
+    by_id = {q["id"]: q for q in sample}
+    reask_ids = {qid for qid in results.get("reasked_by_e", []) if qid in by_id}
+
+    def rescored(rows: dict) -> dict:
+        return {qid: {**row, **score_after(row["answer"], by_id[qid])}
+                for qid, row in rows.items() if qid in by_id}
+
+    before_e = results["before"]["e"]
+    before_b = results["before"]["b_all"]
+    after = results["after"]
+    after_e = rescored(after["e"])
+    after_b = rescored(after["b_all"])
+    e_all = rescored(after["e_all"])
+    b_cache = rescored(after["b_cache"])
+    closed_book = rescored(after["closed_book"])
+    e_final = {
+        qid: after_e[qid] if qid in reask_ids else {**row, **score_after(row["answer"], by_id[qid])}
+        for qid, row in before_e.items() if qid in by_id
+    }
+    return {"sample": sample, "before_e": before_e, "before_b": before_b, "after_e": after_e,
+           "after_b": after_b, "e_all": e_all, "b_cache": b_cache, "closed_book": closed_book,
+           "e_final": e_final, "reask_ids": reask_ids, "usage": results.get("usage", {})}
+
+
+def rescore(results: dict, plan: dict) -> dict:
+    """The whole summary (primary, secondary, by_class with clean_classes, by_arm, controls, stale,
+    targeting) recomputed from a saved run's own answers and the plan that produced them -- no model
+    calls. The fix for the bug the first full run exposed, applied after the fact to a run made before
+    the fix existed: the saved ``results.json`` isn't touched, and every number here comes fresh from
+    its saved answer strings."""
+    rows = _rescore_rows(results, plan)
+    return summarize(rows["sample"], rows["before_e"], rows["before_b"], rows["after_e"], rows["after_b"],
+                     rows["e_all"], rows["closed_book"], rows["reask_ids"], rows["usage"],
+                     b_cache=rows["b_cache"])
+
+
+def slim_run(results: dict, plan: dict) -> dict:
+    """A slim, deterministic per-question report -- id, class, corrected or control, substitute, whether E
+    re-asked, and each arm's answer/em/stale. No lead texts (a saved run's own "leads" fields can be large
+    and aren't needed to read a score): just enough to audit or replot the result without touching the
+    corpus again."""
+    rows = _rescore_rows(results, plan)
+    arms = {"e": rows["e_final"], "e_all": rows["e_all"], "b_all": rows["after_b"],
+           "b_cache": rows["b_cache"], "closed_book": rows["closed_book"]}
+
+    def slim(row: dict | None) -> dict | None:
+        return None if row is None else {"answer": row["answer"], "em": row["em"], "stale": row.get("stale")}
+
+    questions = [
+        {
+            "id": q["id"], "class": q.get("answer_class"), "arm": q["arm"],
+            "substitute": q.get("substitute"), "reasked_by_e": q["id"] in rows["reask_ids"],
+            "arms": {name: slim(arm_rows.get(q["id"])) for name, arm_rows in arms.items()},
+        }
+        for q in sorted(rows["sample"], key=lambda q: q["id"])
+    ]
+    return {"questions": questions}
 
 
 def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
@@ -1137,6 +1252,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rescore(args: argparse.Namespace) -> int:
+    with open(args.results, encoding="utf-8") as handle:
+        results = json.load(handle)
+    with open(args.plan, encoding="utf-8") as handle:
+        plan = json.load(handle)
+    summary = rescore(results, plan)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=1, sort_keys=True)
+    print(json.dumps(summary, indent=1, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="North-star test 1: one environment, end to end, with a correction")
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -1166,6 +1294,12 @@ def main(argv: list[str] | None = None) -> int:
                                  "questions (at most 10) with a small-subset corrected index")
     run_parser.add_argument("--out")
     run_parser.set_defaults(func=_cmd_run)
+
+    rescore_parser = sub.add_parser("rescore", help="recompute the whole summary from a saved run; no model calls")
+    rescore_parser.add_argument("--results", required=True)
+    rescore_parser.add_argument("--plan", required=True)
+    rescore_parser.add_argument("--out")
+    rescore_parser.set_defaults(func=_cmd_rescore)
 
     args = parser.parse_args(argv)
     return args.func(args)
