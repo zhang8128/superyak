@@ -71,6 +71,9 @@ One function, `source_key(record)`, version `source_key/1`, pinned by the profil
     - **Cleaning:** an optional leading `doi:` and one trailing `/` are removed (D5).
     - **The check:** it's a DOI key only when what's left starts with `10.` and a digit. So `https://doi.org/` and
       `https://doi.org/help` give no DOI key.
+      - **Amendment 1 (the build, 2026-11-22):** what's left must also have the citation pattern's shape: `10.`, 4
+        to 9 digits, a `/` and at least one more character. A bare registrant prefix such as `https://doi.org/10.5555`
+        is not a DOI. It keeps only its url key.
     - **Why it's taken whole:** the path never goes through the regex, so `%3C` and `%3E`, `<` and `>`, stay in it
       (C5).
   - **From the citation,** only when the url gave none: the first match of `10\.\d{4,9}/[-._;()/:<>A-Za-z0-9]+`,
