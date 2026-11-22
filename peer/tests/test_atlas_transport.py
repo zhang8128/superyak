@@ -816,3 +816,18 @@ def test_amendment_2_the_receiver_refuses_an_actor_without_a_current_typed_code(
         db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (t_ids['rio-contact'],))
     refused_at_tardis(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))},
                       'The sending contact has no current typed code here')
+
+
+def test_atlas_received_trusts_only_origins_still_listed(atlas_peers, tmp_path, capsys):
+    """Amendment 2's check, advisory 2: a peer dropped from the lessons chain stays paired, but its rows stop feeding
+    relation(), and origins.json no longer names it."""
+    from superyak_peer.__main__ import main
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    atlas_peers['deliver']('pi', 'tardis')
+    with tardis.transaction() as db:
+        db.execute('DELETE FROM lessons_room')
+    out = tmp_path / 'received'
+    main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
+    assert [p.name for p in out.glob('*.json')] == ['origins.json']
+    assert json.loads((out / 'origins.json').read_text()) == {'paired': []}

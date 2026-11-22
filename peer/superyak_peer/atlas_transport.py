@@ -117,10 +117,10 @@ def listed(db, peer_id):
 
 def contact_words(db, contact_id):
     """Why a contact can't take an atlas row now, or None (spec T2, checked at queueing and again at every prepare)."""
-    from .federation import HELD
     from .owner_trust import code_current
-    contact = db.execute(f'SELECT remote_contacts.peer_id, peers.paired, EXISTS({HELD}) AS held FROM remote_contacts '
-                         'JOIN peers USING(peer_id) WHERE remote_contacts.id=?', (contact_id,)).fetchone()
+    contact = db.execute('SELECT remote_contacts.peer_id, peers.paired, EXISTS(SELECT 1 FROM contact_holds WHERE '
+                         'contact_id=remote_contacts.id) AS held FROM remote_contacts JOIN peers USING(peer_id) '
+                         'WHERE remote_contacts.id=?', (contact_id,)).fetchone()  # federation.HELD, written out
     if contact is None or not contact['paired'] or contact['held']:
         return 'That contact is held or its peer is unpaired'
     if not code_current(db, contact_id):
@@ -193,14 +193,17 @@ class AtlasTransport:
 
     def atlas_received_for(self, ship_id):
         """Spec T6: what a ship holds from origins still paired, and the atlas rows this peer refused when it pulled
-        them (A5), with their words."""
-        with self.reading() as db:
+        them (A5), with their words. On transaction(): only the reads test_reading_moves names leave the gate."""
+        with self.transaction() as db:
             held = [dict(r) for r in db.execute(
                 'SELECT a.* FROM atlas_received a JOIN peers p ON p.peer_id=a.origin AND p.paired=1 WHERE a.recipient=? '
                 'ORDER BY a.received_at', (ship_id,))]
             refused = [dict(r) for r in db.execute('SELECT * FROM atlas_refused ORDER BY at')]
-            paired = sorted(r[0] for r in db.execute('SELECT peer_id FROM peers WHERE paired=1'))
-            return held, refused, self._own_peer_id(db), paired
+            # amendment 2's check (its advisory 2): paired and still listed, so a peer dropped from the lessons chain
+            # stops feeding relation() at once, as unpair does through R7
+            trusted = sorted(r[0] for r in db.execute('SELECT peer_id FROM peers WHERE paired=1') if listed(db, r[0]))
+            held = [row for row in held if row['origin'] in trusted]
+            return held, refused, self._own_peer_id(db), trusted
 
 
 def kept_name(row):

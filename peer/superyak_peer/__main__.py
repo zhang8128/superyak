@@ -352,7 +352,7 @@ def atlas_command(args, store):
     by a ship on its own peer. Every name and word printed is one safe line."""
     from .atlas_transport import kept_file, kept_name
     from .ships import safe_line, short_id
-    with store.reading() as db:
+    with store.transaction() as db:  # not reading(): only the reads test_reading_moves names leave the gate
         ship = _ship_id(db, args.as_ship)
         if args.command == 'atlas-send':
             prefix = short_id(args.contact.removeprefix('remote_'))  # a plain prefix: % and _ match only themselves
@@ -370,7 +370,7 @@ def atlas_command(args, store):
     else:
         held, refused, receiver, paired = store.atlas_received_for(ship)
         args.out.mkdir(parents=True, exist_ok=True)
-        # the trust root Atlas's received() takes from its caller (Rio Grande's 3): the origins paired at export
+        # the trust root Atlas's received() takes from its caller (Rio Grande's 3): origins paired and listed at export
         (args.out / 'origins.json').write_text(json.dumps({'paired': paired}, indent=2) + '\n')
         from .atlas_transport import verify_kept
         written = 0
