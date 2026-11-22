@@ -90,3 +90,29 @@ def test_a_notice_naming_a_record_its_snapshot_lacks_is_refused():
 def test_every_notice_is_valid():
     for notice in load("notices.json").values():
         validate_notice(notice, held_publications())
+
+
+def _forged(sentence, snapshots):
+    # sealed by the Pi with the right keys, naming a Snapshot the Pi didn't issue (the transport reviewer's R3)
+    return make_fixtures.seal_notice(sentence, snapshots, make_fixtures.issuer("pi"), make_fixtures.context("pi"),
+                                     make_fixtures.AT)
+
+
+def _tardis_source(record_id):
+    snapshot = load("tardis.json")["snapshot"]
+    return snapshot, next(s for s in snapshot["payload"]["model"]["sources"] if s["id"] == record_id)
+
+
+def test_a_notice_naming_a_snapshot_another_issuer_issued_is_refused():
+    tardis, source = _tardis_source("t-copied-a-1")
+    corrected = load("pi-corrected.json")["snapshot"]
+    new = next(s for s in corrected["payload"]["model"]["sources"] if s["id"] == "pi-copied-a-1-v2")
+    correction = _forged({"notice": "correction",
+                          "old": {"snapshot": tardis["digest"], "record_id": source["id"], "keys": source["keys"]},
+                          "new": {"snapshot": corrected["digest"], "record_id": new["id"], "keys": new["keys"]},
+                          "reason": "A correction of another store's record."}, [tardis, corrected])
+    retraction = _forged({"notice": "retraction", "record_id": source["id"], "keys": source["keys"],
+                          "reason": "A retraction of another store's record."}, [tardis])
+    for notice in (correction, retraction):
+        with pytest.raises(ValueError, match="another issuer"):
+            validate_notice(notice, held_publications())

@@ -196,6 +196,8 @@ def _carried(entry):
     foreign, held = verify(entry["claim"], "Claim"), verify(entry["snapshot"], "Snapshot")
     if foreign["payload"]["snapshotDigests"] != [held["digest"]]:
         raise ValueError("A carried claim doesn't name its carried snapshot")
+    if foreign["issuer"] != held["issuer"]:
+        raise ValueError("A carried claim's issuer isn't its snapshot's issuer")
     return {"claim": deepcopy(foreign), "snapshot": deepcopy(held)}
 
 
@@ -303,8 +305,9 @@ def _notice_records(notice):
 
 
 def validate_notice(notice, publications):
-    """Refuses a notice that isn't under the sourced profile, names a Snapshot or record the receiver doesn't hold, or
-    carries keys that don't match its record, recomputed (D7)."""
+    """Refuses a notice that isn't under the sourced profile, names a Snapshot or record the receiver doesn't hold, names
+    a Snapshot another issuer issued (an issuer retracts or corrects only its own records), or carries keys that don't
+    match its record, recomputed (D7)."""
     verify(notice, "Claim")
     payload = notice["payload"]
     if payload["profile"] != SOURCED_PROFILE or payload["sentenceMediaType"] != NOTICE_SENTENCE:
@@ -314,6 +317,8 @@ def validate_notice(notice, publications):
     for snapshot, record_id, keys in _notice_records(notice):
         if snapshot not in named or snapshot not in snapshots:
             raise ValueError("A notice names a snapshot it doesn't list, or one the receiver doesn't hold")
+        if snapshots[snapshot]["issuer"] != notice["issuer"]:
+            raise ValueError("A notice names a snapshot another issuer issued")
         sources = {s["id"]: s for s in snapshots[snapshot]["payload"]["model"]["sources"]}
         if record_id not in sources:
             raise ValueError("A notice names a record its snapshot doesn't hold")
