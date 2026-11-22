@@ -35,6 +35,10 @@ do as well?
   - Its answer is a year or name-shaped.
 - **Held out:** the pool excludes the 3,926 fresh-router ids and test 1's 800, drawn in a new seeded order.
 - **No corrections:** this test is about retrieval and answering before any correction.
+- **A comparison stratum (revision 3, Rio Grande, all hands 20861f07):** a second draw of 300 qualifying
+  *comparison* questions. The rule is the same apart from the type: two distinct gold leads in corpus v0, the answer
+  a whole word in exactly one, year or name-shaped. A comparison's two paragraphs needn't link to each other, so this
+  is where no link was planted. The stratum is reported apart and never pooled with the 800.
 
 ### The arms
 
@@ -70,6 +74,10 @@ All arms give the same reader (nemotron-mini, temperature 0, prompt v2) two lead
   above 0. A smaller true gain may well read as "no measured gain".
 - **Secondary:**
   - G-cross against W-cross, and G against B under each reranker;
+  - on the comparison stratum, G-dense against W-dense on answer-lead recall at two and on both-gold at two, both
+    paired with 95% CIs. A gain that holds there means the graph helps where no link was planted. A gain that
+    vanishes there means the primary's gain is mostly HotpotQA's construction, and test 2b must carry the claim.
+    With 300 questions its interval will be wide, which is stated now;
   - each arm's answer-lead recall at two, both-gold at two, and pool recall (the lead anywhere in its candidates);
   - the reader's exact match and F1 on all 800, by arm, with paired CIs for G against B under each reranker;
   - whether recall gains reach exact match;
