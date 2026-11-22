@@ -1,0 +1,27 @@
+{
+ "message": {
+  "DOI": "10.1056/nejmoa2022926",
+  "issued": {
+   "date-parts": [
+    [
+     2020,
+     11,
+     19
+    ]
+   ]
+  },
+  "relation": {
+   "has-preprint": [
+    {
+     "asserted-by": "object",
+     "id": "10.1101/2020.07.15.20151852",
+     "id-type": "doi"
+    }
+   ]
+  },
+  "title": [
+   "Effect of Hydroxychloroquine in Hospitalized Patients with Covid-19"
+  ]
+ },
+ "note": "Trimmed to the fields measure3_answers' client reads, from the live response fetched on 2026-11-22."
+}
