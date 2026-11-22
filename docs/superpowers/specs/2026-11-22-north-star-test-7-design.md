@@ -112,7 +112,7 @@ Every arm takes each item's consensus as the median of the reports it counts.
 | --- | --- | --- |
 | N, naive | every report | A, C, D (N on C equals N on D, the reports being identical) |
 | P, kept provenance | every report, with pairs `relation()` answers copied collapsed on their copied items. Equal to O by construction | C |
-| P½, an incomplete record | as P, but a seeded half of the copied reports carry no chain, so only the rest collapse | C |
+| P½, an incomplete record | as P, but ⌈n/2⌉ of the instance's n copied items, drawn from all of them with the instance seed, carry no chain, so only the rest collapse | C |
 | I, inferred | every report, with the auditor's flagged pairs collapsed | A, C, D |
 | O, the oracle | every report, with the truth's copier pair collapsed on its copied items | C and D (equal) |
 
@@ -143,7 +143,8 @@ Every arm takes each item's consensus as the median of the reports it counts.
     false-flag rate reached 10% (the re-check's A2).
 - **Secondary:**
   - **An incomplete record against inference:** S_P½ = (N − P½) / (N − O) on C, beside S_I, paired by base
-    instance. It shows whether a record half missing still beats inference.
+    instance. It shows whether a record half missing still beats inference. The missing half is drawn from all
+    copied items, so its share of the scored items varies by instance, and that share is reported.
   - **Per cell:** S_I and S_P½ where that cell's N − O is at least 0.1σ, descriptive only.
   - **Inference at all:** I against N on D, paired, with its interval. "The auditor helps" if it excludes 0 in I's
     favour.
@@ -180,7 +181,8 @@ Each is reported as found.
 - **Planted data:** one bad source, one copier, Gaussian noise. Real copying can be partial, chained or transformed.
   Real crossings are counted when test 5's Measure 3 runs.
 - **One plain detector:** the lower-quartile pair statistic. A stronger one could narrow Δ where copying is visible
-  at all. Where τ ≥ √2 at K = 4, the symmetry argument above says no detector can.
+  at all. At τ = √2 and K = 4 the pairs are symmetric. Above √2 a smallest-spread detector points the wrong way, and a
+  two-sided anomaly detector is untested, not ruled out.
 - **P is the oracle by construction:** declared chains are exact in C. Real records can be wrong or missing. So Δ is
   an upper bound on what kept provenance is worth. P½ is one step towards a real record, not a model of one.
 - **The median consensus only.**
