@@ -95,8 +95,9 @@ it keys its record. So it's labelled **"argued, checked"**, and it serves three 
   against a ceiling of 40, and B stops by the same rule if it can't be afforded.
 - **Content-keying on real text** needs a rule for when two written approaches are one idea. B's pre-registration
   fixes it, and it isn't decided here.
-- **Where B runs:** on the Pi, where v2's room and jail suite are known to pass, or on Tardis if v2's whole suite
-  passes there (that check is running; its result goes in revision 2).
+- **Where B runs:** on the Pi or on Tardis. v2's whole suite passes on both: on Tardis at v2 7a78136e, on 2026-11-22,
+  `scripts/whole-suite.sh --offline` passed 532 tests in 35 programs, with none ignored or filtered, in 270 s, on
+  x86-64 kernel 7.0.0-38. That includes the jail's seqpacket test, which failed on this kernel at 44447ae1 on 11-17.
 
 ## What this can't show, said before the run
 
