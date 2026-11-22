@@ -796,3 +796,20 @@ class TestRunSmokeEndToEnd:
             assert result[stratum]["summary"]["cost"]["g_dense"]["embeddings"] == usage["g_dense"]["embeddings"]
         assert embeddings == seen["texts"]
         assert pairs == seen["docs"]
+
+
+def test_the_summary_primary_pairs_g_dense_with_w_dense_and_no_other_arm():
+    """The summary's primary compares G-dense with W-dense, as pre-registered. Each arm here gives a different
+    rate, so pairing G-dense with any other arm, or swapping the two, gives a different point estimate (a reader
+    found swapping the comparator to B-dense passed every earlier test, all hands 37677c19)."""
+    n = 20
+    sample = [{"id": f"q{i}"} for i in range(n)]
+    hits = {"e": 0, "b_dense": 5, "g_dense": 15, "w_dense": 10, "b_cross": 2, "g_cross": 18, "w_cross": 12}
+    rows = {arm: {f"q{i}": {"answer_lead_recall": i < k, "both_gold": False, "pool_recall": True, "em": False,
+                            "f1": 0.0, "pool_size": 1, "leads": [], "answer": "", "seconds": 0.0}
+                  for i in range(n)} for arm, k in hits.items()}
+    usage = {arm: {"calls": n, "prompt_tokens": 0, "eval_tokens": 0, "seconds": 0.0, "embeddings": 0, "pairs": 0,
+                   "rerank_seconds": 0.0} for arm in hits}
+    truncation = {name: {"pairs": 0, "truncated": 0} for name in ("b_cross", "g_cross", "w_cross")}
+    summary = ns2.summarize2(sample, rows, usage, truncation)
+    assert summary["primary"]["diff_ci"]["points"] == pytest.approx(100.0 * (15 - 10) / n)  # +25, only G-dense vs W-dense
