@@ -8,15 +8,15 @@ that infers which pairs of sources are dependent, the five arms that each turn a
 consensus per item, the scoring that compares them, and the bootstrap, readings and do-no-harm/ceiling
 checks that turn many instances into the primary.
 
-Numpy only. The fixture generator is swappable: today it is the stub in ``_stub_fixture.py``
-(``generate(cell, condition, instance_index, seed_root) -> dict``, following the fixture spec's rules as
-closely as a stub can); when Tardis's lands, only ``GENERATOR`` below changes.
+Numpy only. The fixture generator is Tardis's ``experiments.northstar.graded_fixture.generate`` (merged
+867614fa, approved); earlier rounds of this module built against a stub with the same interface
+(``generate(cell, condition, instance_index, seed_root) -> Instance``) while her module didn't exist yet,
+and that stub has since been dropped in favour of the real thing.
 
-A "cell" is a dict with at least K, M, rho, b, s; a C or D cell also carries tau, q. ``condition`` is one of
-"A", "C", "D". There is no plan file yet: the plan needs the real generator, the fixture's pilots and a
-calibrated theta, none of which exist until Tardis's generator lands (the coordinator's instruction). ``plan``,
-``run`` and ``rescore`` below are complete and tested against the stub; the only thing withheld is a committed
-plan.json.
+A "cell" is a dict with at least K, M, rho, b, s; a C or D cell also carries tau, q. Every axis must be a
+plain Python ``int``/``float`` (never a numpy scalar): the fixture's own seed key hashes each axis's
+``repr()``, so a ``numpy.float64`` and a ``float`` with the same value would seed differently. ``condition``
+is one of "A", "C", "D".
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from experiments.northstar._stub_fixture import generate as GENERATOR
+from experiments.northstar.graded_fixture import generate as GENERATOR
 
 # ======================================================================================
 # Constants
@@ -54,6 +54,11 @@ GRID_Q = (0.25, 0.5)
 
 PRIMARY_LOWER_SUBSTITUTES = 0.8
 PRIMARY_UPPER_CANT_REPLACE = 0.5
+
+PILOT_INSTANCES = 100          # the fixture spec's own pilot size, per cell
+PILOT_MIN_SHARED = 3           # the pilot's plain copier detector: a pair needs at least this many shared items
+PILOT_CUT_LOWER = 1.5          # kept where the pilot share is between 1.5x chance...
+PILOT_CUT_UPPER = 0.9          # ...and 0.9
 
 
 # ======================================================================================
@@ -247,9 +252,10 @@ def arm_inferred(reports: np.ndarray, mask: np.ndarray, theta: float,
 
 
 def arm_oracle(reports: np.ndarray, mask: np.ndarray, bad: int, copier: int | None,
-                copied_items: np.ndarray) -> np.ndarray:
-    """O, the oracle: every report, with the truth's copier pair collapsed on its copied items."""
-    pair_specs = [(min(bad, copier), max(bad, copier), set(copied_items.tolist()))] \
+                copied_items) -> np.ndarray:
+    """O, the oracle: every report, with the truth's copier pair collapsed on its copied items.
+    ``copied_items`` may be a list or an array (the real fixture's truth gives a plain list)."""
+    pair_specs = [(min(bad, copier), max(bad, copier), set(np.asarray(copied_items, dtype=int).tolist()))] \
         if copier is not None and len(copied_items) else []
     return collapse_consensus(reports, mask, pair_specs)
 
@@ -480,6 +486,174 @@ def blame_first_credit(scores: np.ndarray, target: int, rel_tol: float = 1e-9) -
     return 1.0 / len(tied_for_first)
 
 
+def blame_for_arm(reports: np.ndarray, mask: np.ndarray, consensus: np.ndarray, bad: int,
+                   copier: int | None) -> dict:
+    """Blame for one arm's consensus: the bad source's and the copier's first-place credit (a copier
+    ranking first is scored apart from the bad source ranking first, the fixture spec's rule)."""
+    scores = blame_scores(reports, mask, consensus)
+    return {
+        "bad_first_credit": blame_first_credit(scores, bad),
+        "copier_first_credit": blame_first_credit(scores, copier) if copier is not None else None,
+    }
+
+
+def truth_rests_on_dependent_reports(reports: np.ndarray, mask: np.ndarray, bad: int, copier: int | None,
+                                      copied_items: np.ndarray, sigma: float) -> np.ndarray:
+    """The ground truth for "rests on dependent reports": where the oracle's collapse (the truth's copier
+    pair, on its copied items) moves the consensus by more than 0.5*sigma -- the real sigma, never an
+    estimate (unlike the auditor's own ŝ-based flag, which this is compared against)."""
+    if copier is None or len(copied_items) == 0:
+        return np.zeros(reports.shape[1], dtype=bool)
+    pair_specs = [(min(bad, copier), max(bad, copier), set(np.asarray(copied_items, dtype=int).tolist()))]
+    with_collapse = collapse_consensus(reports, mask, pair_specs)
+    without_collapse = collapse_consensus(reports, mask, [])
+    return np.abs(with_collapse - without_collapse) > 0.5 * sigma
+
+
+def flag_counts(method_flags: np.ndarray, truth_flags: np.ndarray) -> dict:
+    """True/false positive/negative counts of ``method_flags`` against ``truth_flags``, meant to be summed
+    across instances before recall/precision is taken (pooling raw counts, not averaging per-instance
+    rates, which would be undefined whenever an instance has no truth-positive item)."""
+    return {
+        "tp": int(np.sum(method_flags & truth_flags)),
+        "fp": int(np.sum(method_flags & ~truth_flags)),
+        "fn": int(np.sum(~method_flags & truth_flags)),
+    }
+
+
+def recall_precision_from_counts(tp: int, fp: int, fn: int) -> dict:
+    return {
+        "recall": (tp / (tp + fn)) if (tp + fn) > 0 else float("nan"),
+        "precision": (tp / (tp + fp)) if (tp + fp) > 0 else float("nan"),
+    }
+
+
+# ======================================================================================
+# The fixture spec's pilots and cut (93e08797, "The grid, after a pilot")
+# ======================================================================================
+
+def pairwise_median_sq_diff(reports: np.ndarray, mask: np.ndarray,
+                             min_shared: int = PILOT_MIN_SHARED) -> dict:
+    """The pilot's plain copier detector: the median squared difference per pair sharing at least
+    ``min_shared`` items -- no structure, no sigma, not the auditor's lower-quartile statistic (N4)."""
+    K = reports.shape[0]
+    out = {}
+    for i, j in itertools.combinations(range(K), 2):
+        both = mask[i] & mask[j]
+        if int(both.sum()) >= min_shared:
+            out[(i, j)] = float(np.median((reports[i, both] - reports[j, both]) ** 2))
+    return out
+
+
+def chance_a(K: int) -> float:
+    """Chance, A: 1/K for the bad source ranking first by blame."""
+    return 1.0 / K
+
+
+def chance_cd(K: int) -> float:
+    """Chance, C/D: 1/C(K,2) for the copier pair being the one the plain detector finds."""
+    return 1.0 / math.comb(K, 2)
+
+
+def cut_keeps(share: float, chance: float, *, lower: float = PILOT_CUT_LOWER,
+               upper: float = PILOT_CUT_UPPER) -> bool:
+    """The fixture spec's cut: a cell is kept where its pilot's share is between 1.5x chance and 0.9."""
+    return (lower * chance) <= share <= upper
+
+
+def full_a_cells(*, grid_k=GRID_K, grid_m=GRID_M, grid_rho=GRID_RHO, grid_b=GRID_B, grid_s=GRID_S) -> list:
+    """Every A cell in the fixture spec's grid (K x M x rho x b x s); overridable for a fast test grid."""
+    return [{"K": K, "M": M, "rho": rho, "b": b, "s": s}
+            for K in grid_k for M in grid_m for rho in grid_rho for b in grid_b for s in grid_s]
+
+
+def full_cd_cells(*, grid_k=GRID_K, grid_m=GRID_M, grid_rho=GRID_RHO, grid_b=GRID_B, grid_s=GRID_S,
+                   grid_tau=GRID_TAU, grid_q=GRID_Q) -> list:
+    """Every C/D cell in the fixture spec's grid (the A axes plus tau x q); overridable for a fast test
+    grid. One cell serves both C and D -- their reports are identical, differing only in chains."""
+    return [{"K": K, "M": M, "rho": rho, "b": b, "s": s, "tau": tau, "q": q}
+            for K in grid_k for M in grid_m for rho in grid_rho for b in grid_b for s in grid_s
+            for tau in grid_tau for q in grid_q]
+
+
+def pilot_a_cell(cell: dict, generator, seed_root: int, n_pilot: int = PILOT_INSTANCES) -> dict:
+    """The pilot for an A cell: the plain median's naive consensus, scored by mean absolute deviation
+    (blame); the share the bad source ranks first (fractional credit on ties, N1's tolerance)."""
+    credits = []
+    for i in range(n_pilot):
+        inst = generator(cell, "A", i, seed_root)
+        mask = ~np.isnan(inst["reports"])
+        consensus = arm_naive(inst["reports"], mask)
+        scores = blame_scores(inst["reports"], mask, consensus)
+        credits.append(blame_first_credit(scores, inst["truth"]["bad"]))
+    return {"share": float(np.mean(credits)) if credits else float("nan"), "chance": chance_a(cell["K"]),
+            "n_pilot": n_pilot}
+
+
+def pilot_cd_cell(cell: dict, generator, seed_root: int, n_pilot: int = PILOT_INSTANCES) -> dict:
+    """The pilot for a C/D cell: the plain copier detector on condition C's reports (identical to D's); the
+    share it finds the true copier pair. Keeps the drawn instances so the ceiling count and the auditor's
+    pilot detection rate can reuse them without redrawing."""
+    hits = []
+    instances = []
+    for i in range(n_pilot):
+        inst = generator(cell, "C", i, seed_root)
+        instances.append(inst)
+        mask = ~np.isnan(inst["reports"])
+        pairwise = pairwise_median_sq_diff(inst["reports"], mask)
+        truth = inst["truth"]
+        true_pair = tuple(sorted((truth["bad"], truth["copier"])))
+        detected = min(pairwise, key=pairwise.get) if pairwise else None
+        hits.append(detected == true_pair)
+    return {"share": float(np.mean(hits)) if hits else float("nan"), "chance": chance_cd(cell["K"]),
+            "n_pilot": n_pilot, "instances": instances}
+
+
+def ceiling_from_pilot_instances(instances: list) -> dict:
+    """The ceiling count on already-drawn pilot instances: the oracle's gain N-O on copied biased items,
+    and the share of those items the naive consensus misses by more than 0.5 sigma."""
+    gains, off_shares = [], []
+    for inst in instances:
+        truth = inst["truth"]
+        mask = ~np.isnan(inst["reports"])
+        scored = scored_items(truth)
+        if len(scored) == 0:
+            continue
+        true_values = np.asarray(truth["true_values"], dtype=float)
+        cons_n = arm_naive(inst["reports"], mask)
+        copied_items = np.asarray(truth["copied_items"], dtype=int)
+        cons_o = arm_oracle(inst["reports"], mask, truth["bad"], truth["copier"], copied_items)
+        err_n = consensus_error(cons_n, true_values, inst["sigma"], scored)
+        err_o = consensus_error(cons_o, true_values, inst["sigma"], scored)
+        gains.append(err_n - err_o)
+        off_shares.append(float(np.mean(np.abs(cons_n[scored] - true_values[scored]) / inst["sigma"] > 0.5)))
+    return {"pooled_gain_n_minus_o": float(np.mean(gains)) if gains else float("nan"),
+            "share_off_by_half_sigma": float(np.mean(off_shares)) if off_shares else float("nan"),
+            "n_valid": len(gains)}
+
+
+def auditor_pilot_detection(instances: list, theta: float) -> dict:
+    """The auditor's pilot detection rate per kept cell: on the same pilot instances, using the calibrated
+    theta, for the plan's own record (distinct from the plain detector's own cut decision above)."""
+    rows = []
+    for inst in instances:
+        mask = ~np.isnan(inst["reports"])
+        flagged, _, _ = auditor_pairs(inst["reports"], mask, theta)
+        truth = inst["truth"]
+        rows.append({"flagged": [list(p) for p in flagged], "true_pair": sorted((truth["bad"], truth["copier"]))})
+    return detection_rates(rows)
+
+
+def calibrate_all(generator, seed_root: int, *, n_cal: int = 500, grid_k=GRID_K, grid_m=GRID_M,
+                   grid_rho=GRID_RHO) -> dict:
+    """Theta per (K, M, rho) for every combination in the grid (cheap -- 12 combinations at the real grid's
+    size -- so every one is calibrated regardless of which cells the cut keeps)."""
+    return {
+        f"K{K}_M{M}_rho{rho}": calibrate_theta(K, M, rho, generator, seed_root, n_cal=n_cal)
+        for K in grid_k for M in grid_m for rho in grid_rho
+    }
+
+
 # ======================================================================================
 # Orchestration: one cell, many instances
 # ======================================================================================
@@ -496,9 +670,9 @@ def _calibration_key(cell: dict) -> str:
 
 
 def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float, n_instances: int) -> list:
-    """Every instance's per-arm consensus error for one (cell, condition), as a list of plain-dict rows
-    (json-safe except for python bools/floats, which `json.dump` handles) -- the unit ``plan``/``run``/
-    ``rescore`` save and load."""
+    """Every instance's per-arm consensus error, blame and dependence-flag counts for one (cell, condition),
+    as a list of plain-dict rows (json-safe except for python bools/floats, which `json.dump` handles) --
+    the unit ``plan``/``run``/``rescore`` save and load."""
     rows = []
     for i in range(n_instances):
         inst = generator(cell, condition, i, seed_root)
@@ -509,33 +683,65 @@ def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float
         bad = truth["bad"]
         copier = truth["copier"]
         bad_items = np.where(mask[bad])[0]
+        true_pair = sorted((bad, copier)) if copier is not None else None
 
         cons_N = arm_naive(reports, mask)
         cons_I, flagged, ell, s_hat = arm_inferred(reports, mask, theta)
+        pair_specs_i = [(p[0], p[1], None) for p in flagged]
+        n_honest_flagged = (len(flagged) if true_pair is None
+                            else sum(1 for p in flagged if list(p) != true_pair))
 
         row = {
             "instance": i, "condition": condition,
             "flagged": [list(p) for p in flagged], "s_hat": s_hat,
-            "true_pair": sorted((bad, copier)) if copier is not None else None,
+            "true_pair": true_pair, "n_honest_pairs_flagged": n_honest_flagged,
             "consensus_error": {
                 "N_all": consensus_error(cons_N, true_values, sigma, bad_items),
                 "I_all": consensus_error(cons_I, true_values, sigma, bad_items),
+            },
+            "blame": {
+                "N": blame_for_arm(reports, mask, cons_N, bad, copier),
+                "I": blame_for_arm(reports, mask, cons_I, bad, copier),
             },
         }
 
         if condition in ("C", "D"):
             copied_items = np.asarray(truth["copied_items"], dtype=int)
             scored = scored_items(truth)
-            cons_P = arm_provenance(reports, mask, chains)
+            pair_specs_p = provenance_pairs(chains)
+            cons_P = collapse_consensus(reports, mask, pair_specs_p)
             half_rng = p_half_drop_seed(cell, i, seed_root)
-            cons_Phalf = collapse_consensus(reports, mask, p_half_pairs(chains, copied_items, half_rng))
+            pair_specs_phalf = p_half_pairs(chains, copied_items, half_rng)
+            cons_Phalf = collapse_consensus(reports, mask, pair_specs_phalf)
             cons_O = arm_oracle(reports, mask, bad, copier, copied_items)
 
             for arm, cons in (("N", cons_N), ("I", cons_I), ("P", cons_P), ("P_half", cons_Phalf),
                               ("O", cons_O)):
                 row["consensus_error"][arm] = consensus_error(cons, true_values, sigma, scored)
+            row["blame"]["P"] = blame_for_arm(reports, mask, cons_P, bad, copier)
+            row["blame"]["P_half"] = blame_for_arm(reports, mask, cons_Phalf, bad, copier)
+            row["blame"]["O"] = blame_for_arm(reports, mask, cons_O, bad, copier)
             row["n_scored"] = int(len(scored))
             row["n_copied"] = int(len(copied_items))
+
+            # P-half's missing half: the share of the scored items whose chain was dropped this instance.
+            kept_items = set()
+            for (_, _, items) in pair_specs_phalf:
+                kept_items |= items
+            missing = set(copied_items.tolist()) - kept_items
+            row["p_half_missing_share_of_scored"] = (
+                float(len(missing & set(scored.tolist()))) / len(scored) if len(scored) else float("nan"))
+
+            # "Rests on dependent reports": I's own flag (meaningful in D) and P's equivalent (meaningful in
+            # C), each against the truth's own oracle-collapse-moves-consensus definition (0.5 sigma, the
+            # real sigma -- never the auditor's s-hat estimate).
+            truth_flags = truth_rests_on_dependent_reports(reports, mask, bad, copier, copied_items, sigma)
+            i_flags = rests_on_dependent_reports(reports, mask, pair_specs_i, s_hat)
+            p_flags = rests_on_dependent_reports(reports, mask, pair_specs_p, s_hat)
+            row["rests_on_dependent_reports"] = {
+                "I": flag_counts(i_flags, truth_flags),
+                "P": flag_counts(p_flags, truth_flags),
+            }
 
         rows.append(row)
     return rows
@@ -545,61 +751,73 @@ def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float
 # The plan
 # ======================================================================================
 
-def build_plan(cells: list, *, generator=GENERATOR, seed_root_calibration: int, seed_root_pilot: int,
-                seed_root_run: int, n_cal: int = 500, n_pilot: int = 100, n_instances: int = 500) -> dict:
-    """The pre-registration: for each distinct (K, M, rho) among the A cells, calibrate theta and its
-    false-flag rate per (b, s); for each C/D cell, the ceiling count (pilot seeds, no auditor run) -- the
-    oracle's gain N-O on copied biased items and the share of those items the naive consensus misses by
-    more than 0.5 sigma. No reader-model or retrieval calls; pure numpy on ``generator``.
+def build_plan(*, generator=GENERATOR, seed_root_calibration: int, seed_root_pilot: int, seed_root_run: int,
+                n_cal: int = 500, n_pilot: int = PILOT_INSTANCES, n_instances: int = 500,
+                grid_k=GRID_K, grid_m=GRID_M, grid_rho=GRID_RHO, grid_b=GRID_B, grid_s=GRID_S,
+                grid_tau=GRID_TAU, grid_q=GRID_Q) -> dict:
+    """The pre-registration, exactly as the fixture spec (93e08797) and this one fix it:
 
-    This does not decide which cells are *kept* -- that is the fixture spec's own pilot and cut, fixed in
-    its commit before any of this runs. ``cells`` here is whatever the caller passes (the stub's tiny smoke
-    grid today; the fixture's real kept grid once Tardis's generator and its commit exist)."""
-    calibrations: dict = {}
+    1. the full grid's pilots (``n_pilot`` instances per cell, the pilot seed, disjoint from the run's) and
+       the cut (kept where the pilot share is between 1.5x chance and 0.9; dropped cells are recorded for
+       the sensitivity report, never discarded);
+    2. theta per (K, M, rho), from ``n_cal`` A calibration instances on a seed disjoint from the pilots' and
+       the run's, pooled over b and s, with the false-flag rate per (b, s);
+    3. for each *kept* C/D cell, the ceiling count (N-O and the share off by more than 0.5 sigma) and the
+       auditor's pilot detection rate, both read off the same pilot instances the cut already drew -- no
+       redraw;
+    4. ``n_instances`` (500 at the real grid) and the run seeds, fixed here, before any method runs on them.
+
+    The grid axes default to the fixture spec's real grid; the ``grid_*`` overrides exist only so tests (and
+    a labelled smoke) can run this on a handful of cells instead of the real ~500. No reader-model or
+    retrieval calls; pure numpy on ``generator``."""
+    calibrations = calibrate_all(generator, seed_root_calibration, n_cal=n_cal,
+                                 grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho)
+
+    kept_cells: list = []
+    dropped_cells: list = []
+    pilot_a: dict = {}
+    pilot_cd: dict = {}
     ceiling: dict = {}
-    recorded_cells = []
-    for cell in cells:
+    auditor_pilot_detection_by_cell: dict = {}
+
+    for cell in full_a_cells(grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho, grid_b=grid_b, grid_s=grid_s):
         key = _cell_key(cell)
-        is_a = "tau" not in cell
-        if is_a:
-            cal_key = _calibration_key(cell)
-            if cal_key not in calibrations:
-                calibrations[cal_key] = calibrate_theta(
-                    cell["K"], cell["M"], cell["rho"], generator, seed_root_calibration, n_cal=n_cal)
-            recorded_cells.append({"cell": cell, "key": key, "condition": "A"})
+        result = pilot_a_cell(cell, generator, seed_root_pilot, n_pilot)
+        pilot_a[key] = {"share": result["share"], "chance": result["chance"]}
+        entry = {"cell": cell, "key": key, "condition": "A", "share": result["share"],
+                 "chance": result["chance"]}
+        if cut_keeps(result["share"], result["chance"]):
+            kept_cells.append({"cell": cell, "key": key, "condition": "A"})
         else:
-            gains, off_shares = [], []
-            for i in range(n_pilot):
-                inst = generator(cell, "C", i, seed_root_pilot)
-                truth = inst["truth"]
-                mask = ~np.isnan(inst["reports"])
-                scored = scored_items(truth)
-                if len(scored) == 0:
-                    continue
-                true_values = np.asarray(truth["true_values"], dtype=float)
-                cons_N = arm_naive(inst["reports"], mask)
-                copied_items = np.asarray(truth["copied_items"], dtype=int)
-                cons_O = arm_oracle(inst["reports"], mask, truth["bad"], truth["copier"], copied_items)
-                err_n = consensus_error(cons_N, true_values, inst["sigma"], scored)
-                err_o = consensus_error(cons_O, true_values, inst["sigma"], scored)
-                gains.append(err_n - err_o)
-                off_shares.append(float(np.mean(
-                    np.abs(cons_N[scored] - true_values[scored]) / inst["sigma"] > 0.5)))
-            ceiling[key] = {
-                "cell": cell,
-                "pooled_gain_n_minus_o": float(np.mean(gains)) if gains else float("nan"),
-                "share_off_by_half_sigma": float(np.mean(off_shares)) if off_shares else float("nan"),
-                "n_pilot": n_pilot, "n_valid": len(gains),
-            }
-            recorded_cells.append({"cell": cell, "key": key, "condition": "C/D"})
+            dropped_cells.append(entry)
+
+    for cell in full_cd_cells(grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho, grid_b=grid_b, grid_s=grid_s,
+                              grid_tau=grid_tau, grid_q=grid_q):
+        key = _cell_key(cell)
+        result = pilot_cd_cell(cell, generator, seed_root_pilot, n_pilot)
+        pilot_cd[key] = {"share": result["share"], "chance": result["chance"]}
+        if cut_keeps(result["share"], result["chance"]):
+            kept_cells.append({"cell": cell, "key": key, "condition": "C/D"})
+            ceiling[key] = {**ceiling_from_pilot_instances(result["instances"]), "cell": cell,
+                           "n_pilot": n_pilot}
+            cal_key = _calibration_key(cell)
+            theta = calibrations[cal_key]["theta"]
+            auditor_pilot_detection_by_cell[key] = auditor_pilot_detection(result["instances"], theta)
+        else:
+            dropped_cells.append({"cell": cell, "key": key, "condition": "C/D", "share": result["share"],
+                                  "chance": result["chance"]})
 
     return {
+        "grid": {"K": list(grid_k), "M": list(grid_m), "rho": list(grid_rho), "b": list(grid_b),
+                "s": list(grid_s), "tau": list(grid_tau), "q": list(grid_q)},
         "calibrations": calibrations,
+        "pilot": {"n_pilot": n_pilot, "a": pilot_a, "cd": pilot_cd},
+        "cells": kept_cells,
+        "dropped_cells": dropped_cells,
         "ceiling": ceiling,
-        "cells": recorded_cells,
+        "auditor_pilot_detection": auditor_pilot_detection_by_cell,
         "n_instances": n_instances,
         "n_cal": n_cal,
-        "n_pilot": n_pilot,
         "seeds": {"calibration": seed_root_calibration, "pilot": seed_root_pilot, "run": seed_root_run},
     }
 
@@ -641,6 +859,11 @@ def summarize(plan: dict, results: dict) -> dict:
     detection_by_cell = {}
     p_equals_o_max_diff = 0.0
     n_identical_c_d = True
+    p_half_missing_share: dict = {}
+    rests_counts = {"I": {"tp": 0, "fp": 0, "fn": 0}, "P": {"tp": 0, "fp": 0, "fn": 0}}
+    by_tau_q: dict = {}
+    blame_bad_by_arm: dict = {arm: {} for arm in ("N", "I", "P", "P_half", "O")}
+    blame_copier_by_arm: dict = {arm: {} for arm in ("N", "I", "P", "P_half", "O")}
 
     for entry in plan["cells"]:
         key, condition = entry["key"], entry["condition"]
@@ -654,19 +877,45 @@ def summarize(plan: dict, results: dict) -> dict:
             false_flag_rate_a_by_cell[key] = false_flag_rate_a(rows)
             if (cell.get("K"), cell.get("M"), cell.get("rho"), cell.get("b")) == (6, 60, 0.9, 8.0):
                 gain_i_minus_n_a_high_bias = diffs
+            for arm in ("N", "I"):
+                blame_bad_by_arm[arm][key] = [r["blame"][arm]["bad_first_credit"] for r in rows]
             continue
 
         rows_c = cell_results.get("C", [])
         rows_d = cell_results.get("D", [])
-        gain_n_minus_i[key] = [r["consensus_error"]["N"] - r["consensus_error"]["I"] for r in rows_d
-                               if not np.isnan(r["consensus_error"]["N"])]
-        gain_n_minus_o[key] = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_d
-                               if not np.isnan(r["consensus_error"]["N"])]
+        n_i = [r["consensus_error"]["N"] - r["consensus_error"]["I"] for r in rows_d
+              if not np.isnan(r["consensus_error"]["N"])]
+        n_o = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_d
+              if not np.isnan(r["consensus_error"]["N"])]
+        gain_n_minus_i[key] = n_i
+        gain_n_minus_o[key] = n_o
         gain_n_minus_phalf[key] = [r["consensus_error"]["N"] - r["consensus_error"]["P_half"] for r in rows_c
                                    if not np.isnan(r["consensus_error"]["N"])]
         err_i_on_d[key] = [r["consensus_error"]["I"] for r in rows_d]
         err_p_on_c[key] = [r["consensus_error"]["P"] for r in rows_c]
         detection_by_cell[key] = detection_rates(rows_d)
+        p_half_missing_share[key] = float(np.nanmean(
+            [r["p_half_missing_share_of_scored"] for r in rows_c])) if rows_c else float("nan")
+        tau_q_key = (cell.get("tau"), cell.get("q"))
+        group = by_tau_q.setdefault(tau_q_key, {"n_i": {}, "n_o": {}})
+        group["n_i"][key] = n_i
+        group["n_o"][key] = n_o
+
+        for row_d in rows_d:
+            rests_counts["I"]["tp"] += row_d["rests_on_dependent_reports"]["I"]["tp"]
+            rests_counts["I"]["fp"] += row_d["rests_on_dependent_reports"]["I"]["fp"]
+            rests_counts["I"]["fn"] += row_d["rests_on_dependent_reports"]["I"]["fn"]
+        for row_c in rows_c:
+            rests_counts["P"]["tp"] += row_c["rests_on_dependent_reports"]["P"]["tp"]
+            rests_counts["P"]["fp"] += row_c["rests_on_dependent_reports"]["P"]["fp"]
+            rests_counts["P"]["fn"] += row_c["rests_on_dependent_reports"]["P"]["fn"]
+
+        for arm in ("N", "I", "P", "P_half", "O"):
+            blame_bad_by_arm[arm][key] = [r["blame"][arm]["bad_first_credit"] for r in rows_d]
+            copier_credits = [r["blame"][arm]["copier_first_credit"] for r in rows_d
+                              if r["blame"][arm]["copier_first_credit"] is not None]
+            if copier_credits:
+                blame_copier_by_arm[arm][key] = copier_credits
 
         for row_c, row_d in zip(rows_c, rows_d):
             p_err, o_err = row_c["consensus_error"]["P"], row_c["consensus_error"]["O"]
@@ -675,6 +924,22 @@ def summarize(plan: dict, results: dict) -> dict:
             if row_c["consensus_error"]["N"] != row_d["consensus_error"]["N"] and not (
                     np.isnan(row_c["consensus_error"]["N"]) and np.isnan(row_d["consensus_error"]["N"])):
                 n_identical_c_d = False
+
+    by_tau_q_s_i = {
+        f"tau{tau}_q{q}": s_i_ratio(group["n_i"], group["n_o"]) for (tau, q), group in by_tau_q.items()
+    }
+    rests_recall_precision = {
+        "I_on_D": recall_precision_from_counts(**rests_counts["I"]),
+        "P_on_C": recall_precision_from_counts(**rests_counts["P"]),
+    }
+    blame_summary = {
+        arm: {
+            "bad_first_credit": pooled_gain(blame_bad_by_arm[arm]),
+            "copier_first_credit": pooled_gain(blame_copier_by_arm[arm]) if blame_copier_by_arm[arm]
+            else float("nan"),
+        }
+        for arm in ("N", "I", "P", "P_half", "O")
+    }
 
     primary = bootstrap_ratio_ci(gain_n_minus_i, gain_n_minus_o)
     primary["reading"] = primary_reading(primary["ci95"])
@@ -695,9 +960,13 @@ def summarize(plan: dict, results: dict) -> dict:
         "do_no_harm": {"pooled": dnh_pooled, "high_bias_corner": dnh_high_bias},
         "inference_at_all": inference_at_all,
         "detection": {"D": detection_by_cell, "A_false_flag_rate": false_flag_rate_a_by_cell},
+        "blame": blame_summary,
+        "rests_on_dependent_reports": rests_recall_precision,
+        "by_tau_q": {"s_i": by_tau_q_s_i},
         "per_cell": {
             "s_i": per_cell_ratios(gain_n_minus_i, gain_n_minus_o),
             "s_p_half": per_cell_ratios(gain_n_minus_phalf, gain_n_minus_o),
+            "p_half_missing_share_of_scored": p_half_missing_share,
         },
         "checks": {
             "p_on_c_equals_o_max_abs_diff": p_equals_o_max_diff,
@@ -716,16 +985,18 @@ DEFAULT_SEED_RUN = 2026112210
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
-    with open(args.cells, encoding="utf-8") as handle:
-        cells = json.load(handle)
     plan = build_plan(
-        cells, seed_root_calibration=args.seed_calibration, seed_root_pilot=args.seed_pilot,
+        seed_root_calibration=args.seed_calibration, seed_root_pilot=args.seed_pilot,
         seed_root_run=args.seed_run, n_cal=args.n_cal, n_pilot=args.n_pilot, n_instances=args.n_instances)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(plan, handle, indent=1, sort_keys=True)
-    summary = {k: v for k, v in plan.items() if k != "cells"}
-    summary["n_cells"] = len(plan["cells"])
+    summary = {k: v for k, v in plan.items() if k not in ("cells", "dropped_cells")}
+    summary["n_kept_cells"] = len(plan["cells"])
+    summary["n_dropped_cells"] = len(plan["dropped_cells"])
+    summary["kept_by_condition"] = {
+        condition: sum(1 for e in plan["cells"] if e["condition"] == condition) for condition in ("A", "C/D")
+    }
     print(json.dumps(summary, indent=1, sort_keys=True))
     return 0
 
@@ -759,12 +1030,11 @@ def main(argv: list | None = None) -> int:
     sub = parser.add_subparsers(dest="mode", required=True)
 
     plan_parser = sub.add_parser("plan", help="calibrate theta and count the ceiling; no model calls")
-    plan_parser.add_argument("--cells", required=True, help="a JSON list of cell dicts")
     plan_parser.add_argument("--seed-calibration", type=int, default=DEFAULT_SEED_CALIBRATION)
     plan_parser.add_argument("--seed-pilot", type=int, default=DEFAULT_SEED_PILOT)
     plan_parser.add_argument("--seed-run", type=int, default=DEFAULT_SEED_RUN)
     plan_parser.add_argument("--n-cal", type=int, default=500)
-    plan_parser.add_argument("--n-pilot", type=int, default=100)
+    plan_parser.add_argument("--n-pilot", type=int, default=PILOT_INSTANCES)
     plan_parser.add_argument("--n-instances", type=int, default=500)
     plan_parser.add_argument("--out", default="plan.json")
     plan_parser.set_defaults(func=_cmd_plan)

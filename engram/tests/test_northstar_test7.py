@@ -1,6 +1,11 @@
-"""North-star test 7's pieces: the auditor, the five arms, the scoring, the bootstrap, the readings, and
-do-no-harm/ceiling checks -- on hand-made instances and the stub fixture generator. No model, no network,
-no real Tardis generator (it doesn't exist yet).
+"""North-star test 7's pieces: the auditor, the five arms, the scoring, the bootstrap, the readings, the
+pilots/cut and do-no-harm/ceiling checks -- on hand-made instances and Tardis's real graded-blame fixture
+generator (``experiments.northstar.graded_fixture``, merged 867614fa). No model, no network.
+
+The fixture's own contract (minimums, C/D-identical-reports, chains-only-in-C, and so on) is covered by
+``tests/test_northstar_graded_fixture.py``; this file only re-uses the real generator for test7's own
+integration-style checks (the P-on-C-equals-O and C-and-D-identical-N identities, run_cell/build_plan), not
+its contract.
 
 Every number asserted against a hand-made instance below was computed independently by hand (not by
 running the code and copying its output) and is reproduced in each test's docstring or an inline comment,
@@ -18,7 +23,7 @@ import numpy as np
 import pytest
 
 from experiments.northstar import test7 as ns
-from experiments.northstar import _stub_fixture
+from experiments.northstar import graded_fixture
 
 
 # ======================================================================================
@@ -140,7 +145,7 @@ class TestScaleEstimate:
 
 class TestCalibrateTheta:
     def test_returns_a_theta_and_a_false_flag_rate_per_b_s_on_the_stub(self):
-        result = ns.calibrate_theta(4, 20, 0.5, _stub_fixture.generate, seed_root=1, n_cal=60)
+        result = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=1, n_cal=60)
         assert "theta" in result and np.isfinite(result["theta"])
         assert result["n_valid"] <= 60
         assert result["false_flag_rate"]
@@ -148,8 +153,8 @@ class TestCalibrateTheta:
             assert 0.0 <= rate <= 1.0
 
     def test_deterministic_for_the_same_seed_root(self):
-        a = ns.calibrate_theta(4, 20, 0.5, _stub_fixture.generate, seed_root=42, n_cal=40)
-        b = ns.calibrate_theta(4, 20, 0.5, _stub_fixture.generate, seed_root=42, n_cal=40)
+        a = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=42, n_cal=40)
+        b = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=42, n_cal=40)
         assert a["theta"] == b["theta"]
 
 
@@ -527,70 +532,85 @@ class TestBlame:
         assert ns.blame_first_credit(scores, target=2) == pytest.approx(0.0)
 
 
+class TestBlameForArm:
+    def test_on_naive_consensus_the_bad_source_is_not_ranked_first(self):
+        # N's consensus [5,1,0.5,0.5,0.5,0.5]: source 3 (an honest source) has the largest mean absolute
+        # deviation (20/6), not source 0 (16/6) or source 1 (11/6) -- naive scoring blames the wrong source.
+        reports, mask = _hand_reports(), _hand_mask()
+        cons_n = ns.arm_naive(reports, mask)
+        result = ns.blame_for_arm(reports, mask, cons_n, bad=0, copier=1)
+        assert result["bad_first_credit"] == pytest.approx(0.0)
+        assert result["copier_first_credit"] == pytest.approx(0.0)
+
+    def test_on_the_oracle_consensus_the_bad_source_is_ranked_first(self):
+        # O's consensus [0,1,0,0.5,0.5,0.5]: source 0's mean absolute deviation (21.5/6) is the largest.
+        reports, mask, truth = _hand_reports(), _hand_mask(), _hand_truth()
+        cons_o = ns.arm_oracle(reports, mask, truth["bad"], truth["copier"], truth["copied_items"])
+        result = ns.blame_for_arm(reports, mask, cons_o, bad=0, copier=1)
+        assert result["bad_first_credit"] == pytest.approx(1.0)
+        assert result["copier_first_credit"] == pytest.approx(0.0)
+
+    def test_no_copier_gives_no_copier_credit(self):
+        reports, mask = _hand_reports(), _hand_mask()
+        cons_n = ns.arm_naive(reports, mask)
+        result = ns.blame_for_arm(reports, mask, cons_n, bad=0, copier=None)
+        assert result["copier_first_credit"] is None
+
+
+class TestTruthRestsOnDependentReports:
+    def test_pins_the_same_item_as_the_ell_based_scale_but_using_the_real_sigma(self):
+        # with_collapse (oracle on {0,2}) = [0,1,0,0.5,0.5,0.5]; without_collapse (naive) =
+        # [5,1,0.5,0.5,0.5,0.5]; diffs = [5,0,0.5,0,0,0]; 0.5*sigma(1.0) = 0.5, so only item 0 (diff 5)
+        # strictly exceeds it -- item 2's diff of exactly 0.5 does not.
+        flags = ns.truth_rests_on_dependent_reports(_hand_reports(), _hand_mask(), 0, 1,
+                                                     np.array([0, 2]), sigma=1.0)
+        np.testing.assert_array_equal(flags, [True, False, False, False, False, False])
+
+    def test_no_copier_or_no_copied_items_gives_all_false(self):
+        flags = ns.truth_rests_on_dependent_reports(_hand_reports(), _hand_mask(), 0, None, np.array([]), 1.0)
+        assert not flags.any()
+
+
+class TestFlagCountsAndRecallPrecision:
+    def test_counts_true_and_false_positives_and_negatives(self):
+        method = np.array([True, True, False, False])
+        truth = np.array([True, False, True, False])
+        assert ns.flag_counts(method, truth) == {"tp": 1, "fp": 1, "fn": 1}
+
+    def test_recall_and_precision_from_counts(self):
+        result = ns.recall_precision_from_counts(tp=3, fp=1, fn=2)
+        assert result["recall"] == pytest.approx(3 / 5)
+        assert result["precision"] == pytest.approx(3 / 4)
+
+    def test_nan_with_no_positives_at_all(self):
+        result = ns.recall_precision_from_counts(tp=0, fp=0, fn=0)
+        assert math.isnan(result["recall"]) and math.isnan(result["precision"])
+
+
+class TestPairwiseMedianSqDiff:
+    def test_matches_hand_computed_medians(self):
+        medians = ns.pairwise_median_sq_diff(_hand_reports(), _hand_mask())
+        expected = {(0, 1): 1.0, (0, 2): 1.0, (0, 3): 9.0, (1, 2): 4.0, (1, 3): 16.0, (2, 3): 4.0}
+        for pair, value in expected.items():
+            assert medians[pair] == pytest.approx(value)
+
+    def test_the_smallest_pair_on_this_instance_is_the_true_copier_pair(self):
+        medians = ns.pairwise_median_sq_diff(_hand_reports(), _hand_mask())
+        assert min(medians, key=medians.get) == (0, 1)
+
+
 # -------------------------------------------------------------------------------------
-# The stub fixture
-# -------------------------------------------------------------------------------------
-
-class TestStubFixtureMinimumsAndShape:
-    def test_every_item_has_at_least_two_reports_and_every_source_at_least_five(self):
-        cell = {"K": 4, "M": 10, "rho": 0.1, "b": 2.0, "s": 0.5}
-        inst = _stub_fixture.generate(cell, "A", 0, seed_root=1)
-        mask = ~np.isnan(inst["reports"])
-        assert (mask.sum(axis=0) >= 2).all()
-        assert (mask.sum(axis=1) >= 5).all()
-
-    def test_reports_and_truth_shapes_match_the_cell(self):
-        cell = {"K": 5, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5}
-        inst = _stub_fixture.generate(cell, "A", 0, seed_root=1)
-        assert inst["reports"].shape == (5, 20)
-        assert inst["chains"].shape == (5, 20)
-        assert len(inst["truth"]["true_values"]) == 20
-        assert inst["truth"]["copier"] is None
-        assert len(inst["truth"]["copied_items"]) == 0
-
-    def test_at_least_one_biased_item_even_at_a_tiny_share(self):
-        cell = {"K": 4, "M": 20, "rho": 0.9, "b": 2.0, "s": 0.01}
-        inst = _stub_fixture.generate(cell, "A", 0, seed_root=1)
-        assert len(inst["truth"]["biased_items"]) >= 1
-
-
-class TestStubFixtureCAndD:
-    def test_c_and_d_have_identical_reports(self):
-        cell = {"K": 4, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 0.5, "q": 0.25}
-        c = _stub_fixture.generate(cell, "C", 7, seed_root=5)
-        d = _stub_fixture.generate(cell, "D", 7, seed_root=5)
-        np.testing.assert_array_equal(c["reports"], d["reports"])
-        np.testing.assert_array_equal(c["truth"]["copied_items"], d["truth"]["copied_items"])
-        assert c["truth"]["copier"] == d["truth"]["copier"]
-
-    def test_chains_are_named_only_in_c(self):
-        cell = {"K": 4, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 0.5, "q": 0.25}
-        c = _stub_fixture.generate(cell, "C", 7, seed_root=5)
-        d = _stub_fixture.generate(cell, "D", 7, seed_root=5)
-        assert any(entry is not None for entry in c["chains"].flat)
-        assert all(entry is None for entry in d["chains"].flat)
-
-    def test_every_chain_entry_names_the_bad_source(self):
-        cell = {"K": 4, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 0.5, "q": 0.25}
-        c = _stub_fixture.generate(cell, "C", 7, seed_root=5)
-        named = [v for v in c["chains"].flat if v is not None]
-        assert named and all(v == c["truth"]["bad"] for v in named)
-
-    def test_a_rejects_an_unknown_condition(self):
-        with pytest.raises(ValueError):
-            _stub_fixture.generate({"K": 4, "M": 10, "rho": 0.5, "b": 2.0, "s": 0.5}, "Z", 0, 1)
-
-
-# -------------------------------------------------------------------------------------
-# The two pinned identities, run against the stub generator (a real instance, not hand-made, since the
-# identity must hold for whatever the generator draws -- that's the point of "by construction").
+# The two pinned identities, run against the real generator (a real instance, not hand-made, since the
+# identity must hold for whatever the generator draws -- that's the point of "by construction"). The
+# generator's own contract (minimums, C/D-identical-reports, chains-only-in-C) is covered by
+# tests/test_northstar_graded_fixture.py, not duplicated here.
 # -------------------------------------------------------------------------------------
 
 class TestPOnCEqualsOracle:
-    def test_p_equals_o_exactly_across_many_stub_instances(self):
+    def test_p_equals_o_exactly_across_many_real_instances(self):
         cell = {"K": 5, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 0.5, "q": 0.5}
         for i in range(15):
-            inst = _stub_fixture.generate(cell, "C", i, seed_root=11)
+            inst = graded_fixture.generate(cell, "C", i, seed_root=11)
             mask = ~np.isnan(inst["reports"])
             truth = inst["truth"]
             p = ns.arm_provenance(inst["reports"], mask, inst["chains"])
@@ -602,8 +622,8 @@ class TestCAndDGiveIdenticalN:
     def test_naive_consensus_is_identical_between_c_and_d_across_many_instances(self):
         cell = {"K": 5, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 1.0, "q": 0.25}
         for i in range(15):
-            c = _stub_fixture.generate(cell, "C", i, seed_root=13)
-            d = _stub_fixture.generate(cell, "D", i, seed_root=13)
+            c = graded_fixture.generate(cell, "C", i, seed_root=13)
+            d = graded_fixture.generate(cell, "D", i, seed_root=13)
             mask_c = ~np.isnan(c["reports"])
             mask_d = ~np.isnan(d["reports"])
             n_c = ns.arm_naive(c["reports"], mask_c)
@@ -612,49 +632,105 @@ class TestCAndDGiveIdenticalN:
 
 
 # -------------------------------------------------------------------------------------
-# Orchestration: build_plan, run_cell/run_plan, summarize -- a tiny grid on the stub.
+# The fixture spec's pilots and cut
+# -------------------------------------------------------------------------------------
+
+class TestChanceAndCut:
+    def test_chance_a_is_one_over_k(self):
+        assert ns.chance_a(4) == pytest.approx(0.25)
+
+    def test_chance_cd_is_one_over_c_k_2(self):
+        assert ns.chance_cd(4) == pytest.approx(1.0 / 6.0)  # C(4,2) = 6
+
+    def test_cut_keeps_between_1_5x_chance_and_point_9(self):
+        assert ns.cut_keeps(0.3, chance=0.1) is True    # 1.5*0.1=0.15 <= 0.3 <= 0.9
+        assert ns.cut_keeps(0.1, chance=0.1) is False   # 0.1 < 0.15
+        assert ns.cut_keeps(0.95, chance=0.1) is False  # 0.95 > 0.9
+
+
+class TestFullGridEnumeration:
+    def test_full_a_cells_is_the_cross_product(self):
+        cells = ns.full_a_cells(grid_k=(4, 5), grid_m=(20,), grid_rho=(0.5,), grid_b=(2.0, 4.0),
+                                grid_s=(0.5,))
+        assert len(cells) == 4  # 2 K x 1 M x 1 rho x 2 b x 1 s
+        assert all("tau" not in c for c in cells)
+
+    def test_full_cd_cells_adds_tau_and_q(self):
+        cells = ns.full_cd_cells(grid_k=(4,), grid_m=(20,), grid_rho=(0.5,), grid_b=(2.0,), grid_s=(0.5,),
+                                 grid_tau=(0.5, 1.0), grid_q=(0.25, 0.5))
+        assert len(cells) == 4  # 2 tau x 2 q
+        assert all("tau" in c and "q" in c for c in cells)
+
+    def test_the_default_grid_matches_the_fixture_spec(self):
+        assert len(ns.full_a_cells()) == 3 * 2 * 2 * 3 * 2       # K x M x rho x b x s
+        assert len(ns.full_cd_cells()) == 3 * 2 * 2 * 3 * 2 * 3 * 2  # ... x tau x q
+
+
+class TestPilotAndCeilingOnRealInstances:
+    def test_pilot_a_cell_returns_a_share_between_zero_and_one(self):
+        cell = {"K": 4, "M": 20, "rho": 0.5, "b": 8.0, "s": 0.5}
+        result = ns.pilot_a_cell(cell, graded_fixture.generate, seed_root=901, n_pilot=20)
+        assert 0.0 <= result["share"] <= 1.0
+        assert result["chance"] == pytest.approx(0.25)
+
+    def test_pilot_cd_cell_keeps_its_drawn_instances_for_reuse(self):
+        cell = {"K": 4, "M": 60, "rho": 0.9, "b": 2.0, "s": 0.5, "tau": 0.5, "q": 0.5}
+        result = ns.pilot_cd_cell(cell, graded_fixture.generate, seed_root=902, n_pilot=15)
+        assert 0.0 <= result["share"] <= 1.0
+        assert len(result["instances"]) == 15
+
+    def test_ceiling_and_auditor_detection_reuse_the_pilot_instances(self):
+        cell = {"K": 4, "M": 60, "rho": 0.9, "b": 8.0, "s": 0.5, "tau": 0.5, "q": 0.5}
+        result = ns.pilot_cd_cell(cell, graded_fixture.generate, seed_root=903, n_pilot=15)
+        ceiling = ns.ceiling_from_pilot_instances(result["instances"])
+        assert "pooled_gain_n_minus_o" in ceiling
+        detection = ns.auditor_pilot_detection(result["instances"], theta=0.3)
+        assert "copier_pair_flagged_rate" in detection
+
+
+# -------------------------------------------------------------------------------------
+# Orchestration: run_cell, and build_plan/run_plan/summarize on a small grid override.
 # -------------------------------------------------------------------------------------
 
 class TestRunCell:
-    def test_a_cell_rows_carry_every_arm_s_error(self):
-        cell = {"K": 4, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5, "tau": 0.5, "q": 0.5}
-        rows = ns.run_cell(cell, "D", _stub_fixture.generate, seed_root=21, theta=0.1, n_instances=5)
+    def test_a_cell_rows_carry_every_arm_s_error_blame_and_rests_flags(self):
+        cell = {"K": 4, "M": 20, "rho": 0.9, "b": 8.0, "s": 0.5, "tau": 0.5, "q": 0.5}
+        rows = ns.run_cell(cell, "D", graded_fixture.generate, seed_root=21, theta=0.1, n_instances=5)
         assert len(rows) == 5
         for row in rows:
             for arm in ("N", "I", "P", "P_half", "O"):
                 assert arm in row["consensus_error"]
+                assert arm in row["blame"]
+            assert "I" in row["rests_on_dependent_reports"] and "P" in row["rests_on_dependent_reports"]
+            assert "p_half_missing_share_of_scored" in row
 
     def test_an_a_cell_has_no_copy_specific_fields(self):
         cell = {"K": 4, "M": 20, "rho": 0.6, "b": 4.0, "s": 0.5}
-        rows = ns.run_cell(cell, "A", _stub_fixture.generate, seed_root=21, theta=0.1, n_instances=3)
+        rows = ns.run_cell(cell, "A", graded_fixture.generate, seed_root=21, theta=0.1, n_instances=3)
         for row in rows:
             assert "O" not in row["consensus_error"]
             assert row["true_pair"] is None
+            assert set(row["blame"]) == {"N", "I"}
 
 
 class TestBuildPlanAndRunPlan:
-    def _tiny_cells(self):
-        return [
-            {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5},
-            {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5, "tau": 0.5, "q": 0.5},
-        ]
+    GRID_KWARGS = dict(grid_k=(4,), grid_m=(20,), grid_rho=(0.9,), grid_b=(8.0,), grid_s=(0.5,),
+                       grid_tau=(0.5,), grid_q=(0.5,))
 
-    def test_build_plan_calibrates_a_and_counts_the_ceiling_for_c_d(self):
+    def test_build_plan_runs_the_pilot_cut_and_calibration_on_a_small_grid(self):
         plan = ns.build_plan(
-            self._tiny_cells(), generator=_stub_fixture.generate,
-            seed_root_calibration=1, seed_root_pilot=2, seed_root_run=3, n_cal=40, n_pilot=20, n_instances=10)
+            generator=graded_fixture.generate, seed_root_calibration=1, seed_root_pilot=2,
+            seed_root_run=3, n_cal=30, n_pilot=15, n_instances=10, **self.GRID_KWARGS)
         assert plan["calibrations"]
-        assert plan["ceiling"]
+        assert len(plan["cells"]) + len(plan["dropped_cells"]) == 2  # 1 A cell + 1 C/D cell
         for entry in plan["calibrations"].values():
             assert np.isfinite(entry["theta"])
-        for entry in plan["ceiling"].values():
-            assert "pooled_gain_n_minus_o" in entry
 
-    def test_run_plan_and_summarize_end_to_end_on_the_stub(self):
+    def test_run_plan_and_summarize_end_to_end(self):
         plan = ns.build_plan(
-            self._tiny_cells(), generator=_stub_fixture.generate,
-            seed_root_calibration=1, seed_root_pilot=2, seed_root_run=3, n_cal=40, n_pilot=20, n_instances=8)
-        results = ns.run_plan(plan, generator=_stub_fixture.generate)
+            generator=graded_fixture.generate, seed_root_calibration=1, seed_root_pilot=2,
+            seed_root_run=3, n_cal=30, n_pilot=15, n_instances=8, **self.GRID_KWARGS)
+        results = ns.run_plan(plan, generator=graded_fixture.generate)
         summary = ns.summarize(plan, results)
         assert summary["primary"]["reading"] in (
             "inference substitutes for the record", "the record can't be replaced by this inference",
@@ -664,29 +740,30 @@ class TestBuildPlanAndRunPlan:
         assert summary["checks"]["p_on_c_equals_o_max_abs_diff"] == pytest.approx(0.0, abs=1e-9)
         assert "auditor_helps" in summary["inference_at_all"]
         assert "D" in summary["detection"] and "A_false_flag_rate" in summary["detection"]
-        assert "s_p_half" in summary["per_cell"]
+        assert "s_p_half" in summary["per_cell"] and "p_half_missing_share_of_scored" in summary["per_cell"]
+        assert "I_on_D" in summary["rests_on_dependent_reports"]
+        assert "P_on_C" in summary["rests_on_dependent_reports"]
+        assert summary["by_tau_q"]["s_i"]
+        for arm in ("N", "I", "P", "P_half", "O"):
+            assert arm in summary["blame"]
 
 
 # -------------------------------------------------------------------------------------
-# A tiny end-to-end CLI smoke, against the stub generator (labelled as such): 2 cells, 20 instances, just
-# to show the plan -> run -> rescore pipe works. Not a real run -- no plan file is committed.
+# A tiny end-to-end CLI smoke on the real generator: tiny n_cal/n_pilot/n_instances over the fixture
+# spec's full grid shape, just to show the plan -> run -> rescore pipe works. Not a real run -- the real
+# plan needs the full 500 calibration/pilot/run counts, not these tiny stand-ins.
 # -------------------------------------------------------------------------------------
 
 class TestCliSmokeEndToEnd:
     def test_plan_run_rescore_round_trip(self, tmp_path):
-        cells_path = tmp_path / "cells.json"
-        cells_path.write_text(json.dumps([
-            {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5},
-            {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5, "tau": 0.5, "q": 0.5},
-        ]))
         plan_path = tmp_path / "plan.json"
         results_path = tmp_path / "results.json"
         engram_root = str(Path(ns.__file__).resolve().parents[2])
         module_args = [sys.executable, "-m", "experiments.northstar.test7"]
 
         plan_proc = subprocess.run(
-            module_args + ["plan", "--cells", str(cells_path), "--out", str(plan_path),
-                          "--n-cal", "40", "--n-pilot", "20", "--n-instances", "20"],
+            module_args + ["plan", "--out", str(plan_path),
+                          "--n-cal", "10", "--n-pilot", "5", "--n-instances", "5"],
             cwd=engram_root, capture_output=True, text=True)
         assert plan_proc.returncode == 0, plan_proc.stderr
         assert plan_path.exists()
