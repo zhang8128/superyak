@@ -126,24 +126,31 @@ def qualifying_leads_by_type(row: dict, corpus: CorpusLookup, redirects, *, qtyp
 
 
 def draw_qualifying_by_type(pool_rows: list[dict], corpus: CorpusLookup, redirects, *, qtype: str,
-                            target: int, seed: int) -> tuple[list[dict], int]:
+                            target: int, seed: int) -> tuple[list[dict], int, int]:
     """``pool_rows`` in a seeded shuffle's order, keeping each one ``qualifying_leads_by_type`` accepts for
-    ``qtype``, until ``target`` are found. Returns ``(qualifying, draws)``."""
+    ``qtype``, until ``target`` are found. Returns ``(qualifying, draws, own_type_draws)``: ``draws`` is
+    every row examined, of either type (the pool mixes both strata's rows, so most rows examined for the
+    thinner stratum are the other type and are skipped at a glance); ``own_type_draws`` is how many of
+    those were actually ``qtype`` -- the qualifying rate belongs over this count, not over ``draws``, or a
+    stratum that's a small share of the pool reads as qualifying far more rarely than it really does."""
     import random
 
     order = list(range(len(pool_rows)))
     random.Random(seed).shuffle(order)
     qualifying: list[dict] = []
     draws = 0
+    own_type_draws = 0
     for index in order:
         draws += 1
         row = pool_rows[index]
+        if row.get("type") == qtype:
+            own_type_draws += 1
         info = qualifying_leads_by_type(row, corpus, redirects, qtype=qtype)
         if info is not None:
             qualifying.append({**row, **info})
             if len(qualifying) >= target:
                 break
-    return qualifying, draws
+    return qualifying, draws, own_type_draws
 
 
 # =====================================================================================
@@ -230,7 +237,14 @@ def count_truncated_pairs(tokenizer, pairs: list[tuple[str, str]]) -> int:
     truncation, measures each pair's natural encoded length through the exact same ``encode_batch`` path
     ``OnnxTextCrossEncoder.tokenize`` calls, restores truncation, and counts how many exceeded
     ``max_length``. A tokenizer with no truncation configured can't truncate anything, so 0 without
-    encoding a thing."""
+    encoding a thing.
+
+    The real length is ``sum(encoding.attention_mask)``, never ``len(encoding.ids)``: the loaded
+    cross-encoder pads every pair in one ``encode_batch`` call to the *longest* pair in that same batch
+    (confirmed against the real model: its tokenizer's own ``padding`` is ``{"length": None, ...}``, i.e.
+    dynamic, to-the-batch's-longest), so ``len(ids)`` alone would call a short pair truncated too whenever
+    it shares a batch with one long pair -- attention_mask is 0 on the padding, 1 on the real tokens,
+    whatever the batch's longest member is."""
     original = tokenizer.truncation
     if not original:
         return 0
@@ -241,7 +255,7 @@ def count_truncated_pairs(tokenizer, pairs: list[tuple[str, str]]) -> int:
     finally:
         tokenizer.enable_truncation(max_length=max_length, stride=original["stride"],
                                     strategy=original["strategy"], direction=original["direction"])
-    return sum(1 for encoding in encodings if len(encoding.ids) > max_length)
+    return sum(1 for encoding in encodings if sum(encoding.attention_mask) > max_length)
 
 
 def model_digest(loaded_model) -> str:
@@ -452,15 +466,15 @@ def build_plan(rows: list[dict], excluded_ids: set, corpus: CorpusLookup, redire
     ``query_fn``), the reranker's truncation settings, and both models' digests."""
     pool_rows = [row for row in rows if row["id"] not in excluded_ids]
 
-    bridge, bridge_draws = draw_qualifying_by_type(pool_rows, corpus, redirects, qtype="bridge",
-                                                   target=target, seed=seed)
+    bridge, bridge_draws, bridge_own_draws = draw_qualifying_by_type(
+        pool_rows, corpus, redirects, qtype="bridge", target=target, seed=seed)
     if len(bridge) < min_qualifying:
         raise RuntimeError(
             f"only {len(bridge)} qualifying bridge questions in the whole pool of {len(pool_rows)}; "
             f"the spec requires at least {min_qualifying} before a run"
         )
-    comparison, comparison_draws = draw_qualifying_by_type(pool_rows, corpus, redirects, qtype="comparison",
-                                                           target=comparison_target, seed=comparison_seed)
+    comparison, comparison_draws, comparison_own_draws = draw_qualifying_by_type(
+        pool_rows, corpus, redirects, qtype="comparison", target=comparison_target, seed=comparison_seed)
     if len(comparison) < min_comparison_qualifying:
         raise RuntimeError(
             f"only {len(comparison)} qualifying comparison questions in the whole pool of {len(pool_rows)}; "
@@ -477,15 +491,28 @@ def build_plan(rows: list[dict], excluded_ids: set, corpus: CorpusLookup, redire
         "comparison_seed": comparison_seed, "comparison_target": comparison_target,
         "min_comparison_qualifying": min_comparison_qualifying,
         "pool_size": len(pool_rows), "excluded_ids": len(excluded_ids),
-        "qualifying_found": len(bridge), "draws_needed": bridge_draws, "w_short_count": w_short,
+        "qualifying_found": len(bridge), "draws_needed": bridge_draws,
+        "own_type_draws_needed": bridge_own_draws, "w_short_count": w_short,
         "comparison_qualifying_found": len(comparison), "comparison_draws_needed": comparison_draws,
-        "comparison_w_short_count": comparison_w_short,
+        "comparison_own_type_draws_needed": comparison_own_draws, "comparison_w_short_count": comparison_w_short,
         "questions": questions, "comparison_questions": comparison_questions,
         "model": MODEL, "prompt_version": PROMPT_VERSION,
         "e_k": E_K, "b_bm25_k": B_BM25_K, "b_top": B_TOP, "hop_seeds": HOP_SEEDS,
         "cross_encoder_model": CROSS_ENCODER_MODEL, "primary_margin": PRIMARY_MARGIN,
         "digests": {"nemotron": nemotron_digest, "dense": dense_digest, "cross": cross_digest},
         "cross_truncation": cross_truncation,
+        "notes": [
+            "earns_its_place names two outcomes beyond the spec's two (\"earns its place\", \"no measured "
+            "gain\"): \"measured gain under the margin\" (the CI's lower end is above 0, but the point "
+            "estimate is under the margin) and \"measured loss\" (the CI is entirely below 0) -- real "
+            "possibilities the spec's prose leaves unnamed, reported as their own cases rather than folded "
+            "into either of the spec's two.",
+            "The comparison stratum's ceiling rule (revision 3) is applied stratum-wide: when W-dense's "
+            "both-gold-at-two rate is at or above 90%, every G-vs-W earns_its_place verdict in that "
+            "stratum's summary (both the both-gold primary and the answer-lead-recall primary) relabels "
+            "\"no measured gain\" as \"uninformative at ceiling\", not only the both-gold measure the rule "
+            "is stated against.",
+        ],
     }
 
 

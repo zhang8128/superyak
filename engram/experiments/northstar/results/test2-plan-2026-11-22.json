@@ -2,6 +2,7 @@
  "b_bm25_k": 100,
  "b_top": 2,
  "comparison_draws_needed": 5957,
+ "comparison_own_type_draws_needed": 1224,
  "comparison_qualifying_found": 300,
  "comparison_questions": [
   {
@@ -6977,6 +6978,11 @@
  "min_comparison_qualifying": 150,
  "min_qualifying": 500,
  "model": "nemotron-mini:latest",
+ "notes": [
+  "earns_its_place names two outcomes beyond the spec's two (\"earns its place\", \"no measured gain\"): \"measured gain under the margin\" (the CI's lower end is above 0, but the point estimate is under the margin) and \"measured loss\" (the CI is entirely below 0) -- real possibilities the spec's prose leaves unnamed, reported as their own cases rather than folded into either of the spec's two.",
+  "The comparison stratum's ceiling rule (revision 3) is applied stratum-wide: when W-dense's both-gold-at-two rate is at or above 90%, every G-vs-W earns_its_place verdict in that stratum's summary (both the both-gold primary and the answer-lead-recall primary) relabels \"no measured gain\" as \"uninformative at ceiling\", not only the both-gold measure the rule is stated against."
+ ],
+ "own_type_draws_needed": 2843,
  "pool_size": 40498,
  "primary_margin": 5.0,
  "prompt_version": "v2",

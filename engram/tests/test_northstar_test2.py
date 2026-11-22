@@ -120,31 +120,44 @@ class TestQualifyingLeadsByType:
 class TestDraw:
     def test_draws_qualifying_bridge_questions_by_seed(self, corpus, redirects):
         pool = [bridge(f"q{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(6)]
-        qualifying, draws = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=3, seed=1)
+        qualifying, draws, own_draws = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge",
+                                                                   target=3, seed=1)
         assert len(qualifying) == 3
         assert draws >= 3
+        assert own_draws <= draws  # every pool row here is "bridge", but the inequality must hold in general
 
     def test_is_reproducible_for_the_same_seed(self, corpus, redirects):
         pool = [bridge(f"q{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(6)]
-        a, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=3, seed=7)
-        b, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=3, seed=7)
+        a, _, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=3, seed=7)
+        b, _, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=3, seed=7)
         assert [q["id"] for q in a] == [q["id"] for q in b]
 
     def test_draws_qualifying_comparison_questions_by_its_own_seed(self, corpus, redirects):
         pool = [comparison(f"c{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(6)]
-        qualifying, draws = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="comparison",
-                                                        target=3, seed=ns2.COMPARISON_SEED)
+        qualifying, draws, own_draws = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="comparison",
+                                                                   target=3, seed=ns2.COMPARISON_SEED)
         assert len(qualifying) == 3
         assert all(q["type"] == "comparison" for q in qualifying)
+
+    def test_own_type_draws_counts_only_rows_of_the_stratum_s_own_type(self, corpus, redirects):
+        # A pool where comparison rows are a small minority: own_type_draws must count only those,
+        # never the many bridge rows examined and skipped along the way.
+        pool = ([bridge(f"b{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(20)]
+               + [comparison(f"c{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(3)])
+        qualifying, draws, own_draws = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="comparison",
+                                                                   target=3, seed=1)
+        assert len(qualifying) == 3
+        assert own_draws == 3   # every comparison row here qualifies, so own_draws == qualifying_found
+        assert own_draws < draws  # strictly fewer than the total, since bridge rows were examined too
 
     def test_a_mixed_pool_never_crosses_bridge_and_comparison_draws(self, corpus, redirects):
         # The coordinator's disjointness test: with both types in the same pool, each draw's own type
         # filter keeps every one of its own rows, and admits nothing of the other's.
         pool = ([bridge(f"b{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(5)]
                + [comparison(f"c{i}", "Ignored", "1970", ["Lotus (band)", "Ann Vale"]) for i in range(5)])
-        bridge_drawn, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=5, seed=1)
-        comparison_drawn, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="comparison",
-                                                          target=5, seed=2)
+        bridge_drawn, _, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="bridge", target=5, seed=1)
+        comparison_drawn, _, _ = ns2.draw_qualifying_by_type(pool, corpus, redirects, qtype="comparison",
+                                                             target=5, seed=2)
         bridge_ids = {q["id"] for q in bridge_drawn}
         comparison_ids = {q["id"] for q in comparison_drawn}
         assert bridge_ids.isdisjoint(comparison_ids)
@@ -403,14 +416,18 @@ def fake_rerank(query: str, documents):
 
 
 class FakeEncoding:
-    def __init__(self, length: int):
-        self.ids = list(range(length))
+    def __init__(self, real_length: int, padded_length: int):
+        self.ids = list(range(padded_length))
+        self.attention_mask = [1] * real_length + [0] * (padded_length - real_length)
 
 
 class FakeTokenizer:
-    """A minimal stand-in for `tokenizers.Tokenizer`: `encode_batch`'s length is the combined character
-    count of the pair (a crude proxy for token count, but enough to test count_truncated_pairs' own
-    disable/measure/restore logic without the real ~1 GB cross-encoder)."""
+    """A minimal stand-in for `tokenizers.Tokenizer`: `encode_batch`'s real length is the combined
+    character count of the pair (a crude proxy for token count, but enough to test
+    count_truncated_pairs' own disable/measure/restore logic without the real ~1 GB cross-encoder) --
+    and, like the real tokenizer (``padding: {"length": None, ...}``, confirmed against the loaded
+    model), every pair in one ``encode_batch`` call is padded to the *longest* pair's length, with
+    ``attention_mask`` the only field that still says how long each pair really was."""
 
     def __init__(self, max_length: int | None = 10):
         self.truncation = None if max_length is None else {
@@ -423,7 +440,9 @@ class FakeTokenizer:
         self.truncation = {"max_length": max_length, "stride": stride, "strategy": strategy, "direction": direction}
 
     def encode_batch(self, pairs):
-        return [FakeEncoding(len(q) + len(d)) for q, d in pairs]
+        real_lengths = [len(q) + len(d) for q, d in pairs]
+        padded_length = max(real_lengths) if real_lengths else 0
+        return [FakeEncoding(length, padded_length) for length in real_lengths]
 
 
 class TestCrossRerank:
@@ -451,6 +470,15 @@ class TestCountTruncatedPairs:
     def test_zero_when_no_truncation_is_configured_at_all(self):
         tok = FakeTokenizer(max_length=None)
         assert ns2.count_truncated_pairs(tok, [("a" * 1000, "b" * 1000)]) == 0
+
+    def test_a_short_pair_sharing_a_batch_with_a_long_one_is_not_miscounted_as_truncated(self):
+        # The real bug: the tokenizer pads every pair in a batch to the longest pair's length
+        # (confirmed against the loaded model: padding "length": None means dynamic, to-longest), so
+        # len(ids) alone makes the short pair here look exactly as long as the long one. Only the real
+        # token count (sum(attention_mask)) tells them apart; this batch must count exactly 1.
+        tok = FakeTokenizer(max_length=10)
+        pairs = [("short", "doc"), ("a", "b" * 20)]  # pair 1 real length 8 (<= 10); pair 2's is 21 (> 10)
+        assert ns2.count_truncated_pairs(tok, pairs) == 1
 
 
 class TestModelDigestAndTruncationSettings:
