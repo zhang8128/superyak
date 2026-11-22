@@ -17,7 +17,7 @@ before, and spend less doing so, than the same model with a strong conventional 
 - Local models through Ollama on the Mac: nemotron-mini (about 4B), qwen3.6:27b-mlx; prompt v2 from `hotpot_smoke`.
 - HotpotQA's distractor train split (train-00000, revision 1908d6af), whose fresh draws nothing here has scored for answers.
 
-## Design (revision 3: the fresh reviewer's six findings, R1 to R6, power, and the re-check's three changes)
+## Design (revision 4: R1 to R6, power, the re-check's three changes, and the plan's two findings)
 
 ### Questions and corrections
 
@@ -34,8 +34,11 @@ before, and spend less doing so, than the same model with a strong conventional 
   margin is reported as borderline, not as a pass or a fail, and the follow-up run doubles N. That's stated before the
   run, not tuned after it.
 - **A correction:** in the gold lead that holds the answer, each whole-word occurrence is replaced by a substitute: the
-  answer of another qualifying question of the same class (a year for a year, a name-shaped answer for a name-shaped
-  one), never equal to the original. Half the 800, chosen by seed, are corrected; the others are controls.
+  answer of another qualifying question of the same class, never equal to the original. The classes are a year, a
+  person's name, and any other name (revision 4). A name-shaped answer is a person when it resolves, through redirects,
+  to a corpus v0 title whose lead has a birth or life-span parenthesis, "(born" or a year range, in its first 200
+  characters. The builder's plan swapped a person for a county ("Sir Edward Seymour Hicks" to "County Tyrone"), and
+  this split ends that. A place-for-organisation swap inside "other name" can remain, and is reported as a limit. Half the 800, chosen by seed, are corrected; the others are controls.
 - **The corrected corpus (R5):** corpus v0 stays frozen. The corrections are an overlay file, one row per corrected page
   with its old and new text, digested. A second `corpus-index` is built from corpus v0's export with the overlay
   applied, and its sha256 is recorded. Reading a lead after the correction goes through the overlay.
@@ -59,6 +62,8 @@ Atlas's sources are immutable, and `retraction_impact` only reads. So test1.py h
   corrected index.
 - **B-cache, a floor only:** B's earlier answers, never asked again. It shows what a pipeline without provenance gives
   if nothing triggers a re-ask (R2).
+- **E-all (revision 4, secondary):** E's own retrieval, every question asked again after the corrections. Against E
+  it separates what provenance targeting saves from how well E retrieves, the confound the re-check named.
 - **Closed book (R3):** after the corrections, the corrected half asked with no evidence. This counts what the model
   answers from memory, so a stale answer from memory isn't read as a failure of provenance.
 - **No leakage (R6):** a re-ask prompt holds the question and the retrieved leads only. It never holds an earlier
@@ -71,8 +76,9 @@ Atlas's sources are immutable, and `retraction_impact` only reads. So test1.py h
   1. Exact match after the correction, E against B-all, paired, with a 95% CI.
   2. After-correction model calls, E's against B-all's.
 
-  E succeeds if it is within 5 points of B-all's exact match while using under 60% of its calls. The interval is
-  reported either way.
+  E succeeds if it is within 5 points of B-all's exact match while using under 60% of its calls. If E fails the
+  calls test, the verdict is "fails" whatever its accuracy (revision 4). The interval is reported either way.
+- **Secondary, provenance alone:** E against E-all on the corrected half: exact match (paired, 95% CI) and calls.
 - **Read beside the primary:** the retrieval gap before the correction, meaning each arm's source support and exact
   match on all 800. E's evidence path (BM25 and one hop) may simply retrieve less than B's dense rerank. Then a miss
   reads as a retrieval gap, not as provenance failing, and the two are reported apart.
