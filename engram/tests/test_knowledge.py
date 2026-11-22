@@ -8,6 +8,22 @@ import pytest
 
 from config import GraphConfig
 from graphiti_local import GraphitiEmbedder, GraphitiReranker
+from knowledge import kuzu_unsupported_reason
+
+# Kuzu 0.11.3 can't free a buffer frame on a Linux kernel with pages over 4 KB, so every statement fails there (the Pi
+# 5's kernel uses 16 KB pages; all hands 687ae564). Tests that open a real Kuzu database skip on such a kernel, and say
+# why; the guard below is what production does instead of failing.
+needs_kuzu = pytest.mark.skipif(kuzu_unsupported_reason() is not None, reason=str(kuzu_unsupported_reason()))
+
+
+@pytest.fixture(autouse=True)
+def _guard_off_where_kuzu_is_mocked(request, monkeypatch):
+    """Most tests here mock Graphiti and Kuzu, so the page-size guard mustn't stop them on a 16 KB-page kernel. The
+    guard's own tests (TestLargePageKernel) keep it, and real-Kuzu tests skip there instead (needs_kuzu)."""
+    if request.node.cls is not TestLargePageKernel:
+        import knowledge
+
+        monkeypatch.setattr(knowledge, "kuzu_unsupported_reason", lambda: None)
 
 
 @pytest.fixture
@@ -598,6 +614,7 @@ class _StubEmbeddings:
         return [[0.0] * 768 for _ in texts]
 
 
+@needs_kuzu
 class TestKuzuFulltextIndices:
     """graphiti-core 0.28.2's Kuzu driver never creates the full-text indices its
     own search ops query (`build_indices_and_constraints` is a no-op and the
@@ -654,6 +671,7 @@ class TestBoundedKuzuDriver:
     """Kuzu's default buffer pool is 80% of system RAM in every process that
     opens a graph; engram bounds it (GraphConfig.buffer_pool_mb)."""
 
+    @needs_kuzu
     def test_database_opens_with_configured_buffer_pool(self, graph_config, monkeypatch):
         import kuzu
 
@@ -828,3 +846,45 @@ class TestCompressorBackgroundFeeds:
             assert graph.feed.call_count == 2
         finally:
             store.close()
+
+
+class TestLargePageKernel:
+    """On Linux with pages over 4 KB, Kuzu fails every statement, so the graph never opens it and says once why it's
+    off, rather than logging "init failed" on every start and recalling without entities or facts."""
+
+    @pytest.mark.parametrize("platform, page, expected", [
+        ("linux", 16384, True), ("linux", 65536, True), ("linux", 4096, False), ("darwin", 16384, False)])
+    def test_the_reason_names_the_page_size_only_on_large_page_linux(self, monkeypatch, platform, page, expected):
+        import knowledge
+
+        monkeypatch.setattr(knowledge.sys, "platform", platform)
+        monkeypatch.setattr(knowledge.os, "sysconf", lambda name: page)
+        reason = knowledge.kuzu_unsupported_reason()
+        assert (reason is not None) is expected
+        if expected:
+            assert f"{page // 1024} KB" in reason and "4 KB" in reason
+
+    def test_a_large_page_kernel_turns_the_graph_off_without_opening_kuzu(self, graph_config, monkeypatch, caplog):
+        import knowledge
+
+        monkeypatch.setattr(knowledge.sys, "platform", "linux")
+        monkeypatch.setattr(knowledge.os, "sysconf", lambda name: 16384)
+
+        def must_not_open(self):
+            raise AssertionError("opened Kuzu on a 16 KB-page kernel")
+
+        monkeypatch.setattr(knowledge.KnowledgeGraph, "_init_graphiti", must_not_open)
+        with caplog.at_level("WARNING", logger="engram.knowledge"):
+            kg = knowledge.KnowledgeGraph(graph_config)
+        assert kg.enabled is False
+        assert any("16 KB" in r.getMessage() and "init failed" not in r.getMessage() for r in caplog.records)
+
+    def test_a_4_kb_kernel_still_opens_the_graph(self, graph_config, monkeypatch):
+        import knowledge
+
+        monkeypatch.setattr(knowledge.sys, "platform", "linux")
+        monkeypatch.setattr(knowledge.os, "sysconf", lambda name: 4096)
+        opened = []
+        monkeypatch.setattr(knowledge.KnowledgeGraph, "_init_graphiti", lambda self: opened.append(True))
+        knowledge.KnowledgeGraph(graph_config)
+        assert opened == [True]

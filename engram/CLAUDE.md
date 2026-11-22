@@ -235,6 +235,10 @@ feed fails on `node_name_and_summary`). Separate from identity layers.
 The Kuzu database opens with a bounded buffer pool (`[graph] buffer_pool_mb`,
 default 256) through `knowledge._bounded_kuzu_driver`; graphiti's own driver
 takes Kuzu's default of 80% of system RAM in every server process.
+On a Linux kernel with pages over 4 KB (the Pi 5's are 16 KB), Kuzu 0.11.3 fails every statement ("Releasing physical
+memory associated with a frame failed ... Invalid argument"), so the graph is off there and says why once
+(`knowledge.kuzu_unsupported_reason`); tests that open a real Kuzu database skip with that reason. A 4 KB-page kernel
+turns it on.
 
 **Store identity:** Every store carries `meta.instance_id` and
 `instance_id_origin` (migration 028, assigned by the migration runner inside

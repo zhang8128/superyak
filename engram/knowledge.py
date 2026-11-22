@@ -14,6 +14,7 @@ import asyncio
 import threading
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,20 @@ if TYPE_CHECKING:
     from config import GraphConfig
 
 logger = logging.getLogger("engram.knowledge")
+
+
+def kuzu_unsupported_reason() -> str | None:
+    """Why Kuzu can't run on this machine, or None. Kuzu 0.11.3's buffer manager releases memory one 4 KB frame at a
+    time, which a Linux kernel with larger pages refuses ("Releasing physical memory associated with a frame failed
+    ... Invalid argument"), so every statement fails. The Pi 5's kernel uses 16 KB pages. Reproduced on Linux only;
+    macOS, which also uses 16 KB pages on Apple Silicon, isn't refused here."""
+    if not sys.platform.startswith("linux"):
+        return None
+    page = os.sysconf("SC_PAGE_SIZE")
+    if page <= 4096:
+        return None
+    return (f"Kuzu needs 4 KB memory pages and this Linux kernel uses {page // 1024} KB pages, so the knowledge graph "
+            "is off (a 4 KB-page kernel would turn it on)")
 
 
 def _fmt_dt(dt) -> str | None:
@@ -133,6 +148,12 @@ class KnowledgeGraph:
 
         if not config.enabled:
             logger.info("Knowledge graph disabled")
+            return
+
+        unsupported = kuzu_unsupported_reason()
+        if unsupported is not None:
+            logger.warning("Knowledge graph off: %s", unsupported)
+            self._config.enabled = False
             return
 
         try:
