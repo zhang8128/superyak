@@ -1,6 +1,6 @@
 # Claims that cross with their sources' identity (north-star test 5, Rio Grande's half)
 
-Revision 4, 2026-11-22. Rio Grande (the Pi). Board item `north:5-two-lighthouses-keep-source-identity`. Under station
+Revision 5, 2026-11-22. Rio Grande (the Pi). Board item `north:5-two-lighthouses-keep-source-identity`. Under station
 law section 3, a fresh reviewer approves it in Andy's place, and Andy can veto.
 
 - **Revision 1 (e3fc031f)** went to a fresh reviewer, who asked for a revision with ten findings (all hands 1d808ee0).
@@ -8,7 +8,9 @@ law section 3, a fresh reviewer approves it in Andy's place, and Andy can veto.
   advisory ones (bbf3c93b).
 - **Revision 3 (696e9605)** made all twelve, named C1 to C12 below. Its second re-check approved it with five required
   changes and five advisory ones (512c6253).
-- **This revision** makes all ten, named D1 to D10 below.
+- **Revision 4 (c4d99bc9)** made all ten, named D1 to D10 below. Its third check approved it with three changes and
+  one advisory (all hands e0482aee).
+- **This revision** makes all four, named E1 to E4 below.
 
 ## Why
 
@@ -73,8 +75,9 @@ One function, `source_key(record)`, version `source_key/1`, pinned by the profil
   - **From the citation,** only when the url gave none: the first match of `10\.\d{4,9}/[-._;()/:<>A-Za-z0-9]+`,
     case insensitive, after percent-decoding. `<` and `>` are in the class, so a SICI DOI in a citation is kept whole
     and keys equal to its url form (D3).
-    - **Stripping:** remove trailing `.`, `,`, `;` and `:`, and a closing `)` or `]` with no opening partner in the
-      match. Do it repeatedly until none is left, so `doi:10.5555/x.)` gives `10.5555/x`.
+    - **Stripping:** remove trailing `.`, `,`, `;` and `:`, and a closing `)`, `]` or `>` with no opening
+      partner in the match. Do it repeatedly until none is left, so `doi:10.5555/x.)` gives `10.5555/x`, and
+      `<https://doi.org/10.5555/x>.` gives `10.5555/x` (E1).
     - **Then lowercase it.**
     - **More than one distinct DOI** in the citation gives no DOI key.
 - **A title key, `title:<title>:<year>`, weak,** from `store._normalized_title`: NFKC, casefold, and punctuation and
@@ -85,10 +88,12 @@ One function, `source_key(record)`, version `source_key/1`, pinned by the profil
 
 These are checked in order, and the first that holds wins (D1):
 
-1. **Distinct by DOI:** both have DOI keys, the DOIs differ, and their title keys differ or one is missing. A DOI
-   decides, so this holds even when they share a url, such as one proceedings PDF holding two papers.
-2. **Unclear:** both have DOI keys, the DOIs differ, and their title keys are equal. A preprint and its journal
-   version look like this, and so do two editorials of one year (C7).
+1. **Distinct by DOI:** both have DOI keys, the DOIs differ, and their **titles** differ, or one has none. A DOI
+   decides, so this holds even when they share a url, such as one proceedings PDF holding two papers. Here, and in rule
+   2, titles are compared by the normalised title alone, without the year (E4).
+2. **Unclear:** both have DOI keys, the DOIs differ, and their titles are equal. A preprint and its journal version
+   look like this even in different years, and so do two editorials (C7, E4). The cost is that two different works
+   with one generic title and two DOIs can never count as independent of each other, which errs safe.
 3. **Match:** any of one source's strong keys equals any of the other's, or their title keys are equal.
 4. **Distinct:** anything else. No strong key is shared, and the title keys differ, or one is missing.
 
@@ -213,14 +218,31 @@ the table says whose policy is evaluated, and who goes in the request's `publish
 | `retain` | keep a copy, or a carried Claim, in the receiver's store | the original publisher's | the receiver |
 | `reshare` | publish a copy onward | the original publisher's | the store that would republish |
 
+Every request also carries these fields, which `authorize` requires. Every fixture policy rule names a pattern for
+each, as `overlap`'s requests do (E2):
+
+- `domain` is `"research"`;
+- `context` is the publishing Snapshot's context id;
+- `purpose` is `"research"`;
+- `audience` is `"self"` for `read`, `link_overlap` and `retain`, and `"onward"` for `reshare`.
+
+A rule's `publishers` pattern names the counterparty in both directions: the issuer for the receiver's own policy,
+and the receiver or the republisher for the original publisher's.
+
 So `read` and `link_overlap` are the receiver's choice of whom to listen to, as in `overlap`. `retain` and `reshare`
 are the original publisher's consent to how its claims are kept and passed on, so the receiver asks with the
 publisher's own policy, which travels in the publication.
 
-A notice needs `read`. Acting on it is the owner's act, above. Consent isn't transitive: "copied twice through
-`third`" needs `third`'s policy to allow the first store `reshare`, and the second store's policy to allow `read` of
-the first store's publication. The fixtures' policies grant exactly the actions each case uses, and one case has
+A notice needs `read`. Acting on it is the owner's act, above. Consent isn't transitive. "Copied twice through `third`" needs all of these:
+
+- `third`'s policy allows the Pi to `reshare`;
+- `third`'s policy allows Tardis to `retain`;
+- Tardis's own policy allows `read` of the Pi's publication. The fixtures' policies grant exactly the actions each case uses, and one case has
 `third`'s policy refuse `reshare`.
+
+A policy passed on inside another store's publication, as `third`'s reaches Tardis inside the Pi's, counts only when
+it is attested by its issuer, or obtained from its issuer directly. The transport spec owns how. In the fixtures, every
+policy is read from its own file (E3).
 
 `verify` checks only a digest, and an issuer names itself. So on a real crossing, who sent a publication or a notice
 must come from the transport's authenticated peer (follow-up, below), never from the artifact alone.
@@ -275,6 +297,9 @@ isn't decided. They're shown, and the notice reports show what a notice would do
   - two SICI-style DOIs from one issue, `…(199806)49:8<693::…` and `…49:8<701::…`, are two different sources, once
     in url form and once in citation form (C5, D3);
   - one SICI DOI in url form on one side and citation form on the other is the same source (D3);
+  - a DOI written `<https://doi.org/10.5555/superyak-fixture-a1>.` in a citation is the same source as its url form
+    (E1);
+  - a preprint DOI (2023) and its journal DOI (2024), one title, is unclear (E4);
   - two papers sharing one proceedings url, with different DOIs and titles, are distinct by DOI (D1);
   - `https://doi.org/` and `https://doi.org/help` give no DOI key (D5).
 - **Overlapping:** one source shared, by key or by title, and one source each.
