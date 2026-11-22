@@ -306,3 +306,35 @@ the hop, comparison to BM25). The classifiers: the word rule, and nemotron-mini 
   loses more than a comparison sent there gains.
 - **So by the rule written before the run,** the approach-by-kind graph adds nothing yet over the single best approach.
   It would need a classifier above about 95%, or kinds whose arms differ more than these two do.
+
+## The router in the open setting (issue #12 Phase 3, 2026-11-22, on the Mac, 2,166 s)
+
+`hotpot_router_open.py`, fixed before its run (42bffaca): the 2,000 fresh train questions of each sample above, by id,
+each arm picking 2 articles from all of corpus v0 through `corpus-index`, routed as before (bridge to the hop,
+comparison to BM25) by the labels saved in those runs. No new model calls. Primary: c2's model router against the hop
+alone. Every row is in `results/router-open-2026-11-22.json`.
+
+| Against the hop alone, points (95% CI) | c1 (1,977 covered) | c2 (1,971 covered) |
+|---|---|---|
+| Router by the word rule | +0.05 (-0.76 to +0.86) | -0.36 (-1.12 to +0.41) |
+| Router by the model | -0.05 (-0.15 to +0.05) | **-0.66 (-1.31 to -0.01)** |
+| Router that knows the true type | +1.77 (+1.19 to +2.35) | +1.22 (+0.73 to +1.70) |
+
+c1's model router is the hop: in that run the model answered instead of classifying, and labelled every comparison a
+bridge.
+
+**How to read it:**
+- **The primary measure is negative.** The model router finds both gold articles for 395 of c2's covered questions
+  and the hop alone for 408.
+- **Open retrieval makes the ceiling smaller, not larger.** The arms split more sharply by kind here (the hop finds
+  both for 0 to 2 of about 360 comparisons), but BM25's own rate on comparisons is only 7 to 10%. Comparisons are 18%
+  of the questions. So knowing the kind is worth +1.2 to +1.8 points, against +1.9 to +3.8 with distractors.
+- **The asymmetry is the same.** On c2 the word rule sends 165 bridge questions to BM25 and loses 33 of the hop's
+  hits there, while the 277 comparisons it routes correctly win 20.
+- **So the conclusion of the three samples above stands in the open setting:** the approach-by-kind graph adds nothing
+  yet over the single best approach. Untested ideas, which would each need their own run fixed in advance:
+  - a classifier that says "comparison" only when sure;
+  - a third arm, such as one pick from each of the two.
+
+The run took 36 minutes for 4,000 questions, against 12 for the 7,405 dev questions. I didn't look into why; the train
+questions' title maps load twice, once per sample.
