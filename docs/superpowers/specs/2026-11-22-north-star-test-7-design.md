@@ -1,6 +1,6 @@
 # North-star test 7: kept provenance against inferred independence
 
-Serenity, 2026-11-22, revision 2. Test 7 of [docs/north-star.md](../../north-star.md). It needs a fresh reviewer's
+Serenity, 2026-11-22, revision 3. Test 7 of [docs/north-star.md](../../north-star.md). It needs a fresh reviewer's
 approval before any code (station law, section 3), and nothing runs until its plan is fixed in a commit. It is built on
 Tardis's graded-blame fixture,
 [2026-11-22-graded-blame-fixture-design.md](2026-11-22-graded-blame-fixture-design.md), revision 3 (93e08797),
@@ -13,8 +13,13 @@ leaves test 7's auditor, comparator, margin, bootstrap and primary to this spec.
   - The bias inflated the instance median it divided by (R5). So the false-flag rate in A swung from 1.3% to 10.2%
     with the unobservable bias (R3).
   - Its scale estimate confused a median with a mean (R4).
-- **This revision** fixes the statistic and the scale, and reframes the primary around what the design-time checks
-  below found.
+- **Revision 2 (c6c827f5)** fixed the statistic and the scale and reframed the primary. The same reviewer's re-check
+  approved it with named changes. Its R1: P on C is the oracle by construction (93e08797's A3 makes `relation()`
+  exact in C), so a primary of I_D − P_C is the ceiling minus the auditor's small gain, and would fire in nearly
+  every kept cell before inference did anything.
+- **This revision** makes the primary the share of the record's value that inference recovers, read with the gap
+  beside it. It narrows the symmetry claim (A1), reports do-no-harm at the high-bias corner (A2), and adds an
+  incomplete record.
 
 ## Why this test
 
@@ -36,10 +41,14 @@ independent and what would count against a conclusion".
 - **When undeclared copying can be seen at all:**
   - On a copied item, the pair's difference has noise τσ, against √2·σ for two independent reports. So with τ well
     under √2, copying shows on every copied item as unusually close agreement.
-  - With τ at or above √2 it shows only on biased copied items, where the bias cancels within the pair. There, at
-    K = 4, an item all four report is symmetric: [honest, honest] against [bad, copy], two pairs each agreeing inside
-    itself. Nothing in the reports says which pair is the copy.
-  - So in part of the grid no auditor, plain or clever, can recover what a kept record says.
+  - At τ = √2 the copied pair's differences have exactly an honest pair's spread (the re-check: medians 0.911 and
+    0.910 over 2,000,000 draws). Copying then shows only on biased copied items, where the bias cancels within the
+    pair, and at K = 4 an item all four report is symmetric: [honest, honest] against [bad, copy]. Nothing in the
+    reports says which pair is the copy.
+  - Above √2 the copied pair spreads *more* than an honest pair. So information exists, but a smallest-spread
+    detector, this auditor's family, points the wrong way (the re-check's A1). A two-sided anomaly detector could
+    flag the pair; this spec doesn't test one.
+  - So in part of the grid this auditor can't recover what a kept record says.
 - **Design-time checks** (not a run; design seeds, disjoint from any plan's; scripts in
   `engram/experiments/northstar/design/test7/`; `sim.py` is the first reviewer's toy fixture):
   - **The reviewer's statistic** (median over shared items) found the copier in 0% to 4% of instances. A residual
@@ -102,7 +111,8 @@ Every arm takes each item's consensus as the median of the reports it counts.
 | Arm | What it counts | Run on |
 | --- | --- | --- |
 | N, naive | every report | A, C, D (N on C equals N on D, the reports being identical) |
-| P, kept provenance | every report, with pairs `relation()` answers copied collapsed on their copied items | C |
+| P, kept provenance | every report, with pairs `relation()` answers copied collapsed on their copied items. Equal to O by construction | C |
+| P½, an incomplete record | as P, but a seeded half of the copied reports carry no chain, so only the rest collapse | C |
 | I, inferred | every report, with the auditor's flagged pairs collapsed | A, C, D |
 | O, the oracle | every report, with the truth's copier pair collapsed on its copied items | C and D (equal) |
 
@@ -112,21 +122,29 @@ Every arm takes each item's consensus as the median of the reports it counts.
   and the copier copied it, per the truth. The truth only selects and scores. An instance with no scored item is
   excluded and counted.
 - **Consensus error:** |consensus − true value| / σ, averaged per instance over its scored items.
-- **Primary, kept against inferred:** on each base instance, I on D against P on C. Their reports are identical, so
-  the difference is only whether a record of the copying was kept.
-  - The paired difference Δ = I_D − P_C in consensus error, pooled over the kept cells, each cell weighted equally.
+- **Primary, the share inference recovers:** on D, S_I = (N − I) / (N − O), as a ratio of the kept cells' pooled mean
+  gains, each cell weighted equally. It's the share of a kept record's value that the auditor gets back without one.
+  P on C equals O by construction, so S_I is also inference's share of what the record gives.
   - The bootstrap resamples base instances within cells: 10,000 replicates, seed 2026112207, percentile 95%
-    intervals.
-  - **Kept provenance earns its place** if Δ's interval excludes 0 in P's favour and Δ ≥ 0.1σ as a point estimate.
-    An interval excluding 0 with Δ under 0.1σ is "helps, under the margin". An interval straddling 0 is "inference
-    does as well".
+    intervals. The ceiling rule keeps the denominator at 0.1σ or more.
+  - **The readings, fixed now:**
+    - **"Inference substitutes for the record"** if the interval's lower end is 0.8 or more.
+    - **"The record can't be replaced by this inference"** if the upper end is under 0.5.
+    - **"Inference recovers part"** otherwise, with the interval stated.
+  - **Beside it, every time it's read:** the gap Δ = I_D − P_C in σ, with its interval. Δ is mostly the ceiling the
+    cut already guaranteed, so it's never read alone as evidence the auditor was tested hard (the re-check's R1).
+  - **Expected, from the design-time checks:** S_I is small, under about 0.2, in most kept cells. The run measures it
+    over the fixture's real kept grid, with intervals. If inference does better than the toy suggested, the readings
+    say so.
 - **Do no harm, A (no copier):** I against N, consensus error over all items the bad source reports. The interval
   for I − N must lie within ±0.05σ. If it doesn't, false collapses cost honest conclusions, and that's reported as a
   failure.
+  - It's reported pooled and again at the high-bias corner (K = 6, M = 60, ρ = 0.9, b = 8), where the design check's
+    false-flag rate reached 10% (the re-check's A2).
 - **Secondary:**
-  - **Each arm against the ceiling:** N − P on C, and N − I on D, each against N − O, as ratios of pooled mean gains
-    with bootstrap intervals. They're reported only where the pooled N − O is at least 0.1σ, and per cell
-    descriptively.
+  - **An incomplete record against inference:** S_P½ = (N − P½) / (N − O) on C, beside S_I, paired by base
+    instance. It shows whether a record half missing still beats inference.
+  - **Per cell:** S_I and S_P½ where that cell's N − O is at least 0.1σ, descriptive only.
   - **Inference at all:** I against N on D, paired, with its interval. "The auditor helps" if it excludes 0 in I's
     favour.
   - **Detection, D:** the share of instances with the copier pair flagged; the share with an honest pair flagged; and
@@ -150,8 +168,8 @@ and the share of those items whose naive consensus is off by more than 0.5σ.
 
 ### What would count against
 
-- **Kept provenance against inference:** inference does as well as the record (Δ ≈ 0). Then keeping provenance isn't
-  worth its cost on this kind of data.
+- **Kept provenance against inference:** S_I's lower end at 0.8 or more. Then inference substitutes for the record,
+  and keeping provenance isn't worth its cost on this kind of data.
 - **Kept provenance against the ceiling:** P short of O in C. Then the record doesn't carry into the conclusion.
 - **Do no harm:** I worse than N in A. Then the auditor costs honest conclusions.
 
@@ -163,8 +181,8 @@ Each is reported as found.
   Real crossings are counted when test 5's Measure 3 runs.
 - **One plain detector:** the lower-quartile pair statistic. A stronger one could narrow Δ where copying is visible
   at all. Where τ ≥ √2 at K = 4, the symmetry argument above says no detector can.
-- **P is favoured by construction:** declared chains are exact in C. Real records can be wrong or missing. So Δ is
-  an upper bound on what kept provenance is worth, and the spec says so beside every reading of it.
+- **P is the oracle by construction:** declared chains are exact in C. Real records can be wrong or missing. So Δ is
+  an upper bound on what kept provenance is worth. P½ is one step towards a real record, not a model of one.
 - **The median consensus only.**
 - **Routes,** the row's other half, stay with #12's result.
 
@@ -172,7 +190,7 @@ Each is reported as found.
 
 `engram/experiments/northstar/test7.py` and its tests:
 - the auditor's statistic, flag, calibration, collapse and ŝ;
-- the four arms;
+- the five arms, P½'s missing chains drawn from the instance seed;
 - the scoring, tested against hand-made instances that pin which items each measure scores and which answer it
   compares against;
 - `plan` (the ceiling counts, θ, calibration rates, the kept cells and seeds), `run` and `rescore`, as tests 1 and 2.
