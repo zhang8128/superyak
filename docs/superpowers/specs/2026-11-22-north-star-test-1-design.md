@@ -38,7 +38,8 @@ before, and spend less doing so, than the same model with a strong conventional 
   person's name, and any other name (revision 4). A name-shaped answer is a person when it resolves, through redirects,
   to a corpus v0 title whose lead has a birth or life-span parenthesis, "(born" or a year range, in its first 200
   characters. The builder's plan swapped a person for a county ("Sir Edward Seymour Hicks" to "County Tyrone"), and
-  this split ends that. A place-for-organisation swap inside "other name" can remain, and is reported as a limit. Half the 800, chosen by seed, are corrected; the others are controls.
+  this split ends that. Two limits are reported: a place-for-organisation swap inside "other name" can remain, and
+  the person cue can also catch a building or organisation whose lead opens with a founding-date range. Half the 800, chosen by seed, are corrected; the others are controls.
 - **The corrected corpus (R5):** corpus v0 stays frozen. The corrections are an overlay file, one row per corrected page
   with its old and new text, digested. A second `corpus-index` is built from corpus v0's export with the overlay
   applied, and its sha256 is recorded. Reading a lead after the correction goes through the overlay.
