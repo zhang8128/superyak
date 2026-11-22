@@ -202,6 +202,23 @@ envelope, *before* the write. So a store transaction, such as `ask`'s on tardis-
 A carried Claim keeps its own issuer and digest. Its relation answers rest on digests, which are content addresses.
 The report names who carried it.
 
+**Amendment 2 (the build's partner reads, 2026-11-22: Rio Grande e0f253d6 and Serenity 00c1cf21).**
+
+The receiver also refuses an atlas row, with a 400 in its own words, when either holds:
+- **its lessons chain doesn't list the origin**, as T2's sender rule reads it: "That peer isn't listed for this peer's
+  lessons room";
+- **the sending contact has no current typed code here** (`code_current` on the receiver's row for the origin and the
+  actor): "The sending contact has no current typed code here".
+
+T2 checked these at the sender only. A paired but unlisted peer could then fill a ship's `atlas_received` up to the
+quota and feed `relation()`.
+
+The quota counts bytes, `length(CAST(envelope AS BLOB))`. SQLite's `length()` of TEXT counts characters, and
+`canonical()` keeps UTF-8, so counting characters would have let about four times the cap through (Serenity).
+
+`atlas-received`'s files are named `<origin[:16]>-<event_id>.json`, since an event id is unique only per origin (Rio
+Grande). Beside them it writes `origins.json`, `{"paired": [...]}`, the peers paired at export.
+
 ### T4. A policy passed on (E3)
 
 **Real crossings in this version carry no third store's artifacts:**
@@ -341,6 +358,13 @@ T2 also needs the Pi's `tardis` contact to have a current typed code (`contact_c
 the Pi before the run.
 
 This is a correction of what the run needs, not of a rule, so it didn't go back to the reviewer.
+
+**The receiving pipeline, fixed by amendment 2:** for each file `atlas-received` wrote,
+1. the peer's `atlas-verify` checks its signature;
+2. Atlas's `received(file, own_publications, trusted_origins=origins.json's paired list)` checks its sender and issuers;
+3. only then does it reach `held_claims`, `relation` and `apply_notice`.
+
+A file failing either step is reported with its words, never read.
 
 **Each direction is reported separately:**
 - the count of each answer, with every unknown's reason;
