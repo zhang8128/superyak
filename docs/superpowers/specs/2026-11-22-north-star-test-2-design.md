@@ -74,10 +74,15 @@ All arms give the same reader (nemotron-mini, temperature 0, prompt v2) two lead
   above 0. A smaller true gain may well read as "no measured gain".
 - **Secondary:**
   - G-cross against W-cross, and G against B under each reranker;
-  - on the comparison stratum, G-dense against W-dense on answer-lead recall at two and on both-gold at two, both
-    paired with 95% CIs. A gain that holds there means the graph helps where no link was planted. A gain that
-    vanishes there means the primary's gain is mostly HotpotQA's construction, and test 2b must carry the claim.
-    With 300 questions its interval will be wide, which is stated now;
+  - on the comparison stratum, **both-gold at two first**, then answer-lead recall at two. Each arm's own rate is
+    reported before any paired difference, then G-dense against W-dense, paired with 95% CIs.
+    - **The ceiling rule (revision 3, the reviewer's finding 4):** in the reviewer's sample, 94.9% of qualifying
+      comparison questions name both gold titles in the question, and 81% have the answer as the answer-bearing
+      lead's own title. So if W-dense's both-gold at two on the stratum is 90% or more, the stratum is reported as
+      **uninformative at ceiling**, never as "no gain".
+    - Below the ceiling, a gain that holds means the graph helps where no link was planted. A gain that vanishes
+      leaves the primary's gain open to HotpotQA's construction, and test 2b must carry the claim.
+    - With 300 questions the interval will be wide, which is stated now;
   - each arm's answer-lead recall at two, both-gold at two, and pool recall (the lead anywhere in its candidates);
   - the reader's exact match and F1 on all 800, by arm, with paired CIs for G against B under each reranker;
   - whether recall gains reach exact match;
@@ -110,7 +115,8 @@ Each is reported as found.
 ## Code (after approval)
 
 Test 1's exclusion reader expects a `rows` key, and test 1's plan file holds `questions`, so test 2 reads both (the
-reviewer's finding 4).
+reviewer's finding 4). Test 1's `qualifying_leads` rejects every non-bridge row, so the comparison draw needs a type
+parameter, not a reuse.
 
 
 The code extends `engram/experiments/northstar/` with `test2.py` and its tests: the draw, the five arms' candidate and
