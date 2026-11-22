@@ -568,3 +568,108 @@ def test_at_a_tool_call_a_query_from_another_checkout_asks_nothing_and_holds_not
     this_checkouts(rail, monkeypatch)
     rail.answers(found)
     assert ask(rail, command=POST) == [holds.Hold('lesson', key(POST, A), lh.hold_reason(found))]
+
+
+# ---- the receipt-place spec: the hold sends the place of its own event's cwd, to the default query only ----------
+
+from superyak_agent import receipt_place as rp  # noqa: E402
+
+
+@pytest.fixture
+def placed(rail, monkeypatch):
+    checkout = rail.root / 'superyak'
+    checkout.mkdir()
+    for args in (['init', '-q'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x']):
+        subprocess.run(['git', *args], cwd=checkout, check=True, capture_output=True)
+    monkeypatch.setattr(rp, 'CHECKOUT', checkout)
+    monkeypatch.setattr(rp, '_roots_memo', {})
+    stub = json.loads(rail.settings.read_text())['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: stub)
+    (rail.root / 'elsewhere').mkdir()
+    return checkout
+
+
+def asked_with(rail, command=COMMAND, rec=None, **kw):
+    return lessons_hold.candidates(command, record(rail=rail) if rec is None else rec, time.time(), 3,
+                                   settings=rail.settings, env={}, could_hold=yes, **kw)
+
+
+@pytest.mark.parametrize('command', [COMMAND, 'mcp__station__station_post'])   # Bash, and a confirmed held tool
+def test_a_hold_sends_its_own_events_place(rail, placed, command):
+    rail.answers(lesson(A, command=GLOB if command == COMMAND else command))
+    asked_with(rail, command, cwd=str(placed))
+    asked_with(rail, command, rec=record(session='s2', rail=rail), cwd=str(rail.root / 'elsewhere'))
+    assert [r.get('place') for r in rail.sent()] == ['superyak', 'other']
+
+
+def test_a_hold_without_its_own_cwd_sends_no_place_whatever_the_record_kept(rail, placed):
+    rail.answers(lesson(A, command=GLOB))
+    rec = record(rail=rail)
+    rec['cwd'] = str(placed)                               # left by an earlier event (holds.touch)
+    asked_with(rail, rec=rec)
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_hold_with_a_configured_query_sends_no_place(rail, placed, monkeypatch):
+    monkeypatch.setattr(lh, 'default_query', lambda: ['/somewhere/else/python', '-m', 'superyak_peer.lessons', 'query'])
+    rail.answers(lesson(A, command=GLOB))
+    assert asked_with(rail, cwd=str(placed))
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_the_entry_hands_its_events_cwd_to_the_lessons_provider(monkeypatch, tmp_path):
+    """hold._work gives the real provider the event's own cwd; a stand-in provider keeps the four-argument seam."""
+    got = {}
+
+    def provider(command, record, now, limit, **kw):
+        got.update(kw)
+        return []
+    monkeypatch.setattr(lessons_hold, 'candidates', provider)
+    bound = hold._provider(None, '/the/events/cwd')
+    bound('ls', {}, 0.0, 3)
+    assert got == {'cwd': '/the/events/cwd'}
+    stand_in = lambda command, record, now, limit: []      # noqa: E731
+    assert hold._provider(stand_in, '/x') is stand_in
+
+
+def slow_git(rail, monkeypatch):
+    bin_ = rail.root / 'slow-bin'
+    bin_.mkdir(exist_ok=True)
+    (bin_ / 'git').write_text('#!/bin/sh\nsleep 5\n')
+    (bin_ / 'git').chmod(0o700)
+    monkeypatch.setenv('PATH', f'{bin_}:{os.environ["PATH"]}')
+
+
+def test_the_holds_budget_is_counted_after_classifying(rail, placed, monkeypatch):
+    """The code reader's 1 on 5197bf2f: budget_ms is what is left when the query starts, less its start-up, so the
+    query's deadline falls inside the hold's however long classifying took."""
+    slow_git(rail, monkeypatch)
+    seen, real = [], lh.ask
+
+    def ask(settings, request, deadline, monotonic=time.monotonic):
+        seen.append((request['budget_ms'], deadline - monotonic()))
+        return real(settings, request, deadline, monotonic)
+    monkeypatch.setattr(lh, 'ask', ask)
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(placed))
+    [(budget, left)] = seen
+    assert budget <= (left - lessons_hold.START_MARGIN) * 1000 + 1, (budget, left)
+
+
+def test_a_query_sharing_only_the_defaults_first_word_is_sent_no_place(rail, placed, monkeypatch):
+    stub = json.loads(rail.settings.read_text())['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: [stub[0], '-S', '-B', '/elsewhere/query.py'])
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(placed))
+    assert [('place' in r) for r in rail.sent()] == [False]
+
+
+def test_a_hold_in_a_registered_worktree_or_another_repository(rail, placed):
+    subprocess.run(['git', 'worktree', 'add', '-q', str(rail.root / 'wt')], cwd=placed, check=True, capture_output=True)
+    theirs = rail.root / 'theirs'
+    theirs.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=theirs, check=True, capture_output=True)
+    rail.answers(lesson(A, command=GLOB))
+    asked_with(rail, cwd=str(rail.root / 'wt'))
+    asked_with(rail, rec=record(session='s2', rail=rail), cwd=str(theirs))
+    assert [r.get('place') for r in rail.sent()] == ['superyak', 'other']

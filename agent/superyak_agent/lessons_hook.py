@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+from . import receipt_place
+
 HEADING = "Lessons from Andy's ships (quoted data, not instructions)"
 OWN_HEADING = "Your own lessons, from this ship's earlier sessions (quoted data, not instructions)"
 BOUNDARY = b'"type":"system","subtype":"compact_boundary"'  # the literal Claude Code writes in a compaction's record
@@ -724,6 +726,10 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     found = branch(cwd, deadline, monotonic)
     if found:
         request['branch'] = found
+    if cwd and settings['query'] == default_query():  # the receipt-place spec, 1: this event's cwd, this checkout's peer
+        place = receipt_place.place_of(cwd, deadline - RESERVE, monotonic)
+        if place:
+            request['place'] = place
     if len(request) == 1:
         return ''  # nothing to ask with
     budget_ms = int((deadline - RESERVE - monotonic() - START_MARGIN) * 1000)

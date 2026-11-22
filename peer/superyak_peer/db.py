@@ -29,7 +29,7 @@ from .grants import Grants, GRANT_SCHEMA
 from .moderators import Moderators, MODERATE_SCHEMA
 from .owner_trust import OwnerTrust, OWNER_TRUST_SCHEMA, TERMINAL_COLUMNS
 from .members import Members
-from .lessons import Lessons, LESSON_SCHEMA
+from .lessons import Lessons, LESSON_SCHEMA, RECEIPT_PLACE
 from .imprints import Imprints, IMPRINT_SCHEMA
 from .room_cloud import RoomCloud, ROOM_CLOUD_SCHEMA
 from .connector import Connector, OAUTH_SCHEMA
@@ -120,6 +120,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             imprint_columns = {row['name'] for row in db.execute('PRAGMA table_info(imprint_requests)')}
             if 'removal_files' not in imprint_columns:  # store imprints, final review M1: hashes kept before a removal
                 db.execute('ALTER TABLE imprint_requests ADD COLUMN removal_files TEXT')
+            receipt_columns = {row['name'] for row in db.execute('PRAGMA table_info(lesson_receipts)')}
+            if 'place' not in receipt_columns:  # receipt-place spec 3: where a lesson was shown; NULL is unknown
+                db.execute(f'ALTER TABLE lesson_receipts ADD COLUMN {RECEIPT_PLACE}')
             grant_columns = {row['name'] for row in db.execute('PRAGMA table_info(connector_grants)')}
             if 'revoked_why' not in grant_columns:  # connector Task 9a: why a connection ended (build:connector-revoke-reason)
                 db.execute('ALTER TABLE connector_grants ADD COLUMN revoked_why TEXT')

@@ -140,3 +140,24 @@ def test_the_installed_in_process_path_at_a_prompt_writes_nothing(world):
     for path, content in everything_under(world.data, world.state, world.tmp, world.home):
         assert world.marker not in str(path) and world.marker.encode() not in content, path
     assert snapshot(lh.CHECKOUT / 'peer' / 'superyak_peer') == bytecode  # the peer read in process, compiling nothing
+
+
+def test_telling_the_place_keeps_no_path_or_root_and_prints_none(world):
+    """The receipt-place spec, "No new path kept": the roots and the cwd's kind are worked out in memory. Under the audit,
+    place_of opens nothing for writing and no database, and what the child prints is the kind alone."""
+    checkout = world.root / 'superyak'
+    nested = checkout / 'vendor' / 'theirs'
+    nested.mkdir(parents=True)
+    for args, where in ((['init', '-q'], checkout), (['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q',
+                                                      '--allow-empty', '-m', 'x'], checkout), (['init', '-q'], nested)):
+        subprocess.run(['git', *args], cwd=where, check=True, capture_output=True)
+    script = world.tmp / 'tell.py'
+    script.write_text(f"import sys, time\nsys.path.insert(0, {str(AGENT)!r})\nfrom superyak_agent import receipt_place\n"
+                      f"for cwd in ({str(checkout)!r}, {str(nested)!r}, {str(world.home)!r}):\n"
+                      f"    print(receipt_place.place_of(cwd, time.monotonic() + 5, checkout={str(checkout)!r}))\n")
+    before = snapshot(checkout), snapshot(world.home)
+    done = audited(world, script)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.decode().split() == ['superyak', 'other', 'other']
+    assert 'AUDIT' not in done.stderr.decode() and str(checkout) not in done.stderr.decode()
+    assert (snapshot(checkout), snapshot(world.home)) == before

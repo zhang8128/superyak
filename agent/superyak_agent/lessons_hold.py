@@ -25,7 +25,7 @@ import os
 import sys
 import time
 
-from . import checklist_firing as fp, holds as hs, lessons_hook as lh
+from . import checklist_firing as fp, holds as hs, lessons_hook as lh, receipt_place
 
 KIND = 'lesson'
 HOLD_BYTES = 6  # only a `command` value of at least 6 bytes holds a command (section 8)
@@ -91,13 +91,13 @@ def peer_could_hold(command, ship, data_dir, seen=()):
 
 
 def candidates(command, record, now, limit, *, settings=None, env=None, monotonic=time.monotonic, clock=time.time,
-               could_hold=None):
+               could_hold=None, cwd=None):
     """At most `limit` Hold('lesson', key, text) for this command, or [] whenever anything is missing, late or wrong.
     Limit 3 means no checklist leads this deny, so the first text starts with section 8's `Held once` line (Ruling 35).
     `now` is the entry's wall time at its start (`clock`'s): the query stops SAVE_MARGIN before the entry gives up."""
     try:
         return _candidates(command, record, now, limit, settings, os.environ if env is None else env, monotonic,
-                           clock, could_hold or peer_could_hold)
+                           clock, could_hold or peer_could_hold, cwd)
     except Exception:  # noqa: BLE001 - a hold that can't be worked out is no hold; the command runs
         return []
 
@@ -109,7 +109,7 @@ def deadline_of(now, monotonic, clock):
     return min(at + lh.COMMAND_LIMIT, at + (now + fp.HOLD_SECONDS - SAVE_MARGIN - clock()))
 
 
-def _candidates(command, record, now, limit, settings_path, env, monotonic, clock, could_hold):
+def _candidates(command, record, now, limit, settings_path, env, monotonic, clock, could_hold, cwd=None):
     if type(now) not in (int, float) or not math.isfinite(now):
         return []
     deadline = deadline_of(now, monotonic, clock)
@@ -159,11 +159,16 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
     # could hold never reads the transcript. A lesson already shown then starts no query (both reviews' S1/S2).
     if could_hold(cut, settings['ship'], settings['data_dir'], seen) is not True:
         return []
+    place = None
+    if cwd and settings['query'] == lh.default_query():  # receipt-place spec 1: this event's cwd, never the record's;
+        place = receipt_place.place_of(cwd, deadline, monotonic)   # before the budget, which counts what is left after
     budget_ms = int((deadline - monotonic() - START_MARGIN) * 1000)
     if budget_ms <= 0:
         return given_up()  # too late for the query to answer before the entry gives up: it isn't started
     request = {'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
                'seen': seen, 'budget_ms': budget_ms}
+    if place:
+        request['place'] = place
     answer = lh.ask(settings, request, deadline, monotonic)
     if answer is None:
         return given_up()  # late or failing: a Bash head may ask again

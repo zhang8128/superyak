@@ -12,6 +12,7 @@ an output the main thread takes was recorded, and a worker not yet saving at HOL
 saves. A save already under way then gets SAVE_SECONDS more, and its output is printed once it lands (M3); only a save
 stalled past that too is recorded unseen.
 """
+import functools
 import json
 import os
 import sys
@@ -103,6 +104,12 @@ class _NoLists:
         return False
 
 
+def _provider(lessons, cwd):
+    """The lessons provider for this event: a stand-in as given, on the seam's four arguments; the real one with the
+    event's own cwd, from which it tells the receipt's place (receipt-place spec 1), never a cwd the record kept."""
+    return lessons if lessons is not None else functools.partial(lessons_hold.candidates, cwd=cwd)
+
+
 def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
     command, session, cwd, transcript, tool_call = call
     if not (home / 'station.json').is_file():   # an undocked machine gets no ship home and no sessions folder (Ruling 44)
@@ -122,7 +129,7 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         left = count < holds.HOLDS_PER_SESSION
         noted = json.dumps(record.get('lessons'), sort_keys=True)   # the provider's own entries, before it is asked
         lists = lists_here.candidates(command, record, now, fp.LISTS_PER_EVENT)
-        got = _lessons(lessons or lessons_hold.candidates, command, record, now,
+        got = _lessons(_provider(lessons, cwd), command, record, now,
                        holds.HOLDS_PER_SESSION - len(lists)) if left else []
         if left and (lists or got):
             parts = [checklist_hold.first_line(record, lists[0])] if lists else []

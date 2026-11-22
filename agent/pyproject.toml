@@ -40,6 +40,7 @@ only-include = [
     "superyak_agent/mcp.py",
     "superyak_agent/memos.py",
     "superyak_agent/project_dock.py",
+    "superyak_agent/receipt_place.py",
     "superyak_agent/route_watch.py",
     "superyak_agent/runs.py",
     "superyak_agent/station.py",
