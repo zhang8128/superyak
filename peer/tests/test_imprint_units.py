@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -270,11 +271,12 @@ def owner_dry_run(base, *args):
 
 
 CONTROL = {'if', 'then', 'else', 'fi', '[', 'exit', 'test', 'cd'}      # shell structure, not a program the target runs
+ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=.*', re.S)
 
 
 def simple_commands(script):
     """The programs a recipe's dry run would start, in order: continued lines joined, split at the shell's operators,
-    with assignments (rc=0), control words, `[ … ]` tests, `exit`, the usage guard's `test -n` and `cd` left out. Revision 9
+    with assignments (rc=0, or before a program), control words, `[ … ]` tests, `exit`, the usage guard's `test -n` and `cd` left out. Revision 9
     made imprint-send a small script (rc=0; (…) || rc=$?; if …; then … --refused; …), which a split on ' && ' can't read."""
     commands = []
     for line in script.replace('\\\n', ' ').splitlines():
@@ -285,9 +287,9 @@ def simple_commands(script):
         current = []
         for token in list(lexer) + [';']:
             if token in (';', '&&', '||', '(', ')', '|', '{', '}'):
-                while current and current[0] in ('then', 'else'):
-                    current.pop(0)
-                if current and current[0] not in CONTROL and '=' not in current[0]:
+                while current and (current[0] in ('then', 'else') or ASSIGNMENT.fullmatch(current[0])):
+                    current.pop(0)          # a control word, or an assignment before the program it names
+                if current and current[0] not in CONTROL:
                     commands.append(current)
                 current = []
             else:
@@ -374,3 +376,10 @@ def test_verify_resolves_a_short_id_and_refuses_an_unknown_or_ambiguous_one(tmp_
     assert done.returncode == 2 and calls == [] and 'ffff' in done.stdout + done.stderr
     done, calls = owner_run(tmp_path / 'c', 'imprint-verify', 'ID=c0a8', folders=('c0a8aaaa-1', 'c0a8bbbb-2'))
     assert done.returncode == 2 and calls == []
+
+
+def test_simple_commands_keeps_a_command_after_its_assignments():
+    """Serenity's nit on ebdd33b0: a line such as `VAR=x cmd` names a program, so it's kept without its assignments;
+    only a bare assignment such as `rc=0` is left out, with the shell's control words."""
+    script = 'rc=0; (cd engram && FOO=1 BAR=2 uv run imprint.py build) || rc=$?; \\\n  if [ $rc -eq 5 ]; then exit 5; fi\nX=1\n'
+    assert simple_commands(script) == [['uv', 'run', 'imprint.py', 'build']]
