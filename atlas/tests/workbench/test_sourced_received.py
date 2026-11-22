@@ -20,6 +20,7 @@ from workbench.sourced_relation import held_claims, relation  # noqa: E402
 AT = "2026-11-22T10:00:00Z"
 KEYS = {name: bytes([n]) * 32 for n, name in enumerate(("pi", "tardis", "third"), start=1)}
 PEER = {name: hashlib.sha256(key).hexdigest() for name, key in KEYS.items()}
+TRUSTED = [PEER["pi"], PEER["tardis"]]  # the paired origins, as origins.json lists them
 
 
 def uri(name):
@@ -64,7 +65,7 @@ def stores():
 
 def test_a_received_publication_feeds_relation_as_the_fixtures_do(stores):
     pi, tardis = stores
-    got = received(kept("pi", "tardis", pi), [tardis])
+    got = received(kept("pi", "tardis", pi), [tardis], trusted_origins=TRUSTED)
     assert got["origin"] == PEER["pi"] and got["package"] == pi
     held = held_claims([tardis, got["package"]])
     answer = relation(pi["claims"][0]["digest"], tardis["claims"][0]["digest"], held)
@@ -81,7 +82,7 @@ def test_a_file_whose_sender_was_edited_fails_the_consistency_check(stores, edit
     file = kept("pi", "tardis", pi)
     edit(file)
     with pytest.raises(ValueError, match=words):
-        received(file, [tardis])
+        received(file, [tardis], trusted_origins=TRUSTED)
 
 
 def test_a_publication_issued_as_another_peer_is_refused(stores):
@@ -89,7 +90,7 @@ def test_a_publication_issued_as_another_peer_is_refused(stores):
     as_third = publication("pi", sources=[source("pi-S1", "https://journal.example/a")], items=[claim("P1", "pi-S1")],
                            peer="third")
     with pytest.raises(ValueError, match="must all be issued by the peer that delivered it"):
-        received(kept("pi", "tardis", as_third), [tardis])
+        received(kept("pi", "tardis", as_third), [tardis], trusted_origins=TRUSTED)
 
 
 def test_a_carried_claim_issued_as_the_receivers_own_must_be_one_it_published(stores):
@@ -97,13 +98,13 @@ def test_a_carried_claim_issued_as_the_receivers_own_must_be_one_it_published(st
     real = {"claim": tardis["claims"][0], "snapshot": tardis["snapshot"]}
     honest = publication("pi", sources=[source("pi-S1", "https://journal.example/a")], items=[claim("P1", "pi-S1")],
                          carried=[real])
-    assert received(kept("pi", "tardis", honest), [tardis])["package"] == honest
+    assert received(kept("pi", "tardis", honest), [tardis], trusted_origins=TRUSTED)["package"] == honest
     forged_tardis = publication("tardis", sources=[source("t-S9", "https://elsewhere.example/z", "Never said")],
                                 items=[claim("T9", "t-S9")])
     forged = publication("pi", sources=[source("pi-S1", "https://journal.example/a")], items=[claim("P1", "pi-S1")],
                          carried=[{"claim": forged_tardis["claims"][0], "snapshot": forged_tardis["snapshot"]}])
     with pytest.raises(ValueError, match="this store never published"):
-        received(kept("pi", "tardis", forged), [tardis])
+        received(kept("pi", "tardis", forged), [tardis], trusted_origins=TRUSTED)
 
 
 def test_with_no_own_publications_every_receiver_issued_carried_claim_is_refused(stores):
@@ -111,7 +112,7 @@ def test_with_no_own_publications_every_receiver_issued_carried_claim_is_refused
     carrying = publication("pi", sources=[source("pi-S1", "https://journal.example/a")], items=[claim("P1", "pi-S1")],
                            carried=[{"claim": tardis["claims"][0], "snapshot": tardis["snapshot"]}])
     with pytest.raises(ValueError, match="carried claim"):
-        received(kept("pi", "tardis", carrying), [])
+        received(kept("pi", "tardis", carrying), [], trusted_origins=TRUSTED)
 
 
 def test_a_carried_claim_from_a_third_issuer_is_refused(stores):
@@ -120,7 +121,7 @@ def test_a_carried_claim_from_a_third_issuer_is_refused(stores):
     carrying = publication("pi", sources=[source("pi-S1", "https://journal.example/a")], items=[claim("P1", "pi-S1")],
                            carried=[{"claim": third["claims"][0], "snapshot": third["snapshot"]}])
     with pytest.raises(ValueError, match="carried claim"):
-        received(kept("pi", "tardis", carrying), [tardis])
+        received(kept("pi", "tardis", carrying), [tardis], trusted_origins=TRUSTED)
 
 
 def notice_for(pi, record_id="pi-S1"):
@@ -132,20 +133,20 @@ def notice_for(pi, record_id="pi-S1"):
 def test_a_notice_is_read_against_what_it_names(stores):
     pi, tardis = stores
     notice = notice_for(pi)
-    assert received(kept("pi", "tardis", notice, kind="notice"), [tardis], received_publications=[pi])["notice"] == notice
+    assert received(kept("pi", "tardis", notice, kind="notice"), [tardis], received_publications=[pi], trusted_origins=TRUSTED)["notice"] == notice
 
 
 def test_an_early_notice_names_the_snapshot_it_waits_for(stores):
     pi, tardis = stores
     with pytest.raises(ValueError) as caught:
-        received(kept("pi", "tardis", notice_for(pi), kind="notice"), [tardis])
+        received(kept("pi", "tardis", notice_for(pi), kind="notice"), [tardis], trusted_origins=TRUSTED)
     assert pi["snapshot"]["digest"]["value"][:12] in str(caught.value) and "not held here yet" in str(caught.value)
 
 
 def test_a_notice_issued_by_anyone_but_its_sender_is_refused(stores):
     pi, tardis = stores
     with pytest.raises(ValueError, match="must be issued by the peer that delivered it"):
-        received(kept("tardis", "pi", notice_for(pi), kind="notice"), [pi], received_publications=[pi])
+        received(kept("tardis", "pi", notice_for(pi), kind="notice"), [pi], trusted_origins=TRUSTED, received_publications=[pi])
 
 
 def test_a_notice_naming_another_issuers_snapshot_is_refused(stores):
@@ -154,7 +155,7 @@ def test_a_notice_naming_another_issuers_snapshot_is_refused(stores):
     notice = seal_notice({"notice": "retraction", "record_id": "t-S1", "keys": keys}, [tardis["snapshot"]], uri("pi"),
                          {"id": f"{uri('pi')}:context", "path": ["research"]}, AT)
     with pytest.raises(ValueError, match="another issuer"):
-        received(kept("pi", "tardis", notice, kind="notice"), [tardis], received_publications=[pi])
+        received(kept("pi", "tardis", notice, kind="notice"), [tardis], received_publications=[pi], trusted_origins=TRUSTED)
 
 
 def test_a_file_from_an_origin_the_caller_does_not_trust_is_refused(stores):
@@ -163,3 +164,10 @@ def test_a_file_from_an_origin_the_caller_does_not_trust_is_refused(stores):
     assert received(file, [tardis], trusted_origins=[PEER["pi"]])["origin"] == PEER["pi"]
     with pytest.raises(ValueError, match="not one this store's peer had paired"):
         received(file, [tardis], trusted_origins=[PEER["third"]])
+
+
+def test_the_trust_root_is_required_so_no_caller_forgets_it(stores):
+    """Serenity's re-read: no default that trusts every origin. A caller must pass the paired origins."""
+    pi, tardis = stores
+    with pytest.raises(TypeError):
+        received(kept("pi", "tardis", pi), [tardis])

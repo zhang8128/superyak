@@ -52,13 +52,13 @@ def _own(own_publications):
     return (issuers.pop() if issuers else None), published
 
 
-def received(file, own_publications, *, received_publications=(), trusted_origins=None):
+def received(file, own_publications, *, trusted_origins, received_publications=()):
     """One received file, checked (module docstring). `own_publications` are this store's own sourced publications.
     `received_publications` are ones already received, which a notice may name. `trusted_origins` is the caller's trust
     root, the `paired` list of the origins.json that atlas-received wrote beside the files (Rio Grande's read, 3): a
     file whose origin isn't in it is refused. Run the peer's atlas-verify on each file first: it checks the signature."""
     origin, envelope = _origin(file)
-    if trusted_origins is not None and origin not in set(trusted_origins):
+    if origin not in set(trusted_origins):  # required, never a default that trusts all (Serenity's re-read)
         raise ValueError("The file's sender is not one this store's peer had paired")
     sender = peer_uri(origin)
     own_uri, published = _own(own_publications)
