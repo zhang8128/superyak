@@ -1032,7 +1032,10 @@ def _read_key(conn: sqlite3.Connection, path: Path) -> tuple[_Key, bool]:
     head = conn.execute("SELECT value FROM meta NOT INDEXED WHERE key = 'head'").fetchone()
     opened = conn._key
     header = os.pread(_held_fd(opened), 28, 0)
-    st = _stat(path)
+    try:
+        st = _stat(path)
+    except FileNotFoundError:   # moved aside or removed since this connection opened it: changed, as a replaced file is
+        raise LedgerUnreadable(f"{path}: {_CHANGED}") from None
     if (st.st_dev, st.st_ino) != opened:
         raise LedgerUnreadable(f"{path}: {_CHANGED}")
     return (_Key(st.st_dev, st.st_ino, st.st_size, st.st_ctime_ns, int.from_bytes(header[24:28], "big"),
@@ -1083,7 +1086,9 @@ class Ledger:
         # `fresh`: a file this process is building beside its final name (rebuild, migrate), which no other process
         # reads, so it skips the key, the memo and the marker, and is checked whole once at the end (the re-check, S4)
         self.conn, self.path, self.read_only, self._fresh = conn, path, read_only, fresh
-        self.state_key = None               # the key of the last state() checked (revision 8)
+        # the key of the last state() checked (revision 8). Each state() overwrites it, so one Ledger serves one
+        # reader at a time: two callers sharing one would each read the other's key (the reader's 3 on b3eb3497)
+        self.state_key = None
         # a fresh file's parts, carried in memory from append to append and written once, at `_finish_fresh` (the
         # section 2 review's S6); None until its first append reads them
         self._carried: dict | None = None
@@ -1537,7 +1542,11 @@ class Ledger:
         `_append_busy_ms` for the lock, since a reader's rare full check holds SHARED for its whole length (S1)."""
         text = canonical_json(dict(body))
         busy = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
-        self.conn.execute(f"PRAGMA busy_timeout={_append_busy_ms(_stat(self.path).st_size)}")
+        try:
+            size = _stat(self.path).st_size
+        except FileNotFoundError:   # moved aside: the floor, and the key read below reads it as changed (board
+            size = 0                # fix:ledger-moved-aside-reads-changed)
+        self.conn.execute(f"PRAGMA busy_timeout={_append_busy_ms(size)}")
         try:
             for _ in range(WRITER_TRIES):
                 done = self._append_on(self._base_key(), kind, ref, actor, channel, body, text, under_grant,
@@ -1834,7 +1843,7 @@ class Ledger:
         reads now, instead of "nothing was written" (P 12.3, "Before the raise"; the re-check's R5)."""
         try:
             yield
-        except (LedgerBusy, LedgerUnreadable) as e:
+        except (LedgerBusy, LedgerUnreadable, sqlite3.Error) as e:   # a raw SQLite error too (the reader's A)
             changed = body.get("houses") or []
             if not changed:
                 raise

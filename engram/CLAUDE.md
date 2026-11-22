@@ -146,6 +146,15 @@ Observational, read-only (`Storage.open_read_only`): `python
 lighthouse_sheaf.py --store a=/p/a.db --store b=/p/b.db --semantic a:ID`.
 Spec: docs/superpowers/specs/2026-09-29-lighthouse-sheaf-design.md.
 
+**Sheaf kernel:** `sheaf_kernel.c` (C11, no dependencies) is a cellular sheaf
+on a graph with any restriction maps: coboundary, Laplacian, energy, H^0 and
+H^1, and the nearest global section. The two measures above are that engine
+with identity maps, and both run in it wherever it builds (compiled on first
+use, as the n-category kernel is); the numpy code stays as the fallback and
+as the oracle the kernel is tested against. `ENGRAM_SHEAF_BACKEND=numpy` or
+`native` names one. It refuses values that are not finite and sizes past its
+limits. Spec: docs/superpowers/specs/2026-11-20-sheaf-kernel-design.md.
+
 **Persistence (Layer 4):** Single-linkage filtrations (exact, via MST) give
 each episode a redundancy (nearest-neighbor coverage) and uniqueness
 (survival across merge scales); resonance history adds generativity
@@ -343,6 +352,9 @@ An agent asks through the `permit` tool (a proposal the owner signs, unless a gr
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `lighthouse_sheaf.py` | Cross-store sheaf cohesion — per-topic disagreement between lighthouses, scoped trust, read-only CLI |
+| `sheaf_kernel.c` | The sheaf engine in C11 — general restriction maps, Laplacian, cohomology, and the two measures above |
+| `sheaf_native.py` | The kernel from Python — `Sheaf`, `cohesion`, `glue`, `basis`, `sym_eig`; picks kernel or numpy |
+| `native_build.py` | Builds a C file into this user's own cache with a fixed compiler and environment |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
 | `paths.py` | Layer 5 — path signatures of sessions and semantic journeys, different-route detection (observational) |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |

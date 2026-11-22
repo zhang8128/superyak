@@ -141,6 +141,9 @@ def test_wheel_contains_runtime_modules_and_assets(tmp_path):
     assert any(name.endswith("share/engram/prompts/classify.txt") for name in names)
     assert any(name.endswith("share/engram/hooks/hooks.json") for name in names)
     assert any(name.endswith("share/engram/skills/engram/skill.md") for name in names)
+    # The C kernels are compiled on first use from the installed copy, so a wheel without them has no kernel.
+    assert any(name.endswith("share/engram/ncat_kernel.c") for name in names)
+    assert any(name.endswith("share/engram/sheaf_kernel.c") for name in names)
 
 
 def test_wheel_build_does_not_create_artifacts_in_source_tree(

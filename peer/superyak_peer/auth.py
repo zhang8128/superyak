@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+from . import tags
 from .common import Problem, text, uid, require
 
 def token_hash(token):
@@ -23,9 +24,13 @@ PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD, DEVICE_ATTEMPTS_HOLD = (8, 300),
 # And per username across all its known browsers (section 2 review of 581cea18, should-fix 1): a cookieless success
 # mints a token for free, so the per-token count alone holds a browser, not an account holder.
 KNOWN_USER_HOLD = (24, 300)
-INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
+# What secrets.token_urlsafe(32) makes, for both kinds, and since public-route-bound Task 7a its tagged form
+# (tags.TAGGED); an untagged one made before the deploy still redeems
+INVITATION_TOKEN = re.compile(rf'[A-Za-z0-9_-]{{43}}|{tags.TAGGED.pattern}')  # built from it, so they never drift (N3)
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
+SESSION_LIFETIME = 86400
+SESSIONS_PER_USER = 20  # public-route-bound plan, Task 2: a user's live sessions, so the live set stays bounded
 
 
 def login_source(host, public):
@@ -150,16 +155,37 @@ class Auth:
     def _device_signed_in(self, db, user_id, device, now):
         """After a success: the presented token's row, kept and extended (its failures reset, its attempts kept), or a
         new token's row.
-        Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token."""
+        Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token and the
+        live set's changes (public-route-bound Task 2), each deleted hash selected before its DELETE."""
+        exp = now + DEVICE_LIFETIME
         if device is not None and db.execute('UPDATE login_devices SET expires=?, failures=0, failure_reset=0 WHERE token_hash=?',
-                                             (now + DEVICE_LIFETIME, token_hash(device))).rowcount:
-            return device
+                                             (exp, token_hash(device))).rowcount:
+            return device, [('add', 'device', token_hash(device), exp, user_id)]
         device = secrets.token_urlsafe(32)
+        expired = [row[0] for row in db.execute('SELECT token_hash FROM login_devices WHERE expires<=?', (now,))]
         db.execute('DELETE FROM login_devices WHERE expires<=?', (now,))
-        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(device), user_id, now + DEVICE_LIFETIME))
-        db.execute('DELETE FROM login_devices WHERE user_id=? AND token_hash NOT IN '
-                   '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)', (user_id, user_id, DEVICES_PER_USER))
-        return device
+        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(device), user_id, exp))
+        beyond = ('FROM login_devices WHERE user_id=? AND token_hash NOT IN '
+                  '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)')
+        pruned = [row[0] for row in db.execute(f'SELECT token_hash {beyond}', (user_id, user_id, DEVICES_PER_USER))]
+        db.execute(f'DELETE {beyond}', (user_id, user_id, DEVICES_PER_USER))
+        return device, [*(('remove', 'device', hashed) for hashed in expired + pruned),
+                        ('add', 'device', token_hash(device), exp, user_id)]
+
+    @staticmethod
+    def _session_made(db, user_id, hashed, csrf, now):
+        """Task 2's session cap: this user's expired sessions go, the new one is made, then the oldest beyond
+        SESSIONS_PER_USER go (never the new one, whatever the clock did). Returns the live set's changes, each deleted
+        hash selected before its DELETE."""
+        expired = [row[0] for row in db.execute('SELECT token_hash FROM sessions WHERE user_id=? AND expires<=?', (user_id, now))]
+        db.execute('DELETE FROM sessions WHERE user_id=? AND expires<=?', (user_id, now))
+        db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (hashed, user_id, csrf, now + SESSION_LIFETIME))
+        oldest = [row[0] for row in db.execute('SELECT token_hash FROM sessions WHERE user_id=? AND token_hash<>? '
+                                               'ORDER BY expires DESC, rowid DESC LIMIT -1 OFFSET ?',
+                                               (user_id, hashed, SESSIONS_PER_USER - 1))]
+        db.executemany('DELETE FROM sessions WHERE token_hash=?', [(gone,) for gone in oldest])
+        return [*(('remove', 'session', gone) for gone in expired + oldest),
+                ('add', 'session', hashed, now + SESSION_LIFETIME, user_id)]
 
     def _reserve(self, username, source, public, device):
         """Step 1 of login below, shared with check_password_attempt (R19): deletes expired counters, then refuses a
@@ -262,11 +288,13 @@ class Auth:
             current = self._settle(db, username, user, hashed, public, reserved)
             if current is not None:
                 now, token, csrf = self.clock(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, now + 86400))
-                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token,
-                          'device': self._device_signed_in(db, current['id'], device if known is not None else None, now)}
+                changes = self._session_made(db, current['id'], token_hash(token), csrf, now)
+                device, made = self._device_signed_in(db, current['id'], device if known is not None else None, now)
+                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token, 'device': device}
         if result is None:
             raise Problem(401, 'Invalid username or password')
+        if self.live is not None:  # Task 2's change C: after the commit, before the cookie leaves; a rollback applies none
+            self.live.apply([*changes, *made])
         return result
 
     def session(self, token):
@@ -278,16 +306,23 @@ class Auth:
 
     def session_is_valid(self, token):
         """Public route spec 2: the lookup `session` does, answered True or False. It writes nothing; the route's own
-        check still runs afterwards."""
+        check still runs afterwards. A lookup that finds no live row takes the session out of serve's live set (Task 2);
+        one that raises changes nothing."""
         if not isinstance(token, str):
             return False
+        hashed = token_hash(token)
         with self.reading() as db:
-            row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token), self.clock())).fetchone()
+            row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (hashed, self.clock())).fetchone()
+        if row is None and self.live is not None:
+            self.live.remove('session', hashed)
         return row is not None and not row['activation_pending'] and row['kind'] == 'person'
 
     def logout(self, token):
+        hashed = token_hash(token or '')
         with self.transaction() as db:
-            db.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash(token or ''),))
+            db.execute('DELETE FROM sessions WHERE token_hash=?', (hashed,))
+        if self.live is not None:  # after the commit (Task 2)
+            self.live.remove('session', hashed)
 
     def _admin(self, db, actor):
         row = require(db.execute('SELECT is_admin,activation_pending FROM users WHERE id=?', (actor,)).fetchone())
@@ -317,7 +352,8 @@ class Auth:
                     user = self._create_user(db, username, name, secrets.token_urlsafe(48), True)
                     db.execute('UPDATE users SET is_super_admin=1,activation_pending=1 WHERE id=?', (user['id'],))
                     db.execute('INSERT INTO account_role_changes(user_id,actor_id,old_role,new_role,role_version,created) VALUES(?,?,NULL,?,?,?)', (user['id'], user['id'], 'super_admin', 1, self.clock()))
-                token, expires = secrets.token_urlsafe(32), self.clock() + 604800
+                expires = self.clock() + 604800
+                token = self._minted(db, 'activation', expires)  # Task 7a: tagged
                 db.execute('INSERT INTO account_activations(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(token), user['id'], expires))
                 json.dump({'user_id': user['id'], 'username': username, 'name': name, 'token': token, 'expires': expires}, stream, indent=2)
                 stream.write('\n')
@@ -367,22 +403,69 @@ class Auth:
             self._admin(db, actor)
             return [public_user(r) for r in db.execute("SELECT * FROM users WHERE kind='person' ORDER BY created,id")]
 
+    def _minted(self, db, label, exp):
+        """A tagged credential from a mint site (Task 7a). In serve, its kid must be one serve's start loaded, which
+        its redeem check uses: they differ only after a restore under a running serve (which Task 9 refuses), and then
+        serve would refuse what it just made, so it says so instead (the Task 7a reader's N2)."""
+        token = tags.minted(db, label, exp)
+        if self.tag_keys is not None and token.split('.')[1] not in self.tag_keys[label]:
+            raise RuntimeError(f'the {label} tag key changed under this serve; restart it to load the new one')
+        return token
+
     def invite(self, actor, expires_in=86400):
         if type(expires_in) is not int or not 60 <= expires_in <= 604800:
             raise Problem(400, 'Invalid invitation lifetime')
         with self.transaction() as db:
             self._admin(db, actor)
-            token = secrets.token_urlsafe(32)
             expires = self.clock() + expires_in
+            token = self._minted(db, 'invitation', expires)  # Task 7a: tagged
             db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, expires))
             return {'id': token_hash(token), 'token': token, 'expires': expires}
 
-    def redeem(self, token, username, name, password):
+    def redeem(self, token, username, name, password, *, label=None):
+        """An invitation or activation, used once. `label` (public-route-bound Task 7b: the one its tag or the start-time
+        set named) looks in that table only; the tailnet's None looks in both, as before. A successful redeem, and a
+        lookup that finds no live row, take the token out of serve's start-time set."""
         text(token, 'invitation', 128)
         if not INVITATION_TOKEN.fullmatch(token):  # anonymous and public: a made-up token never reaches the database
             raise Problem(400, 'Invitation unavailable')
+        if label is not None and self._gone_since_its_check(token):
+            raise Problem(400, 'Invitation unavailable')
+        none_live = []
+        try:
+            redeemed = self._redeem(token, username, name, password, label, none_live)
+        except Problem:
+            if none_live:  # its lookup found no live row; the rollback undid nothing
+                self._spent(token)
+            raise
+        self._spent(token)  # only once the commit returned: a failed COMMIT keeps a live row's place
+        return redeemed
+
+    def _gone_since_its_check(self, token):
+        """A public redeem, now in its lane: the in-memory check ran before the lane, so up to its 4 waiting places passed
+        it before the first lookup found the token used. Asked again here, only that first one reads, as revision 4's bar
+        has it (at most one read, then none until its exp)."""
+        hashed = token_hash(token)
+        if tags.TAGGED.fullmatch(token):
+            return self.spent is not None and self.spent.spent(hashed, self.clock())
+        return self.untagged is not None and self.untagged.label(hashed) is None
+
+    def _spent(self, token):
+        """Task 7b: this token can redeem nothing more. Untagged, it leaves serve's start-time set; tagged, it enters the
+        spent set until its exp. Only a tag that checks under serve's own keys enters, with its exp held to the longest a
+        mint site gives: the tailnet's path runs redeem with no check before it, so a forged tag there (any shape, any
+        kid, any exp) would otherwise stay until a restart (the 7b re-check's M1). A Store outside serve has neither."""
+        hashed, now = token_hash(token), self.clock()
+        if self.untagged is not None:
+            self.untagged.discard(hashed)
+        if self.spent is None or self.tag_keys is None:
+            return
+        if any(tags.check(label, self.tag_keys[label], token, now) for label in tags.LABELS):
+            self.spent.add(hashed, min(int(tags.TAGGED.fullmatch(token)['exp']), now + tags.LONGEST), now)
+
+    def _redeem(self, token, username, name, password, label, none_live):
         with self.transaction() as db:
-            activation = db.execute('SELECT * FROM account_activations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone()
+            activation = db.execute('SELECT * FROM account_activations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone() if label in (None, 'activation') else None
             if activation:
                 current = require(db.execute('SELECT * FROM users WHERE id=?', (activation['user_id'],)).fetchone())
                 if not current['activation_pending'] or username != current['username'] or name != current['name']:
@@ -392,8 +475,9 @@ class Auth:
                 db.execute('UPDATE users SET salt=?,password_hash=?,activation_pending=0 WHERE id=?', (salt, password_hash(password, salt), current['id']))
                 db.execute('UPDATE account_activations SET used=1 WHERE token_hash=?', (token_hash(token),))
                 return public_user(db.execute('SELECT * FROM users WHERE id=?', (current['id'],)).fetchone())
-            invite = db.execute('SELECT * FROM invitations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone()
+            invite = db.execute('SELECT * FROM invitations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone() if label in (None, 'invitation') else None
             if not invite:
+                none_live.append(1)  # no live row: the start-time set drops it
                 raise Problem(400, 'Invitation unavailable')
             user = self._create_user(db, username, name, password)
             db.execute('UPDATE invitations SET used=1 WHERE token_hash=?', (token_hash(token),))

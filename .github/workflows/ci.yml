@@ -69,6 +69,14 @@ jobs:
           python-version: "3.13"
           enable-cache: true
           cache-dependency-glob: engram/uv.lock
+      # The embedding model lives in ~/.kairos/models/fastembed (engram/embeddings.py, _CACHE_DIR). Uncached, every run
+      # downloaded it, and a slow or broken download failed tests that are not about it: 10 test_embeddings tests at once in
+      # one v2 run, and main's 22:00 red on 11-21 (an ONNX model cache error, green on rerun). The key follows the code that
+      # names the model and the locked fastembed, so a change to either downloads afresh.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.kairos/models/fastembed
+          key: fastembed-${{ runner.os }}-${{ hashFiles('engram/embeddings.py', 'engram/uv.lock') }}
       - run: make setup-engram
       - run: make check-engram
       - run: make check-research-tasks

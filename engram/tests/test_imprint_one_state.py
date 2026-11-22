@@ -1,6 +1,8 @@
 """One checked State per plan, read and build (store-copy spec revision 8; plan Task 8a; board item
 fix:imprint-filter-verified-read). Revision 7 read the ledger with direct SQL that no check covers; these tests fail
 on it, and pass when every ledger fact comes from one `Ledger.state()` with a closing key read."""
+import errno
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -301,6 +303,32 @@ def test_a_marked_append_during_the_run_passes(tmp_path, monkeypatch):
     finally:
         args[3].ledger.close()
     assert len(_plans(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("err", [errno.EIO, errno.ENOENT])
+@pytest.mark.parametrize("step", ["plan", "read", "build"])
+def test_a_bare_os_error_in_the_closing_read_refuses(tmp_path, monkeypatch, step, err):
+    """The reader's 1 on b3eb3497 (all hands bfa9823a): the closing read's ``_read_key`` does os.pread and os.stat,
+    and either can raise a bare OSError, an I/O error or the file gone. It reached the caller as a traceback. It
+    refuses with the process's sentence and saves nothing: a ledger gone reads as changed, other errors as
+    unreadable."""
+    import permission_ledger
+
+    args = plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"})
+    plan = None if step == "plan" else make_plan(*args)
+
+    def broken(*a, **k):
+        raise OSError(err, os.strerror(err))
+    _during_close(monkeypatch, lambda: monkeypatch.setattr(permission_ledger, "_read_key", broken))
+    sentence = "changed while it was read" if err == errno.ENOENT else "The permissions ledger can't be read"
+    with pytest.raises(PlanRefused, match=sentence):
+        if step == "plan":
+            make_plan(*args)
+        elif step == "read":
+            read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
+        else:
+            build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
+    assert len(_plans(tmp_path)) == (0 if step == "plan" else 1) and _no_imprint(tmp_path)
 
 
 # ---- an unstamped ledger ---------------------------------------------------------------------------------------

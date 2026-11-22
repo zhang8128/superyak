@@ -1,0 +1,269 @@
+"""The public-route-bound plan, Task 5: the page waits once. A 503 that carries x-superyak-busy was refused before the
+home did anything (spec R3), so app.js's api() and consent.js's post() ask again once, after its Retry-After plus up to
+1 s. A second marked 503 shows the error; a 503 without the mark (a proxy's, or the home's own failure) is never asked
+again."""
+from playwright.sync_api import expect, sync_playwright
+import pytest
+
+from test_browser import (browser_peer, connector_home, consent_browser, signed_out_browser,  # noqa: F401 - fixtures
+                          start_connecting)
+
+BUSY_ERROR = {'error': 'This home is busy; try again shortly'}
+
+
+def answering(log, busy_times, marked=True):
+    """A route handler: the first `busy_times` requests get a 503 (marked or not, Retry-After 0), the rest go on.
+    marked='abort' fails them instead, as a dropped connection does."""
+    def handle(route):
+        log.append(route.request.method)
+        if len(log) <= busy_times and marked == 'abort':
+            route.abort('failed')
+        elif len(log) <= busy_times:
+            headers = {'retry-after': '0', **({'x-superyak-busy': '1'} if marked else {})}
+            route.fulfill(status=503, json=BUSY_ERROR, headers=headers)
+        else:
+            route.fallback()
+    return handle
+
+
+def sign_in(page, peer):
+    page.goto(peer['base_url'] + '/')
+    page.get_by_label('Username', exact=True).fill('patient')
+    page.get_by_label('Password', exact=True).fill(peer['password'])
+    page.get_by_role('button', name='Sign in').click()
+
+
+def test_the_app_asks_once_more_after_a_marked_503_and_signs_in(browser_peer):
+    log = []
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.route('**/api/login', answering(log, 1))
+            sign_in(page, browser_peer)
+            expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
+    assert log == ['POST', 'POST']
+
+
+def test_the_app_shows_a_second_marked_503(browser_peer):
+    log = []
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.route('**/api/login', answering(log, 2))
+            sign_in(page, browser_peer)
+            expect(page.get_by_text('This home is busy; try again shortly')).to_be_visible()
+            page.wait_for_timeout(1500)  # past any second wait
+    assert log == ['POST', 'POST']
+
+
+def test_the_app_never_asks_again_after_an_unmarked_503(browser_peer):
+    log = []
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.route('**/api/login', answering(log, 1, marked=False))
+            sign_in(page, browser_peer)
+            expect(page.get_by_text('This home is busy; try again shortly')).to_be_visible()
+            page.wait_for_timeout(1500)  # a retry, had there been one, would have come by now
+    assert log == ['POST']
+
+
+def test_the_app_never_asks_again_after_a_dropped_connection(browser_peer):
+    """The Tasks 4-5 reader's S1: a fetch that throws may have reached the home and changed something, so it's never
+    asked again; only the home's mark says nothing was done."""
+    log = []
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.route('**/api/login', answering(log, 1, marked='abort'))
+            sign_in(page, browser_peer)
+            expect(page.get_by_text('Connection lost. Try again when this home is reachable.')).to_be_visible()
+            page.wait_for_timeout(1500)
+    assert log == ['POST']
+
+
+def consent_sign_in(page):
+    page.get_by_label('Username', exact=True).fill('sam@example.org')
+    page.get_by_label('Password', exact=True).fill('long-password-sam')
+    page.get_by_role('button', name='Sign in').click()
+
+
+@pytest.mark.parametrize('busy_times, marked, shown, asked', [
+    (1, True, 'Signed in as Sam Example', 2),
+    (2, True, 'Your home is busy just now. Try again in a moment.', 2),
+    (1, False, 'The connection to your home was lost. Try again.', 1),
+    (1, 'abort', 'The connection to your home was lost. Try again.', 1),  # S1: a dropped connection is never asked again
+])
+def test_the_consent_page_asks_once_more_only_after_a_marked_503(connector_home, busy_times, marked, shown, asked):
+    log, landed = [], []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, connector_home, landed) as page:
+            start_connecting(page, connector_home)
+            page.route('**/authorize/signin', answering(log, busy_times, marked))
+            consent_sign_in(page)
+            expect(page.get_by_text(shown)).to_be_visible()
+            page.wait_for_timeout(1500)
+    assert len(log) == asked
+
+
+WAITS = """() => {
+  const wait = (status, headers) => busyWait({ status, headers: new Headers(headers) });
+  const marked = { 'x-superyak-busy': '1' };
+  return {
+    zero: wait(503, { ...marked, 'retry-after': '0' }), hour: wait(503, { ...marked, 'retry-after': '3600' }),
+    junk: wait(503, { ...marked, 'retry-after': 'soon' }), none: wait(503, marked),
+    negative: wait(503, { ...marked, 'retry-after': '-5' }),
+    date: wait(503, { ...marked, 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }),
+    jitter: Array.from({ length: 20 }, () => wait(503, { ...marked, 'retry-after': '0' })),
+    unmarked: wait(503, { 'retry-after': '0' }), ok: wait(200, marked),
+  };
+}"""
+
+
+def waits_are_bounded(waits):
+    """Retry-After plus up to 1 s, at most 5 s of it; a negative, an HTTP date (which parseInt can't read), an
+    unreadable or a missing one is 1 s; unmarked or not a 503, none. The jitter varies (the Tasks 4-5 reader's S2)."""
+    assert 0 <= waits['zero'] < 1000 and 5000 <= waits['hour'] < 6000
+    for one in ('junk', 'none', 'negative', 'date'):
+        assert 1000 <= waits[one] < 2000, (one, waits[one])
+    assert all(0 <= wait < 1000 for wait in waits['jitter']) and len(set(waits['jitter'])) > 10
+    assert waits['unmarked'] is None and waits['ok'] is None
+
+
+def test_the_apps_wait_is_its_retry_after_capped_at_5_s_plus_up_to_1_s(browser_peer):
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.goto(browser_peer['base_url'] + '/')
+            expect(page.get_by_role('heading', name='Sign in to this home')).to_be_visible()
+            waits_are_bounded(page.evaluate(WAITS))
+
+
+def test_the_consent_pages_wait_is_bounded_the_same_way(connector_home):
+    landed = []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, connector_home, landed) as page:
+            start_connecting(page, connector_home)
+            expect(page.get_by_label('Username', exact=True)).to_be_visible()
+            waits_are_bounded(page.evaluate(WAITS))
+
+
+def public_attachment(peer):
+    """A published layer with one attachment, and the public page that shows it."""
+    import base64
+    store, owner = peer['app'].state.store, peer['users']['patient']['id']
+    made = store.upload_file(owner, 'notes.txt', 'text/plain', base64.b64encode(b'hello from the file').decode())
+    layer = store.create_layer(owner, {'title': 'Open', 'body': 'Shared', 'public': True, 'attachment_ids': [made['id']]})
+    store.activate_layer(owner, layer['id'], layer['version'])
+    return f"{peer['base_url']}/public/?layer={layer['id']}"
+
+
+@pytest.mark.parametrize('busy_times, marked, shown, asked', [
+    (1, True, None, 2),
+    (2, True, 'This home is busy just now. Try again in a moment.', 2),
+    (1, False, 'This attachment is unavailable.', 1),
+    (1, 'abort', 'Connection lost. Try again when this home is reachable.', 1),
+])
+def test_a_public_attachment_asks_once_more_after_a_marked_503_and_never_shows_its_json(browser_peer, busy_times, marked,
+                                                                                         shown, asked):
+    """The Task 6 reader's N3: a link that navigated straight to the file showed a busy answer's raw JSON. Now the page
+    fetches it, asks once more after a marked 503 only, and saves the file under its own name."""
+    log, address = [], public_attachment(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.goto(address)
+            link = page.get_by_role('link', name='Download attachment 1')
+            page.route('**/public/layers/*/files/*', answering(log, busy_times, marked))
+            if shown is None:
+                with page.expect_download() as saving:
+                    link.click()
+                saved = saving.value
+                assert saved.suggested_filename == 'notes.txt'
+                assert open(saved.path(), 'rb').read() == b'hello from the file'
+            else:
+                link.click()
+                expect(page.get_by_role('status')).to_have_text(shown)
+                page.wait_for_timeout(1500)
+                expect(page.get_by_role('heading', name='Open')).to_be_visible()  # still the page, not an answer's body
+    assert len(log) == asked
+
+
+def test_a_dropped_attachment_body_says_lost_and_the_saved_files_address_is_freed(browser_peer):
+    """The 7b reader's N1 and N2: a connection dropped mid-file is said, not an unhandled rejection; a saved file's
+    object URL is revoked once the download has it."""
+    address = public_attachment(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.add_init_script("""
+              window.__revoked = [];
+              const revoke = URL.revokeObjectURL.bind(URL);
+              URL.revokeObjectURL = (url) => { window.__revoked.push(url); revoke(url); };
+            """)
+            page.clock.install()  # the page's own timers, run forward from here (the re-check's N1: 40 s, as FileSaver)
+            page.goto(address)
+            with page.expect_download():
+                page.get_by_role('link', name='Download attachment 1').click()
+            page.clock.run_for(39_000)
+            assert page.evaluate('window.__revoked.length') == 0  # a slow save still has it
+            page.clock.run_for(2_000)
+            assert page.evaluate('window.__revoked.length') == 1
+            page.evaluate('() => { Response.prototype.blob = () => Promise.reject(new TypeError("network error")); }')
+            page.get_by_role('link', name='Download attachment 1').click()
+            expect(page.get_by_role('status')).to_have_text('Connection lost. Try again when this home is reachable.')
+
+
+# ---- the merge reader's S1 on be6d3f13: a page still marked busy reads as busy whatever its body ------------------------
+
+NOT_AN_OBJECT = {
+    'html': ('text/html', '<html><body>Gateway</body></html>'),
+    'list': ('application/json', '[]'),
+    'null': ('application/json', 'null'),
+    'cut': ('application/json', '{"error": "This ho'),
+}
+
+
+def answering_with(log, answers):
+    """A route handler that gives each request its own (status, marked, body kind) in turn; the rest go on."""
+    def handle(route):
+        log.append(route.request.method)
+        if len(log) > len(answers):
+            return route.fallback()
+        status, marked, kind = answers[len(log) - 1]
+        content_type, body = NOT_AN_OBJECT[kind]
+        headers = {'retry-after': '0', **({'x-superyak-busy': '1'} if marked else {})}
+        route.fulfill(status=status, content_type=content_type, body=body, headers=headers)
+    return handle
+
+
+BUSY_LINE = 'Your home is busy just now. Try again in a moment.'
+LOST_LINE = 'The connection to your home was lost. Try again.'
+
+
+def consent_answers_case(home, path, answers, shown, asked):
+    from test_browser import CONSENT_ORIGIN, sign_in_to_consent
+    log, landed, errors = [], [], []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            start_connecting(page, home)
+            if path == 'decision':
+                sign_in_to_consent(page)
+            page.route(lambda url: url.startswith(f'{CONSENT_ORIGIN}/authorize/{path}'), answering_with(log, answers))
+            if path == 'decision':
+                page.get_by_role('button', name='Deny').click()
+            else:
+                consent_sign_in(page)
+            expect(page.get_by_text(shown)).to_be_visible()
+            page.wait_for_timeout(1500)  # past any second wait
+    assert (len(log), errors, landed) == (asked, [], [])
+
+
+@pytest.mark.parametrize('path', ['signin', 'decision'])
+@pytest.mark.parametrize('kind', sorted(NOT_AN_OBJECT))
+def test_a_consent_page_still_marked_busy_after_its_wait_says_busy_whatever_the_body(connector_home, path, kind):
+    """Two marked 503s whose bodies aren't a JSON object (a portal's page, a list, null, an answer cut short): the page
+    waited once, the home still says it did nothing, so it's busy, not lost (consent.js's post(), merge be6d3f13)."""
+    consent_answers_case(connector_home, path, [(503, True, kind), (503, True, kind)], BUSY_LINE, 2)
+
+
+@pytest.mark.parametrize('path', ['signin', 'decision'])
+@pytest.mark.parametrize('kind', ['html', 'list'])
+def test_a_consent_page_busy_then_answered_with_no_object_says_lost(connector_home, path, kind):
+    """A marked 503, then a 200 that isn't a JSON object: no yes can be read and the home may have acted, so it's lost
+    (main's rule, 9b72e5d2), and nothing is asked a third time."""
+    consent_answers_case(connector_home, path, [(503, True, 'html'), (200, False, kind)], LOST_LINE, 2)

@@ -1,0 +1,88 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Three stores hold the same thing, each in its own coordinates: b's are a's turned a quarter, c's a half. Here the a-c map was fitted wrongly, as the identity. Each edge's map is a fine rotation on its own, and the three do not compose: going round the loop turns data a half turn. So no data but zero can agree everywhere, and the fault shows on one edge only.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     1
+    ],
+    [
+     -1,
+     0
+    ]
+   ]
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": [
+    [
+     0,
+     1
+    ],
+    [
+     -1,
+     0
+    ]
+   ]
+  },
+  {
+   "tail": "a",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "local": {
+  "a": [
+   1,
+   0
+  ],
+  "b": [
+   0,
+   1
+  ],
+  "c": [
+   -1,
+   0
+  ]
+ },
+ "expect": {
+  "dim_h0": 0,
+  "dim_h1": 0,
+  "glued": false,
+  "residual_edges": [
+   2
+  ],
+  "residuals": [
+   0,
+   0,
+   2
+  ],
+  "distance_squared": 3
+ }
+}

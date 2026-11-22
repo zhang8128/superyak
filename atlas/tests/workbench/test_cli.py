@@ -88,6 +88,8 @@ def test_cli_init_import_search_show_review_and_export_emit_json(tmp_path):
         ("show", "anything"),
         ("duplicates",),
         ("unlocks", "anything"),
+        ("impact", "anything"),
+        ("as-of", "anything", "2026-11-21T12:00:00Z"),
         ("export",),
     ],
 )
@@ -160,3 +162,20 @@ def test_cli_malformed_source_url_is_a_clean_validation_error(tmp_path):
     assert result.returncode == 2
     assert "url" in result.stderr and "Traceback" not in result.stderr
     assert json.loads(run_cli("--db", database, "export").stdout)["sources"] == []
+
+
+def test_cli_impact_and_as_of_read_without_writing(tmp_path):
+    database = tmp_path / "test.db"
+    source = {"id": "A", "title": "Paper A", "url": "https://example.org/a", "year": 2025, "citation": "A (2025)"}
+    claim = {"id": "B", "kind": "claim", "title": "B", "summary": "B",
+             "evidence": [{"source_id": "A", "locator": "Fig. 1", "note": "result"}]}
+    bundle = tmp_path / "b.json"
+    bundle.write_text(json.dumps({"schema_version": 1, "title": "T", "sources": [source], "items": [claim],
+                                  "relations": []}))
+    assert run_cli("--db", database, "init").returncode == 0
+    assert run_cli("--db", database, "import", bundle).returncode == 0
+    impact = run_cli("--db", database, "impact", "A")
+    assert impact.returncode == 0, impact.stderr
+    assert json.loads(impact.stdout)["items"][0]["verdict"] == "unsupported"
+    as_of = run_cli("--db", database, "as-of", "B", "2026-11-21T12:00:00Z")
+    assert as_of.returncode == 0 and json.loads(as_of.stdout)["status"] == "proposed"

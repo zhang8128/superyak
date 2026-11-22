@@ -298,7 +298,10 @@ it too, since the words are a literal piece of the command. Its long form:
 - GitHub CI's result is read, including the jobs the Pi can't run: a pushed head's before its merge, and main's after
   the push. A red job holds the merge until its failing test is named and either fixed, or shown to fail the same
   way on main and put on the board (Tardis's T5, 2026-10-29: a comment-only head went red on an engram flake, and no
-  one read it).
+  one read it). The section 2 reader reads the reviewed head's CI before its yes and names the result in the
+  verdict: green, still running, or red with its failing test named. A head that was never pushed says so (Rio
+  Grande, 2026-11-21: a yes on multihop-smoke 9d14c2df went to train 1144 about four hours after its CI had gone
+  red, 16 bridge tests broken by an import; three ships agreed the rule, all hands 29fc2c26).
 - The `only-include` lists name every new module and test file, and the package builds and imports in a clean
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
   by test_packaging (retired there, see "Retiring an item"); check any other package's list by hand.

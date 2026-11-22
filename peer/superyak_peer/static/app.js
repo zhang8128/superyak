@@ -184,6 +184,15 @@ function bindEditorIdentity(user) {
   state.editorIdentity = next;
 }
 
+// Public-route-bound Task 5: a 503 marked x-superyak-busy was refused before the home did anything (spec R3), so it's
+// asked again once, after its Retry-After (at most 5 s) and up to 1 s more, so pages turned away together don't all come
+// back together. A 503 without the mark (a proxy's, or the home's own failure) is never asked again.
+function busyWait(response) {
+  if (response.status !== 503 || response.headers.get("x-superyak-busy") !== "1") return null;
+  const after = Number.parseInt(response.headers.get("retry-after") || "1", 10);
+  return (Math.min(Number.isFinite(after) && after >= 0 ? after : 1, 5) + Math.random()) * 1000;
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.json !== undefined) {
@@ -194,10 +203,15 @@ async function api(path, options = {}) {
     headers.set("x-csrf-token", state.me.csrf_token);
   }
   let response;
-  try {
-    response = await fetch(path, { credentials: "same-origin", ...options, headers });
-  } catch (_) {
-    throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(path, { credentials: "same-origin", ...options, headers });
+    } catch (_) {
+      throw new ApiError("Connection lost. Try again when this home is reachable.", 0);
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
   }
   const isJson = (response.headers.get("content-type") || "").includes("application/json");
   const data = await (isJson ? response.json() : response.text()).catch(() => undefined);
@@ -213,7 +227,14 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "apps", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "apps", "accounts"].includes(route) ? route : "home", id: id ? addressId(id) : null };
+}
+
+// An id the address can't decode, such as a typed or pasted `%E0%A4%A`, names nothing, so it is no id. Thrown, it stopped
+// every draw: one room stayed drawn while state.room was another, and a press landed on the room not on screen (board
+// fix:bad-address-leaves-state-room-off-screen).
+function addressId(part) {
+  try { return decodeURIComponent(part); } catch (_) { return null; }
 }
 
 function navLink(route, label, icon) {
@@ -1492,13 +1513,13 @@ function cloudControl(room, replaced) {
       : ask.pending ? `<p class="meta room-ask" role="status" tabindex="-1">Clearing your mark…</p>`
       : roomAskMarkup("Clear your mark on this room?", "Other members' marks stay. If none stand, a member's connected app that reads all their rooms, or was given this one before it was marked, can read it from its next call, and the room can take ships, which send its text to Claude, and people on other homes.",
         "Cancel", `<button class="button danger" type="button" data-action="cloud-clear-confirm">Yes, clear my mark</button>`);
-    return `<div class="cloud-control"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
+    return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">You've marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are kept out of it, every member's connected apps included. Everyone in it still reads it. It stays until you clear it, and you can clear it only while you're in the room.</p><p class="meta">Clearing takes your mark off this room only, and another member's mark would still hold.${yoursEarlier}</p>${limits}${clear}</div>`;
   }
-  if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
+  if (replaced) return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  if (room.cloud) return `<div class="cloud-control"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
-  return `<div class="cloud-control"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
+  if (room.cloud) return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">A member has marked this room, so AI agents with an account on this home (ships) and connected apps, such as Claude, are already kept out of it, every member's connected apps included. Everyone in it still reads it. Only the member who set a mark can clear it, and only while they're in the room. If they leave or are removed, it stays.</p><p class="meta">Add your own and it still holds if they clear theirs.</p>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Add my mark too</button></div>`;
+  return `<div class="cloud-control" data-room="${escapeHtml(room.id)}"><p class="meta">Mark this room to keep AI agents with an account on this home (ships) and connected apps, such as Claude, out of it. Everyone in it still reads it, and people on this home can still be added.</p><p class="meta">One member's mark holds for the whole room:</p><ul class="meta"><li>No ship can join, and any ship here has to be removed first.</li><li>No member's connected app can read it.</li><li>Nobody new from another home can join.</li><li>Only the member who set it can clear it, and only while they're in the room. If they leave or are removed, it stays.</li></ul>${limits}${ask}<button class="button secondary" data-action="cloud-mark">Mark this room</button></div>`;
 }
 
 async function markRoom(room, earlier) {
@@ -1990,6 +2011,51 @@ async function renderPublic() {
   }
   clearDialogs();
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
+  for (const link of app.querySelectorAll(".attachments .attachment")) {
+    link.addEventListener("click", (event) => { event.preventDefault(); downloadAttachment(link); });
+  }
+}
+
+// Public-route-bound Task 7b (the Task 6 reader's N3): a public file read waits in the layers' lane, so its busy answer
+// is asked again once, after the same wait api() takes, and a reader never sees that answer's raw JSON. The file is
+// saved from what came back, under the name its answer gives.
+async function downloadAttachment(link) {
+  const says = (words) => {
+    let status = link.closest(".attachments").querySelector(".attachment-status");
+    if (!status) {
+      status = Object.assign(document.createElement("p"), { className: "inline-message attachment-status" });
+      status.setAttribute("role", "status");
+      link.closest(".attachments").append(status);
+    }
+    status.textContent = words;
+  };
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(link.href, { credentials: "same-origin" });
+    } catch (_) {
+      return says("Connection lost. Try again when this home is reachable.");
+    }
+    const wait = attempt === 0 ? busyWait(response) : null;
+    if (wait === null) break;
+    await new Promise((done) => setTimeout(done, wait));
+  }
+  if (!response.ok) {
+    return says(busyWait(response) !== null ? "This home is busy just now. Try again in a moment." : "This attachment is unavailable.");
+  }
+  const named = /filename="([^"]*)"/.exec(response.headers.get("content-disposition") || "");
+  let blob;
+  try {
+    blob = await response.blob();  // a connection dropped mid-file throws here
+  } catch (_) {
+    return says("Connection lost. Try again when this home is reachable.");
+  }
+  const url = URL.createObjectURL(blob);
+  const save = Object.assign(document.createElement("a"), { href: url, download: named ? named[1] : "attachment" });
+  document.body.append(save);
+  save.click();
+  save.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 40000);  // as FileSaver waits: long enough for a slow save to read it
 }
 
 // A read's answer or its refusal, kept for later, so a read nobody ends up waiting on is never an unhandled rejection.
@@ -3571,7 +3637,8 @@ document.addEventListener("click", async (event) => {
     const next = [`[data-action="remove-participant"][data-id="${CSS.escape(ask.id)}"]`, '[data-action="remove-participant"]', '[data-action="change-participants"]'];
     if (state.room?.id === roomId) next.map((selector) => app.querySelector(selector)).find(Boolean)?.focus();
   }
-  if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
+  // Mark acts on one press, so only for the room its control was drawn for, as the board checks (boardOnScreen)
+  if (action === "cloud-mark" && state.room && target.closest(".cloud-control")?.dataset.room === state.room.id) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
   if (action === "cloud-clear-confirm" && roomAskOnScreen("clear")) {
     const ask = state.roomAsk = { ...state.roomAsk, pending: true }, roomId = state.room.id;
     render();
