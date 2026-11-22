@@ -399,6 +399,38 @@ class TestOverlay:
 
 
 # =====================================================================================
+# Building the corrected docs.tsv: the point-lookup subset path (the smoke build's) and
+# the full-scan path (the lead's full run; exercised here as a true full pass over the
+# tiny planted corpus, never over the real 9.4 GB one).
+# =====================================================================================
+
+class TestExportCorrectedTsv:
+    def _overlay_correcting_ann_vale(self):
+        return [{"page_id": 2, "old_rev": 2, "new_rev": "2c1",
+                "old_text": "Ann Vale grew up in Leeds in 1970.",
+                "new_text": "Ann Vale grew up in Leeds in 1985."}]
+
+    def test_subset_path_writes_only_the_named_pages_with_the_overlay_applied(self, corpus, tmp_path):
+        docs_path, links_path = tmp_path / "docs.tsv", tmp_path / "links.tsv"
+        stats = ns.export_corrected_tsv(corpus, self._overlay_correcting_ann_vale(), docs_path, links_path,
+                                        page_ids={1, 2})
+        assert stats == {"docs": 2, "links": 1}  # page 1 (Lotus) links to page 2 (Ann Vale)
+        lines = {line.split("\t", 1)[0]: line for line in docs_path.read_text().splitlines()}
+        assert "1985" in lines["2"] and "1970" not in lines["2"]
+        assert links_path.read_text().strip() == "1\t2"
+
+    def test_full_scan_path_applies_the_overlay_and_leaves_other_pages_untouched(self, corpus, tmp_path):
+        docs_path, links_path = tmp_path / "docs.tsv", tmp_path / "links.tsv"
+        stats = ns.export_corrected_tsv(corpus, self._overlay_correcting_ann_vale(), docs_path, links_path,
+                                        page_ids=None)
+        assert stats["docs"] == len(RECORDS)  # every passage, not a subset
+        lines = {line.split("\t", 1)[0]: line for line in docs_path.read_text().splitlines()}
+        assert "1985" in lines["2"] and "1970" not in lines["2"]
+        assert "Lotus is a band whose singer was Ann Vale." in lines["1"]  # page 1 itself is untouched
+        assert stats["links"] > 1  # the full link graph, not just the overlay's own page's edges
+
+
+# =====================================================================================
 # Atlas records: one revision, one source; impact targeting; withdrawal keeps history
 # =====================================================================================
 

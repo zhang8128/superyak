@@ -108,6 +108,16 @@ class CorpusLookup:
         ).fetchone()
         return None if row is None else {"page_id": row[0], "rev_id": row[1], "title": row[2], "text": row[3]}
 
+    def iter_all(self):
+        """Every ``(page_id, title, text)``, in page-id order -- the one deliberate full scan in this
+        module, for the real, full-corpus corrected export only (``export_corrected_tsv`` with
+        ``page_ids=None``). The smoke build and every other lookup here stay point lookups."""
+        yield from self._connection.execute("SELECT page_id, title, text FROM passages ORDER BY page_id")
+
+    def iter_links(self):
+        """Every ``(src_title, dst_title)`` link, for the full-corpus export's link pass."""
+        yield from self._connection.execute("SELECT src, dst FROM links ORDER BY src, dst")
+
     def links_from(self, page_id: int) -> list[int]:
         """Out-links from this page id, resolved to page ids -- a point lookup by ``links.src``, joined on
         ``title`` (``links`` is keyed by title; one row's worth of joins, not a scan)."""
@@ -659,15 +669,37 @@ def b_cache_from(before_b: dict) -> dict:
     return {qid: dict(row) for qid, row in before_b.items()}
 
 
-def export_subset_tsv(corpus: CorpusLookup, page_ids: set, overlay_rows: list[dict], docs_path, links_path) -> dict:
-    """``docs.tsv``/``links.tsv`` for just ``page_ids`` (each a point lookup, never a scan of the corpus),
-    with any id in the overlay getting its corrected text instead of the stored one. For a small, named
-    subset only -- the full corpus's export stays ``export_corpus_tsv.export``."""
+def export_corrected_tsv(corpus: CorpusLookup, overlay_rows: list[dict], docs_path, links_path, *,
+                         page_ids: set | None = None) -> dict:
+    """``docs.tsv``/``links.tsv`` for ``corpus-index build``, with the overlay's corrected text applied.
+
+    ``page_ids`` given (a smoke's handful of pages): each is a point lookup, never a scan of the corpus --
+    the small stand-in ``run_smoke`` uses, per this build's limits (never the full 7.2M rebuild in this
+    build). ``page_ids=None``: the real, full-corpus export (the same single scan
+    ``export_corpus_tsv.export`` already does, with the overlay's substitutions folded in) -- what the
+    lead's full run uses; this build never calls it against the real corpus."""
     import re
 
     bad = re.compile(r"[\t\r\n]")
     overlay_by_page = {row["page_id"]: row["new_text"] for row in overlay_rows}
     docs_written = links_written = 0
+
+    if page_ids is None:
+        title_to_page_id: dict[str, int] = {}
+        with open(docs_path, "w", encoding="utf-8", newline="\n") as docs_out:
+            for page_id, title, text in corpus.iter_all():
+                title_to_page_id[title] = page_id
+                text = apply_overlay_text(page_id, text, overlay_by_page)
+                docs_out.write(f"{page_id}\t{bad.sub(' ', title)}\t{bad.sub(' ', text)}\n")
+                docs_written += 1
+        with open(links_path, "w", encoding="utf-8", newline="\n") as links_out:
+            for src_title, dst_title in corpus.iter_links():
+                src_id, dst_id = title_to_page_id.get(src_title), title_to_page_id.get(dst_title)
+                if src_id is not None and dst_id is not None:
+                    links_out.write(f"{src_id}\t{dst_id}\n")
+                    links_written += 1
+        return {"docs": docs_written, "links": links_written}
+
     with open(docs_path, "w", encoding="utf-8", newline="\n") as docs_out:
         for page_id in sorted(page_ids):
             lead = corpus.by_page_id(page_id)
@@ -798,7 +830,7 @@ def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
     overlay = plan["overlay"]
     touched_pages.update(row["page_id"] for row in overlay)
     docs_path, links_path, corrected_index_path = workdir / "docs.tsv", workdir / "links.tsv", workdir / "corrected.bin"
-    export_stats = export_subset_tsv(corpus, touched_pages, overlay, docs_path, links_path)
+    export_stats = export_corrected_tsv(corpus, overlay, docs_path, links_path, page_ids=touched_pages)
     build_stats = build_corpus_index(bin_path, docs_path, links_path, corrected_index_path)
 
     overlay_old_sources = {source_id(row["page_id"], row["old_rev"]) for row in overlay}
