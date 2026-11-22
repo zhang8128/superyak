@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS atlas_received(origin TEXT NOT NULL, recipient TEXT N
     payload_digest TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('publication','notice')), actor TEXT NOT NULL,
     signing_key TEXT NOT NULL, event_id TEXT NOT NULL, envelope_digest TEXT NOT NULL, received_at REAL NOT NULL,
     envelope TEXT NOT NULL, PRIMARY KEY(origin, recipient, payload_digest));
+CREATE TABLE IF NOT EXISTS atlas_refused(origin TEXT NOT NULL, event_id TEXT NOT NULL, action TEXT NOT NULL,
+    words TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(origin, event_id));
 '''
 
 MAX_ATLAS = 1024 * 1024  # spec T1: a payload's canonical JSON, checked at the sender and again at the receiver
@@ -166,6 +168,70 @@ class AtlasTransport:
             db.execute('INSERT INTO atlas_outgoing(outbox_id, digest, payload) VALUES(?,?,?)',
                        (key, digest, canonical(payload).decode()))
             return {'id': key, 'digest': digest, 'state': 'pending'}
+
+
+    def atlas_deliveries(self, ship_id, *, retry=None):
+        """Spec T7 (R4): a ship's own atlas rows, the newest last, and a retry of one that failed or was refused. It's
+        trusted-local; the owner's `deliveries` and `retry` show and retry the same rows as their author."""
+        with self.transaction() as db:
+            mine = [row for row in db.execute("SELECT * FROM outbox WHERE action LIKE 'atlas.%' ORDER BY event_seq, id")
+                    if json.loads(row['metadata']).get('ship') == ship_id]
+            if retry is not None:
+                [row] = [r for r in mine if r['id'] == retry] or [None]
+                if row is None:
+                    raise Problem(404, 'Not found')
+                if row['status'] not in ('failed', 'refused'):
+                    raise Problem(409, 'Only failed or refused deliveries can be retried')
+                db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0,last_error=NULL WHERE id=?", (retry,))
+                db.execute('UPDATE peer_delivery SET next_attempt=NULL WHERE peer_id=(SELECT peer_id FROM remote_contacts '
+                           'WHERE id=?)', (row['contact_id'],))
+                mine = [dict(r, status='pending', last_error=None) if r['id'] == retry else r for r in mine]
+            return [{'id': r['id'], 'kind': ACTIONS[r['action']], 'status': r['status'], 'attempts': r['attempts'],
+                     'next_attempt': r['next_attempt'] or None, 'last_error': r['last_error'] if r['status'] == 'refused'
+                     else None, 'contact_id': r['contact_id'], 'digest': r['resource_id'],
+                     'title': json.loads(r['metadata']).get('title', '')} for r in mine]
+
+    def atlas_received_for(self, ship_id):
+        """Spec T6: what a ship holds from origins still paired, and the atlas rows this peer refused when it pulled
+        them (A5), with their words."""
+        with self.reading() as db:
+            held = [dict(r) for r in db.execute(
+                'SELECT a.* FROM atlas_received a JOIN peers p ON p.peer_id=a.origin AND p.paired=1 WHERE a.recipient=? '
+                'ORDER BY a.received_at', (ship_id,))]
+            refused = [dict(r) for r in db.execute('SELECT * FROM atlas_refused ORDER BY at')]
+            return held, refused, self._own_peer_id(db)
+
+
+def kept_file(row, receiver):
+    """What `atlas-received` writes for one row (spec T6): the signed envelope as it arrived, the sender's signing key,
+    the receiver's own peer id, and who delivered it."""
+    return {'format': 'atlas-received', 'version': 1, 'envelope': json.loads(row['envelope']),
+            'signing_key': row['signing_key'], 'receiver': receiver,
+            'delivered': {'origin': row['origin'], 'actor': row['actor'], 'event_id': row['event_id'],
+                          'envelope_digest': row['envelope_digest'], 'received_at': row['received_at']}}
+
+
+def verify_kept(kept):
+    """Spec T6 (RG2): a kept file's source identity, checked without the store, so it survives a copy. The key's SHA-256
+    is the delivering peer's id, the envelope is that peer's signature over its payload, it was addressed to the named
+    receiver, and the delivered record agrees. Returns the envelope, or raises ValueError."""
+    import base64
+    from .identity import verify_envelope
+    if not isinstance(kept, dict) or kept.get('format') != 'atlas-received' or kept.get('version') != 1:
+        raise ValueError('Not a received atlas file')
+    envelope, key, delivered = kept.get('envelope'), kept.get('signing_key'), kept.get('delivered')
+    if not isinstance(envelope, dict) or not isinstance(key, str) or not isinstance(delivered, dict):
+        raise ValueError('Not a received atlas file')
+    origin = hashlib.sha256(base64.b64decode(key, validate=True)).hexdigest()
+    if envelope.get('origin') != origin or delivered.get('origin') != origin:
+        raise ValueError("The file's sender doesn't match its key")
+    try:
+        value = verify_envelope(canonical(envelope), {'peer_id': origin, 'signing_key': key}, kept.get('receiver'))
+    except Problem:
+        raise ValueError('The signature does not cover this envelope') from None
+    if value['action'] not in ACTIONS or delivered.get('event_id') != value['event_id']:
+        raise ValueError("The file's delivered record doesn't match its envelope")
+    return value
 
 
 def _title(kind, body):

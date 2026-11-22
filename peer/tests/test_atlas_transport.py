@@ -587,3 +587,119 @@ def test_holding_a_contact_clears_what_it_sent(atlas_peers):
         contact = db.execute('SELECT * FROM remote_contacts WHERE id=?', (t_ids['rio-contact'],)).fetchone()
         hold_contact(db, contact, 1.0)
     assert received(tardis, t_ids['tardis']) == []
+
+
+# --- 6. status, retry, the puller's refusal words and the CLI (T6, T7: R4, A2, A5) ----------------------------------
+
+def refuse_atlas_at(fed, monkeypatch):
+    original = type(fed)._apply
+    def old_apply(self, db, e):
+        if self is fed and e['action'].startswith('atlas.'):
+            raise Problem(400, 'Unknown peer action')
+        return original(self, db, e)
+    monkeypatch.setattr(type(fed), '_apply', old_apply)
+
+
+def test_andy_sees_his_ships_atlas_row_in_deliveries_and_can_retry_it(atlas_peers, monkeypatch):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    queued = pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    [row] = [r for r in pi_fed.status(pi_ids['andy']) if r['id'] == queued['id']]
+    assert (row['action'], row['status'], row['resource_title'], row['ship']) == (
+        'atlas.publication', 'pending', 'Atlas publication', 'rio-grande')
+    refuse_atlas_at(tardis_fed, monkeypatch)
+    atlas_peers['deliver']('pi', 'tardis')
+    [row] = [r for r in pi_fed.status(pi_ids['andy']) if r['id'] == queued['id']]
+    assert (row['status'], row['last_error']) == ('refused', '400 Unknown peer action')
+    assert pi_fed.retry(pi_ids['andy'], queued['id'])['ok']
+    assert rows(pi, 'atlas.publication')[0]['status'] == 'pending'
+
+
+def test_a_ship_lists_and_retries_only_its_own_atlas_rows(atlas_peers, monkeypatch):
+    from conftest import lesson_ship
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    other = lesson_ship(pi, pi_ids['andy'], 'serenity')['id']
+    queued = pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    refuse_atlas_at(tardis_fed, monkeypatch)
+    atlas_peers['deliver']('pi', 'tardis')
+    [mine] = pi.atlas_deliveries(pi_ids['rio-grande'])
+    assert (mine['id'], mine['status'], mine['last_error'], mine['kind']) == (
+        queued['id'], 'refused', '400 Unknown peer action', 'publication')
+    assert pi.atlas_deliveries(other) == []
+    with pytest.raises(Problem) as caught:
+        pi.atlas_deliveries(other, retry=queued['id'])
+    assert caught.value.status == 404
+    assert pi.atlas_deliveries(pi_ids['rio-grande'], retry=queued['id'])[0]['status'] == 'pending'
+
+
+def test_a_contact_that_loses_its_code_makes_a_waiting_row_withdrawn_at_prepare(atlas_peers):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    with pi.transaction() as db:
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (pi_ids['contact'],))
+    atlas_peers['deliver']('pi', 'tardis')
+    assert rows(pi, 'atlas.publication')[0]['status'] == 'withdrawn'
+    assert received(tardis, t_ids['tardis']) == []
+
+
+def test_the_puller_keeps_the_words_of_an_atlas_row_it_refuses(atlas_peers):
+    from collections import defaultdict
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    raw = envelope_from_pi(atlas_peers, {'package': package(uri(tardis_fed), uri(tardis_fed))},
+                           event_id='a' * 32)  # issued as the receiver's: refused
+    owed, got = {'acks': [], 'refused': []}, defaultdict(int)
+    tardis_fed._take_pulled(pi_fed.identity.peer_id, [raw.decode()], owed, got)
+    assert owed['refused'] == [{'event_id': 'a' * 32, 'code': 400}]
+    with tardis.reading() as db:
+        [row] = db.execute('SELECT origin, event_id, words FROM atlas_refused').fetchall()
+    assert tuple(row) == (pi_fed.identity.peer_id, 'a' * 32,
+                          "400 A publication's artifacts must all be issued by the peer that delivered it")
+
+
+def contact_short(store, contact_id):
+    return contact_id.removeprefix('remote_')[:8]
+
+
+def test_send_receive_and_verify_from_the_command_line(atlas_peers, tmp_path, capsys):
+    from superyak_peer.__main__ import main
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    body = tmp_path / 'publication.json'
+    body.write_text(json.dumps(package(uri(pi_fed), uri(tardis_fed))))
+    main(['atlas-send', '--data-dir', str(pi.data_dir), '--as', 'rio-grande',
+          '--to', contact_short(pi, pi_ids['contact']), '--kind', 'publication', '--file', str(body)])
+    assert 'Queued publication' in capsys.readouterr().out
+    atlas_peers['deliver']('pi', 'tardis')
+    out = tmp_path / 'received'
+    main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
+    assert 'Wrote 1' in capsys.readouterr().out
+    [written] = sorted(out.glob('*.json'))
+    kept = json.loads(written.read_text())
+    assert kept['receiver'] == tardis_fed.identity.peer_id
+    assert kept['delivered']['origin'] == pi_fed.identity.peer_id
+    assert canonical(kept['envelope']['payload']['package']) == canonical(json.loads(body.read_text()))
+    main(['atlas-verify', str(written)])
+    assert 'Verified' in capsys.readouterr().out
+    kept['envelope']['payload']['package']['claims'][0]['id'] = 'edited'
+    edited = tmp_path / 'edited.json'
+    edited.write_text(json.dumps(kept))
+    with pytest.raises(SystemExit) as caught:
+        main(['atlas-verify', str(edited)])
+    assert caught.value.code == 1
+    kept = json.loads(written.read_text())
+    kept['delivered']['origin'] = 'f' * 64
+    edited.write_text(json.dumps(kept))
+    with pytest.raises(SystemExit):
+        main(['atlas-verify', str(edited)])
+    main(['atlas-deliveries', '--data-dir', str(pi.data_dir), '--as', 'rio-grande'])
+    assert 'delivered' in capsys.readouterr().out
+
+
+def test_atlas_received_writes_nothing_from_an_unpaired_origin(atlas_peers, tmp_path, capsys):
+    from superyak_peer.__main__ import main
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    atlas_peers['deliver']('pi', 'tardis')
+    with tardis.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (pi_fed.identity.peer_id,))  # rows kept, peer unpaired
+    out = tmp_path / 'received'
+    main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
+    assert list(out.glob('*.json')) == []

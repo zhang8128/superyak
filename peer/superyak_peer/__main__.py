@@ -340,6 +340,49 @@ def admin_account(store, username):
     return row['id']
 
 
+def _ship_id(db, username):
+    row = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (username,)).fetchone()
+    if not row:
+        raise ValueError('Unknown ship on this peer')
+    return row['id']
+
+
+def atlas_command(args, store):
+    """`atlas-send`, `atlas-received` and `atlas-deliveries` (claim-crossing transport T2, T6, T7): trusted-local, run
+    by a ship on its own peer. Every name and word printed is one safe line."""
+    from .atlas_transport import kept_file
+    from .ships import safe_line, short_id
+    with store.reading() as db:
+        ship = _ship_id(db, args.as_ship)
+        if args.command == 'atlas-send':
+            prefix = short_id(args.contact.removeprefix('remote_'))
+            found = [r['id'] for r in db.execute("SELECT id FROM remote_contacts WHERE substr(id, 8) LIKE ? || '%'",
+                                                 (prefix,))]
+            if len(found) != 1:
+                raise ValueError('No contact has that short id' if not found else 'That short id names more than one contact')
+    if args.command == 'atlas-send':
+        queued = store.atlas_send(ship, found[0], args.kind, json.loads(args.file.read_text()))
+        print(f"Queued {args.kind} {queued['id']} ({queued['digest'][:12]}): it goes with the next delivery pass.")
+    elif args.command == 'atlas-deliveries':
+        for row in store.atlas_deliveries(ship, retry=args.retry_key):
+            words = f" ({safe_line(row['last_error'], 120)})" if row['last_error'] else ''
+            print(f"{row['id']}  {row['kind']}  {row['status']}{words}  {safe_line(row['title'] or '-', 60)}")
+    else:
+        held, refused, receiver = store.atlas_received_for(ship)
+        args.out.mkdir(parents=True, exist_ok=True)
+        from .atlas_transport import verify_kept
+        written = 0
+        for row in held:
+            kept = kept_file(row, receiver)
+            verify_kept(kept)  # checked again before it leaves the store (RG2)
+            (args.out / f"{row['event_id']}.json").write_text(json.dumps(kept, indent=2) + '\n')
+            written += 1
+        print(f'Wrote {written} to {args.out}')
+        for row in refused:
+            print(f"Refused when pulled: {row['action']} {row['event_id']} from {row['origin'][:12]}: "
+                  f"{safe_line(row['words'], 160)}")
+
+
 def federation_here(store):
     """A Federation that never makes an identity: card --endpoint does that, naming its host (SF2)."""
     from .federation import Federation, NO_IDENTITY
@@ -669,6 +712,26 @@ def main(argv=None):
     export_kind.add_argument('--endpoint')
     export_kind.add_argument('--pull', action='store_true')
     export_ship.add_argument('--out', type=Path, required=True)
+    atlas_send = commands.add_parser('atlas-send', help="A ship sends an Atlas publication or notice to a contact "
+                                     "(claim-crossing transport T2)")
+    atlas_send.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_send.add_argument('--as', dest='as_ship', required=True, help='the sending ship, a username on this peer')
+    atlas_send.add_argument('--to', dest='contact', required=True, help="the contact's short id (connections lists them)")
+    atlas_send.add_argument('--kind', choices=['publication', 'notice'], required=True)
+    atlas_send.add_argument('--file', type=Path, required=True, help='the package or notice, as JSON')
+    atlas_got = commands.add_parser('atlas-received', help="Write a ship's received Atlas payloads out, each signature "
+                                    "checked again (transport T6)")
+    atlas_got.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_got.add_argument('--as', dest='as_ship', required=True)
+    atlas_got.add_argument('--out', type=Path, required=True)
+    atlas_check = commands.add_parser('atlas-verify', help="Check a written Atlas file's sender and signature, from the "
+                                      "file alone (transport T6)")
+    atlas_check.add_argument('file', type=Path)
+    atlas_rows = commands.add_parser('atlas-deliveries', help="A ship's own Atlas deliveries, and a retry of one "
+                                     "(transport T7)")
+    atlas_rows.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_rows.add_argument('--as', dest='as_ship', required=True)
+    atlas_rows.add_argument('--retry', dest='retry_key')
     deliveries = commands.add_parser('deliveries', help="An admin's deliveries, one safe line each (federation pull P10)")
     deliveries.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     deliveries.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
@@ -1161,6 +1224,15 @@ def main(argv=None):
             for path, value in zip(paths, (card, assertion)):
                 path.write_text(json.dumps(value, indent=2) + '\n')
             print('\n'.join(map(str, paths)))
+        elif args.command in ('atlas-send', 'atlas-received', 'atlas-deliveries'):
+            atlas_command(args, Store(args.data_dir))
+        elif args.command == 'atlas-verify':
+            from .atlas_transport import verify_kept
+            try:
+                value = verify_kept(json.loads(args.file.read_text()))
+            except (ValueError, OSError) as error:
+                parser.exit(1, f'atlas-verify: {error}\n')
+            print(f"Verified: {value['action']} from {value['origin'][:12]}, event {value['event_id']}")
         elif args.command == 'deliveries':
             store = Store(args.data_dir)
             print(describe_deliveries(federation_here(store).status(admin_account(store, args.as_user))))

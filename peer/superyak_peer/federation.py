@@ -872,6 +872,11 @@ class Federation:
                     owed['refused'].append({'event_id': event, 'code': answer.status})
                     got['refused'] += 1
                     new += 1
+                    action = value.get('action') if isinstance(value, dict) else None
+                    if isinstance(action, str) and action.startswith('atlas.'):  # transport A5: the words stay here
+                        with self.store.transaction() as db:
+                            db.execute('INSERT OR REPLACE INTO atlas_refused VALUES(?,?,?,?,?)',
+                                       (peer_id, event, action, f'{answer.status} {answer.message}'[:200], self.store.clock()))
                 elif not named:
                     got['unreadable'] += 1
                 continue
@@ -915,6 +920,9 @@ class Federation:
             # rid belongs to the destination peer. Never query local resources.
             author = meta.get('actor')
             message = meta.get('message')
+        elif action.startswith('atlas.'):  # claim-crossing transport T7: the sending ship's owner is the author
+            ship = db.execute("SELECT owner_id FROM users WHERE id=? AND kind='ship'", (meta.get('ship'),)).fetchone()
+            author = ship['owner_id'] if ship else None
         elif action in ('layer.release','layer.withdraw'):
             resource = db.execute('SELECT owner_id FROM layers WHERE id=?', (rid,)).fetchone()
             author = resource['owner_id'] if resource else None
@@ -961,6 +969,13 @@ class Federation:
                     if current:
                         snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (row['resource_id'],resource['active_revision'])).fetchone()[0]) if resource['active_revision'] else {}
                         action = 'layer.release' if contact['id'] in snapshot.get('audience_users', []) else 'layer.withdraw'
+                elif action.startswith('atlas.'):  # transport T7: its own title, never "Room unavailable"
+                    meta = json.loads(row['metadata'])
+                    title = ('Atlas publication' if action == 'atlas.publication' else 'Atlas notice') + (
+                        f": {meta['title']}" if meta.get('title') else '')
+                    current = True
+                    ship = db.execute('SELECT username FROM users WHERE id=?', (meta.get('ship'),)).fetchone()
+                    correlation = {**correlation, 'ship': ship['username'] if ship else None}
                 elif action == 'room.reply':
                     inbox = db.execute("SELECT revision,payload FROM inbox WHERE origin=? AND resource_id=? AND kind='room' AND recipient=?", (contact['peer_id'],row['resource_id'],actor)).fetchone()
                     title = json.loads(inbox['payload'])['title'] if inbox and inbox['payload'] else 'Received room'
