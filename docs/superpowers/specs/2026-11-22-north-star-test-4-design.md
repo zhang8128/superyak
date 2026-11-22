@@ -220,12 +220,14 @@ and its twin undoes exactly that change. No rule reads a policy's state, flags o
 took; a world never reads flags.*
 
 **Seeds.** A world is built from `numpy.random.SeedSequence([20261129, trap, D, k, w])`, where `trap` is 1 to 4 in the
-order below and `w` is the world's index. A world and its twin come from one seed. These seeds are disjoint from the
-policies' seeds.
+order below and `w` is the world's index, from 0 to 24. A world and its twin come from one seed. These seeds are
+disjoint from the policies' seeds. One `numpy.random.default_rng` built from that SeedSequence makes every draw, in
+the order fixed under "The order of draws" (review 1's advisory 3).
 
 **The base world** (shared by every trap and every twin), with depth `D` and `k` options per state:
-- **The pool:** `P = 2k` ideas. Each has a `content`, the first 16 hex digits of sha256 of `f"{seed}:{i}"`, and a
-  canonical `name`, drawn without replacement from this fixed list of 64 neutral words, in this order: amber, basin,
+- **The pool:** `P = 2k` ideas, indexed `i` from 0 to `2k − 1`. Idea `i` has a `content`, the first 16 hex digits of
+  sha256 of `f"{trap}:{D}:{k}:{w}:{i}"`, and a canonical `name`, word `i` of this fixed list of 64 neutral words, so
+  the pool takes the first `2k` words in list order, with no draw: amber, basin,
   cedar, delta, ember, fjord, garnet, harbor, iris, jasper, kestrel, lantern, meadow, nectar, onyx, pepper, quarry,
   raven, saffron, timber, umber, velvet, willow, xenon, yarrow, zephyr, acorn, birch, cobalt, dune, elm, flint, grove,
   heron, indigo, juniper, kelp, lichen, maple, nickel, oak, pine, quartz, reed, slate, thistle, upland, vale, walnut,
@@ -239,6 +241,22 @@ policies' seeds.
   `None`.
 - **`recovered(state)`** is `state == "G"`.
 - **`budget`** is `2·D·k` turns, about twice what a blind search needs, chosen without reference to any policy.
+
+**The order of draws,** all from the one generator, so the worlds are reproducible from this text:
+1. the key, an integer from 0 to `2k − 1`;
+2. for each level from 0 to `D − 1`, in order: its `k − 1` other ideas, drawn without replacement from the `2k − 1`
+   non-key ideas, then a permutation of its `k` options for their order;
+3. the trap's own draws, in the order its rule below lists them:
+   - cycle: `c`, then the lure from `Lc`'s non-key options, then a permutation for each of `C1`, `C2` and `C3`;
+   - renamed idea: the returner from level 0's non-key options, then, for each level from 1 on that lacks it, which
+     of that level's non-key options it replaces;
+   - misleading summary: the misled set;
+   - map: `m`, then the new key from the non-key ideas, then, for each level from `m` on that lacks it, which of that
+     level's non-key options other than the old key it replaces.
+
+The twin is built from the same draws, and differs only in the mechanic its trap names. A replacement takes the
+replaced option's place in the level's order. The returner's new names are the unused words of the list, in list
+order from word `2k`.
 
 **The four traps,** each with its twin and its naming rule:
 
@@ -259,6 +277,8 @@ policies' seeds.
    - **Twin:** the returner keeps its canonical name at every level.
    - **Named** if, once the run has tried the returner, a `repeat` flag naming its content is raised by the first policy
      call at which it's offered under a different name. A run that never tries it isn't exposed, and is counted apart.
+     So is a run that tried it but was never offered it under a new name again, because it tried it at the last level
+     or the budget ran out (review 1's advisory 6).
 3. **A misleading summary.** Half the pool's `2k − 1` non-key ideas, rounded down (at least one), drawn by the seed,
    are the misled ideas.
    - Any turn that takes a misled idea has verdict fail, as in the base, but `summary.says` is "worked".
@@ -283,9 +303,14 @@ trapped and twin form, so 800 worlds in all, each run with every policy at 20 po
 - each twin differs from its trapped world only in the mechanic its trap names;
 - a world is identical when rebuilt from its seed;
 - every naming rule fires on a hand-built run that raises the right flag at the right call, and doesn't fire one call
-  later.
+  later, one call earlier, or in the twin (advisory 5);
+- **a record-only policy,** round robin over each state's options and reading only the record, recovers within
+  `budget` in both forms of every world, which shows each world can be recovered from the record alone (advisory 4).
 
 **Scored beside each naming rule:** the same flag raised in the twin counts as a false name, and is reported.
+
+**The fingerprint:** the implementer posts the sha256 of the canonical JSON (sorted keys, no spaces) of all 800
+worlds' full tables, trapped and twin, beside the code's hash (advisory 3).
 
 ## Decided in draft 2
 
