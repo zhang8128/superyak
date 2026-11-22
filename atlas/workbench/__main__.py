@@ -27,6 +27,12 @@ def _parser():
     subcommands.add_parser("duplicates", help="find normalized exact-title candidates")
     unlocks_parser = subcommands.add_parser("unlocks", help="show reviewed prerequisite reachability")
     unlocks_parser.add_argument("id")
+    impact_parser = subcommands.add_parser(
+        "impact", help="show what retracting sources does to what depends on them (read-only)")
+    impact_parser.add_argument("source", nargs="+")
+    as_of_parser = subcommands.add_parser("as-of", help="show a record's status at a time, from its audit history")
+    as_of_parser.add_argument("id")
+    as_of_parser.add_argument("at", help="ISO 8601 UTC, like 2026-11-21T12:00:00Z")
     review_parser = subcommands.add_parser("review", help="change a record status with an audit event")
     review_parser.add_argument("id")
     review_parser.add_argument("--status", required=True)
@@ -88,6 +94,10 @@ def _run(arguments):
             return store.duplicates()
         if arguments.command == "unlocks":
             return store.unlocks(arguments.id)
+        if arguments.command == "impact":
+            return store.retraction_impact(arguments.source)
+        if arguments.command == "as-of":
+            return store.history_as_of(arguments.id, arguments.at)
         if arguments.command == "review":
             store.set_status(arguments.id, arguments.status, arguments.reason, arguments.actor)
             return store.get(arguments.id)
