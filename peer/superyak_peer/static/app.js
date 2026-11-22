@@ -316,6 +316,7 @@ function showLogin(message = "") {
   state.me = null;
   state.home = null;
   state.room = null;  // the next person on this browser starts from the route, and no timer asks about this room for them
+  clearPressed();  // after state.room, so its composer line draws nothing; a slow press's "Opening…" isn't said here
   state.roomGone = null;
   clearDialogs();
   app.innerHTML = `<main class="login-page" id="main-content">
