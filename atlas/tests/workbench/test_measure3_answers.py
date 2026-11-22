@@ -228,3 +228,11 @@ def test_freeze_check_with_the_client_passes_canonical_fields_and_flags_a_trimme
         return lookup(source, fetch=recorded) if source["id"] in ("g1", "g2") else registry(collection()["sources"]).get(source["id"])
     got = freeze_check(bundle, client)["deviations"]
     assert not any("g1" in d for d in got) and any("g2" in d and "title" in d for d in got)
+
+
+def test_a_sici_doi_is_quoted_in_the_request():
+    """Rio Grande's nit: a SICI-style DOI's <, >, ; and # must be quoted in the url, with / kept."""
+    asked = []
+    crossref_record("10.1002/(SICI)1097-4571(199806)49:8<693::AID-ASI4>3.0.CO;2-0#x", fetch=lambda url: asked.append(url))
+    assert asked == ["https://api.crossref.org/works/10.1002/%28sici%291097-4571%28199806%2949%3A8%3C693%3A%3Aaid-asi4"
+                     "%3E3.0.co%3B2-0%23x"]

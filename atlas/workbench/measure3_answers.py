@@ -103,7 +103,8 @@ def fetch_json(url, *, timeout=30):
 
 def crossref_record(doi, *, fetch=fetch_json):
     """Crossref's record for a DOI: `title[0]` verbatim, the `issued` year, the DOI, and its version links."""
-    got = fetch(CROSSREF.format(doi=doi.lower()))
+    from urllib.parse import quote
+    got = fetch(CROSSREF.format(doi=quote(doi.lower(), safe="/")))  # a SICI DOI's <, >, ; and # quoted (Rio Grande)
     if got is None:
         return None
     m = got["message"]
