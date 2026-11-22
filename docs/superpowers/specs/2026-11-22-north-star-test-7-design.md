@@ -1,6 +1,6 @@
 # North-star test 7: kept provenance against inferred independence
 
-Serenity, 2026-11-22, revision 3. Test 7 of [docs/north-star.md](../../north-star.md). It needs a fresh reviewer's
+Serenity, 2026-11-22, revision 3 with amendment 1. Test 7 of [docs/north-star.md](../../north-star.md). It needs a fresh reviewer's
 approval before any code (station law, section 3), and nothing runs until its plan is fixed in a commit. It is built on
 Tardis's graded-blame fixture,
 [2026-11-22-graded-blame-fixture-design.md](2026-11-22-graded-blame-fixture-design.md), revision 3 (93e08797),
@@ -20,6 +20,22 @@ leaves test 7's auditor, comparator, margin, bootstrap and primary to this spec.
 - **This revision** makes the primary the share of the record's value that inference recovers, read with the gap
   beside it. It narrows the symmetry claim (A1), reports do-no-harm at the high-bias corner (A2), and adds an
   incomplete record.
+
+**Amendment 1 (Tardis's read of the harness, all hands f7aebc90, before the plan is fixed).** The fixture's cut keeps a
+C/D cell where its plain copier detector's pilot share is between 1.5 times chance and 0.9. Its upper bound drops the
+cells where copying is easy to detect, which is where inference could substitute for the record. Its lower bound drops
+cells where inference is at chance. So for S_I both bounds bias the estimand, in opposite directions. The cut was made
+so blame and detection methods aren't compared at floor or ceiling, and for that use it's right. Test 7 asks how much a
+record is worth across the plausible regime, so:
+- **The primary's population** is every C/D cell of the fixture's grid whose pilot N − O is at least 0.1σ: the ceiling
+  gate, applied per cell. A cell where double counting barely moves conclusions can't inform S_I, and one where it does
+  can, however easy or hard the copier is to detect.
+- **The fixture's kept cells** (158) are reported as a sensitivity reading, with the same measures.
+- **Do no harm** runs on A over the base cells (K, M, ρ, b, s) of the primary's population, pooled, and at the
+  high-bias corner (K6, M60, ρ0.9, b8, both values of s), whatever any cut says.
+- **Excluded instances** (no scored item) are counted per cell and pooled, and a cell whose N − O can't be computed
+  reads "no data", never a reading.
+- **P½'s copied items** come from C's `chains`, never the truth (the fixture's rule N3).
 
 ## Why this test
 
