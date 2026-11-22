@@ -1,11 +1,14 @@
 # Claims that cross between peers: the transport (north-star test 5, Tardis's half)
 
-Revision 2, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. Under station law section 3,
+Revision 3, 2026-11-22. Tardis. Board item `spec:claim-crossing-transport`, goal line T1. Under station law section 3,
 a fresh reviewer approves it in Andy's place, and Andy can veto. Rio Grande is its partner reader.
 
 - **Revision 1 (09923aef)** went to a fresh reviewer, who approved it with seven required changes and twelve advisory
   ones (all hands 82edc797). Rio Grande's partner read asked for two more and a small one (9c1afb0e).
-- **This revision makes all of them.** They're named R1 to R7, A1 to A12, and RG1 to RG3 where they land.
+- **Revision 2 (f8ece5f5)** made all of them, named R1 to R7, A1 to A12 and RG1 to RG3. Its re-check found R1 to R7
+  fixed, and asked for four more and seven advisory ones (834c18a4).
+- **This revision makes those too.** They're named N1 to N4, and A1 to A7 of the re-check, where they land. Where an
+  advisory number appears twice, the re-check's is the one in T1, T2's list, T6 and T7.
 
 This is the follow-up that [the claim-crossing spec](2026-11-22-claim-crossing-design.md) (revision 6, 84fafe71, with
 amendments 1 and 2) leaves to a transport: "who sent what: a sender comes from the crossing's authenticated peer, never
@@ -63,7 +66,7 @@ against the code.
   - Engram's permissions ledger governs only `mem:`, `road:` and `trail:` objects (`engram/permissions.py:195-206`), so
     it doesn't reach Atlas;
   - crossings refuse a contact that only an owner trust confirmed (`contact_current`, `federation.py:148-156`).
-- **What says a peer is the owner's own:** only the lessons chain.
+- **What lists a peer as one the owner chose:** only the lessons chain, and it lists peers for the lessons room.
   - On the station, `lessons_peers` lists the peers Andy confirmed (`lessons.py:1278-1279`).
   - On another peer, the origin of its recorded lessons room (`lessons_room.room_key`, `<origin>:<room>`) is the
     station whose room its agent checked was Andy's.
@@ -82,37 +85,62 @@ against the code.
 There's one recipient per envelope, as for every action today. The payload's canonical JSON is at most 1 MiB, checked
 by the sender before it queues and again by the receiver.
 
-**Pushing an atlas row:**
-- **Its deadline** is `3 s + payload bytes / PULL_RATE`, the rate pull already uses. That's 19 s for 1 MiB, and 5.2 s
-  for the largest planted publication.
-- **It goes last in each pass:** `_due_rows` orders non-atlas rows first, then atlas rows by event order. So a room
-  message queued after an atlas row is never behind it.
-- **Its timeout is the row's, not the peer's:**
-  - the row is `failed`, with a backoff of its own, `min(3600, 60 × 2^attempts)` s in `outbox.next_attempt`;
-  - the peer's other rows keep flowing.
+**Pushing an atlas row, in two phases (N1):**
+1. **DNS, connect and the pinned handshake** (`_pinned_socket`, `transport.py:67-98`) keep today's 3 s. A timeout or
+   fault here is classified as today: a peer failure. So an unreachable peer gets `failing_since` and `last_problem`,
+   and Ops hears after a day, even when only atlas rows are queued.
+2. **The write and the wait for the answer** get `3 s + payload bytes / PULL_RATE`, the rate pull already uses. That's
+   19 s for 1 MiB, and 5.2 s for the largest planted publication. **Only a timeout in this phase is the row's:**
+   - the row is `failed`, with a backoff of its own, `min(3600, 60 × 2^attempts)` s in `outbox.next_attempt`;
+   - the peer's other rows keep flowing;
+   - `_due_rows` reads `outbox.next_attempt` for atlas rows, and `sync_once` stops resetting it to 0 for them
+     (`federation.py:583, 597-606`).
 
-  A real outage still backs the peer off, through its other rows, as today.
-- **The gate:** `send_pinned` holds the dispatch gate while it writes the body (`transport.py:138-142`). At 1 MiB
-  that's measured in Measure 3's run and reported (A9).
+**Scheduling:**
+- **Atlas rows go last in each pass.** `_due_rows` orders non-atlas rows first, then atlas rows by event order, so a
+  room message queued after an atlas row is never behind it.
+- **At most one atlas row per peer is pushed in each pass (A3).** A pass can then never stretch to minutes, or delay
+  the next pull and a SIGTERM.
+
+**The gate (N2):** for an atlas row, `send_pinned` releases the dispatch gate once `prepare` has committed the
+envelope, *before* the write. So a store transaction, such as `ask`'s on tardis-peer's crossing socket
+(`crossing.py:404`), never waits behind a slow push.
+- A hold that commits during that write meets an attempt already in flight. That's the rule PROTOCOL.md already gives
+  for a hold after the write, and PROTOCOL.md says it holds here too.
+- Room rows keep today's gate.
 
 **Pulling an atlas row** already has its own scaled deadline, and needs nothing new.
 
 ### T2. Who may send, and to whom (R5, RG1)
 
-- **The sender:** a ship, in process on its own peer, with `superyak_peer atlas-send --data-dir D --as <ship> --to
-  <contact> --file <package or notice>`. Nothing else sends: no room, board item or brief triggers a send.
+- **The sender:** a ship that has an owner who is an admin on its peer. It sends in process on its own peer, with
+  `superyak_peer atlas-send --data-dir D --as <ship> --to <contact> --file <package or notice>`.
+  - An ownerless ship, such as the station ship `create-ship` makes, is refused: `_delivery_authority` would find it no
+    author (`federation.py:917-918`) (A4).
+  - Nothing else sends: no room, board item or brief triggers a send.
 - **The recipient:** a ship account on the paired peer.
 - **The contact:** at queueing *and again at every prepare* (R4), it must:
   - have a current typed code (`contact_current`). A contact that only an owner trust confirmed is refused, in words of
     its own, as for crossings;
-  - be on **the owner's own peer** (RG1). That's a peer in this peer's `lessons_peers`, or the origin of this peer's
-    recorded lessons room. Any other peer is refused with "That peer isn't listed as your owner's own: Atlas
-    publications go only to his own peers."
-- **The package's own policy (R5)** is read with string checks only, with no Atlas import. The sender refuses unless:
+  - be on **a peer the lessons chain lists** (RG1). That's a peer in this peer's `lessons_peers`, or the origin of this
+    peer's recorded lessons room, read from `lessons_room.room_key` even when `_lessons_chain` returns []
+    (`lessons.py:1141-1143`) (A1). Any other peer is refused with "That peer isn't listed for your lessons room:
+    Atlas publications go only to peers listed there."
+- **What the list is, said plainly (A1):**
+  - On the station, `lessons_peers` holds the peers Andy confirmed for the lessons room. Today those are only his own.
+  - On another peer, the origin comes from its agent's CONFIRM (`lessons.py:1322-1357`), checked against the room's
+    owner, not confirmed by Andy.
+  - Listing a peer for the lessons room now also lets Atlas publications go to its typed-code contacts. So
+    `station-lessons-room`'s view says so, as `pair` prints its lessons line. A trust-made ship's contact is still
+    refused, by the typed-code rule above.
+- **The package's own policy (R5, N4)** is read with string checks only, with no Atlas import. The sender refuses
+  unless:
   - an `allow` rule grants `retain` with a `publishers` entry exactly equal to the destination's
     `urn:superyak:peer:<peer id>`;
-  - no `allow` rule has a publisher pattern ending in `*`;
-  - no `allow` rule grants `reshare`.
+  - no `allow` rule has a `*` anywhere in any selector: actions, publishers, audiences, contexts, domains, purposes,
+    profiles or media types. `authorize` matches a trailing `*` as a prefix (`lighthouse_wire.py:234`), so
+    `actions: ["*"]` would grant `reshare`;
+  - no `allow` rule names `reshare`.
 - **Duplicates (R6):** the sender refuses to queue a payload whose digest it already has queued, delivered or failed
   for the same contact, saying "Already sent to that contact". The receiver also stores a duplicate once (T6).
 
@@ -132,8 +160,14 @@ by the sender before it queues and again by the receiver.
     (`lighthouse_wire.py:204`), so this version takes none.
 
   These are string comparisons on known fields.
-- **Every fault in an atlas receive is a 4xx (A2).** An integrity or storage fault on the new table is caught and
-  answered 400 with its own words, so it never reaches the 500 that `classify` counts as a peer failure.
+- **How each fault in an atlas receive is answered (A2, N3):**
+  - **A duplicate on the new key** is acknowledged as a duplicate.
+  - **A deterministic fault,** such as a malformed payload, a refused issuer or a full quota, is a 4xx with its own
+    words. The row is `refused`.
+  - **A passing storage fault,** `sqlite3.OperationalError` (locked, busy, I/O or full), answers 503. That's
+    peer-scoped, as it is for every row today, so the row is retried. Atlas rows go last, so a 503 doesn't hold back
+    room messages in the pass.
+  - **Nothing escapes as a 500.**
 - **What the receiver keeps,** beside each payload:
   - **the signed envelope, exactly as it arrived (RG2);**
   - the delivering peer (`origin`) and its card's signing key;
@@ -158,8 +192,8 @@ fixture case. Attestation for a third store is a later spec, when a third peer e
 
 **Decided by the fresh reviewer, in Andy's place under section 3:** option 1, with T2's checks. Andy can veto.
 
-1. **Chosen:** the typed pairing, between peers the lessons chain lists as the owner's own, plus each package's own
-   policy. Each policy is written in the Measure 3 run's commit before the run, and names only the two peers' URIs:
+1. **Chosen:** the typed pairing, between peers the lessons chain lists (T2), plus each package's own policy. Each
+   policy is written in the Measure 3 run's commit before the run, and names only the two peers' URIs:
    - `read`, `link_overlap` and `retain` are allowed;
    - `reshare` isn't.
 
@@ -173,7 +207,7 @@ fixture case. Attestation for a third store is a later spec, when a third peer e
 **This amends the claim-crossing spec.** That spec says "A publication crosses only under its owner's ledger" (its D4)
 and that a real crossing "waits on an allow its owner signs" (its "What this spec does not do"). This spec puts in
 their place:
-- Andy's typed pairing between his own listed peers;
+- Andy's typed pairing, between peers listed for his lessons room;
 - each package's policy, which its sender's checks enforce.
 
 No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
@@ -200,8 +234,9 @@ No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
 - **`superyak_peer atlas-verify FILE`** checks that a copied file's signature still covers its payload, and that the
   key's SHA-256 is the issuer's peer id. So source identity survives a copy (RG2).
 - **On the Atlas side, a new `atlas/workbench/sourced_received.py`:**
-  - `received(file, own_publications)` checks T3's binding against `delivered.origin`, and that the SHA-256 of the
-    file's key is that origin. That's a **consistency check**; the signature is `atlas-verify`'s, since Atlas has no
+  - `received(file, own_publications)` takes the receiver's own URI from the issuer of `own_publications`, its caller's,
+    not from the file (A6). It checks T3's binding against `delivered.origin`, and that the SHA-256 of the file's key
+    is that origin. That's a **consistency check**; the signature is `atlas-verify`'s, since Atlas has no
     Ed25519 (A5).
   - It refuses a receiver-issued carried entry unless `own_publications` hold that claim digest with that snapshot
     (R2).
@@ -224,19 +259,26 @@ No law line makes this act his. Andy can veto, and then option 2 or 3 applies.
   (`peer_store.py:203-222`):
   - `action` is the action, and `resource_id` is the payload digest;
   - `revision` is 1;
-  - `metadata` holds the payload and the sending ship's id.
+  - `metadata` holds only the sending ship's id, the digest, the kind and the collection's title;
+  - **the payload goes in a side table, `atlas_outgoing`, keyed by digest (A2).** `_delivery_authority` and `status()`
+    parse every row's metadata and envelope inside a transaction (`federation.py:892, 928, 958-959`), so a payload
+    in metadata would be parsed on every `deliveries` call.
 - **`_prepare_in` has an atlas branch:** it re-checks T2's contact rules, then builds the envelope from `metadata`. A
   contact that fails them now makes the row `withdrawn`. Today a non-room row would raise 404.
 - **`status()` and `_delivery_authority`:**
   - `_delivery_authority` names the ship's owner as an atlas row's author, so Andy's `deliveries` and `retry` show
     and retry it, under the ship's name;
   - `status()` titles it "Atlas publication" or "Atlas notice", with the collection's title, not "Room unavailable".
-- **New, for ships:** `superyak_peer atlas-deliveries --data-dir D --as <ship> [--retry KEY]` lists that ship's own
-  atlas rows and retries a refused one. It's trusted-local, and admin commands still refuse ship keys.
-- **Refusal words, by direction (A3):**
+- **New, for ships:** `superyak_peer atlas-deliveries --data-dir D --as <ship> [--retry KEY]` lists the atlas rows
+  whose `metadata` names that ship, and retries a refused one through a path of its own (R4).
+  - `retry()` checks the owner as author (`federation.py:976`), so it isn't reused.
+  - `atlas-deliveries` is trusted-local, and admin commands still refuse ship keys.
+  - The owner must be an admin on that peer to see the rows in `deliveries` (`__main__.py:332-340`).
+- **Refusal words, by direction:**
   - on a push, the sender keeps the receiver's words in `last_error`;
-  - on a pull, the puller's refusal reaches the sender as a status only. So a pulled direction's words are read on the
-    receiving peer, where `atlas-received` lists refusals with their words.
+  - on a pull, the puller's refusal reaches the sender as a status only. So the puller keeps each refused atlas row's
+    words in a table of its own, `atlas_refused` (origin, event id, words, at), and `atlas-received` lists them
+    (A5). `_take_pulled` keeps none today (`federation.py:849-857`).
 - **An old receiver** refuses an atlas row alone, on either path (`classify` for push, `_take_pulled` for pull). The
   row waits for a `retry`. The deploy goes receivers first.
 - **PROTOCOL.md** gains the two actions, their payloads, their refusals and T1's deadlines (A9).
@@ -260,7 +302,7 @@ then, the result reports one direction and says why.
 - the transport's facts:
   - rows sent, delivered, refused and retried;
   - the seconds from send to receipt;
-  - the longest gate hold.
+  - the longest write of an atlas push, which no longer holds the gate (T1).
 
 Nothing is a score, and a failure is a result.
 
@@ -277,23 +319,31 @@ Nothing is a score, and a failure is a result.
    - a payload over 1 MiB, at the sender and again at the receiver;
    - a recipient that isn't a ship;
    - a contact only an owner trust confirmed;
-   - a contact on a peer that isn't the owner's own;
+   - a contact on a peer the lessons chain doesn't list;
+  - an ownerless ship;
    - a held contact;
    - an unpaired origin;
-   - a policy with no exact `retain` allow for the destination, with a wildcard publisher, or allowing `reshare`;
+   - a policy with no exact `retain` allow for the destination, a `*` in any selector (`actions: ["*"]` among them), or
+     a rule naming `reshare`;
    - a non-empty `attestations`;
    - a second send of one digest to one contact;
    - an origin over 64 MiB;
-   - a storage fault, answered 400 and not 500.
+   - a locked store, answered 503 and retried, not refused (N3);
+   - a duplicate on the new key, acknowledged as a duplicate.
 3. **The old receiver, on both paths:** a push to an old listener and a pull by an old puller each refuse only the
    atlas row, and a room message queued after it is still delivered.
-4. **No stall:** on a link throttled below the 3 s deadline, an atlas row times out alone, with its own backoff, while
-   a room message queued after it is delivered in the same pass.
+4. **No stall, no hidden outage, no held gate:**
+   - On a link throttled below the write deadline, an atlas row times out alone, with its own backoff, and a room
+     message queued after it is delivered in the same pass.
+   - An unreachable peer with only an atlas row queued still gets `failing_since` and `last_problem` (N1).
+   - A store transaction completes while a throttled atlas push is writing (N2).
+   - Two atlas rows to one peer go in two passes (A3).
 5. **Idempotency:** one package sent to two ships on one peer is stored for each. The same event id with a different
    digest gets 409, as today.
 6. **Status:** an atlas row shows in Andy's `deliveries` under its ship, and in the ship's `atlas-deliveries`. `retry`
    sends a refused one again, and a contact that lost its code makes the row `withdrawn` at prepare.
-7. **Unpair and hold:** each deletes that origin's rows, and `atlas-received` writes nothing from an unpaired origin.
+7. **Unpair, hold and restore's reconcile:** each deletes that origin's rows (A7), and `atlas-received` writes
+   nothing from an unpaired origin.
 8. **Atlas reading:**
    - a file whose `delivered.origin` or key was edited fails `received`'s consistency check;
    - a payload that was edited fails `atlas-verify`;
@@ -319,6 +369,7 @@ Nothing is a score, and a failure is a result.
 
 - **#12's push peer on Tardis.** It's for Engram recall both ways, not needed to send.
 - **Rooms, briefs and the board.** None of them sends or shows a publication.
-- **A third store, or a peer the lessons chain doesn't list as the owner's own.** T2's code refuses both, and T4
-  refuses a third store's artifacts.
+- **A third store, or a peer the lessons chain doesn't list.** T2's code refuses a peer that isn't listed, and T4
+  refuses a third store's artifacts. Listing another owner's peer for the lessons room would open sends to it. That's
+  why `station-lessons-room`'s view says so (T2).
 - **Agreement.** Each store keeps its own records and history. The rule and the reports only show.
