@@ -10,7 +10,7 @@ see: docs/checklists.md#merging-to-main-law-section-2
 - [ ] killer: Partners: Rio Grande, Serenity, Tardis. No ship's silence counts as consent; if Andy (quoted) says one is out, the rest say yes and it reviews on return. No ship pushes straight to main.
 - [ ] Only Rio Grande and Serenity merge to main, on a verdict posted whole in the room: Rio Grande's for a Serenity branch; Serenity's, or a fresh Pi reviewer's that took no part, for a Rio Grande one.
 - [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. An unpushed merge is agreed by tree: `git rev-parse <commit>^{tree}` on both machines.
-- [ ] Pi suites pass (engram, peer, agent, as touched); a known failure is named and fails alike on main here. GitHub CI: a pushed head's before merge, main's after; red holds it unless known and boarded.
+- [ ] Pi suites pass (engram, peer, agent, as touched); a known failure is named and fails alike on main here. CI: the head's, in the reader's verdict; main's after. Red holds unless known and boarded.
 - [ ] The `only-include` lists name every new module and test file (peer's and agent's are held by test_packaging; check others by hand); the package builds and imports in a clean venv.
 - [ ] The station database is backed up (`make station-backup`).
 - [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, each stop read from the unit; a touched public route is probed from outside; if a check fails, revert and restart.
