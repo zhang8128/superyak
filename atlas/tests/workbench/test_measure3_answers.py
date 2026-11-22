@@ -147,3 +147,84 @@ def test_an_item_with_no_record_keeps_its_fields_and_is_listed():
     records = registry(collection()["sources"])
     del records["s4"]
     assert check(collection(), records) == {"deviations": [], "without_record": ["s4"]}
+
+
+# --- copies and notices (Rio Grande's read, 5afaf5bb) -----------------------------------------------------------------
+
+from workbench import Store  # noqa: E402
+from workbench.measure3_answers import copy_answers, notice_reach  # noqa: E402
+
+
+def test_copy_answers_lists_declared_copies_and_reles_copied_answers_over_every_cross_pair():
+    got = copy_answers([load("tardis")], [load("pi")])
+    assert got["declared"] and set(map(tuple, got["declared"])) <= set(map(tuple, got["answered_copied"]))
+    assert all(len(pair) == 2 for pair in got["answered_copied"])
+
+
+def test_notice_reach_splits_direct_reach_from_reach_through_supports(tmp_path):
+    model = load("tardis")["snapshot"]["payload"]["model"]
+    store = Store(tmp_path / "t.db", create=True)
+    store.import_bundle({"schema_version": 1, "title": model["title"],
+                         "sources": [{k: v for k, v in s.items() if k != "keys"} for s in model["sources"]],
+                         "items": model["items"], "relations": model["relations"]})
+    notices = json.loads((FIXTURES / "notices.json").read_text())
+    publications = [load(n) for n in ("tardis", "pi", "pi-corrected", "third")]
+    got = notice_reach(notices["N1"], store=store, own=load("tardis"), publications=publications)
+    assert got == {"direct": ["T-lean-copy-a"], "through_supports": ["T-lean-a"], "outcome": "reported"}
+
+
+# --- the one committed Crossref and PubMed client (Rio Grande's read, 5afaf5bb, 2) ------------------------------------
+
+from workbench.measure3_answers import crossref_record, lookup, pubmed_record  # noqa: E402
+
+RECORDED = ATLAS / "tests" / "fixtures" / "measure3"
+
+
+def recorded(url):
+    """Recorded responses, keyed by the request the client makes."""
+    if url == "https://api.crossref.org/works/10.1056/nejmoa2022926":
+        return json.loads((RECORDED / "crossref-nejm.json").read_text())
+    if url == "https://api.crossref.org/works/10.1101/2020.07.15.20151852":
+        return json.loads((RECORDED / "crossref-medrxiv.json").read_text())
+    if url == "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=32356626&retmode=json":
+        return json.loads((RECORDED / "pubmed-32356626.json").read_text())
+    raise AssertionError(f"unexpected request {url}")
+
+
+def test_crossref_gives_title_zero_the_issued_year_and_the_version_links():
+    got = crossref_record("10.1056/NEJMoa2022926", fetch=recorded)
+    assert got["title"] == "Effect of Hydroxychloroquine in Hospitalized Patients with Covid-19"
+    assert (got["year"], got["doi"]) == (2020, "10.1056/nejmoa2022926")
+    assert got["relations"]["has-preprint"] == ["10.1101/2020.07.15.20151852"]
+
+
+def test_pubmed_gives_its_title_year_and_doi():
+    got = pubmed_record("32356626", fetch=recorded)
+    assert got == {"pmid": "32356626", "doi": "10.1056/nejmoa2007621", "year": 2020,
+                   "title": "Cardiovascular Disease, Drug Therapy, and Mortality in Covid-19."}
+
+
+def test_lookup_uses_crossref_for_a_doi_pubmed_for_a_pmid_url_and_nothing_otherwise():
+    assert lookup({"url": "https://doi.org/10.1056/NEJMoa2022926", "citation": "", "title": "x", "year": 2020},
+                  fetch=recorded)["year"] == 2020
+    assert lookup({"url": "https://pubmed.ncbi.nlm.nih.gov/32356626/", "citation": "", "title": "x", "year": 2020},
+                  fetch=recorded)["pmid"] == "32356626"
+    assert lookup({"url": "https://news.example/a-story", "citation": "", "title": "x", "year": 2020},
+                  fetch=recorded) is None
+
+
+def test_freeze_check_with_the_client_passes_canonical_fields_and_flags_a_trimmed_title():
+    medrxiv = crossref_record("10.1101/2020.07.15.20151852", fetch=recorded)
+    good = {"id": "g1", "title": medrxiv["title"], "year": 2020,
+            "url": "https://www.medrxiv.org/content/10.1101/2020.07.15.20151852v1",
+            "citation": "doi:10.1101/2020.07.15.20151852"}
+    trimmed = {**good, "id": "g2", "title": "Effect of Hydroxychloroquine in Hospitalized Patients with COVID-19"}
+    bundle = collection()
+    bundle["sources"][:2] = [good, trimmed]
+    for item in bundle["items"]:
+        item["evidence"] = [{"source_id": "g1" if e["source_id"] == "s0" else "g2" if e["source_id"] == "s1" else e["source_id"], "locator": "p1"} for e in item["evidence"]]
+
+    def client(source):
+        return lookup(source, fetch=recorded) if source["id"] in ("g1", "g2") else registry(collection()["sources"]).get(source["id"])
+    got = freeze_check(bundle, client)["deviations"]
+    assert not any("g1" in d for d in got) and any("g2" in d and "title" in d for d in got)

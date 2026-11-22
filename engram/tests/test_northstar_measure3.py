@@ -148,6 +148,16 @@ def test_side_by_side_names_every_methods_answer_and_the_truth():
 
 # --- evaluate(): the whole analysis from stage 1's file and the audit file -------------------------------------------
 
+def sealed(a, stage):
+    """The audit as its file's bytes, with every T × P source label the labeller would write, and its sha256."""
+    import hashlib
+    import json as _json
+    labels = {f"T:{x['id']}|P:{y['id']}": m.source_label(a, x["id"], y["id"])
+              for xs in stage["records"]["T"].values() for x in xs for ys in stage["records"]["P"].values() for y in ys}
+    raw = _json.dumps({**a, "labels": labels}, sort_keys=True).encode()
+    return raw, hashlib.sha256(raw).hexdigest()
+
+
 def stage1(t_records, p_records, rel):
     pairs = [{"t": t, "p": p, "rel": rel[(t, p)], "reason": None if rel[(t, p)] != "unknown" else "unclear sources",
               "link": None} for t in sorted(t_records) for p in sorted(p_records)]
@@ -160,7 +170,8 @@ def test_evaluate_runs_every_method_and_reads_too_little_overlap_on_a_small_case
     rel = {("T1", "P1"): "same sources", ("T1", "P2"): "independent", ("T2", "P1"): "independent",
            ("T2", "P2"): "independent"}
     a = audit({"T:a": "doi:10.1/x", "T:b": "doi:10.1/y", "P:c": "doi:10.1/x", "P:d": "doi:10.1/z"})
-    out = m.evaluate(stage1(t, p, rel), a, replicates=50)
+    stage = stage1(t, p, rel)
+    out = m.evaluate(stage, *sealed(a, stage), replicates=50)
     assert set(out["costs"]) == {"REL", "B1", "B2", "B3", "U0", "O1", "I1"}
     assert out["costs"]["REL"]["cost"] == 0 and out["costs"]["U0"]["cost"] == pytest.approx(0.25 * 4)
     assert out["costs"]["I1"]["cost"] == 1 and out["costs"]["O1"]["cost"] == pytest.approx(0.5 * 3)
@@ -173,8 +184,48 @@ def test_evaluate_drops_each_of_the_three_most_shared_classes_in_turn():
     p = {f"P{i}": [src(f"p{i}", doi=f"10.1/{i % 4}")] for i in range(12)}
     classes = {**{f"T:t{i}": f"doi:10.1/{i % 4}" for i in range(12)}, **{f"P:p{i}": f"doi:10.1/{i % 4}" for i in range(12)}}
     rel = {(a, b): ("same sources" if int(a[1:]) % 4 == int(b[1:]) % 4 else "independent") for a in t for b in p}
-    out = m.evaluate(stage1(t, p, rel), audit(classes), replicates=50)
+    stage = stage1(t, p, rel)
+    out = m.evaluate(stage, *sealed(audit(classes), stage), replicates=50)
     assert out["shared_classes"] == 4 and len(out["drops"]) == 3
     assert out["most_shared"] == ["doi:10.1/0", "doi:10.1/1", "doi:10.1/2"]
     assert out["reading"] in ("the structure helps on real data", "keys and titles help; the ordered rules aren't shown to",
                               "no measured gain (with a few hundred pairs, that may mean the run was too small to see one)")
+
+
+# --- copies and notices, scored (Rio Grande's read, 5afaf5bb) ---------------------------------------------------------
+
+def test_copies_are_scored_as_misses_and_extras():
+    got = m.score_copies({"declared": [["t1", "p1"], ["t2", "p2"]], "answered_copied": [["t1", "p1"], ["t3", "p3"]]})
+    assert got == {"misses": [["t2", "p2"]], "extras": [["t3", "p3"]], "declared": 2}
+
+
+def test_notice_reach_is_compared_with_the_audits():
+    got = m.score_reach({"N1": {"direct": ["a", "b"], "through_supports": ["c"]}}, {"N1": ["b", "d"]})
+    assert got == {"N1": {"missing": ["d"], "extra": ["a"], "through_supports": ["c"]}}
+
+
+# --- the seal, enforced in code (Serenity's read, ab885c15; her watcher's point 2) -----------------------------------
+
+def small_case():
+    t = {"T1": [src("a", doi="10.1/x")]}
+    p = {"P1": [src("c", doi="10.1/x")]}
+    return stage1(t, p, {("T1", "P1"): "same sources"}), audit({"T:a": "doi:10.1/x", "P:c": "doi:10.1/x"})
+
+
+def test_evaluate_refuses_an_audit_file_that_isnt_the_sealed_one():
+    stage, a = small_case()
+    raw, sha = sealed(a, stage)
+    with pytest.raises(ValueError, match="isn't the sealed one"):
+        m.evaluate(stage, raw + b" ", sha, replicates=10)
+
+
+def test_evaluate_refuses_a_sealed_label_that_the_classes_dont_give():
+    import hashlib
+    import json as _json
+    stage, a = small_case()
+    raw, _ = sealed(a, stage)
+    doc = _json.loads(raw)
+    doc["labels"]["T:a|P:c"] = "DIFFERENT"          # the derivation says SAME
+    raw = _json.dumps(doc, sort_keys=True).encode()
+    with pytest.raises(ValueError, match="T:a\\|P:c"):
+        m.evaluate(stage, raw, hashlib.sha256(raw).hexdigest(), replicates=10)

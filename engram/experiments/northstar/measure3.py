@@ -183,9 +183,35 @@ def side_by_side(pairs, answers_by_method, truth):
 
 # --- the whole analysis -----------------------------------------------------------------------------------------------
 
-def evaluate(stage1, audit, *, replicates=REPLICATES):
+def check_seal(audit_bytes, sealed_sha256, stage1):
+    """The seal, in code (Serenity's read): the audit file's bytes must hash to the sealed value posted before any
+    method ran, and every sealed label must be the one the classes and unclear pairs give. Returns the parsed audit,
+    or raises on either failure, so nothing is ever scored against anything but the sealed truth."""
+    import hashlib
+    import json
+    got = hashlib.sha256(audit_bytes).hexdigest()
+    if got != sealed_sha256:
+        raise ValueError(f"The audit file isn't the sealed one: its sha256 is {got}, the seal {sealed_sha256}")
+    audit = json.loads(audit_bytes)
+    rec = stage1["records"]
+    mismatched = []
+    for t_sources in rec["T"].values():
+        for x in t_sources:
+            for p_sources in rec["P"].values():
+                for y in p_sources:
+                    key = f"T:{x['id']}|P:{y['id']}"
+                    if audit["labels"].get(key) != source_label(audit, x["id"], y["id"]):
+                        mismatched.append(key)
+    if mismatched:
+        raise ValueError(f"Sealed labels the classes don't give: {', '.join(sorted(set(mismatched))[:10])}")
+    return audit
+
+
+def evaluate(stage1, audit_bytes, sealed_sha256, *, replicates=REPLICATES):
     """Every method's answers and costs, the record bootstrap, the three drops, the component secondary, the matrices,
-    the break-even weight, item 3's side-by-side view, and the reading, from stage 1's file and the sealed audit."""
+    the break-even weight, item 3's side-by-side view, and the reading, from stage 1's file and the sealed audit's
+    bytes, checked against their seal first."""
+    audit = check_seal(audit_bytes, sealed_sha256, stage1)
     rec = stage1["records"]
     t_ids, p_ids = sorted(rec["T"]), sorted(rec["P"])
     pairs = [(r["t"], r["p"]) for r in stage1["pairs"]]
@@ -240,3 +266,25 @@ def evaluate(stage1, audit, *, replicates=REPLICATES):
             "not_independent": not_independent, "undecided": sum(1 for v in truth.values() if v == "undecided"),
             "matrices": matrices, "break_even_abstention_weight": break_even, "reading": read,
             "side_by_side": side_by_side(pairs, {n: answers[n] for n in ("REL", "B1", "B2", "B3")}, truth)}
+
+
+# --- copies and notices, scored (Rio Grande's read) -------------------------------------------------------------------
+
+def score_copies(stage1_copies):
+    """REL must answer copied on each declared copy and on no other cross pair of held claims."""
+    declared = {tuple(p) for p in stage1_copies["declared"]}
+    answered = {tuple(p) for p in stage1_copies["answered_copied"]}
+    return {"misses": [list(p) for p in sorted(declared - answered)],
+            "extras": [list(p) for p in sorted(answered - declared)], "declared": len(declared)}
+
+
+def score_reach(rel_reach, audit_reach):
+    """Per notice: the records the audit says it reaches that REL's direct reach misses, the ones REL adds, and REL's
+    reach through `supports`, reported apart."""
+    out = {}
+    for notice in sorted(set(rel_reach) | set(audit_reach)):
+        rel = set(rel_reach.get(notice, {}).get("direct", []))
+        truth = set(audit_reach.get(notice, []))
+        out[notice] = {"missing": sorted(truth - rel), "extra": sorted(rel - truth),
+                       "through_supports": sorted(rel_reach.get(notice, {}).get("through_supports", []))}
+    return out

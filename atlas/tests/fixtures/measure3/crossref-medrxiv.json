@@ -1,0 +1,27 @@
+{
+ "message": {
+  "DOI": "10.1101/2020.07.15.20151852",
+  "issued": {
+   "date-parts": [
+    [
+     2020,
+     7,
+     15
+    ]
+   ]
+  },
+  "relation": {
+   "is-preprint-of": [
+    {
+     "asserted-by": "subject",
+     "id": "10.1056/NEJMoa2022926",
+     "id-type": "doi"
+    }
+   ]
+  },
+  "title": [
+   "Effect of Hydroxychloroquine in Hospitalized Patients with COVID-19: Preliminary results from a multi-centre, randomized, controlled trial"
+  ]
+ },
+ "note": "Trimmed to the fields measure3_answers' client reads, from the live response fetched on 2026-11-22."
+}
