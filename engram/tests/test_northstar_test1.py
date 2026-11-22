@@ -93,6 +93,20 @@ RECORDS = [
      "text": "Nile Band's lead singer once honored a city called Boston.", "links": ["Jane Pryce"]},
     {"title": "Jane Pryce", "page_id": 10, "rev_id": 1,
      "text": "Jane Pryce performed with Nile Band for a decade.", "links": []},
+    # For classify_name (revision 4): a biography with a "(born" parenthesis, one with a life-span year
+    # range, and a resolvable non-person (a place) -- the same shape as the bug revision 4 fixes.
+    {"title": "Thomas Reed", "page_id": 11, "rev_id": 1,
+     "text": "Thomas Reed (born 3 March 1950) is a British actor.", "links": []},
+    {"title": "Agnes Clarke", "page_id": 12, "rev_id": 1,
+     "text": "Agnes Clarke (1842-1907) was an astronomer.", "links": []},
+    {"title": "County Tyrone", "page_id": 13, "rev_id": 1,
+     "text": "County Tyrone is a county in Northern Ireland.", "links": []},
+    # A bridge pair mentioning "Thomas Reed" in exactly one lead, for a qualifying-level person test (the
+    # person himself is page 11 above; neither of these is his own article, avoiding the self-mention trap).
+    {"title": "Echo Films", "page_id": 14, "rev_id": 1,
+     "text": "Echo Films was founded by Thomas Reed in 1990.", "links": []},
+    {"title": "Echo Films Studio", "page_id": 15, "rev_id": 1,
+     "text": "Echo Films Studio is based in Soho.", "links": []},
 ]
 
 
@@ -114,6 +128,7 @@ def redirects(tmp_path):
     db.execute("CREATE TABLE r (title TEXT PRIMARY KEY, target TEXT NOT NULL) WITHOUT ROWID")
     db.execute("INSERT INTO r VALUES ('Lotus band', 'Lotus (band)')")
     db.execute("INSERT INTO r VALUES ('Old Band Name', 'Lotus (band)')")
+    db.execute("INSERT INTO r VALUES ('Thomas R Reed', 'Thomas Reed')")
     db.commit()
     return db
 
@@ -138,29 +153,60 @@ def bridge(qid, question, answer, gold):
 # The qualifying rule
 # =====================================================================================
 
-class TestAnswerClass:
+class TestAnswerShape:
+    """``answer_shape`` is the structural check alone (year-or-name-shaped), with no corpus lookup --
+    before revision 4 splits "name" into "person" and "other_name" (``TestClassifyName`` below)."""
+
     def test_bare_four_digit_year_is_the_year_class(self):
-        assert ns.answer_class("1970") == "year"
+        assert ns.answer_shape("1970") == "year"
 
     def test_a_full_date_is_neither_class(self):
         # the re-check: "a third of otherwise qualifying answers are dates ... left out, not mis-substituted"
-        assert ns.answer_class("12 January 1970") is None
-        assert ns.answer_class("1970s") is None
+        assert ns.answer_shape("12 January 1970") is None
+        assert ns.answer_shape("1970s") is None
 
     def test_name_shaped_including_accents_periods_hyphens_apostrophes(self):
-        assert ns.answer_class("Ann Vale") == "name"
-        assert ns.answer_class("Curaçao") == "name"
-        assert ns.answer_class("St. Louis") == "name"
-        assert ns.answer_class("O'Brien") == "name"
-        assert ns.answer_class("Jean-Luc") == "name"
+        assert ns.answer_shape("Ann Vale") == "name"
+        assert ns.answer_shape("Curaçao") == "name"
+        assert ns.answer_shape("St. Louis") == "name"
+        assert ns.answer_shape("O'Brien") == "name"
+        assert ns.answer_shape("Jean-Luc") == "name"
 
     def test_a_lowercase_phrase_is_neither_class(self):
-        assert ns.answer_class("a record label") is None
-        assert ns.answer_class("the Royal Navy") is None
+        assert ns.answer_shape("a record label") is None
+        assert ns.answer_shape("the Royal Navy") is None
 
     def test_empty_or_non_string_answer_is_neither_class(self):
-        assert ns.answer_class("") is None
-        assert ns.answer_class(None) is None
+        assert ns.answer_shape("") is None
+        assert ns.answer_shape(None) is None
+
+
+class TestClassifyName:
+    """revision 4: a name-shaped answer is "person" only when it resolves to a corpus article with a birth
+    or life-span parenthesis; otherwise "other_name" -- including when it doesn't resolve at all."""
+
+    def test_a_born_parenthesis_is_a_person(self, corpus, redirects):
+        assert ns.classify_name("Thomas Reed", corpus, redirects) == "person"
+
+    def test_a_year_range_parenthesis_is_a_person(self, corpus, redirects):
+        assert ns.classify_name("Agnes Clarke", corpus, redirects) == "person"
+
+    def test_a_resolvable_non_person_is_other_name(self, corpus, redirects):
+        # the bug revision 4 fixes: "Sir Edward Seymour Hicks" (a person) was swapped for "County Tyrone"
+        # (a place) because both are merely name-shaped; this is the place side of that same-shape pair.
+        assert ns.classify_name("County Tyrone", corpus, redirects) == "other_name"
+
+    def test_an_unresolvable_answer_is_other_name(self, corpus, redirects):
+        assert ns.classify_name("No Such Person At All", corpus, redirects) == "other_name"
+
+    def test_resolution_goes_through_redirects(self, corpus, redirects):
+        assert ns.classify_name("Thomas R Reed", corpus, redirects) == "person"  # redirects to "Thomas Reed"
+
+    def test_answer_class_composes_shape_and_classify_name(self, corpus, redirects):
+        assert ns.answer_class("1970", corpus, redirects) == "year"
+        assert ns.answer_class("Thomas Reed", corpus, redirects) == "person"
+        assert ns.answer_class("County Tyrone", corpus, redirects) == "other_name"
+        assert ns.answer_class("a record label", corpus, redirects) is None
 
 
 class TestWholeWordOccurrences:
@@ -201,7 +247,14 @@ class TestQualifyingLeads:
         row = bridge("q2", "Where did the airport that opened in 1942 open?", "Curaçao",
                      ["Delta Airport", "Ann Vale"])
         info = ns.qualifying_leads(row, corpus, redirects)
-        assert info is not None and info["answer_class"] == "name"
+        # "Curaçao" doesn't itself resolve to a corpus article here, so it's other_name, not person.
+        assert info is not None and info["answer_class"] == "other_name"
+
+    def test_a_person_answer_qualifies_with_the_person_class(self, corpus, redirects):
+        row = bridge("q11", "Whose manager founded Echo Films?", "Thomas Reed",
+                     ["Echo Films", "Echo Films Studio"])
+        info = ns.qualifying_leads(row, corpus, redirects)
+        assert info is not None and info["answer_class"] == "person"
 
     def test_answer_in_both_leads_does_not_qualify(self, corpus, redirects):
         row = bridge("q3", "Who was the singer of the band Echo?", "Ann Vale",
@@ -283,17 +336,22 @@ class TestDraw:
 
 
 class TestSplitAndDonors:
-    def _qualifying(self, n_year, n_name):
+    def _qualifying(self, n_year, n_person, n_other_name=0):
         out = []
         for i in range(n_year):
             out.append({"id": f"y{i}", "question": "q", "answer": str(1900 + i), "answer_class": "year",
                        "gold_leads": [{"page_id": 1, "rev_id": 1, "title": "A"},
                                       {"page_id": 2, "rev_id": 1, "title": "B"}],
                        "corrected_lead_index": 1})
-        for i in range(n_name):
-            out.append({"id": f"n{i}", "question": "q", "answer": f"Name{i}", "answer_class": "name",
+        for i in range(n_person):
+            out.append({"id": f"p{i}", "question": "q", "answer": f"Person{i}", "answer_class": "person",
                        "gold_leads": [{"page_id": 10, "rev_id": 1, "title": "C"},
                                       {"page_id": 11, "rev_id": 1, "title": "D"}],
+                       "corrected_lead_index": 1})
+        for i in range(n_other_name):
+            out.append({"id": f"o{i}", "question": "q", "answer": f"Place{i}", "answer_class": "other_name",
+                       "gold_leads": [{"page_id": 20, "rev_id": 1, "title": "E"},
+                                      {"page_id": 21, "rev_id": 1, "title": "F"}],
                        "corrected_lead_index": 1})
         return out
 
@@ -316,9 +374,25 @@ class TestSplitAndDonors:
         substitutes = ns.choose_substitutes(qualifying, corrected, seed=5)
         for index, substitute in substitutes.items():
             original = qualifying[index]
+            donor_class = "year" if substitute.isdigit() else "person"
             assert substitute != original["answer"]
-            donor_class = "year" if substitute.isdigit() else "name"
             assert donor_class == original["answer_class"]
+
+    def test_a_person_is_never_swapped_for_a_place_or_vice_versa(self):
+        # revision 4's fix, directly: with person and other_name donors both on offer at once, a person's
+        # substitute must still come from the person pool only, and an other_name's from other_name only
+        # (the bug this closes: "Sir Edward Seymour Hicks" to "County Tyrone").
+        qualifying = self._qualifying(n_year=0, n_person=4, n_other_name=4)
+        corrected = list(range(len(qualifying)))  # correct every one
+        substitutes = ns.choose_substitutes(qualifying, corrected, seed=3)
+        person_answers = {q["answer"] for q in qualifying if q["answer_class"] == "person"}
+        other_name_answers = {q["answer"] for q in qualifying if q["answer_class"] == "other_name"}
+        for index, substitute in substitutes.items():
+            original_class = qualifying[index]["answer_class"]
+            if original_class == "person":
+                assert substitute in person_answers and substitute not in other_name_answers
+            else:
+                assert substitute in other_name_answers and substitute not in person_answers
 
     def test_substitute_choice_is_reproducible(self):
         qualifying = self._qualifying(6, 6)
@@ -608,6 +682,15 @@ class TestScoring:
         result = ns.primary_verdict(diff_ci, e_calls=10, b_calls=100)
         assert result["accuracy"] == "borderline" and result["verdict"] == "borderline"
 
+    def test_primary_verdict_fails_on_borderline_accuracy_when_not_cheaper(self):
+        # revision 4: "if E isn't cheaper, the verdict is 'fails' whatever the accuracy" -- so a
+        # borderline-accuracy CI must not be reported as merely "borderline" once E also failed the calls test.
+        diff_ci = {"ci95": [-8.0, -2.0]}  # the same straddling CI as the test above
+        result = ns.primary_verdict(diff_ci, e_calls=70, b_calls=100)  # ratio 0.7, not under the 0.6 threshold
+        assert result["accuracy"] == "borderline"
+        assert result["cheaper"] is False
+        assert result["verdict"] == "fails"
+
     def test_controls_unchanged_counts_changes_and_stayed_right(self):
         before = {"c1": {"answer": "A", "em": True}, "c2": {"answer": "B", "em": False}}
         after = {"c1": {"answer": "A"}, "c2": {"answer": "C"}}
@@ -629,6 +712,58 @@ class TestScoring:
 
 
 # =====================================================================================
+# summarize: the primary (E against B-all), the secondary (E against E-all, revision 4),
+# and their call counts, on hand-made before/after rows.
+# =====================================================================================
+
+class TestSummarize:
+    def test_primary_and_secondary_are_none_with_fewer_than_two_corrected(self):
+        sample = [{"id": "c1", "arm": "corrected"}, {"id": "k1", "arm": "control"}]
+        rows = {"c1": {"answer": "A", "em": True}, "k1": {"answer": "B", "em": True}}
+        summary = ns.summarize(sample, rows, rows, {}, rows, {}, {}, set(), {})
+        assert summary["primary"] is None
+        assert summary["secondary_e_vs_e_all"] is None
+
+    def test_primary_and_secondary_count_calls_and_agree_when_answers_match(self):
+        # Four corrected questions: E reasks c0 and c1 (retraction_impact named them) and gets them right;
+        # c2 and c3 were never reasked, but E's *prior* belief there already matched B-all's after-correction
+        # answer, and E-all (asked fresh on every one) also agrees everywhere -- a zero-variance CI on both
+        # comparisons, so this pins down the call counts `summarize` computes, not just the CI arithmetic
+        # (already covered by TestScoring).
+        sample = [{"id": f"c{i}", "arm": "corrected"} for i in range(4)]
+        before_e = {"c0": {"answer": "old0", "em": False}, "c1": {"answer": "old1", "em": False},
+                   "c2": {"answer": "right2", "em": True}, "c3": {"answer": "right3", "em": True}}
+        after_e = {"c0": {"answer": "new0", "em": True}, "c1": {"answer": "new1", "em": True}}
+        after_b = {f"c{i}": {"answer": f"ans{i}", "em": True} for i in range(4)}
+        e_all = {f"c{i}": {"answer": f"eall{i}", "em": True} for i in range(4)}
+        reask_ids = {"c0", "c1"}
+        usage = {"e": {"calls": 6}, "b_all": {"calls": 8}}
+
+        summary = ns.summarize(sample, before_e, after_b, after_e, after_b, e_all, {}, reask_ids, usage)
+
+        assert summary["primary"] == {
+            "diff_ci": {"n": 4, "points": 0.0, "ci95": [0.0, 0.0]}, "accuracy": "within margin",
+            "e_calls": 2, "b_calls": 4, "calls_ratio": 0.5, "cheaper": True, "verdict": "succeeds",
+        }
+        assert summary["secondary_e_vs_e_all"] == {
+            "em_ci": {"n": 4, "points": 0.0, "ci95": [0.0, 0.0]}, "e_calls": 2, "e_all_calls": 4,
+        }
+        assert summary["cost"] == usage
+
+    def test_e_calls_only_counts_the_corrected_questions_e_actually_reasked(self):
+        sample = [{"id": "c0", "arm": "corrected"}, {"id": "c1", "arm": "corrected"}]
+        before_e = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
+        after_b = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
+        e_all = {"c0": {"answer": "a", "em": True}, "c1": {"answer": "a", "em": True}}
+        # c0 was reasked (its claim cited the corrected lead); c1 was not, and a control question that was
+        # reasked by coincidence must not be counted as one of the *corrected* calls.
+        summary = ns.summarize(sample, before_e, after_b, {"c0": before_e["c0"]}, after_b, e_all, {},
+                               {"c0", "not-in-sample"}, {})
+        assert summary["primary"]["e_calls"] == 1
+        assert summary["secondary_e_vs_e_all"]["e_calls"] == 1
+
+
+# =====================================================================================
 # build_plan end to end, on the planted corpus (no model calls)
 # =====================================================================================
 
@@ -645,6 +780,8 @@ class TestBuildPlan:
         for q in plan["questions"]:
             if q["arm"] == "corrected":
                 assert q["substitute"] != q["answer"]
+        assert sum(plan["class_counts"].values()) == 4
+        assert set(plan["class_counts"]) <= {"year", "person", "other_name"}
 
     def test_build_plan_raises_below_the_minimum(self, corpus, redirects):
         pool = _pool(corpus, redirects, n_qualifying=1, n_junk=2)

@@ -1,19 +1,23 @@
 """North-star test 1: one environment, end to end, with a correction.
 
-Spec: ``docs/superpowers/specs/2026-11-22-north-star-test-1-design.md`` (approved, revision 3). Draws 800
+Spec: ``docs/superpowers/specs/2026-11-22-north-star-test-1-design.md`` (approved, revision 4). Draws 800
 qualifying HotpotQA bridge questions from the train split, corrects half of their gold leads with a seeded
-substitute, and compares the environment arm (E: BM25 then one link hop through ``corpus-index``, answers
-recorded as Atlas claims citing the leads used) against a hybrid baseline (B-all: BM25's top 100 reranked by a
-dense embedder) on exact match and model calls after the correction, paired, with a 95% CI. B-cache (a floor:
-B's first answers, never re-asked) and closed book (the corrected half with no evidence) read beside it.
+substitute (a year, a person, or any other name -- revision 4 splits "name" in two so a donor never swaps a
+person for a place), and compares the environment arm (E: BM25 then one link hop through ``corpus-index``,
+answers recorded as Atlas claims citing the leads used) against a hybrid baseline (B-all: BM25's top 100
+reranked by a dense embedder) on exact match and model calls after the correction, paired, with a 95% CI --
+"fails" whatever the accuracy if E isn't cheaper (revision 4). E-all (revision 4, secondary: E's own
+retrieval re-asking every question) isolates what targeting saves from how well E retrieves. B-cache (a
+floor: B's first answers, never re-asked) and closed book (the corrected half with no evidence) read beside it.
 
 Two modes:
 - ``plan``: everything the pre-registration fixes -- seeds, the qualifying count and draws needed, the 800
   ids, the corrected/control split, each substitute, and the overlay's sha256 -- with **no model calls**.
   Writes ``plan.json``.
-- ``run --plan plan.json``: executes the plan. A full run needs the real model and the full index; this
-  module's ``run_smoke`` (the CLI's ``run`` subcommand) is capped at 10 questions and builds its *corrected*
-  index from a small subset of pages, never the full 7.2M-document rebuild (the spec's limits for this build).
+- ``run --plan plan.json``: a smoke of at most 10 questions (the default), with a *small* corrected index
+  built only from the pages that smoke touches -- this build's limits. ``run --plan plan.json --full`` runs
+  every one of the 800 with the real, full-corpus corrected index, every full-index query through
+  ``capped.sh``; expensive, and not run by this build.
 
 Usage (PYTHONPATH must include this repo's ``engram`` and, for ``run``, ``atlas`` too -- as
 ``hotpot_open.py``'s docstring already asks for Atlas-backed scripts here):
@@ -21,6 +25,8 @@ Usage (PYTHONPATH must include this repo's ``engram`` and, for ``run``, ``atlas`
 --parquet P.parquet --out plan.json``
 ``PYTHONPATH=engram:atlas python -m experiments.northstar.test1 run --plan plan.json --corpus C.sqlite3
 --index index.bin --store store.db --out results.json``
+``PYTHONPATH=engram:atlas python -m experiments.northstar.test1 run --plan plan.json --full --corpus C.sqlite3
+--index index.bin --store store.db --capped-sh capped.sh --out results.json``
 
 Atlas's sources are immutable and ``retraction_impact`` only reads (R4), so this module holds its own
 convention instead of editing anything in place: each lead revision is its own source (``wiki:<page
@@ -135,6 +141,7 @@ class CorpusLookup:
 # =====================================================================================
 
 _YEAR_RE = None  # set below to keep `re` import local to this section
+_PERSON_LEAD_RE = None
 
 
 def _year_re():
@@ -144,6 +151,20 @@ def _year_re():
 
         _YEAR_RE = re.compile(r"^\d{4}$")
     return _YEAR_RE
+
+
+def _person_lead_re():
+    """A birth or life-span parenthesis: "(born ..." literally, or a parenthesis (optionally prefixed
+    "born"/"b."/"c.") holding a year range with a hyphen or an en dash, like "1935-2010" (revision 4)."""
+    global _PERSON_LEAD_RE
+    if _PERSON_LEAD_RE is None:
+        import re
+
+        en_dash = chr(0x2013)  # built from its code point, not pasted, so this file's diff stays ASCII
+        _PERSON_LEAD_RE = re.compile(
+            r"\((?:born|b\.|c\.)?[^)]*\b\d{3,4}\s*[" + en_dash + r"-]\s*\d{3,4}|\(born"
+        )
+    return _PERSON_LEAD_RE
 
 
 def _is_name_word(word: str) -> bool:
@@ -161,8 +182,9 @@ def is_name_shaped(answer: str) -> bool:
     return all(_is_name_word(word) for word in words)
 
 
-def answer_class(answer: str) -> str | None:
-    """"year" for a bare four-digit year, "name" for a name-shaped answer, else ``None`` (not a class this
+def answer_shape(answer: str) -> str | None:
+    """"year" for a bare four-digit year, "name" for a name-shaped answer (the structural check alone --
+    before revision 4's split of "name" into "person" and "other_name"), else ``None`` (not a class this
     test substitutes)."""
     if not isinstance(answer, str):
         return None
@@ -171,6 +193,29 @@ def answer_class(answer: str) -> str | None:
     if is_name_shaped(answer):
         return "name"
     return None
+
+
+def classify_name(answer: str, corpus: CorpusLookup, redirects) -> str:
+    """"person" when ``answer``, resolved through redirects the same way a gold title is, names a corpus v0
+    article whose lead opens with a birth or life-span parenthesis in its first 200 characters; "other_name"
+    otherwise -- including when ``answer`` doesn't resolve to any article in the corpus at all (revision 4:
+    the re-check found a same-shape donor had swapped a person, "Sir Edward Seymour Hicks", for a county,
+    "County Tyrone"; an unresolvable answer is treated the same as a resolvable non-person, not as an error)."""
+    lead = corpus.by_title(current_title(answer, redirects))
+    if lead is None:
+        return "other_name"
+    return "person" if _person_lead_re().search(lead["text"][:200]) else "other_name"
+
+
+def answer_class(answer: str, corpus: CorpusLookup, redirects) -> str | None:
+    """"year", "person" or "other_name" (revision 4's three substitution classes), or ``None`` when
+    ``answer`` is neither a bare four-digit year nor name-shaped at all."""
+    shape = answer_shape(answer)
+    if shape is None:
+        return None
+    if shape == "year":
+        return "year"
+    return classify_name(answer, corpus, redirects)
 
 
 def whole_word_occurrences(text: str, word: str) -> list[int]:
@@ -215,8 +260,8 @@ def replace_whole_word(text: str, word: str, substitute: str) -> str:
 def qualifying_leads(row: dict, corpus: CorpusLookup, redirects) -> dict | None:
     """``None`` when ``row`` (one HotpotQA record) doesn't qualify for this test; otherwise a dict holding
     ``gold_leads`` (the two lead dicts from ``CorpusLookup``, in the order their 2017 titles originally came
-    in), ``answer_class`` ("year" or "name"), and ``corrected_lead_index`` (0 or 1: which of the two holds
-    the answer as a whole word -- exactly one must).
+    in), ``answer_class`` ("year", "person" or "other_name", revision 4), and ``corrected_lead_index`` (0 or
+    1: which of the two holds the answer as a whole word -- exactly one must).
 
     The rule (spec, "Qualifying rule"): a bridge question, whose answer is a bare four-digit year or
     name-shaped, whose two gold leads both resolve (through redirects) to distinct articles present in the
@@ -224,7 +269,7 @@ def qualifying_leads(row: dict, corpus: CorpusLookup, redirects) -> dict | None:
     """
     if row.get("type") != "bridge":
         return None
-    cls = answer_class(row.get("answer", ""))
+    cls = answer_class(row.get("answer", ""), corpus, redirects)
     if cls is None:
         return None
     gold_titles_2017 = row["supporting_facts"]["title"]
@@ -375,12 +420,17 @@ def build_plan(rows: list[dict], excluded_ids: set, corpus: CorpusLookup, redire
             entry["substitute"] = substitutes[i]
         questions.append(entry)
 
+    class_counts: dict[str, int] = {}
+    for q in qualifying:
+        class_counts[q["answer_class"]] = class_counts.get(q["answer_class"], 0) + 1
+
     return {
         "seeds": {"pool": pool_seed, "split": split_seed, "donor": donor_seed},
         "target": target, "min_qualifying": min_qualifying,
         "pool_size": len(pool_rows), "excluded_ids": len(excluded_ids),
         "qualifying_found": len(qualifying), "draws_needed": draws,
         "corrected_count": len(corrected_idx), "control_count": len(control_idx),
+        "class_counts": class_counts,
         "questions": questions,
         "overlay": overlay, "overlay_sha256": overlay_sha256(overlay),
         "model": MODEL, "prompt_version": PROMPT_VERSION,
@@ -585,9 +635,10 @@ def primary_verdict(diff_ci: dict, e_calls: int, b_calls: int, *,
                     margin: float = MARGIN, calls_ratio_threshold: float = CALLS_RATIO_THRESHOLD) -> dict:
     """R2's primary, read off a 95% CI on (E's exact match - B-all's exact match), never off the point
     estimate alone: "succeeds" when the CI holds E within ``margin`` points of B-all AND E used under
-    ``calls_ratio_threshold`` of B-all's calls; "fails" when the CI shows E more than ``margin`` points under,
-    or E wasn't cheap enough; "borderline" when the CI straddles ``-margin`` (the pre-registered rule for
-    when the interval can't decide it either way)."""
+    ``calls_ratio_threshold`` of B-all's calls; "borderline" when the CI straddles ``-margin`` (the
+    pre-registered rule for when the interval can't decide it either way) *and* E was cheap enough; "fails"
+    otherwise -- in particular, if E isn't cheaper, the verdict is "fails" whatever the accuracy (revision 4:
+    a borderline-accuracy, not-cheaper case must not read as merely "borderline")."""
     lower, upper = diff_ci["ci95"]
     if lower > -margin:
         accuracy = "within margin"
@@ -597,9 +648,11 @@ def primary_verdict(diff_ci: dict, e_calls: int, b_calls: int, *,
         accuracy = "borderline"
     calls_ratio = (e_calls / b_calls) if b_calls else float("inf")
     cheaper = calls_ratio < calls_ratio_threshold
-    if accuracy == "borderline":
+    if not cheaper:
+        verdict = "fails"
+    elif accuracy == "borderline":
         verdict = "borderline"
-    elif accuracy == "within margin" and cheaper:
+    elif accuracy == "within margin":
         verdict = "succeeds"
     else:
         verdict = "fails"
@@ -776,36 +829,58 @@ def _usage(prior: dict | None, new: dict, seconds: float = 0.0) -> dict:
     return out
 
 
-def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
-             capped_sh=None, capped_gb: int = 16, count: int = SMOKE_LIMIT,
-             model: str = MODEL, ask_fn=real_ask, embed_fn=None, workdir=None) -> dict:
-    """Runs the first ``count`` (<= 10) of the plan's 800 questions against the real model and data: E's and
-    B-all's first pass (real BM25/hop/dense rerank over the real index), a *small* corrected index built only
-    from the pages this smoke's questions and the overlay touch, then both arms' second pass, B-cache, and
-    closed book for the corrected ones among this smoke's sample. Not a result: too few questions, and the
-    corrected index is a small stand-in, not the real corrected corpus."""
-    if count > SMOKE_LIMIT:
-        raise ValueError(f"run_smoke is capped at {SMOKE_LIMIT} questions; got {count}")
-    if embed_fn is None:
-        from embeddings import NomicEmbedProvider
+def summarize(sample: list[dict], before_e: dict, before_b: dict, after_e: dict, after_b: dict,
+             e_all: dict, closed_book: dict, reask_ids, usage: dict) -> dict:
+    """The measures computed the same way regardless of sample size (10 for a smoke, 800 for the full run):
+    the primary (E against B-all on the corrected half, paired em CI and calls, through `primary_verdict`),
+    the secondary (E against E-all, revision 4: what provenance targeting saves, apart from how well E
+    retrieves), controls left unchanged, and stale answers read beside closed book."""
+    corrected_ids = sorted(q["id"] for q in sample if q["arm"] == "corrected")
+    control_ids = sorted(q["id"] for q in sample if q["arm"] == "control")
+    e_final = {qid: (after_e[qid] if qid in reask_ids else before_e[qid]) for qid in before_e}
 
-        provider = NomicEmbedProvider()
-        embed_fn = provider.embed
+    primary = secondary = None
+    if len(corrected_ids) >= 2:
+        corrected_rows = [{"e": e_final[qid]["em"], "b_all": after_b[qid]["em"]} for qid in corrected_ids]
+        em_ci = paired_ci(corrected_rows, lambda r: r["e"], lambda r: r["b_all"])
+        e_calls_corrected = sum(1 for qid in corrected_ids if qid in reask_ids)
+        b_calls_corrected = len(corrected_ids)  # B-all re-asks every question after the correction
+        primary = primary_verdict(em_ci, e_calls_corrected, b_calls_corrected)
 
+        e_all_rows = [{"e": e_final[qid]["em"], "e_all": e_all[qid]["em"]} for qid in corrected_ids]
+        secondary = {"em_ci": paired_ci(e_all_rows, lambda r: r["e"], lambda r: r["e_all"]),
+                    "e_calls": e_calls_corrected, "e_all_calls": len(corrected_ids)}
+
+    return {
+        "corrected_ids": corrected_ids, "control_ids": control_ids,
+        "primary": primary, "secondary_e_vs_e_all": secondary,
+        "controls": controls_unchanged(before_b, after_b, control_ids),
+        "stale_answers": stale_answers(before_e, e_final, corrected_ids, closed_book),
+        "cost": usage,
+    }
+
+
+def _run_arms(plan: dict, sample: list[dict], *, corpus_path, index_path, bin_path, store_path,
+              capped_sh, capped_gb: int, model: str, ask_fn, embed_fn, workdir: Path, full: bool) -> dict:
+    """The arms shared by the smoke (``full=False``, a handful of pages in the corrected index, queried
+    directly) and the full run (``full=True``, the real corrected index, queried through ``capped.sh`` like
+    the original one): E's and B-all's first pass, the corrected index, E's targeted reask (only what
+    ``retraction_impact`` names) and E-all's untargeted one (every question, revision 4), B-all's reask,
+    closed book, B-cache, and the summary measures."""
     corpus = CorpusLookup.open(corpus_path)
-    workdir = Path(workdir or tempfile.mkdtemp(prefix="northstar-smoke-"))
-    sample = plan["questions"][:count]
     store = open_store(Path(store_path), create=True)
 
-    def query_full(items, k):
-        if capped_sh is not None:
-            return run_queries_capped(bin_path, index_path, items, k, capped_sh=capped_sh, mem_gb=capped_gb,
+    def query(path, items, k, through_cap):
+        # `through_cap` asks for capped.sh; `run_full` has already refused to start without --capped-sh, so
+        # only the smoke (optional capped_sh) can still fall through to a direct, uncapped query here.
+        if through_cap and capped_sh is not None:
+            return run_queries_capped(bin_path, path, items, k, capped_sh=capped_sh, mem_gb=capped_gb,
                                       workdir=workdir)
-        return run_queries(bin_path, index_path, items, k)
+        return run_queries(bin_path, path, items, k)
 
     items = [(q["id"], q["question"]) for q in sample]
-    e_picks = query_full(items, E_K)
-    b_picks = query_full(items, B_BM25_K)
+    e_picks = query(index_path, items, E_K, through_cap=True)
+    b_picks = query(index_path, items, B_BM25_K, through_cap=True)
 
     usage: dict[str, dict] = {}
     before_e, before_b = {}, {}
@@ -828,18 +903,17 @@ def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
                              "f1": round(f1(b_answer, q["answer"]), 4), "seconds": b_seconds}
 
     overlay = plan["overlay"]
-    touched_pages.update(row["page_id"] for row in overlay)
     docs_path, links_path, corrected_index_path = workdir / "docs.tsv", workdir / "links.tsv", workdir / "corrected.bin"
-    export_stats = export_corrected_tsv(corpus, overlay, docs_path, links_path, page_ids=touched_pages)
+    page_ids = None if full else touched_pages | {row["page_id"] for row in overlay}
+    export_stats = export_corrected_tsv(corpus, overlay, docs_path, links_path, page_ids=page_ids)
     build_stats = build_corpus_index(bin_path, docs_path, links_path, corrected_index_path)
 
-    overlay_old_sources = {source_id(row["page_id"], row["old_rev"]) for row in overlay}
     sample_corrected_ids = {q["id"] for q in sample if q["arm"] == "corrected"}
     sample_control_ids = {q["id"] for q in sample if q["arm"] == "control"}
     corrected_claims = {cid for cid in impacted_claim_ids(store, overlay) if cid.startswith("claim-e-")}
     now = _utc_now()
     history_before = {}
-    reask_ids = set()
+    reask_ids: set[str] = set()
     for q in sample:
         cid = claim_id(q["id"])
         if cid in corrected_claims:
@@ -847,20 +921,31 @@ def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
             withdraw_claim(store, cid, "test1: a cited source was retracted (north-star test 1)")
             reask_ids.add(q["id"])
 
+    # E-all (revision 4, secondary): E's own retrieval, every question re-asked on the corrected index --
+    # isolates what provenance targeting saves from how well E retrieves, apart from E's targeted reask below.
+    e_all_picks = query(corrected_index_path, items, E_K, through_cap=full)
+    e_all = {}
+    for q in sample:
+        leads = [apply_overlay_lead(lead, overlay) for pid in e_all_picks.get(q["id"], ([], []))[1]
+                if (lead := corpus.by_page_id(pid)) is not None]
+        answer, seconds, info = ask_fn(model, build_prompt(q["question"], leads))
+        usage["e_all"] = _usage(usage.get("e_all"), info, seconds)
+        e_all[q["id"]] = {"answer": answer, "em": exact(answer, q["answer"]),
+                          "f1": round(f1(answer, q["answer"]), 4), "seconds": seconds}
+
+    # E's targeted reask: only the claims retraction_impact named. The leakage guard (R6) holds here by
+    # construction, not by scanning this prompt's text for the prior answer: real evidence can legitimately
+    # contain the correct answer word again (it did, on this build's own smoke run -- "Seymour Hicks" was
+    # both the earlier answer and a name genuinely in the retrieved lead), so that scan is a false-positive
+    # generator, not a guard. build_prompt takes only (question_text, leads) -- see its signature test.
+    reask_items = [(q["id"], q["question"]) for q in sample if q["id"] in reask_ids]
+    e_reask_picks = query(corrected_index_path, reask_items, E_K, through_cap=full) if reask_items else {}
     after_e, after_b, closed_book = {}, {}, {}
     for q in sample:
         if q["id"] not in reask_ids:
             continue
-        # The corrected index is small (a handful of pages): query it directly, no capped.sh needed.
-        picks_small = run_queries(bin_path, corrected_index_path, [(q["id"], q["question"])], E_K)
-        _, hop_ids = picks_small.get(q["id"], ([], []))
-        leads = [apply_overlay_lead(lead, overlay) for pid in hop_ids
+        leads = [apply_overlay_lead(lead, overlay) for pid in e_reask_picks.get(q["id"], ([], []))[1]
                 if (lead := corpus.by_page_id(pid)) is not None]
-        # The leakage guard (R6) holds here by construction, not by scanning this prompt's text for the
-        # prior answer: real evidence can legitimately contain the correct answer word again (it did, on
-        # this build's own smoke run -- "Seymour Hicks" was both the earlier answer and a name genuinely in
-        # the retrieved lead), so that scan is a false-positive generator, not a guard. build_prompt takes
-        # only (question_text, leads) -- see its signature test -- and this is the only call site.
         prompt_text = build_prompt(q["question"], leads)
         answer, seconds, info = ask_fn(model, prompt_text)
         record_e_claim(store, q["id"], q["question"], answer, leads, attempt=2)
@@ -868,10 +953,10 @@ def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
         after_e[q["id"]] = {"answer": answer, "em": exact(answer, q["answer"]),
                             "f1": round(f1(answer, q["answer"]), 4), "seconds": seconds}
 
+    # B-all: every question re-asked on the corrected index (never targeted).
+    b_reask_picks = query(corrected_index_path, items, B_BM25_K, through_cap=full)
     for q in sample:
-        picks_small = run_queries(bin_path, corrected_index_path, [(q["id"], q["question"])], B_BM25_K)
-        bm25_ids, _ = picks_small.get(q["id"], ([], []))
-        candidates = [apply_overlay_lead(lead, overlay) for pid in bm25_ids
+        candidates = [apply_overlay_lead(lead, overlay) for pid in b_reask_picks.get(q["id"], ([], []))[0]
                      if (lead := corpus.by_page_id(pid)) is not None]
         leads = dense_rerank(q["question"], candidates, embed_fn, top=B_TOP)
         prompt_text = build_prompt(q["question"], leads)
@@ -888,16 +973,56 @@ def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
                                     "f1": round(f1(cb_answer, q["answer"]), 4), "seconds": cb_seconds}
 
     b_cache_after = b_cache_from(before_b)
+    summary = summarize(sample, before_e, before_b, after_e, after_b, e_all, closed_book, reask_ids, usage)
 
     return {
         "sample": [q["id"] for q in sample], "corrected_in_sample": sorted(sample_corrected_ids),
         "control_in_sample": sorted(sample_control_ids), "reasked_by_e": sorted(reask_ids),
         "export_stats": export_stats, "build_stats": build_stats,
         "before": {"e": before_e, "b_all": before_b},
-        "after": {"e": after_e, "b_all": after_b, "b_cache": b_cache_after, "closed_book": closed_book},
-        "history_before_correction": history_before, "usage": usage,
-        "controls": controls_unchanged(before_b, after_b, sample_control_ids),
+        "after": {"e": after_e, "b_all": after_b, "e_all": e_all, "b_cache": b_cache_after,
+                  "closed_book": closed_book},
+        "history_before_correction": history_before, "usage": usage, "summary": summary,
     }
+
+
+def run_smoke(plan: dict, *, corpus_path, index_path, bin_path, store_path,
+             capped_sh=None, capped_gb: int = 16, count: int = SMOKE_LIMIT,
+             model: str = MODEL, ask_fn=real_ask, embed_fn=None, workdir=None) -> dict:
+    """Runs the first ``count`` (<= 10) of the plan's 800 questions against the real model and data: a
+    *small* corrected index built only from the pages this smoke's questions and the overlay touch (queried
+    directly, not through ``capped.sh`` -- it's tiny), with every other arm as ``run_full`` has them. Not a
+    result: too few questions, and the corrected index is a small stand-in, not the real corrected corpus."""
+    if count > SMOKE_LIMIT:
+        raise ValueError(f"run_smoke is capped at {SMOKE_LIMIT} questions; got {count}")
+    if embed_fn is None:
+        from embeddings import NomicEmbedProvider
+
+        embed_fn = NomicEmbedProvider().embed
+    workdir = Path(workdir or tempfile.mkdtemp(prefix="northstar-smoke-"))
+    sample = plan["questions"][:count]
+    return _run_arms(plan, sample, corpus_path=corpus_path, index_path=index_path, bin_path=bin_path,
+                     store_path=store_path, capped_sh=capped_sh, capped_gb=capped_gb, model=model,
+                     ask_fn=ask_fn, embed_fn=embed_fn, workdir=workdir, full=False)
+
+
+def run_full(plan: dict, *, corpus_path, index_path, bin_path, store_path,
+             capped_sh, capped_gb: int = 16, model: str = MODEL, ask_fn=real_ask, embed_fn=None,
+             workdir=None) -> dict:
+    """All 800 of the plan's questions against the real model and data: the *real*, full-corpus corrected
+    index (``export_corrected_tsv(..., page_ids=None)`` then ``build_corpus_index``), with every query
+    against either full index -- the original and the corrected -- routed through ``capped.sh`` (``full``
+    and the full corrected index are each gigabytes). Expensive; not run by this build (the spec's limits)."""
+    if capped_sh is None:
+        raise ValueError("run_full needs --capped-sh: every full-index query must be memory-capped")
+    if embed_fn is None:
+        from embeddings import NomicEmbedProvider
+
+        embed_fn = NomicEmbedProvider().embed
+    workdir = Path(workdir or tempfile.mkdtemp(prefix="northstar-full-"))
+    return _run_arms(plan, plan["questions"], corpus_path=corpus_path, index_path=index_path, bin_path=bin_path,
+                     store_path=store_path, capped_sh=capped_sh, capped_gb=capped_gb, model=model,
+                     ask_fn=ask_fn, embed_fn=embed_fn, workdir=workdir, full=True)
 
 
 # =====================================================================================
@@ -925,7 +1050,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             json.dump(plan, handle, indent=1)
     summary = {k: v for k, v in plan.items() if k not in ("questions", "overlay")}
     summary["first_substitutes"] = [
-        {"id": q["id"], "answer": q["answer"], "substitute": q["substitute"]}
+        {"id": q["id"], "class": q["answer_class"], "answer": q["answer"], "substitute": q["substitute"]}
         for q in plan["questions"] if q["arm"] == "corrected"
     ][:5]
     print(json.dumps(summary, indent=1))
@@ -935,10 +1060,16 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     with open(args.plan, encoding="utf-8") as handle:
         plan = json.load(handle)
-    result = run_smoke(
-        plan, corpus_path=args.corpus, index_path=args.index, bin_path=args.bin, store_path=args.store,
-        capped_sh=args.capped_sh, capped_gb=args.capped_gb, count=args.count, model=plan.get("model", MODEL),
-    )
+    if args.full:
+        result = run_full(
+            plan, corpus_path=args.corpus, index_path=args.index, bin_path=args.bin, store_path=args.store,
+            capped_sh=args.capped_sh, capped_gb=args.capped_gb, model=plan.get("model", MODEL),
+        )
+    else:
+        result = run_smoke(
+            plan, corpus_path=args.corpus, index_path=args.index, bin_path=args.bin, store_path=args.store,
+            capped_sh=args.capped_sh, capped_gb=args.capped_gb, count=args.count, model=plan.get("model", MODEL),
+        )
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(result, handle, indent=1)
@@ -960,7 +1091,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--out", default="plan.json")
     plan_parser.set_defaults(func=_cmd_plan)
 
-    run_parser = sub.add_parser("run", help="execute a plan (a smoke of at most 10 questions in this build)")
+    run_parser = sub.add_parser("run", help="execute a plan (a smoke of at most 10 questions by default)")
     run_parser.add_argument("--plan", required=True)
     run_parser.add_argument("--corpus", required=True)
     run_parser.add_argument("--index", required=True)
@@ -968,7 +1099,11 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--store", required=True)
     run_parser.add_argument("--capped-sh", default=None, help="capped.sh, required while --index is the full corpus")
     run_parser.add_argument("--capped-gb", type=int, default=16)
-    run_parser.add_argument("--count", type=int, default=SMOKE_LIMIT)
+    run_parser.add_argument("--count", type=int, default=SMOKE_LIMIT, help="ignored with --full (always all 800)")
+    run_parser.add_argument("--full", action="store_true",
+                            help="run every question in the plan with the real, full-corpus corrected index "
+                                 "(needs --capped-sh); the default without this flag is a smoke of --count "
+                                 "questions (at most 10) with a small-subset corrected index")
     run_parser.add_argument("--out")
     run_parser.set_defaults(func=_cmd_run)
 
