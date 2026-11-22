@@ -3279,6 +3279,16 @@ def test_an_announcement_still_waiting_for_its_frame_is_not_said_to_the_next_acc
             assert page.evaluate("announcer.textContent") == "A later announcement"
 
 
+def test_the_same_account_still_hears_an_announcement_made_just_before_a_rebind(browser_peer):
+    # bindEditorIdentity runs on every sign-in read, so it hushes only when the account changes: a save's message
+    # announced just before a read of the same account is still said (Serenity's check, all hands 987096f3).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("announce('Saved.'); bindEditorIdentity(state.me)")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "Saved."
+
+
 @pytest.mark.parametrize("press, route, confirm", [
     ("^Mark this room$", "cloud", None),
     ("^Remove .* from this room", "participants/**", confirm_remove),
