@@ -141,7 +141,8 @@ class CorpusLookup:
 # =====================================================================================
 
 _YEAR_RE = None  # set below to keep `re` import local to this section
-_PERSON_LEAD_RE = None
+_BORN_WORD_RE = None
+_YEAR_RANGE_RE = None
 
 
 def _year_re():
@@ -153,18 +154,48 @@ def _year_re():
     return _YEAR_RE
 
 
-def _person_lead_re():
-    """A birth or life-span parenthesis: "(born ..." literally, or a parenthesis (optionally prefixed
-    "born"/"b."/"c.") holding a year range with a hyphen or an en dash, like "1935-2010" (revision 4)."""
-    global _PERSON_LEAD_RE
-    if _PERSON_LEAD_RE is None:
+def _born_word_re():
+    global _BORN_WORD_RE
+    if _BORN_WORD_RE is None:
+        import re
+
+        _BORN_WORD_RE = re.compile(r"\bborn\b")
+    return _BORN_WORD_RE
+
+
+def _year_range_re():
+    """Two 3-or-4-digit years joined by a dash or en dash, with any text in between (a founding or life
+    span: "1935-2010", "February 18, 1950 – August 6, 2009", "c. 1340 – 1400") -- widened from
+    revision 4's first cut, which only caught a dash immediately next to both years."""
+    global _YEAR_RANGE_RE
+    if _YEAR_RANGE_RE is None:
         import re
 
         en_dash = chr(0x2013)  # built from its code point, not pasted, so this file's diff stays ASCII
-        _PERSON_LEAD_RE = re.compile(
-            r"\((?:born|b\.|c\.)?[^)]*\b\d{3,4}\s*[" + en_dash + r"-]\s*\d{3,4}|\(born"
-        )
-    return _PERSON_LEAD_RE
+        _YEAR_RANGE_RE = re.compile(r"\b\d{3,4}\b.*?[" + en_dash + r"-].*?\b\d{3,4}\b")
+    return _YEAR_RANGE_RE
+
+
+def _first_parenthetical(text: str, open_within: int = 200) -> str | None:
+    """The content of the first parenthesis in ``text`` that *opens* within its first ``open_within``
+    characters, or ``None`` when none does. Not nested-paren aware (a birth or life-span parenthesis in a
+    Wikipedia lead isn't either), and the content itself isn't truncated at ``open_within`` -- only where
+    the "(" falls is bounded, not how far the matching ")" is."""
+    opens_at = text.find("(")
+    if opens_at == -1 or opens_at >= open_within:
+        return None
+    closes_at = text.find(")", opens_at + 1)
+    if closes_at == -1:
+        return None
+    return text[opens_at + 1:closes_at]
+
+
+def _is_person_parenthetical(content: str) -> bool:
+    """revision 4, widened: the word "born" anywhere in the parenthesis (so "(; born ...)", a stripped
+    pronunciation guide before it, still counts), or two 3-or-4-digit years joined by a dash with any text
+    between them (so a full birth-to-death date range with no "born" word, like "(February 18, 1950 -
+    August 6, 2009)", counts too). A single year alone ("(founded 1890)") does not."""
+    return bool(_born_word_re().search(content)) or bool(_year_range_re().search(content))
 
 
 def _is_name_word(word: str) -> bool:
@@ -197,14 +228,19 @@ def answer_shape(answer: str) -> str | None:
 
 def classify_name(answer: str, corpus: CorpusLookup, redirects) -> str:
     """"person" when ``answer``, resolved through redirects the same way a gold title is, names a corpus v0
-    article whose lead opens with a birth or life-span parenthesis in its first 200 characters; "other_name"
-    otherwise -- including when ``answer`` doesn't resolve to any article in the corpus at all (revision 4:
-    the re-check found a same-shape donor had swapped a person, "Sir Edward Seymour Hicks", for a county,
-    "County Tyrone"; an unresolvable answer is treated the same as a resolvable non-person, not as an error)."""
+    article whose lead's *first* parenthesis opening in its first 200 characters is a birth or life-span one
+    (see ``_is_person_parenthetical``); "other_name" otherwise -- including when ``answer`` doesn't resolve
+    to any article in the corpus at all (revision 4: the re-check found a same-shape donor had swapped a
+    person, "Sir Edward Seymour Hicks", for a county, "County Tyrone"; an unresolvable answer is treated the
+    same as a resolvable non-person, not as an error), and including when the lead opens with a parenthesis
+    that isn't a birth or life span at all ("(founded 1890)")."""
     lead = corpus.by_title(current_title(answer, redirects))
     if lead is None:
         return "other_name"
-    return "person" if _person_lead_re().search(lead["text"][:200]) else "other_name"
+    content = _first_parenthetical(lead["text"])
+    if content is None:
+        return "other_name"
+    return "person" if _is_person_parenthetical(content) else "other_name"
 
 
 def answer_class(answer: str, corpus: CorpusLookup, redirects) -> str | None:

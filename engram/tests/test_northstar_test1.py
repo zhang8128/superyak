@@ -107,6 +107,18 @@ RECORDS = [
      "text": "Echo Films was founded by Thomas Reed in 1990.", "links": []},
     {"title": "Echo Films Studio", "page_id": 15, "rev_id": 1,
      "text": "Echo Films Studio is based in Soho.", "links": []},
+    # classify_name, widened: "born" anywhere in the parenthesis (a stripped pronunciation guide before it,
+    # as real Wikipedia leads commonly have), a full birth-to-death date range with no "born" word at all,
+    # a single year alone (not a person), and a later parenthesis that must NOT be looked at.
+    {"title": "Diane Foster", "page_id": 16, "rev_id": 1,
+     "text": "Diane Foster (; born 2 May 1972) is a violinist.", "links": []},
+    {"title": "Percy Vance", "page_id": 17, "rev_id": 1,
+     "text": "Percy Vance (12 May 1901 – 3 June 1980) was a composer.", "links": []},
+    {"title": "Grand Hall", "page_id": 18, "rev_id": 1,
+     "text": "Grand Hall (founded 1890) is a concert venue.", "links": []},
+    {"title": "Riverside Club", "page_id": 19, "rev_id": 1,
+     "text": "Riverside Club (founded 1925) hosted events (born from an older society, 1890-1910).",
+     "links": []},
 ]
 
 
@@ -207,6 +219,59 @@ class TestClassifyName:
         assert ns.answer_class("Thomas Reed", corpus, redirects) == "person"
         assert ns.answer_class("County Tyrone", corpus, redirects) == "other_name"
         assert ns.answer_class("a record label", corpus, redirects) is None
+
+    # The widened cue (the coordinator's second round): "born" anywhere in the first parenthesis, not only
+    # right after "(" -- and a full birth-to-death date range with no "born" word at all.
+
+    def test_born_anywhere_in_the_parenthesis_is_a_person(self, corpus, redirects):
+        # "(; born 2 May 1972)" -- a stripped pronunciation guide before "born", as real Wikipedia leads
+        # commonly have (David Koepp, in the real corpus); the first cut's regex missed this.
+        assert ns.classify_name("Diane Foster", corpus, redirects) == "person"
+
+    def test_a_full_date_range_with_no_born_word_is_a_person(self, corpus, redirects):
+        # "(12 May 1901 - 3 June 1980)" -- a death range with full dates, no "born" word (John Hughes, in
+        # the real corpus); the first cut's regex required the dash immediately next to both years.
+        assert ns.classify_name("Percy Vance", corpus, redirects) == "person"
+
+    def test_a_single_year_alone_is_not_a_person(self, corpus, redirects):
+        # "(founded 1890)" -- explicitly not a person: one year, no range, no "born".
+        assert ns.classify_name("Grand Hall", corpus, redirects) == "other_name"
+
+    def test_only_the_first_parenthesis_is_consulted(self, corpus, redirects):
+        # "Riverside Club (founded 1925) hosted events (born from an older society, 1890-1910)." The first
+        # parenthesis is a single year (not a person); a later one would match on both cues, but must never
+        # be looked at.
+        assert ns.classify_name("Riverside Club", corpus, redirects) == "other_name"
+
+
+class TestFirstParenthetical:
+    def test_extracts_the_first_parenthesis_content(self):
+        assert ns._first_parenthetical("Name (born 1970) text") == "born 1970"
+
+    def test_none_when_no_parenthesis_opens_early_enough(self):
+        padding = "x" * 200
+        assert ns._first_parenthetical(f"{padding}(born 1970)") is None
+
+    def test_none_when_there_is_no_parenthesis_at_all(self):
+        assert ns._first_parenthetical("Nothing here") is None
+
+    def test_content_is_not_truncated_even_if_it_runs_past_the_open_within_limit(self):
+        text = "x" * 190 + "(born 1 January 1970, a very long parenthetical) rest"
+        content = ns._first_parenthetical(text)
+        assert content == "born 1 January 1970, a very long parenthetical"
+
+
+class TestIsPersonParenthetical:
+    def test_born_word_with_boundaries(self):
+        assert ns._is_person_parenthetical("; born June 9, 1963")
+        assert not ns._is_person_parenthetical("newborn 1963")  # not the whole word "born"
+
+    def test_year_range_with_arbitrary_text_between(self):
+        assert ns._is_person_parenthetical("February 18, 1950 – August 6, 2009")
+        assert ns._is_person_parenthetical("c. 1340 - 1400")
+
+    def test_a_single_year_is_not_a_range(self):
+        assert not ns._is_person_parenthetical("founded 1890")
 
 
 class TestWholeWordOccurrences:
