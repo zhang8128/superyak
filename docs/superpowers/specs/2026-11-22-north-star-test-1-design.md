@@ -17,52 +17,74 @@ before, and spend less doing so, than the same model with a strong conventional 
 - Local models through Ollama on the Mac: nemotron-mini (about 4B), qwen3.6:27b-mlx; prompt v2 from `hotpot_smoke`.
 - HotpotQA's distractor train split (train-00000, revision 1908d6af), whose fresh draws nothing here has scored for answers.
 
-## Design
+## Design (revision 2: the fresh reviewer's six findings, R1 to R6, and power)
 
 ### Questions and corrections
 
-- **Questions:** 300 drawn by a new seed from train-00000, excluding the 4,000 ids of the two fresh router samples.
-  Bridge questions only, whose answer is a span that occurs in exactly one of the two gold articles' leads in corpus v0
-  (a correction must change the answer and nothing else). Comparison and yes/no questions are left out of this run.
-- **The ceiling, counted before the run:** how many of the draw qualify, and in how many the gold lead holds the answer
-  once. The run stops at this count if fewer than 200 qualify, and the spec is revised.
-- **A correction:** in the gold lead that holds the answer, its occurrences are replaced by a substitute, the answer of
-  another drawn question of the same answer type (a year for a year, a name for a name, by a fixed rule on the
-  string). The corrected lead is the source's new revision; the old one is retracted. Expected answer after: the
-  substitute. Half the questions, chosen by seed, are corrected; the other half are controls whose sources don't
-  change.
+- **Pool:** HotpotQA train-00000 less the 3,926 ids of the two fresh router samples (41,298 questions).
+- **Qualifying rule:** a bridge question whose two gold leads are both in corpus v0, and whose answer occurs, as a whole
+  word, in exactly one of them. The reviewer's check of 200 fresh draws found 44 to 45% qualify (R1).
+- **Draw:** the pool in an order fixed by a new seed, taking the first **600 that qualify**. The count of draws needed
+  is reported. The run needs at least 400 qualifying; below that it stops and the spec is revised.
+- **Power:** half are corrected, so about 300 paired questions. With 20% discordant pairs that gives a 95% interval
+  about ±5 points on a paired difference. That's stated before the run, not tuned after it.
+- **A correction:** in the gold lead that holds the answer, each whole-word occurrence is replaced by a substitute: the
+  answer of another qualifying question of the same type (four digits for a year, else a capitalised name), never
+  equal to the original. Half the 600, chosen by seed, are corrected; the others are controls.
+- **The corrected corpus (R5):** corpus v0 stays frozen. The corrections are an overlay file, one row per corrected page
+  with its old and new text, digested. A second `corpus-index` is built from corpus v0's export with the overlay
+  applied, and its sha256 is recorded. Reading a lead after the correction goes through the overlay.
 
-### The two systems, with one model and one evidence budget
+### One revision, one source (R4)
+
+Atlas's sources are immutable, and `retraction_impact` only reads. So test1.py holds a convention, and its tests check it.
+- Each lead revision is its own source, `wiki:<page id>@<revision>`.
+- A correction adds the new revision as a new source.
+- The questions to ask again are exactly the claims `retraction_impact([old revisions])` names. Each is then withdrawn
+  with `set_status(..., "withdrawn", reason, "test1")`, never deleted.
+- A test fails if a correction ever edits a source in place.
+
+### The arms, with one model and one evidence budget
 
 - **Environment (E):** the agent searches `corpus-index` (BM25, then one link hop, as in the open test), reads at most
-  two leads, answers, and records the answer as an Atlas claim whose evidence cites each lead it used (source id =
-  page id plus revision). After the corrections, `retraction_impact(retracted revisions)` names the claims that lost
-  support; only those questions are asked again, with the corrected corpus. The earlier claims are withdrawn, not
-  deleted, so `history_as_of` before the correction still returns them.
-- **Baseline (B):** BM25's top 100 from the same index, reranked by a dense embedder (nomic-embed-text, cosine), top 2
-  leads to the same model with the same prompt. After the corrections, B is run two ways and both are reported:
-  B-all re-asks every question (fresh, full cost), and B-cache serves its earlier answers unless a question is
-  re-asked (what a pipeline without provenance knows to do).
-- Same model (nemotron-mini, temperature 0), same prompt, two leads each, same corrected corpus.
+  two leads, answers, and records the answer as an Atlas claim citing each lead it used. After the corrections it asks
+  again only what `retraction_impact` names, on the corrected index.
+- **B-all:** BM25's top 100 from the same index, reranked by a dense embedder (nomic-embed-text, cosine). The top two
+  leads go to the same model with the same prompt. After the corrections every question is asked again on the
+  corrected index.
+- **B-cache, a floor only:** B's earlier answers, never asked again. It shows what a pipeline without provenance gives
+  if nothing triggers a re-ask (R2).
+- **Closed book (R3):** after the corrections, the corrected half asked with no evidence. This counts what the model
+  answers from memory, so a stale answer from memory isn't read as a failure of provenance.
+- **No leakage (R6):** a re-ask prompt holds the question and the retrieved leads only. It never holds an earlier
+  answer or a withdrawn claim, and a test asserts that.
+- Same model (nemotron-mini, temperature 0), same prompt, two leads each.
 
 ### Measures, fixed before the run
 
-- **Before the correction:** exact match and F1 on all 300; source support (both gold leads among those cited).
-- **After, on the corrected half:** exact match against the substitute; stale answers (the old answer still given).
-- **After, on the controls:** answers unchanged where they were right (a revision must not disturb what didn't depend
-  on it).
+- **Primary (R2), two parts, on the corrected half:**
+  1. Exact match after the correction, E against B-all, paired, with a 95% CI.
+  2. After-correction model calls, E's against B-all's.
+
+  E succeeds if it is within 5 points of B-all's exact match while using under 60% of its calls. The interval is
+  reported either way.
+- **Targeting:** of the corrected questions, how many E asks again (its claim cited the corrected lead); of the
+  controls, how many it asks again (should be none).
+- **Before the correction:** exact match and F1 on all 600; source support (both gold leads among those cited).
+- **Stale answers:** after the correction, how often each arm still gives the old answer, read beside the closed-book
+  arm's.
+- **Controls:** answers unchanged where they were right.
 - **History:** for E, `history_as_of` just before the correction returns the earlier claim for every corrected question.
-- **Cost:** model calls and tokens before and after the correction; wall time; and the cost of building E's records
-  (Atlas writes), counted in.
-- **Primary:** on the corrected half, E's exact match after the correction against B-cache's, paired, with a 95% CI.
-  Secondary: E against B-all on the same, and E's after-correction model calls against B-all's.
+- **Cost:** model calls, tokens and wall time per arm, plus the cost of building E's records and the corrected index.
 
 ### What would count against
 
-- E no better than B-cache after the correction means provenance didn't help with this model.
-- E needing as many calls as B-all means the targeting saved nothing.
-- Controls disturbed in E means the impact rule is too broad.
-- Each is reported as found, in RESULTS and on #8 and #9.
+- E more than 5 points under B-all on the corrected half.
+- E needing about as many calls as B-all.
+- Controls asked again or disturbed.
+- Most stale answers matching the closed-book arm, meaning memory rather than context decides.
+
+Each is reported as found, in RESULTS and on #8 and #9.
 
 ## Out of scope for this run
 
