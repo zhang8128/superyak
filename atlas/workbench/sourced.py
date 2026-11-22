@@ -378,7 +378,8 @@ def apply_notice(notice, *, store, own, publications, corrections=()):
     matched, unclear = {}, []
     for source in store.export_bundle()["sources"]:
         local = source_key(source)
-        results = [(ref, compare_sources(local, keys)) for ref, keys in sorted(gathered.items())]
+        results = [(ref, compare_sources(local, keys)) for ref, keys in gathered.items()]  # gathering order: a match
+        # is named by the first gathered record it matches, the notice's own record first
         for ref, result in results:
             if result == "match":
                 matched.setdefault(source["id"], how_matched(local, gathered[ref]))

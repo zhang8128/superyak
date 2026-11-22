@@ -223,6 +223,9 @@ A notice is a Claim under the new profile, with `sentenceMediaType` `application
      of Tardis's, yet Tardis's `t-copied-a-1` carries the old DOI and the same title: rule 2's "unclear". The report
      said "no impact" for a source that is the same work. The five planted reports are unchanged except for an empty
      `unclear` list, derived by hand: in each, every source unclear against one gathered record matches another.
+     The list is sorted by source id, then Snapshot digest, then record id, so the same holdings give the same report.
+     A source that matches two gathered records is named by the first it matches in gathering order, the notice's
+     own record first, as before (the fresh reviewer's finding 3).
 3. **Lists its claims reached through a chain:** every local claim whose roots, followed through its chain, include
    a gathered source. These are listed with the verdict "reached through its chain", separate from step 4's output.
    A copy whose own local source is keyed another way is caught here.

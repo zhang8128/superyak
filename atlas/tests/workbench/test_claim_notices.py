@@ -122,3 +122,53 @@ def test_a_notice_naming_a_snapshot_another_issuer_issued_is_refused():
     for notice in (correction, retraction):
         with pytest.raises(ValueError, match="another issuer"):
             validate_notice(notice, held_publications())
+
+
+def _publication(store, sources, items, **extra):
+    bundle = {"schema_version": 1, "title": f"Small {store}", "sources": sources, "items": items, "relations": []}
+    return make_fixtures.publish_sourced(bundle, {
+        "issuer": make_fixtures.issuer(store), "name": f"Small {store}", "origin": f"urn:superyak:fixture:{store}:small",
+        "context": make_fixtures.context(store), "item_ids": [i["id"] for i in items], "issued_at": make_fixtures.AT,
+        **extra})
+
+
+def _claim(record_id, source_id):
+    return {"id": record_id, "kind": "claim", "title": f"Claim {record_id}", "summary": "", "status": "source_reported",
+            "evidence": [{"source_id": source_id, "locator": "p1"}]}
+
+
+def test_a_correction_whose_only_results_are_unclear_lists_each_pair_in_order(tmp_path):
+    # amendment 4, both of its rules: t-x has a third DOI and the same title and year (rule 2); t-y is kept by an arXiv
+    # url a year earlier (rule 4). Each is unclear against the old and the new record, so four entries, sorted.
+    doi = "https://doi.org/10.5555/superyak-fixture-small-"
+    one = {"id": "p-old", "title": "A small study", "url": doi + "old", "year": 2024, "citation": ""}
+    two = {"id": "p-new", "title": "A small study", "url": doi + "new", "year": 2024, "citation": ""}
+    pi_one, pi_two = _publication("pi", [one], [_claim("P1", "p-old")]), _publication("pi", [two], [_claim("P1", "p-new")])
+    # the correction's old side gets the larger Snapshot digest, so gathering order (old, then new) differs from the
+    # report's sorted order, and the sort is pinned
+    (pi_old, old_source), (pi_new, new_source) = sorted([(pi_one, one), (pi_two, two)],
+                                                        key=lambda p: p[0]["snapshot"]["digest"]["value"], reverse=True)
+    tardis = _publication("tardis", [
+        {"id": "t-x", "title": "A small study", "url": doi + "third", "year": 2024, "citation": ""},
+        {"id": "t-y", "title": "A small study", "url": "https://arxiv.org/abs/2311.00001", "year": 2023, "citation": ""}],
+        [_claim("T1", "t-x"), _claim("T2", "t-y")])
+    model = tardis["snapshot"]["payload"]["model"]
+    store = Store(tmp_path / "small.db", create=True)
+    store.import_bundle({"schema_version": 1, "title": model["title"], "items": model["items"], "relations": [],
+                         "sources": [{k: v for k, v in s.items() if k != "keys"} for s in model["sources"]]})
+
+    def side(package, source):
+        keys = next(s["keys"] for s in package["snapshot"]["payload"]["model"]["sources"] if s["id"] == source["id"])
+        return {"snapshot": package["snapshot"]["digest"], "record_id": source["id"], "keys": keys}
+
+    correction = make_fixtures.seal_notice({"notice": "correction", "old": side(pi_old, old_source),
+                                            "new": side(pi_new, new_source), "reason": "A fictional DOI change."},
+                                           [pi_old["snapshot"], pi_new["snapshot"]], make_fixtures.issuer("pi"),
+                                           make_fixtures.context("pi"), make_fixtures.AT)
+    report = apply_notice(correction, store=store, own=tardis, publications=[tardis, pi_old, pi_new])
+    snapshots = sorted([pi_old["snapshot"]["digest"]["value"], pi_new["snapshot"]["digest"]["value"]])
+    by_snapshot = {pi_old["snapshot"]["digest"]["value"]: old_source["id"], pi_new["snapshot"]["digest"]["value"]: new_source["id"]}
+    assert report["unclear"] == [{"source_id": s, "with": {"snapshot": d, "record_id": by_snapshot[d]}}
+                                 for s in ("t-x", "t-y") for d in snapshots]
+    assert report["matched"] == [] and report["through_chain"] == [] and report["corrected"] == []
+    assert report["impact"] is None and report["outcome"] == "unclear"
