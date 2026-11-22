@@ -302,8 +302,8 @@ def test_the_files_on_the_source_machine(tmp_path):
     built = run_build(tmp_path, plan)
     assert stat.S_IMODE((built.dir / "imprint.db").stat().st_mode) == 0o400 and stat.S_IMODE(built.dir.stat().st_mode) == 0o700
     assert built.dir == HOME(tmp_path) / "imprints" / built.imprint_id and built.imprint_id == built.imprint_id.lower()
-    assert sorted(p.name for p in built.dir.iterdir()) == ["imprint.db", "manifest.json", "objects.json", "request.json",
-                                                           "subjects.json"]
+    assert sorted(p.name for p in built.dir.iterdir()) == ["checked.json", "imprint.db", "manifest.json", "objects.json",
+                                                           "request.json", "sources.json", "subjects.json"]   # revision 9
     objects = json.loads((built.dir / "objects.json").read_text())
     assert objects == sorted(objects) and objects and (built.dir / "objects.json").read_text().startswith("[\n")
     assert json.loads((built.dir / "subjects.json").read_text()) == []

@@ -98,7 +98,7 @@ def test_each_process_reads_the_ledger_through_one_state(tmp_path, monkeypatch, 
     read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
     assert len(calls) == 2, "read"
     build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))
-    assert len(calls) == 3, "build"
+    assert len(calls) == 4, "build"                 # the build's State, then its send check's own (revision 9, 6)
     assert not hasattr(imprint_filter, "COSUBJECTS_SQL") and not hasattr(imprint_filter, "REFUSALS_SQL")
 
 

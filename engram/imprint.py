@@ -213,6 +213,7 @@ class Plan:
     not_copied: tuple[str, ...]     # source tables no rule names (D4)
     owner: str
     cross_references: tuple = ()   # CrossRef(table, id, keys): shipped text that names something that stays
+    ledger: str | None = None       # the resolved path of the ledger the plan read, or None (revision 9)
 
 
 PEOPLE_REASONS = ("others", "needs_yes", "said_no", "retired")
@@ -310,8 +311,27 @@ def _plan_file(plan: Plan) -> str:
         "terms": {"audience": plan.terms.audience, "actions": sorted(plan.terms.actions),
                   "purposes": sorted(plan.terms.purposes), "days": plan.terms.days},
         "digest": plan.digest, "counts": plan.counts, "contents": plan.contents, "others": plan.others,
-        "package_bytes": plan.package_bytes, "parts": plan.parts,
+        "package_bytes": plan.package_bytes, "parts": plan.parts, "ledger": plan.ledger,
         "cross_references": len({c.id for c in plan.cross_references})}, indent=2, sort_keys=True) + "\n"
+
+
+def _ledger_path(ledger) -> str | None:
+    """The resolved path of a ledger (a ``Ledger``, the process's ``LedgerFacts``, or None), as a plan records it
+    (revision 9, asked 1)."""
+    from imprint_filter import LedgerFacts
+
+    if ledger is None:
+        return None
+    if isinstance(ledger, LedgerFacts):
+        ledger = ledger.ledger
+    return str(Path(ledger.path).resolve())
+
+
+def _same_ledger(saved: dict, ledger) -> None:
+    """``read`` and ``build`` open the ledger the plan read, or refuse (revision 9, asked 1): ledger paths are
+    compared, never engram homes."""
+    if _ledger_path(ledger) != saved["ledger"]:
+        raise PlanRefused(LEDGER_ELSEWHERE)
 
 
 def _ledger_facts(ledger, *, owner: str, now: int, terms, act: str):
@@ -422,7 +442,8 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
             ancestry_complete=bool(complete), selection=sel, terms=terms, digest=digest, counts=counts,
             contents=contents, package_bytes=size, parts=max(1, -(-size // PART_BYTES)), others=pr.others,
             home=bool(ctx.home), people=who, origin=identity.get("instance_id_origin"),
-            not_copied=tuple(not_copied), owner=context.owner, cross_references=crossed)
+            not_copied=tuple(not_copied), owner=context.owner, cross_references=crossed,
+            ledger=_ledger_path(facts))
         _write_private(plans_dir(home) / f"{plan.id}.json", _plan_file(plan))
         return plan
     finally:
@@ -765,6 +786,17 @@ def subjects_for(rows: PackageRows, source_id: str) -> Iterator[list[str]]:
                 yield [f"mem:{source_id}/{layer}/{row['memory_id']}", row["subject"]]
 
 
+def sources_for(conn: sqlite3.Connection, rows: PackageRows) -> Iterator[list]:
+    """``[semantic, episode, lane]`` for each recorded source episode of each shipped semantic, as the build read
+    them from its working copy: ``sources.json`` (revision 9, asked 1). A send asks these episodes the build's
+    questions again, since a semantic ships only while all its sources are admissible (Ŝ, I 5.2)."""
+    for id in rows.shipped.semantics:
+        for episode, lane in conn.execute(
+                "SELECT ss.episode_id, e.lane FROM semantic_sources ss LEFT JOIN episodes e ON e.id = ss.episode_id "
+                "WHERE ss.semantic_id = ? ORDER BY ss.episode_id", (id,)):
+            yield [id, episode, lane]
+
+
 def _write_json_lines(path: Path, items: Iterable) -> None:
     """A JSON array, one element per line, ``[`` and ``]`` on lines of their own (R30)."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -789,6 +821,8 @@ def write_owner_lists(dir: Path, rows: PackageRows, source_id: str) -> None:
 
 
 _CHANGED = "Your store changed since the plan. Run the plan again."
+LEDGER_ELSEWHERE = "The permissions ledger this plan read is not the one here. Run the plan again."
+BEFORE_9 = "This plan was saved before each send asked the permissions ledger again. Run the plan again."
 
 
 def resolve_plan(home: Path, prefix: str) -> Path:
@@ -817,6 +851,10 @@ def _saved_plan(path: Path) -> dict:
         scope["lanes"], scope["layers"], scope["until"]
     except (OSError, ValueError, KeyError, TypeError):
         raise PlanRefused("The saved plan can't be read. Run the plan again.") from None
+    if "ledger" not in saved:                   # a missing key never reads as None (revision 9, the last read's 4)
+        raise PlanRefused(BEFORE_9)
+    if saved["ledger"] is not None and not isinstance(saved["ledger"], str):
+        raise PlanRefused("The saved plan can't be read. Run the plan again.")
     if "route" in terms["actions"] and not imprint_filter.ROUTE_OPEN:     # a plan saved before the gate (review S-1)
         raise PlanRefused(imprint_filter.ROUTE_WAITS + " Run the plan again without route.")
     return saved
@@ -858,6 +896,7 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        _same_ledger(saved, ledger)
         facts = _ledger_facts(ledger, owner=owner, now=now, terms=terms, act="read")
         try:
             source_id, _, _, _, _, working = _working_copy(store, work, engram_home=engram_home, home=home,
@@ -1002,6 +1041,7 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         if not store.is_file():
             raise PlanRefused(_CHANGED)
         ledger = open_ledger(engram_home)
+        _same_ledger(saved, ledger)
         facts = _ledger_facts(ledger, owner=owner, now=created, terms=terms, act="built")
         try:
             source_id, identity, ancestry, complete, _, working = _working_copy(
@@ -1051,6 +1091,7 @@ def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Pa
         _write_bytes_private(dest / "request.json", canonical(request))
         _write_bytes_private(dest / "manifest.json", canonical(manifest))
         write_owner_lists(dest, pr, source_id)
+        _write_json_lines(dest / "sources.json", sources_for(conn, pr))   # always, [] with none (revision 9)
         package.chmod(0o400)                                           # step 9
         return Built(imprint_id, dest, request, manifest)
     except BaseException:
@@ -1081,7 +1122,8 @@ def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram
     try:
         saved = _saved_plan(path)
         if saved.get("imprint_id"):
-            if if_needed:
+            if if_needed:                           # each send run asks the ledger again first (revision 9)
+                recheck(plan_id, home=home, engram_home=engram_home)
                 return _built_of(home, saved["imprint_id"])
             raise PlanRefused(f"This plan was already built as imprint {saved['imprint_id'][:4]}; "
                               "send it, or run the plan again.")
@@ -1092,11 +1134,181 @@ def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram
         except BaseException:
             shutil.rmtree(built.dir, ignore_errors=True)
             raise
+        recheck(plan_id, home=home, engram_home=engram_home)    # on a new State, before the stamp (revision 9, 6)
         return built
     finally:
         if work is not None:
             _remove_work(work, whole=scratch_dir is None)
         os.close(fd)
+
+
+# ---- Each send asks the ledger again (revision 9) ----------------------------------------------------------------
+
+CHECKED, REFUSED = "checked.json", "refused.json"
+EXIT_SEND_REFUSED = 5               # the check refused after a request: the recipe runs the agent's send --refused
+LEDGER_GONE = "The permissions ledger this plan read is gone. Nothing was sent. Run the plan again."
+PACKAGE_GONE = "This imprint's package is gone, and no request was sent. Run the plan again."
+BUILT_BEFORE_9 = "This imprint was built before each send asked the permissions ledger again. Run the plan again."
+IMPRINT_UNREADABLE = "This imprint's files can't be read. Nothing was sent. Run the plan again."
+IMPRINT_UNREADABLE_SENT = ("This imprint's files can't be read. Nothing more was sent; make imprint-status says what the "
+                           "station holds, and make imprint-withdraw ID={id} ends it.")
+
+
+class SendRefused(PlanRefused):
+    """The check refused while a request is at the station: ``refused.json`` is written for the agent, and the CLI
+    exits with ``EXIT_SEND_REFUSED`` (revision 9, asked 4)."""
+
+
+def _stays_sentence(n: int, *, sent: bool = False) -> str:
+    """The refusal. After a request the station may hold parts or the package, and the agent says what (the code
+    reader's 1), so this says only that nothing more left."""
+    tail = "Nothing more was sent; what the station holds follows." if sent else "Nothing was sent. Run the plan again."
+    return f"Your permissions changed since this imprint was built: {_n(n, 'memory', 'memories')} would now stay home. {tail}"
+
+
+def _source_rows(path: Path) -> Iterator[tuple[str, str, str | None]]:
+    """``sources.json``'s elements, one per line (R30), read as a stream. The file must be whole: ``[`` first,
+    ``]`` last, and each element ``[semantic, episode, lane]``, else ``ValueError``, since a short file would leave
+    its semantics' sources unasked (the code reader's 3)."""
+    with path.open(encoding="utf-8") as f:
+        if f.readline() != "[\n":
+            raise ValueError("sources.json does not open with [")
+        closed = False
+        for line in f:
+            if closed:
+                raise ValueError("sources.json goes on after ]")
+            if line == "]\n":
+                closed = True
+                continue
+            item = json.loads(line.rstrip("\n").removesuffix(","))
+            if (not isinstance(item, list) or len(item) != 3 or not all(isinstance(v, str) for v in item[:2])
+                    or not (item[2] is None or isinstance(item[2], str))):
+                raise ValueError("a sources.json element is not [semantic, episode, lane]")
+            yield item[0], item[1], item[2]
+        if not closed:
+            raise ValueError("sources.json does not close with ]")
+
+
+def recheck(plan_id: str, *, home: Path, engram_home: Path | None = None,
+            clock: Callable[[], float] = time.time) -> dict | None:
+    """Revision 9: before anything of a built imprint leaves, ask the ledger the plan read the build's questions
+    again, of the package's own rows and of each shipped semantic's sources, from one checked State. A memory that
+    would now stay home refuses: with ``PlanRefused`` before any request, with ``SendRefused`` and ``refused.json``
+    after one. Success writes ``checked.json``, ``{imprint_id, at, seq}``, ``at`` being when the State was read. With
+    the package gone after a request (D24) nothing is asked and None is returned, for the agent to report."""
+    home = Path(home)
+    engram_home = _default_engram_home() if engram_home is None else Path(engram_home)
+    saved = _saved_plan(resolve_plan(home, plan_id))
+    imprint_id = saved.get("imprint_id")
+    if not isinstance(imprint_id, str):
+        raise PlanRefused("This plan is not built. Run make imprint-send, which builds it first.")
+    folder = home / "imprints" / imprint_id
+    sent = (folder / "send.json").is_file()
+    unreadable = IMPRINT_UNREADABLE_SENT.format(id=imprint_id[:4]) if sent else IMPRINT_UNREADABLE   # the reader's N2
+    try:
+        for name in (CHECKED, REFUSED):
+            (folder / name).unlink(missing_ok=True)
+    except OSError:
+        raise PlanRefused(unreadable) from None
+    if not (folder / "imprint.db").is_file():
+        if sent:
+            return None
+        raise PlanRefused(PACKAGE_GONE)
+    if not (folder / "sources.json").is_file():
+        raise PlanRefused(BUILT_BEFORE_9)
+    sel, terms = _selection_of(saved)
+    store, owner, created = Path(saved["store"]), saved["owner"], int(saved["created"])
+    recorded = saved["ledger"]
+    if recorded is not None:
+        if not Path(recorded).is_file():
+            raise PlanRefused(LEDGER_GONE)
+        ledger = open_ledger(Path(recorded).parent.parent, act="sent")
+        if ledger is None:
+            raise PlanRefused(LEDGER_GONE)
+        if _ledger_path(ledger) != recorded:
+            ledger.conn.close()
+            raise PlanRefused(LEDGER_ELSEWHERE)
+    else:
+        ledger = open_ledger(engram_home, act="sent")   # none at the plan: one here now is asked (asked 3)
+    stays, at, seq = 0, int(clock()), None
+    work = scratch = pkg = None
+    try:
+        if ledger is not None:
+            at = int(clock())
+            facts = _ledger_facts(ledger, owner=owner, now=created, terms=terms, act="sent")
+            seq = facts.state.seq
+            check_owner(facts, saved["source_id"], owner, act="sent")
+            work = _new_scratch(home)
+            scratch = Scratch(work / "scratch.db")
+            ctx = imprint_filter.SourceContext(
+                source_path=store, source_id=saved["source_id"], instance_name=_instance_name(store), owner=owner,
+                published=None, ledger=facts, home=bool(saved.get("home")), scratch=scratch, terms=terms, now=created)
+            counts: Counter = Counter()
+            pkg = _connect(folder / "imprint.db", read_only=True)
+            stays = _ask_again(facts, ctx, pkg, folder / "sources.json", counts)
+            facts.close()                           # the closing read, before anything is written
+    except PlanRefused:
+        raise
+    except (OSError, ValueError, sqlite3.Error):    # the package or its lists damaged (the code reader's 3)
+        raise PlanRefused(unreadable) from None
+    finally:
+        if pkg is not None:
+            pkg.close()
+        if scratch is not None:
+            scratch.close()
+        if work is not None:
+            _remove_work(work, whole=True)
+        if ledger is not None:
+            ledger.conn.close()
+    try:
+        if stays:
+            if sent:
+                _write_private(folder / REFUSED, json.dumps({"imprint_id": imprint_id, "at": at, "count": stays},
+                                                            sort_keys=True) + "\n")
+                raise SendRefused(_stays_sentence(stays, sent=True))
+            raise PlanRefused(_stays_sentence(stays))
+        stamp = {"imprint_id": imprint_id, "at": at, "seq": seq}
+        _write_private(folder / CHECKED, json.dumps(stamp, sort_keys=True) + "\n")
+    except OSError:
+        raise PlanRefused(unreadable) from None
+    return stamp
+
+
+def _ask_again(facts, ctx, pkg: sqlite3.Connection, sources: Path, counts: Counter) -> int:
+    """How many of the package's memories would now stay home: each episode and semantic of ``pkg`` with its own
+    lane, asked base(m)'s ledger questions and held to its carried co-subject rows, and each semantic whose
+    recorded source episode would now stay home. Streamed in batches, with prefetch."""
+    from imprint_filter import BATCH, _admits
+
+    source_id = ctx.source_id
+    bad = IdSet(ctx.scratch)                        # semantics a source would now keep home
+    rows = _source_rows(sources)
+    while batch := list(itertools.islice(rows, BATCH)):     # in batches, with prefetch (the code reader's 7)
+        facts.prefetch([f"mem:{source_id}/episode/{episode}" for _, episode, _ in batch])
+        for semantic, episode, lane in batch:
+            if semantic not in bad and not _admits(facts, ctx, "episode", episode, lane, counts):
+                bad.add(semantic)
+    stays = 0
+    for layer, table in (("episode", "episodes"), ("semantic", "semantics")):
+        cursor = pkg.execute(f"SELECT id, lane FROM {table} ORDER BY id")
+        while batch := cursor.fetchmany(BATCH):
+            ids = [r[0] for r in batch]
+            facts.prefetch([f"mem:{source_id}/{layer}/{i}" for i in ids])
+            carried: dict[str, set] = {}
+            marks = ",".join("?" * len(ids))
+            for memory_id, subject in pkg.execute(
+                    f"SELECT memory_id, subject FROM imprint_subjects WHERE layer = ? AND memory_id IN ({marks}) "
+                    "ORDER BY memory_id, subject", (layer, *ids)):
+                carried.setdefault(memory_id, set()).add(subject)
+            for id, lane in batch:
+                ref = f"mem:{source_id}/{layer}/{id}"
+                ok = _admits(facts, ctx, layer, id, lane, counts)
+                if ok and not facts.cosubjects(ref) <= carried.get(id, set()):
+                    ok = False                      # a co-subject the owner wasn't shown (D27)
+                if ok and layer == "semantic" and id in bad:
+                    ok = False
+                stays += not ok
+    return stays
 
 
 # ---- Admission (I 10, D39) -----------------------------------------------------------------------------------
@@ -1894,6 +2106,9 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
     except PlanBusy as busy:
         print(str(busy), file=sys.stderr)
         return 4
+    except SendRefused as refusal:                  # a request is out: the recipe runs the agent's send --refused
+        print(str(refusal), file=sys.stderr)
+        return EXIT_SEND_REFUSED
     except PlanRefused as refusal:
         print(str(refusal), file=sys.stderr)
         return 2
