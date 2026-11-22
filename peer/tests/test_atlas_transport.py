@@ -831,3 +831,14 @@ def test_atlas_received_trusts_only_origins_still_listed(atlas_peers, tmp_path, 
     main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
     assert [p.name for p in out.glob('*.json')] == ['origins.json']
     assert json.loads((out / 'origins.json').read_text()) == {'paired': []}
+
+
+def test_contact_words_writes_out_exactly_federations_held_rule():
+    """Serenity's advisory: contact_words spells federation.HELD out (so the contact-name check can read it); this keeps
+    the two from drifting. Adjacent string literals are one constant in the syntax tree."""
+    import ast
+    import inspect
+    from superyak_peer import atlas_transport, federation
+    tree = ast.parse(inspect.getsource(atlas_transport.contact_words))
+    strings = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    assert any(f'EXISTS({federation.HELD})' in s for s in strings)
