@@ -671,7 +671,7 @@ def test_send_receive_and_verify_from_the_command_line(atlas_peers, tmp_path, ca
     out = tmp_path / 'received'
     main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
     assert 'Wrote 1' in capsys.readouterr().out
-    [written] = sorted(out.glob('*.json'))
+    [written] = sorted(p for p in out.glob('*.json') if p.name != 'origins.json')
     kept = json.loads(written.read_text())
     assert kept['receiver'] == tardis_fed.identity.peer_id
     assert kept['delivered']['origin'] == pi_fed.identity.peer_id
@@ -702,7 +702,7 @@ def test_atlas_received_writes_nothing_from_an_unpaired_origin(atlas_peers, tmp_
         db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (pi_fed.identity.peer_id,))  # rows kept, peer unpaired
     out = tmp_path / 'received'
     main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
-    assert list(out.glob('*.json')) == []
+    assert [p.name for p in out.glob('*.json')] == ['origins.json']
 
 
 # --- 7. the old puller, the lessons views and restore's reconcile (test 3's pull path, A1, A7) -----------------------
@@ -751,3 +751,68 @@ def test_restores_reconcile_deletes_what_an_unpaired_peer_delivered(tmp_path, ca
     import sqlite3
     with sqlite3.connect(copy) as db:
         assert [r[0] for r in db.execute('SELECT origin FROM atlas_received')] == [peers['kept']]
+
+
+# --- 8. the partner reads' changes (Serenity 00c1cf21, Rio Grande e0f253d6; spec amendment 2) -----------------------
+
+def test_the_quota_counts_bytes_not_characters(atlas_peers, monkeypatch):
+    from superyak_peer import atlas_transport
+    _, pi_fed, _, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    def wide(title):
+        body = package(uri(pi_fed), uri(tardis_fed))
+        body['snapshot']['payload'].update(title=title, pad='\U0001F600' * 10000)  # 4 bytes each, 1 character
+        return {'package': body}
+    first = envelope_from_pi(atlas_peers, wide('one'))
+    monkeypatch.setattr(atlas_transport, 'ORIGIN_QUOTA', int(len(first) * 1.5))
+    assert tardis_fed.receive(first)['ok']
+    with pytest.raises(Problem) as caught:
+        tardis_fed.receive(envelope_from_pi(atlas_peers, wide('two'), event_id='e' + 'c' * 31))
+    assert caught.value.message == 'This peer holds 64 MiB from that peer already'
+
+
+def test_received_files_are_named_by_origin_and_event_so_two_origins_never_collide():
+    from superyak_peer.atlas_transport import kept_name
+    a = kept_name({'origin': 'a' * 64, 'event_id': 'e' * 32})
+    b = kept_name({'origin': 'b' * 64, 'event_id': 'e' * 32})
+    assert a == 'a' * 16 + '-' + 'e' * 32 + '.json' and a != b
+
+
+def test_atlas_received_writes_the_paired_origins_beside_the_files(atlas_peers, tmp_path, capsys):
+    from superyak_peer.__main__ import main
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    atlas_peers['deliver']('pi', 'tardis')
+    out = tmp_path / 'received'
+    main(['atlas-received', '--data-dir', str(tardis.data_dir), '--as', 'tardis', '--out', str(out)])
+    [written] = [p for p in out.glob('*.json') if p.name != 'origins.json']
+    assert written.name.startswith(pi_fed.identity.peer_id[:16] + '-')
+    assert json.loads((out / 'origins.json').read_text()) == {'paired': [pi_fed.identity.peer_id]}
+
+
+def test_a_contact_short_id_is_a_plain_prefix_so_percent_matches_nothing(atlas_peers, tmp_path, capsys):
+    from superyak_peer.__main__ import main
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    body = tmp_path / 'publication.json'
+    body.write_text(json.dumps(package(uri(pi_fed), uri(tardis_fed))))
+    for wild in ('%%%%', '____'):
+        with pytest.raises(SystemExit) as caught:
+            main(['atlas-send', '--data-dir', str(pi.data_dir), '--as', 'rio-grande', '--to', wild,
+                  '--kind', 'publication', '--file', str(body)])
+        assert caught.value.code == 1 and 'No contact has that short id' in capsys.readouterr().err
+    assert rows(pi, 'atlas.publication') == []
+
+
+def test_amendment_2_the_receiver_refuses_an_origin_it_does_not_list(atlas_peers):
+    _, pi_fed, _, tardis, tardis_fed, _ = parts(atlas_peers)
+    with tardis.transaction() as db:
+        db.execute('DELETE FROM lessons_room')
+    refused_at_tardis(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))},
+                      "That peer isn't listed for this peer's lessons room")
+
+
+def test_amendment_2_the_receiver_refuses_an_actor_without_a_current_typed_code(atlas_peers):
+    _, pi_fed, _, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    with tardis.transaction() as db:
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (t_ids['rio-contact'],))
+    refused_at_tardis(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))},
+                      'The sending contact has no current typed code here')

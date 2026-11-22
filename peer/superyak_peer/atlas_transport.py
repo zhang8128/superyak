@@ -199,7 +199,13 @@ class AtlasTransport:
                 'SELECT a.* FROM atlas_received a JOIN peers p ON p.peer_id=a.origin AND p.paired=1 WHERE a.recipient=? '
                 'ORDER BY a.received_at', (ship_id,))]
             refused = [dict(r) for r in db.execute('SELECT * FROM atlas_refused ORDER BY at')]
-            return held, refused, self._own_peer_id(db)
+            paired = sorted(r[0] for r in db.execute('SELECT peer_id FROM peers WHERE paired=1'))
+            return held, refused, self._own_peer_id(db), paired
+
+
+def kept_name(row):
+    """A written file's name: event ids are unique per origin only, so the origin leads (Rio Grande's read)."""
+    return f"{row['origin'][:16]}-{row['event_id']}.json"
 
 
 def kept_file(row, receiver):
@@ -271,6 +277,14 @@ def apply(fed, db, e):
     if recipient is None or recipient['kind'] != 'ship':
         raise Problem(400, 'Atlas publications go only to a ship')
     origin = e['origin']
+    # Spec amendment 2 (both partner reads): the receiver lists the origin as the sender must, and holds the sending
+    # contact's own typed code, so a paired but unlisted peer fills nothing here.
+    if not listed(db, origin):
+        raise Problem(400, "That peer isn't listed for this peer's lessons room")
+    from .owner_trust import code_current
+    contact = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (origin, e['actor']['id'])).fetchone()
+    if contact is None or not code_current(db, contact['id']):
+        raise Problem(400, 'The sending contact has no current typed code here')
     check_issuers(kind, body, peer_uri(origin), peer_uri(fed.identity.peer_id), receiving=True)
     card = json.loads(db.execute('SELECT card FROM peers WHERE peer_id=?', (origin,)).fetchone()['card'])
     raw = canonical(e)
@@ -278,7 +292,8 @@ def apply(fed, db, e):
     if db.execute('SELECT 1 FROM atlas_received WHERE origin=? AND recipient=? AND payload_digest=?',
                   (origin, e['recipients'][0], digest)).fetchone():
         return DUPLICATE
-    held = db.execute('SELECT COALESCE(SUM(length(envelope)), 0) FROM atlas_received WHERE origin=?', (origin,)).fetchone()[0]
+    held = db.execute('SELECT COALESCE(SUM(length(CAST(envelope AS BLOB))), 0) FROM atlas_received WHERE origin=?',
+                      (origin,)).fetchone()[0]  # bytes, as raw is: length() of TEXT counts characters (Serenity's read)
     if held + len(raw) > ORIGIN_QUOTA:
         raise Problem(400, 'This peer holds 64 MiB from that peer already')
     db.execute('INSERT INTO atlas_received VALUES(?,?,?,?,?,?,?,?,?,?)',
