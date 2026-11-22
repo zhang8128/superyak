@@ -371,6 +371,7 @@ class Federation:
             db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (row['peer_id'],))
             db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (row['peer_id'],))
             db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (row['peer_id'],))
+            db.execute('DELETE FROM atlas_received WHERE origin=?', (row['peer_id'],))  # claim-crossing transport R7
             settle_owner_trust(db, now)
             self.store._emit_held(db, epochs)
         return {'ok':True}
@@ -1023,6 +1024,19 @@ class Federation:
         value = parse(raw)
         if not isinstance(value.get('origin'),str) or not re.fullmatch(r'[0-9a-f]{64}',value['origin']):
             raise Problem(403, 'Unknown or unpaired peer')
+        if not (isinstance(value.get('action'), str) and value['action'].startswith('atlas.')):
+            return self._receive(value)
+        # Claim-crossing transport N3 and the approving check: an atlas receive waits at most RECEIVE_BOUND for the gate
+        # and SQLite, and a passing fault is a 503, peer-scoped and retried, never a 500 and never a refusal.
+        from .atlas_transport import RECEIVE_BOUND
+        from .dispatch import GateTimeout
+        try:
+            with self.store.bounded(RECEIVE_BOUND):
+                return self._receive(value)
+        except (sqlite3.OperationalError, GateTimeout):
+            raise Problem(503, 'Peer busy: try again') from None
+
+    def _receive(self, value):
         with self.store.transaction() as db:
             peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (value.get('origin'),)).fetchone()
             if not peer:
@@ -1051,10 +1065,13 @@ class Federation:
     def _apply(self, db, e):
         action, p, origin, rid, revision = e['action'], e['payload'], e['origin'], e['resource_id'], e['revision']
         if action.startswith('atlas.'):  # claim-crossing transport T3, T6
-            from .atlas_transport import ACTIONS, apply as apply_atlas
-            if action not in ACTIONS:
+            from . import atlas_transport
+            if action not in atlas_transport.ACTIONS:
                 raise Problem(400, 'Unknown peer action')
-            return apply_atlas(self, db, e)
+            try:
+                return atlas_transport.apply(self, db, e)
+            except sqlite3.IntegrityError:  # a deterministic fault on the new table: the row's, never a 500 (N3)
+                raise Problem(400, 'Invalid atlas payload') from None
         if action == 'room.reply':
             return self._reply(db, e)
         if action not in ('layer.release','layer.withdraw','room.roster','room.message','room.withdraw'):

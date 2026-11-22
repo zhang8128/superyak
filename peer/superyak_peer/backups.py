@@ -829,6 +829,8 @@ def _unpair(db, old, peer, now, report):
     withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
     nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND payload IS NOT NULL', (peer,)).rowcount
+    if _has(db, 'atlas_received.origin'):  # claim-crossing transport R7: a copy from before it has no such table
+        db.execute('DELETE FROM atlas_received WHERE origin=?', (peer,))
     report['unpaired'].append((_shown(db, old, peer), names))
     report['unpaired_full'].append(peer)
     report['unpaired_counts'] = [sum(pair) for pair in zip(report['unpaired_counts'], (withdrawn, nulled))]

@@ -496,3 +496,94 @@ def test_a_room_push_keeps_the_gate_through_its_write_as_today(tmp_path):
         sender.join(15)
     finally:
         srv.shutdown()
+
+
+# --- 5. the receiver's faults (N3, third check's advisory 1, A10) and clearing an origin (R7) ------------------------
+
+def test_a_receiver_whose_gate_is_held_answers_503_within_its_bound(atlas_peers):
+    import threading
+    import time
+    _, pi_fed, _, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    holding, done = threading.Event(), threading.Event()
+    def hold():
+        with tardis.transaction():
+            holding.set()
+            done.wait(10)
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert holding.wait(5)
+        start = time.monotonic()
+        with pytest.raises(Problem) as caught:
+            tardis_fed.receive(envelope_from_pi(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))}))
+        assert caught.value.status == 503 and time.monotonic() - start < 3.5
+    finally:
+        done.set()
+        holder.join(5)
+    assert received(tardis, t_ids['tardis']) == []
+
+
+def test_a_passing_storage_fault_answers_503_and_a_deterministic_one_400(atlas_peers, monkeypatch):
+    import sqlite3
+    from superyak_peer import atlas_transport
+    _, pi_fed, _, _, tardis_fed, _ = parts(atlas_peers)
+    raw = envelope_from_pi(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))})
+    for fault, status in ((sqlite3.OperationalError('database is locked'), 503),
+                          (sqlite3.IntegrityError('constraint'), 400)):
+        def broken(*args, fault=fault):
+            raise fault
+        monkeypatch.setattr(atlas_transport, 'apply', broken)
+        with pytest.raises(Problem) as caught:
+            tardis_fed.receive(raw)
+        assert caught.value.status == status
+
+
+def test_an_origin_past_its_quota_is_refused_in_its_own_words(atlas_peers, monkeypatch):
+    from superyak_peer import atlas_transport
+    _, pi_fed, _, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    first = envelope_from_pi(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))})
+    monkeypatch.setattr(atlas_transport, 'ORIGIN_QUOTA', int(len(first) * 1.5))
+    assert tardis_fed.receive(first)['ok']
+    second = package(uri(pi_fed), uri(tardis_fed))
+    second['snapshot']['payload']['title'] = 'another'
+    with pytest.raises(Problem) as caught:
+        tardis_fed.receive(envelope_from_pi(atlas_peers, {'package': second}, event_id='e' + 'c' * 31))
+    assert (caught.value.status, caught.value.message) == (400, 'This peer holds 64 MiB from that peer already')
+    assert tardis_fed.receive(envelope_from_pi(atlas_peers, {'package': package(uri(pi_fed), uri(tardis_fed))},
+                                               event_id='e' + 'd' * 31))['duplicate']  # a duplicate isn't refused
+
+
+def test_an_old_receiver_refuses_only_the_atlas_row_on_a_push(atlas_peers, monkeypatch):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    original = type(tardis_fed)._apply
+    def old_apply(self, db, e):
+        if e['action'].startswith('atlas.'):
+            raise Problem(400, 'Unknown peer action')
+        return original(self, db, e)
+    monkeypatch.setattr(type(tardis_fed), '_apply', old_apply)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    pi.create_room(pi_ids['andy'], 'Queued after it', [pi_ids['contact']])
+    atlas_peers['deliver']('pi', 'tardis')
+    [atlas] = rows(pi, 'atlas.publication')
+    assert (atlas['status'], atlas['last_error']) == ('refused', '400 Unknown peer action')
+    assert rows(pi, 'room.roster')[-1]['status'] == 'delivered'
+
+
+def test_unpairing_a_peer_clears_what_it_delivered(atlas_peers):
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    atlas_peers['deliver']('pi', 'tardis')
+    assert len(received(tardis, t_ids['tardis'])) == 1
+    tardis_fed.unpair(t_ids['andy'], t_ids['rio-contact'])
+    assert received(tardis, t_ids['tardis']) == []
+
+
+def test_holding_a_contact_clears_what_it_sent(atlas_peers):
+    from superyak_peer.owner_trust import hold_contact
+    pi, pi_fed, pi_ids, tardis, tardis_fed, t_ids = parts(atlas_peers)
+    pi.atlas_send(pi_ids['rio-grande'], pi_ids['contact'], 'publication', package(uri(pi_fed), uri(tardis_fed)))
+    atlas_peers['deliver']('pi', 'tardis')
+    with tardis.transaction() as db:
+        contact = db.execute('SELECT * FROM remote_contacts WHERE id=?', (t_ids['rio-contact'],)).fetchone()
+        hold_contact(db, contact, 1.0)
+    assert received(tardis, t_ids['tardis']) == []

@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS atlas_received(origin TEXT NOT NULL, recipient TEXT N
 '''
 
 MAX_ATLAS = 1024 * 1024  # spec T1: a payload's canonical JSON, checked at the sender and again at the receiver
+ORIGIN_QUOTA = 64 * 1024 * 1024  # spec T6 (A10): the envelopes one origin may have kept here
+RECEIVE_BOUND = 2.0  # seconds an atlas receive waits for the gate and SQLite (the approving check's correction)
 KINDS = {'publication': 'atlas.publication', 'notice': 'atlas.notice'}
 ACTIONS = {action: kind for kind, action in KINDS.items()}
 FIELD = {'publication': 'package', 'notice': 'notice'}
@@ -207,7 +209,13 @@ def apply(fed, db, e):
     card = json.loads(db.execute('SELECT card FROM peers WHERE peer_id=?', (origin,)).fetchone()['card'])
     raw = canonical(e)
     digest = hashlib.sha256(canonical(e['payload'])).hexdigest()
-    inserted = db.execute('INSERT OR IGNORE INTO atlas_received VALUES(?,?,?,?,?,?,?,?,?,?)',
-                          (origin, e['recipients'][0], digest, kind, e['actor']['id'], card['signing_key'],
-                           e['event_id'], hashlib.sha256(raw).hexdigest(), fed.store.clock(), raw.decode())).rowcount
-    return None if inserted else DUPLICATE
+    if db.execute('SELECT 1 FROM atlas_received WHERE origin=? AND recipient=? AND payload_digest=?',
+                  (origin, e['recipients'][0], digest)).fetchone():
+        return DUPLICATE
+    held = db.execute('SELECT COALESCE(SUM(length(envelope)), 0) FROM atlas_received WHERE origin=?', (origin,)).fetchone()[0]
+    if held + len(raw) > ORIGIN_QUOTA:
+        raise Problem(400, 'This peer holds 64 MiB from that peer already')
+    db.execute('INSERT INTO atlas_received VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (origin, e['recipients'][0], digest, kind, e['actor']['id'], card['signing_key'],
+                e['event_id'], hashlib.sha256(raw).hexdigest(), fed.store.clock(), raw.decode()))
+    return None
