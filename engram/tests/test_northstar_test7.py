@@ -132,6 +132,31 @@ class TestFlaggedPairs:
         # under 1.5: r(0,1)=0.0625, r(0,2)=0.25, r(1,2)=1.0, r(2,3)=1.0; not under: r(0,3)=2.25, r(1,3)=4.0
         assert flagged == {(0, 1), (0, 2), (1, 2), (2, 3)}
 
+    def test_flagged_pairs_are_ordered_by_increasing_r(self):
+        # r(0,1)=0.0625 < r(0,2)=0.25 < r(1,2)=1.0 < r(2,3)=1.0 (a tie, stable on ratios.items() order)
+        ell = ns.pairwise_lower_quartile(_hand_reports(), _hand_mask())
+        ratios = ns.pair_ratios(ell)
+        flagged = ns.flagged_pairs(ratios, theta=1.5)
+        rs = [ratios[p] for p in flagged]
+        assert rs == sorted(rs)
+
+    def test_an_overlapping_pair_with_the_larger_r_is_skipped_when_collapsed_in_order(self):
+        # Three pairs all share source 1: (0,1) r=0.3, (1,2) r=0.1, (1,3) r=0.2 -- written here in
+        # combination order (0,1) then (1,2) then (1,3), the *wrong* merge order the bug would use.
+        # Sorted by increasing r, (1,2) (the smallest r) must merge first, claiming sources 1 and 2, so
+        # (0,1) and (1,3) are both skipped.
+        ratios = {(0, 1): 0.3, (1, 2): 0.1, (1, 3): 0.2, (0, 2): 5.0}
+        flagged = ns.flagged_pairs(ratios, theta=1.0)
+        assert flagged == [(1, 2), (1, 3), (0, 1)]
+
+        reports = np.array([[10.0], [0.0], [4.0], [100.0]])  # sources 0,1,2,3 on one item
+        mask = np.ones((4, 1), dtype=bool)
+        pair_specs = [(p[0], p[1], None) for p in flagged]
+        cons = ns.collapse_consensus(reports, mask, pair_specs)
+        # (1,2) merges first: (0+4)/2=2; remaining [10, 100] -> median([2,10,100]) = 10. Collapsing (0,1)
+        # first instead (the bug) would give (10+0)/2=5; remaining [4,100] -> median([5,4,100]) = 5.
+        assert cons[0] == pytest.approx(10.0)
+
 
 class TestScaleEstimate:
     def test_matches_hand_computed_s_hat(self):
@@ -156,6 +181,21 @@ class TestCalibrateTheta:
         a = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=42, n_cal=40)
         b = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=42, n_cal=40)
         assert a["theta"] == b["theta"]
+
+    def test_the_six_b_s_combinations_get_exactly_equal_counts_when_n_cal_divides_evenly(self):
+        # n_cal=600 divides evenly by 6 combinations (3 b's x 2 s's): each must get exactly 100, not
+        # whatever an independent per-instance random draw happens to land on.
+        result = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=7, n_cal=600)
+        combos = [(b, s) for b in ns.GRID_B for s in ns.GRID_S]
+        assert set(result["n_per_bs"]) == {f"b{b}_s{s}" for b, s in combos}
+        assert all(n == 100 for n in result["n_per_bs"].values())
+
+    def test_every_combo_is_represented_even_with_few_calibration_instances(self):
+        # a purely random per-instance draw over 24 instances could easily miss one of 6 combos; cycling
+        # through them never does.
+        result = ns.calibrate_theta(4, 20, 0.5, graded_fixture.generate, seed_root=9, n_cal=24)
+        assert len(result["n_per_bs"]) == len(ns.GRID_B) * len(ns.GRID_S)
+        assert all(n == 4 for n in result["n_per_bs"].values())
 
 
 # -------------------------------------------------------------------------------------
@@ -240,6 +280,62 @@ class TestProvenancePairs:
         chains = np.full((3, 2), None, dtype=object)
         chains[0, 0] = 2  # source 0 names source 2 -> pair should be (0, 2), not (2, 0)
         assert ns.provenance_pairs(chains) == [(0, 2, {0})]
+
+
+class TestChainNamedItems:
+    def test_is_every_item_any_chain_names_at_all(self):
+        np.testing.assert_array_equal(ns.chain_named_items(_hand_chains()), [0, 2])
+
+    def test_empty_chains_give_an_empty_array(self):
+        assert len(ns.chain_named_items(np.full((4, 6), None, dtype=object))) == 0
+
+    def test_never_reads_truth_only_chains(self):
+        # a chain naming items {1, 5}, disjoint from whatever truth["copied_items"] might say -- the
+        # function must report what the chain itself names, not truth's own set.
+        chains = np.full((3, 10), None, dtype=object)
+        chains[1, 1] = 0
+        chains[1, 5] = 0
+        np.testing.assert_array_equal(ns.chain_named_items(chains), [1, 5])
+
+
+class TestIndependentReportCounts:
+    def test_with_no_collapse_every_item_counts_its_own_reporters(self):
+        mask = np.array([[True, True], [True, False], [True, True]])
+        counts = ns.independent_report_counts(mask, [])
+        np.testing.assert_array_equal(counts, [3, 2])
+
+    def test_a_collapsed_pair_counts_once_not_twice_on_its_items(self):
+        mask = np.ones((4, 2), dtype=bool)
+        # pair (0,1) collapses on item 0 only; item 1 is untouched.
+        counts = ns.independent_report_counts(mask, [(0, 1, {0})])
+        np.testing.assert_array_equal(counts, [3, 4])  # item0: 4 reporters - 2 used + 1 merged = 3
+
+    def test_a_pair_missing_from_an_item_s_reporters_does_not_collapse_there(self):
+        mask = np.array([[True, False], [True, True], [True, True]])  # source 0 doesn't report item 1
+        counts = ns.independent_report_counts(mask, [(0, 1, None)])
+        assert counts[0] == 2  # item0: sources 0,1 collapse -> 3 reporters - 2 used + 1 = 2
+        assert counts[1] == 2  # item1: source 0 absent, pair never applies -> both of 1,2 count normally
+
+
+class TestPopulationComposition:
+    def test_counts_sum_to_the_population_size_per_axis(self):
+        cells = [
+            {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.25, "tau": 0.5, "q": 0.25},
+            {"K": 4, "M": 20, "rho": 0.5, "b": 4.0, "s": 0.5, "tau": 1.0, "q": 0.5},
+            {"K": 6, "M": 60, "rho": 0.9, "b": 8.0, "s": 0.5, "tau": 1.5, "q": 0.5},
+        ]
+        composition = ns.population_composition(cells, axes=("K", "b", "s", "tau", "q"))
+        for axis in ("K", "b", "s", "tau", "q"):
+            assert sum(composition[axis].values()) == len(cells)
+
+    def test_axes_without_the_key_are_skipped_not_zero_filled(self):
+        cells = [{"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5}]  # no tau/q (an A cell)
+        composition = ns.population_composition(cells, axes=("K", "b", "s", "tau", "q"))
+        assert "tau" not in composition and "q" not in composition
+        assert composition["K"] == {"4": 1}
+
+    def test_empty_population_gives_an_empty_composition(self):
+        assert ns.population_composition([]) == {}
 
 
 class TestArmProvenance:
@@ -392,6 +488,23 @@ class TestSIRatio:
         den = {"a": [10.0], "b": [10.0, 10.0]}  # pooled = 10.0
         assert ns.s_i_ratio(num, den) == pytest.approx(0.5)
 
+    def test_a_zero_pooled_denominator_gives_nan_not_a_raised_zerodivisionerror(self):
+        # plain Python float division by an exact 0.0 raises ZeroDivisionError, unlike numpy's; pooled_gain
+        # returns plain floats, so s_i_ratio must guard this itself.
+        assert math.isnan(ns.s_i_ratio({"a": [1.0]}, {"a": [0.0]}))
+
+
+class TestSafeRatio:
+    def test_zero_denominator_gives_nan(self):
+        assert math.isnan(ns.safe_ratio(1.0, 0.0))
+
+    def test_non_finite_either_side_gives_nan(self):
+        assert math.isnan(ns.safe_ratio(float("nan"), 1.0))
+        assert math.isnan(ns.safe_ratio(1.0, float("inf")))
+
+    def test_ordinary_division_is_unaffected(self):
+        assert ns.safe_ratio(3.0, 2.0) == pytest.approx(1.5)
+
 
 class TestPerCellRatios:
     def test_omits_a_cell_whose_denominator_is_under_the_floor(self):
@@ -437,6 +550,51 @@ class TestBootstrapRatioCi:
         assert ns.BOOTSTRAP_SEED == 2026112207
 
 
+class TestBootstrapPooledMeanCi:
+    def test_result_does_not_depend_on_the_input_dict_s_insertion_order(self):
+        # the same data, inserted in two different key orders, must give the same replicate sequence (and
+        # so the same CI) for a fixed seed -- the bootstrap's own cell order must come from sorting the
+        # keys, never from whatever order the caller happened to build the dict in.
+        forward = {"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0], "c": [6.0]}
+        backward = {"c": [6.0], "b": [4.0, 5.0], "a": [1.0, 2.0, 3.0]}
+        result_forward = ns.bootstrap_pooled_mean_ci(forward, replicates=300)
+        result_backward = ns.bootstrap_pooled_mean_ci(backward, replicates=300)
+        assert result_forward == result_backward
+
+
+class TestBootstrapSIAndSPHalf:
+    def test_paired_bootstrap_matches_independent_point_estimates(self):
+        n_i = {"a": [2.0, 3.0]}
+        o_d = {"a": [4.0, 4.0]}
+        n_half = {"a": [1.0, 1.0]}
+        o_c = {"a": [4.0, 4.0]}
+        result = ns.bootstrap_s_i_and_s_phalf(n_i, o_d, n_half, o_c, replicates=200)
+        assert result["s_i"]["point"] == pytest.approx(ns.s_i_ratio(n_i, o_d))
+        assert result["s_p_half"]["point"] == pytest.approx(ns.s_i_ratio(n_half, o_c))
+
+    def test_constant_cells_give_degenerate_intervals_at_the_true_ratios(self):
+        n_i = {"a": [1.0, 1.0, 1.0]}
+        o_d = {"a": [2.0, 2.0, 2.0]}
+        n_half = {"a": [0.5, 0.5, 0.5]}
+        o_c = {"a": [2.0, 2.0, 2.0]}
+        result = ns.bootstrap_s_i_and_s_phalf(n_i, o_d, n_half, o_c, replicates=200)
+        assert result["s_i"]["ci95"] == [pytest.approx(0.5), pytest.approx(0.5)]
+        assert result["s_p_half"]["ci95"] == [pytest.approx(0.25), pytest.approx(0.25)]
+
+    def test_the_two_ratios_share_one_resample_per_cell_per_replicate(self):
+        # n_half is exactly 2*n_i, and o_c equals o_d, so with a SHARED resample every replicate's
+        # s_p_half value is exactly double that replicate's s_i value -- and since doubling is a monotonic
+        # transform, the two CIs must then satisfy the same exact 2x relationship. Resampling the two
+        # ratios independently (the bug this guards against) would not reliably preserve it.
+        n_i = {"a": [10.0, 0.0, 4.0, 6.0]}
+        o_d = {"a": [1.0, 1.0, 1.0, 1.0]}
+        n_half = {"a": [20.0, 0.0, 8.0, 12.0]}
+        o_c = {"a": [1.0, 1.0, 1.0, 1.0]}
+        result = ns.bootstrap_s_i_and_s_phalf(n_i, o_d, n_half, o_c, replicates=500, seed=321)
+        assert result["s_p_half"]["ci95"][0] == pytest.approx(2 * result["s_i"]["ci95"][0])
+        assert result["s_p_half"]["ci95"][1] == pytest.approx(2 * result["s_i"]["ci95"][1])
+
+
 class TestPrimaryReading:
     def test_lower_end_at_or_above_point_eight_substitutes_for_the_record(self):
         assert ns.primary_reading([0.8, 0.95]) == "inference substitutes for the record"
@@ -453,6 +611,13 @@ class TestPrimaryReading:
         assert ns.primary_reading([0.5, 0.5]) == "inference recovers part"  # upper is not < 0.5
         assert ns.primary_reading([0.79, 0.8]) == "inference recovers part"  # lower is not >= 0.8
 
+    def test_a_non_finite_end_reads_undefined_never_partial(self):
+        # nan and inf compare False against every threshold, so without an explicit guard these would
+        # silently fall through to "inference recovers part".
+        assert ns.primary_reading([float("nan"), 0.6]) == "undefined"
+        assert ns.primary_reading([0.3, float("nan")]) == "undefined"
+        assert ns.primary_reading([float("-inf"), float("inf")]) == "undefined"
+
 
 class TestDoNoHarm:
     def test_within_band_when_every_resample_is_inside_it(self):
@@ -464,7 +629,20 @@ class TestDoNoHarm:
         gains = {"a": [0.2, 0.2, 0.2], "b": [0.2, 0.2]}  # constant: point and CI are exactly 0.2
         result = ns.do_no_harm(gains, band=0.05)
         assert result["within_band"] is False
+        assert result["reading"] == "outside band"
         assert result["ci95"][0] == pytest.approx(0.2)
+
+    def test_empty_data_reads_no_data_never_within_band_or_outside_band(self):
+        # an empty dict's bootstrap CI is [nan, nan]; -band <= nan is False, so without the explicit guard
+        # this would misread as "within_band: False" (a false failure), not "there is no data here".
+        result = ns.do_no_harm({})
+        assert result["within_band"] is None
+        assert result["reading"] == "no data"
+
+    def test_all_nan_data_also_reads_no_data(self):
+        result = ns.do_no_harm({"a": [float("nan"), float("nan")]})
+        assert result["within_band"] is None
+        assert result["reading"] == "no data"
 
 
 class TestCeilingCheck:
@@ -712,6 +890,151 @@ class TestRunCell:
             assert row["true_pair"] is None
             assert set(row["blame"]) == {"N", "I"}
 
+    def test_rows_carry_excluded_and_mean_independent_reports(self):
+        cell = {"K": 4, "M": 20, "rho": 0.9, "b": 8.0, "s": 0.5, "tau": 0.5, "q": 0.5}
+        rows = ns.run_cell(cell, "D", graded_fixture.generate, seed_root=21, theta=0.1, n_instances=5)
+        for row in rows:
+            assert isinstance(row["excluded"], bool)
+            assert "mean_independent_reports_i" in row
+
+    def test_p_half_pairs_is_called_with_chain_named_items_not_truth_copied_items(self, monkeypatch):
+        # a stub generator whose chains name a DIFFERENT item set than truth["copied_items"] (chains name
+        # only item 0; truth claims items 0 and 2 are copied) -- a spy on p_half_pairs records which array
+        # run_cell actually hands it. On the real fixture the two arrays always coincide, so only a
+        # deliberately mismatched stub can tell them apart.
+        def stub_generator(cell, condition, instance_index, seed_root):
+            K, M = 4, 6
+            chains = np.full((K, M), None, dtype=object)
+            if condition == "C":
+                chains[1, 0] = 0
+            truth = {"bad": 0, "copier": 1, "biased_items": [0, 2], "copied_items": [0, 2],
+                     "true_values": np.zeros(M), "honest_counts_on_copied": {}}
+            reports = np.random.default_rng(0).normal(0.0, 1.0, (K, M))  # real variance: avoids the
+                                                                         # auditor's own ell_bar==0 edge
+            return {"reports": reports, "sigma": 1.0, "chains": chains, "truth": truth, "meta": {}}
+
+        captured = []
+        real_p_half_pairs = ns.p_half_pairs
+
+        def spy(chains, copied_items, rng):
+            captured.append(sorted(np.asarray(copied_items).tolist()))
+            return real_p_half_pairs(chains, copied_items, rng)
+
+        monkeypatch.setattr(ns, "p_half_pairs", spy)
+        cell = {"K": 4, "M": 6, "rho": 1.0, "b": 1.0, "s": 1.0, "tau": 0.5, "q": 1.0}
+        ns.run_cell(cell, "C", stub_generator, seed_root=1, theta=0.1, n_instances=1)
+        assert captured == [[0]]  # chain_named_items(chains) -- never truth's [0, 2]
+
+
+class TestMissingThetaRaises:
+    def test_run_plan_raises_on_a_cd_cell_with_no_calibration(self):
+        plan = {
+            "cells": [{"cell": {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5, "tau": 0.5, "q": 0.5},
+                      "key": "K4_M20_rho0.5_b2.0_s0.5_tau0.5_q0.5", "condition": "C/D"}],
+            "calibrations": {},  # deliberately missing K4_M20_rho0.5
+            "n_instances": 2, "seeds": {"run": 1},
+        }
+        with pytest.raises(KeyError):
+            ns.run_plan(plan, generator=graded_fixture.generate)
+
+
+class TestPEqualsOCheck:
+    def test_zero_for_identical_rows(self):
+        rows = [{"consensus_error": {"P": 0.5, "O": 0.5}}, {"consensus_error": {"P": 1.0, "O": 1.0}}]
+        assert ns._p_equals_o_check(rows) == pytest.approx(0.0)
+
+    def test_the_true_maximum_over_every_row(self):
+        rows = [{"consensus_error": {"P": 0.5, "O": 0.5}}, {"consensus_error": {"P": 1.3, "O": 1.0}}]
+        assert ns._p_equals_o_check(rows) == pytest.approx(0.3)
+
+    def test_both_nan_is_not_a_mismatch(self):
+        rows = [{"consensus_error": {"P": float("nan"), "O": float("nan")}}]
+        assert ns._p_equals_o_check(rows) == pytest.approx(0.0)
+
+    def test_one_nan_one_finite_reports_as_infinite_never_silently_dropped(self):
+        # the old bug used max(running_max, abs(p_err - o_err)); abs(nan - 1.0) is nan, and max(x, nan)
+        # silently keeps x, hiding a real P/O mismatch. This must surface, not disappear.
+        rows = [{"consensus_error": {"P": float("nan"), "O": 1.0}}]
+        assert math.isinf(ns._p_equals_o_check(rows))
+
+    def test_empty_rows_give_zero(self):
+        assert ns._p_equals_o_check([]) == pytest.approx(0.0)
+
+
+def _minimal_a_row(i_all: float, n_all: float) -> dict:
+    return {
+        "consensus_error": {"I_all": i_all, "N_all": n_all},
+        "flagged": [],
+        "blame": {"N": {"bad_first_credit": 0.0, "copier_first_credit": None},
+                  "I": {"bad_first_credit": 0.0, "copier_first_credit": None}},
+    }
+
+
+class TestSummarizeHighBiasCorner:
+    def test_both_s_values_are_pooled_not_one_overwriting_the_other(self):
+        # s=0.25's diff is 1.0, s=0.5's diff is 2.0 -- equal-cell-weighted pooled mean is 1.5. The old bug
+        # (summarize() overwrote a single gain_i_minus_n_a_high_bias variable with whichever s it saw
+        # last) would silently drop one of the two and report 1.0 or 2.0 instead.
+        plan = {
+            "cells": [
+                {"key": "corner_s025", "condition": "A",
+                 "cell": {"K": 6, "M": 60, "rho": 0.9, "b": 8.0, "s": 0.25}},
+                {"key": "corner_s05", "condition": "A",
+                 "cell": {"K": 6, "M": 60, "rho": 0.9, "b": 8.0, "s": 0.5}},
+            ],
+            "high_bias_corner_a_cells": ["corner_s025", "corner_s05"],
+            "do_no_harm_a_cells": [], "primary_population": [], "sensitivity_population": [],
+            "primary_population_composition": {}, "do_no_harm_a_composition": {},
+        }
+        results = {
+            "corner_s025": {"A": [_minimal_a_row(1.0, 0.0)]},
+            "corner_s05": {"A": [_minimal_a_row(2.0, 0.0)]},
+        }
+        summary = ns.summarize(plan, results)
+        assert summary["do_no_harm"]["high_bias_corner"]["point"] == pytest.approx(1.5)
+
+    def test_does_not_conflate_with_do_no_harm_a_cells(self):
+        # a cell in do_no_harm_a_cells but not the corner must not leak into the corner's own pool.
+        plan = {
+            "cells": [
+                {"key": "base_cell", "condition": "A",
+                 "cell": {"K": 4, "M": 20, "rho": 0.5, "b": 2.0, "s": 0.5}},
+                {"key": "corner_s025", "condition": "A",
+                 "cell": {"K": 6, "M": 60, "rho": 0.9, "b": 8.0, "s": 0.25}},
+            ],
+            "high_bias_corner_a_cells": ["corner_s025"],
+            "do_no_harm_a_cells": ["base_cell"], "primary_population": [], "sensitivity_population": [],
+            "primary_population_composition": {}, "do_no_harm_a_composition": {},
+        }
+        results = {
+            "base_cell": {"A": [_minimal_a_row(100.0, 0.0)]},
+            "corner_s025": {"A": [_minimal_a_row(1.0, 0.0)]},
+        }
+        summary = ns.summarize(plan, results)
+        assert summary["do_no_harm"]["high_bias_corner"]["point"] == pytest.approx(1.0)
+        assert summary["do_no_harm"]["pooled"]["point"] == pytest.approx(100.0)
+
+
+class TestPrimaryPopulationGate:
+    def test_every_primary_member_clears_the_gate_and_every_non_member_does_not(self):
+        # a wider grid (every tau, both q, at a modest b and s) to get a real mix of pilot N-O gains --
+        # some cells should clear CEILING_GATE_SIGMA and some should not. The gate's whole job is to keep
+        # them apart.
+        plan = ns.build_plan(
+            generator=graded_fixture.generate, seed_root_calibration=1, seed_root_pilot=2, seed_root_run=3,
+            n_cal=20, n_pilot=40, n_instances=5, grid_k=(6,), grid_m=(20,), grid_rho=(0.9,),
+            grid_b=(2.0,), grid_s=(0.25,), grid_tau=(0.5, 1.5), grid_q=(0.25, 0.5))
+        gains = plan["pilot"]["cd"]
+        assert any(g["pilot_gain_n_minus_o"] >= ns.CEILING_GATE_SIGMA for g in gains.values())
+        assert any(g["pilot_gain_n_minus_o"] < ns.CEILING_GATE_SIGMA for g in gains.values()), (
+            "this grid is expected to produce a mix; widen it if every cell cleared the gate")
+        primary = set(plan["primary_population"])
+        for key, pilot_entry in gains.items():
+            clears = pilot_entry["pilot_gain_n_minus_o"] >= ns.CEILING_GATE_SIGMA
+            assert (key in primary) == clears, (
+                f"{key}: gain {pilot_entry['pilot_gain_n_minus_o']} clears={clears} "
+                f"but membership={key in primary}")
+
 
 class TestBuildPlanAndRunPlan:
     GRID_KWARGS = dict(grid_k=(4,), grid_m=(20,), grid_rho=(0.9,), grid_b=(8.0,), grid_s=(0.5,),
@@ -732,10 +1055,11 @@ class TestBuildPlanAndRunPlan:
             seed_root_run=3, n_cal=30, n_pilot=15, n_instances=8, **self.GRID_KWARGS)
         results = ns.run_plan(plan, generator=graded_fixture.generate)
         summary = ns.summarize(plan, results)
-        assert summary["primary"]["reading"] in (
+        assert summary["primary"]["s_i"]["reading"] in (
             "inference substitutes for the record", "the record can't be replaced by this inference",
-            "inference recovers part")
-        assert "pooled_gain_n_minus_o" in summary["ceiling"]
+            "inference recovers part", "undefined")
+        assert "pooled_gain_n_minus_o" in summary["primary"]["ceiling"]
+        assert "population_composition" in summary["primary"]
         assert summary["checks"]["n_identical_between_c_and_d"] is True
         assert summary["checks"]["p_on_c_equals_o_max_abs_diff"] == pytest.approx(0.0, abs=1e-9)
         assert "auditor_helps" in summary["inference_at_all"]
@@ -743,9 +1067,13 @@ class TestBuildPlanAndRunPlan:
         assert "s_p_half" in summary["per_cell"] and "p_half_missing_share_of_scored" in summary["per_cell"]
         assert "I_on_D" in summary["rests_on_dependent_reports"]
         assert "P_on_C" in summary["rests_on_dependent_reports"]
-        assert summary["by_tau_q"]["s_i"]
-        for arm in ("N", "I", "P", "P_half", "O"):
-            assert arm in summary["blame"]
+        assert summary["sensitivity"]["n_cells"] >= 0
+        for arm in ("N", "I", "O"):
+            assert arm in summary["blame"]["D"]
+        for arm in ("P", "P_half"):
+            assert arm in summary["blame"]["C"]
+        assert "a_composition" in summary["do_no_harm"]
+        assert "excluded_instances" in summary["primary"]
 
 
 # -------------------------------------------------------------------------------------
@@ -779,4 +1107,4 @@ class TestCliSmokeEndToEnd:
             cwd=engram_root, capture_output=True, text=True)
         assert rescore_proc.returncode == 0, rescore_proc.stderr
         summary = json.loads(rescore_proc.stdout)
-        assert "primary" in summary and "reading" in summary["primary"]
+        assert "primary" in summary and "reading" in summary["primary"]["s_i"]

@@ -38,7 +38,9 @@ from experiments.northstar.graded_fixture import generate as GENERATOR
 PAIR_MIN_SHARED = 4          # ell(i,j) needs at least this many items both i and j report
 CHI2_1_LOWER_QUARTILE_OVER_2 = 0.1015   # the chi-squared_1 25th percentile, divided by 2 (R4's s-hat formula)
 CALIBRATION_PERCENTILE = 5    # theta is the 5th percentile of each A calibration instance's min r
-CEILING_FLOOR_SIGMA = 0.1      # the ceiling stop: pooled N-O under this many sigma means the test stops
+CEILING_GATE_SIGMA = 0.1      # a C/D cell's pilot N-O must be at least this many sigma to enter the
+                                # primary's population (amendment 1); the same number also gates the
+                                # pooled-ceiling stop rule and the per-cell descriptive ratios' floor
 DO_NO_HARM_BAND_SIGMA = 0.05    # the do-no-harm interval must lie within +/- this many sigma
 
 BOOTSTRAP_REPLICATES = 10_000
@@ -91,8 +93,12 @@ def pair_ratios(ell: dict) -> dict:
 
 
 def flagged_pairs(ratios: dict, theta: float) -> list[tuple[int, int]]:
-    """Every pair with r below theta is marked dependent."""
-    return [pair for pair, r in ratios.items() if r < theta]
+    """Every pair with r below theta is marked dependent, in increasing r order. The order matters once the
+    flagged pairs overlap (share a source): fed in this order to ``collapse_consensus``, the smallest-r
+    pair -- the clearest case of dependence -- merges first, and a later pair sharing an already-merged
+    source is skipped (``collapse_consensus``'s own "first match wins" rule, stated here as the auditor's
+    merge order)."""
+    return sorted((pair for pair, r in ratios.items() if r < theta), key=lambda pair: ratios[pair])
 
 
 def scale_estimate(ell: dict) -> float | None:
@@ -117,14 +123,18 @@ def calibrate_theta(K: int, M: int, rho: float, generator, seed_root: int, *, n_
                      b_grid: tuple = GRID_B, s_grid: tuple = GRID_S,
                      percentile: float = CALIBRATION_PERCENTILE) -> dict:
     """theta, fixed on A instances per (K, M, rho): the 5th percentile of each instance's min r, over
-    ``n_cal`` calibration instances pooled over b and s (which the auditor can't count, R3). Also returns
-    the false-flag rate per (b, s), for the plan to record."""
+    ``n_cal`` calibration instances pooled over b and s (which the auditor can't count, R3), balanced: each
+    (b, s) combination gets an equal (or, where n_cal doesn't divide evenly, as equal as cycling allows)
+    share of the draws, rather than each instance rolling b and s independently and risking an uneven mix.
+    Also returns the false-flag rate per (b, s), for the plan to record."""
     rng = np.random.default_rng(np.random.SeedSequence([int(seed_root), int(K), int(M), int(round(rho * 1000))]))
+    combos = [(b, s) for b in b_grid for s in s_grid]
+    order = rng.permutation(len(combos))  # which combo lands on which instance index; balance itself
+                                          # doesn't depend on this, only on the cycling below
     mins_by_bs: dict = {}
     all_mins = []
     for i in range(n_cal):
-        b = float(rng.choice(b_grid))
-        s = float(rng.choice(s_grid))
+        b, s = combos[order[i % len(combos)]]
         inst = generator({"K": K, "M": M, "rho": rho, "b": b, "s": s}, "A", i, seed_root)
         mask = ~np.isnan(inst["reports"])
         ell = pairwise_lower_quartile(inst["reports"], mask)
@@ -137,7 +147,9 @@ def calibrate_theta(K: int, M: int, rho: float, generator, seed_root: int, *, n_
     theta = float(np.percentile(all_mins, percentile)) if all_mins else float("nan")
     false_flag_rate = {f"b{b}_s{s}": float(np.mean(np.asarray(vals) < theta))
                         for (b, s), vals in mins_by_bs.items()}
-    return {"theta": theta, "n_cal": n_cal, "n_valid": len(all_mins), "false_flag_rate": false_flag_rate}
+    n_per_bs = {f"b{b}_s{s}": len(vals) for (b, s), vals in mins_by_bs.items()}
+    return {"theta": theta, "n_cal": n_cal, "n_valid": len(all_mins), "false_flag_rate": false_flag_rate,
+            "n_per_bs": n_per_bs}
 
 
 # ======================================================================================
@@ -186,6 +198,29 @@ def rests_on_dependent_reports(reports: np.ndarray, mask: np.ndarray, pair_specs
     return np.abs(with_collapse - without_collapse) > 0.5 * s_hat
 
 
+def independent_report_counts(mask: np.ndarray, pair_specs: list) -> np.ndarray:
+    """Per item, the number of independent reports supporting its consensus after collapse (the spec's
+    "what would count against a conclusion": consensus, independent-report count, and the dependence flag
+    above). A collapsed pair counts once, not twice, on the items it actually collapses; every other
+    reporter on that item counts itself."""
+    K, M = mask.shape
+    counts = np.zeros(M, dtype=int)
+    for m in range(M):
+        reporters = set(np.where(mask[:, m])[0].tolist())
+        used: set = set()
+        merged_pairs = 0
+        for (i, j, items) in pair_specs:
+            if i in used or j in used or i not in reporters or j not in reporters:
+                continue
+            if items is not None and m not in items:
+                continue
+            used.add(i)
+            used.add(j)
+            merged_pairs += 1
+        counts[m] = len(reporters) - len(used) + merged_pairs
+    return counts
+
+
 # ======================================================================================
 # The five arms
 # ======================================================================================
@@ -213,6 +248,17 @@ def arm_provenance(reports: np.ndarray, mask: np.ndarray, chains: np.ndarray) ->
     """P, kept provenance: every report, with the pairs ``relation()`` (here, ``chains``) answers copied
     collapsed on their copied items."""
     return collapse_consensus(reports, mask, provenance_pairs(chains))
+
+
+def chain_named_items(chains: np.ndarray) -> np.ndarray:
+    """The items any declared chain names at all -- what P actually knows, read from ``chains`` itself, not
+    from ``truth["copied_items"]``. On this fixture the two sets happen to coincide in C (every copied item
+    gets a named chain) and chains is empty in D, but P-half's own "n copied items" must come from what the
+    record declares, never from the hidden truth (P-half's whole point is to model an incomplete record)."""
+    named: set = set()
+    for (_, _, items) in provenance_pairs(chains):
+        named |= items
+    return np.array(sorted(named), dtype=int)
 
 
 def p_half_drop_seed(cell: dict, instance_index: int, seed_root: int) -> np.random.Generator:
@@ -293,16 +339,25 @@ def pooled_gain(per_cell_values: dict) -> float:
     return float(np.mean(means)) if means else float("nan")
 
 
+def safe_ratio(numerator: float, denominator: float) -> float:
+    """numerator/denominator, nan (never a raised ZeroDivisionError) if the denominator is zero or either
+    side is non-finite. Plain Python float division raises on an exact 0.0 denominator, unlike numpy's; the
+    pooled gains this divides are plain floats, so this guard is load-bearing, not defensive filler."""
+    if denominator == 0 or not np.isfinite(denominator) or not np.isfinite(numerator):
+        return float("nan")
+    return numerator / denominator
+
+
 def s_i_ratio(gain_n_minus_i_by_cell: dict, gain_n_minus_o_by_cell: dict) -> float:
     """The primary, on D: S_I = pooled(N-I) / pooled(N-O), each cell's gain weighted equally. The share of a
     kept record's value the auditor gets back without one."""
     numerator = pooled_gain(gain_n_minus_i_by_cell)
     denominator = pooled_gain(gain_n_minus_o_by_cell)
-    return numerator / denominator
+    return safe_ratio(numerator, denominator)
 
 
 def per_cell_ratios(numerator_by_cell: dict, denominator_by_cell: dict, *,
-                     floor: float = CEILING_FLOOR_SIGMA) -> dict:
+                     floor: float = CEILING_GATE_SIGMA) -> dict:
     """S_I and S_P-half per cell, descriptive only, where that cell's own mean denominator is at least
     ``floor`` sigma (otherwise the ratio is too noisy to read, so it is left out)."""
     out = {}
@@ -346,10 +401,54 @@ def bootstrap_ratio_ci(numerator_by_cell: dict, denominator_by_cell: dict, *,
             idx = rng.integers(0, n, size=n)
             num_means.append(num[idx].mean())
             den_means.append(den[idx].mean())
-        boot[r] = (float(np.mean(num_means)) / float(np.mean(den_means))) if den_means else float("nan")
+        boot[r] = (safe_ratio(float(np.mean(num_means)), float(np.mean(den_means)))
+                  if den_means else float("nan"))
     point = s_i_ratio(numerator_by_cell, denominator_by_cell)
     lo, hi = np.nanpercentile(boot, [2.5, 97.5])
     return {"point": float(point), "ci95": [float(lo), float(hi)]}
+
+
+def bootstrap_s_i_and_s_phalf(n_minus_i_d: dict, n_minus_o_d: dict, n_minus_phalf_c: dict,
+                               n_minus_o_c: dict, *, replicates: int = BOOTSTRAP_REPLICATES,
+                               seed: int = BOOTSTRAP_SEED) -> dict:
+    """S_I (on D) and S_P-half (on C), bootstrapped together, paired by base instance: each cell's
+    instances are resampled once per replicate -- not twice, independently -- and that one resample feeds
+    both ratios for that cell, since C's row i and D's row i are the same base instance."""
+    rng = np.random.default_rng(seed)
+    keys = sorted(set(n_minus_i_d) & set(n_minus_o_d) & set(n_minus_phalf_c) & set(n_minus_o_c))
+    arrays = {}
+    for key in keys:
+        n_i = np.asarray(n_minus_i_d[key], dtype=float)
+        o_d = np.asarray(n_minus_o_d[key], dtype=float)
+        n_half = np.asarray(n_minus_phalf_c[key], dtype=float)
+        o_c = np.asarray(n_minus_o_c[key], dtype=float)
+        n = min(len(n_i), len(o_d), len(n_half), len(o_c))
+        arrays[key] = (n_i[:n], o_d[:n], n_half[:n], o_c[:n])
+    boot_i = np.empty(replicates)
+    boot_half = np.empty(replicates)
+    for r in range(replicates):
+        i_num, i_den, half_num, half_den = [], [], [], []
+        for key in keys:
+            n_i, o_d, n_half, o_c = arrays[key]
+            n = len(n_i)
+            if n == 0:
+                continue
+            idx = rng.integers(0, n, size=n)
+            i_num.append(n_i[idx].mean())
+            i_den.append(o_d[idx].mean())
+            half_num.append(n_half[idx].mean())
+            half_den.append(o_c[idx].mean())
+        boot_i[r] = safe_ratio(float(np.mean(i_num)), float(np.mean(i_den))) if i_den else float("nan")
+        boot_half[r] = (safe_ratio(float(np.mean(half_num)), float(np.mean(half_den)))
+                       if half_den else float("nan"))
+    point_i = s_i_ratio(n_minus_i_d, n_minus_o_d)
+    point_half = s_i_ratio(n_minus_phalf_c, n_minus_o_c)
+    lo_i, hi_i = np.nanpercentile(boot_i, [2.5, 97.5])
+    lo_half, hi_half = np.nanpercentile(boot_half, [2.5, 97.5])
+    return {
+        "s_i": {"point": float(point_i), "ci95": [float(lo_i), float(hi_i)]},
+        "s_p_half": {"point": float(point_half), "ci95": [float(lo_half), float(hi_half)]},
+    }
 
 
 def bootstrap_pooled_mean_ci(values_by_cell: dict, *, replicates: int = BOOTSTRAP_REPLICATES,
@@ -361,7 +460,8 @@ def bootstrap_pooled_mean_ci(values_by_cell: dict, *, replicates: int = BOOTSTRA
     for key, values in values_by_cell.items():
         arr = np.asarray(values, dtype=float)
         arrays[key] = arr[~np.isnan(arr)]
-    keys = list(arrays)
+    keys = sorted(arrays)  # fixed order so the replicate sequence depends only on the data, never on
+                           # the caller's dict insertion order
     boot = np.empty(replicates)
     for r in range(replicates):
         means = []
@@ -385,8 +485,12 @@ def bootstrap_pooled_mean_ci(values_by_cell: dict, *, replicates: int = BOOTSTRA
 def primary_reading(ci95: list) -> str:
     """The readings, fixed by the spec: "inference substitutes for the record" if the lower end is 0.8 or
     more; "the record can't be replaced by this inference" if the upper end is under 0.5; else "inference
-    recovers part"."""
+    recovers part". A non-finite end (an undefined ratio -- a zero or non-finite pooled denominator) reads
+    "undefined", never "partial": a NaN or inf compares False against every threshold below, so without
+    this guard it would silently fall through to "inference recovers part"."""
     lower, upper = ci95
+    if not (np.isfinite(lower) and np.isfinite(upper)):
+        return "undefined"
     if lower >= PRIMARY_LOWER_SUBSTITUTES:
         return "inference substitutes for the record"
     if upper < PRIMARY_UPPER_CANT_REPLACE:
@@ -397,14 +501,21 @@ def primary_reading(ci95: list) -> str:
 def do_no_harm(gain_i_minus_n_by_cell: dict, *, band: float = DO_NO_HARM_BAND_SIGMA) -> dict:
     """Do no harm, A: I against N, consensus error over all items the bad source reports. The interval for
     I-N must lie within +/- ``band`` sigma; outside it, false collapses cost honest conclusions, reported as
-    a failure."""
+    a failure. A NaN or empty case (no cells, or every cell empty) reads "no data" -- never "within band"
+    (false positive pass) or "outside band" (false failure): a NaN end compares False against every
+    threshold, so without this guard an empty case would silently read as passing."""
     result = bootstrap_pooled_mean_ci(gain_i_minus_n_by_cell)
     lo, hi = result["ci95"]
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        result["within_band"] = None
+        result["reading"] = "no data"
+        return result
     result["within_band"] = bool(-band <= lo and hi <= band)
+    result["reading"] = "within band" if result["within_band"] else "outside band"
     return result
 
 
-def ceiling_check(gain_n_minus_o_by_cell: dict, *, floor: float = CEILING_FLOOR_SIGMA) -> dict:
+def ceiling_check(gain_n_minus_o_by_cell: dict, *, floor: float = CEILING_GATE_SIGMA) -> dict:
     """The ceiling, counted before the plan is fixed: the oracle's gain N-O on copied biased items, pooled
     equally across kept cells. Under ``floor`` sigma, double counting barely moves these conclusions and the
     test stops with that as its result."""
@@ -654,6 +765,24 @@ def calibrate_all(generator, seed_root: int, *, n_cal: int = 500, grid_k=GRID_K,
     }
 
 
+def population_composition(cells: list, *, axes: tuple = ("K", "b", "s", "tau", "q")) -> dict:
+    """Marginal counts of a population's cells by each requested axis value -- how many have K=4, how many
+    have b=2.0, and so on. Each axis's own counts are a partition of the population (they sum to
+    len(cells)), which is what makes the primary's equal-cell weighting checkable: does the gate
+    over-represent large b or small K?"""
+    out: dict = {}
+    for axis in axes:
+        counts: dict = {}
+        for cell in cells:
+            if axis not in cell:
+                continue
+            label = str(cell[axis])
+            counts[label] = counts.get(label, 0) + 1
+        if counts:
+            out[axis] = counts
+    return out
+
+
 # ======================================================================================
 # Orchestration: one cell, many instances
 # ======================================================================================
@@ -707,11 +836,12 @@ def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float
 
         if condition in ("C", "D"):
             copied_items = np.asarray(truth["copied_items"], dtype=int)
+            chain_items = chain_named_items(chains)  # what P itself knows -- never truth's copied_items
             scored = scored_items(truth)
             pair_specs_p = provenance_pairs(chains)
             cons_P = collapse_consensus(reports, mask, pair_specs_p)
             half_rng = p_half_drop_seed(cell, i, seed_root)
-            pair_specs_phalf = p_half_pairs(chains, copied_items, half_rng)
+            pair_specs_phalf = p_half_pairs(chains, chain_items, half_rng)
             cons_Phalf = collapse_consensus(reports, mask, pair_specs_phalf)
             cons_O = arm_oracle(reports, mask, bad, copier, copied_items)
 
@@ -723,12 +853,14 @@ def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float
             row["blame"]["O"] = blame_for_arm(reports, mask, cons_O, bad, copier)
             row["n_scored"] = int(len(scored))
             row["n_copied"] = int(len(copied_items))
+            row["excluded"] = len(scored) == 0  # the instance has no scored item; counted, never dropped silently
 
-            # P-half's missing half: the share of the scored items whose chain was dropped this instance.
-            kept_items = set()
+            # P-half's missing half: the share of the scored items whose chain was dropped this instance,
+            # measured against what the chain itself named (chain_items), not the hidden truth.
+            kept_items: set = set()
             for (_, _, items) in pair_specs_phalf:
                 kept_items |= items
-            missing = set(copied_items.tolist()) - kept_items
+            missing = set(chain_items.tolist()) - kept_items
             row["p_half_missing_share_of_scored"] = (
                 float(len(missing & set(scored.tolist()))) / len(scored) if len(scored) else float("nan"))
 
@@ -743,6 +875,12 @@ def run_cell(cell: dict, condition: str, generator, seed_root: int, theta: float
                 "P": flag_counts(p_flags, truth_flags),
             }
 
+            # The auditor's own per-item report (spec: consensus, independent-report count, dependence
+            # flag): the mean independent-report count over the scored items, after I's collapse.
+            independent_counts_i = independent_report_counts(mask, pair_specs_i)
+            row["mean_independent_reports_i"] = (
+                float(np.mean(independent_counts_i[scored])) if len(scored) else float("nan"))
+
         rows.append(row)
     return rows
 
@@ -755,17 +893,24 @@ def build_plan(*, generator=GENERATOR, seed_root_calibration: int, seed_root_pil
                 n_cal: int = 500, n_pilot: int = PILOT_INSTANCES, n_instances: int = 500,
                 grid_k=GRID_K, grid_m=GRID_M, grid_rho=GRID_RHO, grid_b=GRID_B, grid_s=GRID_S,
                 grid_tau=GRID_TAU, grid_q=GRID_Q) -> dict:
-    """The pre-registration, exactly as the fixture spec (93e08797) and this one fix it:
+    """The pre-registration, exactly as the fixture spec (93e08797), this spec, and amendment 1 fix it.
 
-    1. the full grid's pilots (``n_pilot`` instances per cell, the pilot seed, disjoint from the run's) and
-       the cut (kept where the pilot share is between 1.5x chance and 0.9; dropped cells are recorded for
-       the sensitivity report, never discarded);
-    2. theta per (K, M, rho), from ``n_cal`` A calibration instances on a seed disjoint from the pilots' and
-       the run's, pooled over b and s, with the false-flag rate per (b, s);
-    3. for each *kept* C/D cell, the ceiling count (N-O and the share off by more than 0.5 sigma) and the
-       auditor's pilot detection rate, both read off the same pilot instances the cut already drew -- no
-       redraw;
-    4. ``n_instances`` (500 at the real grid) and the run seeds, fixed here, before any method runs on them.
+    Two C/D populations, both read off the *same* pilot instances (no redraw):
+    - **the primary's population** (amendment 1): every C/D grid cell -- all of them, not only the
+      fixture's own cut -- whose pilot N-O is at least CEILING_GATE_SIGMA;
+    - **the sensitivity set**: the fixture's own cut (kept where the pilot's plain-detector share is
+      between 1.5x chance and 0.9) -- the original kept cells, reported as a check beside the primary.
+
+    ``run`` covers their union; a C/D cell in neither is recorded in ``dropped_cells``.
+
+    **Do-no-harm's A cells**: the (K, M, rho, b, s) base cells under the primary's population, deduped,
+    plus the high-bias corner (K6, M60, rho0.9, b8, every s in the grid) *always* -- regardless of the
+    cut, regardless of whether it happens to be one of the primary's own base cells. A's own pilot/cut
+    (bad-source-first share) still runs separately and still decides A's entry in the sensitivity set, for
+    A's false-flag-rate reporting; it does not gate do-no-harm's cells.
+
+    theta is calibrated for every (K, M, rho) in the grid regardless of any of the above (cheap: 12
+    combinations at the real grid's size), since both populations draw from the same 12.
 
     The grid axes default to the fixture spec's real grid; the ``grid_*`` overrides exist only so tests (and
     a labelled smoke) can run this on a handful of cells instead of the real ~500. No reader-model or
@@ -773,39 +918,84 @@ def build_plan(*, generator=GENERATOR, seed_root_calibration: int, seed_root_pil
     calibrations = calibrate_all(generator, seed_root_calibration, n_cal=n_cal,
                                  grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho)
 
-    kept_cells: list = []
-    dropped_cells: list = []
-    pilot_a: dict = {}
+    # ---- C/D: one pilot per cell; both populations read off it, never a redraw ----
     pilot_cd: dict = {}
     ceiling: dict = {}
+    primary_population: list = []
+    sensitivity_population: list = []
+    cd_cell_by_key: dict = {}
     auditor_pilot_detection_by_cell: dict = {}
-
-    for cell in full_a_cells(grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho, grid_b=grid_b, grid_s=grid_s):
-        key = _cell_key(cell)
-        result = pilot_a_cell(cell, generator, seed_root_pilot, n_pilot)
-        pilot_a[key] = {"share": result["share"], "chance": result["chance"]}
-        entry = {"cell": cell, "key": key, "condition": "A", "share": result["share"],
-                 "chance": result["chance"]}
-        if cut_keeps(result["share"], result["chance"]):
-            kept_cells.append({"cell": cell, "key": key, "condition": "A"})
-        else:
-            dropped_cells.append(entry)
 
     for cell in full_cd_cells(grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho, grid_b=grid_b, grid_s=grid_s,
                               grid_tau=grid_tau, grid_q=grid_q):
         key = _cell_key(cell)
+        cd_cell_by_key[key] = cell
         result = pilot_cd_cell(cell, generator, seed_root_pilot, n_pilot)
-        pilot_cd[key] = {"share": result["share"], "chance": result["chance"]}
-        if cut_keeps(result["share"], result["chance"]):
-            kept_cells.append({"cell": cell, "key": key, "condition": "C/D"})
-            ceiling[key] = {**ceiling_from_pilot_instances(result["instances"]), "cell": cell,
-                           "n_pilot": n_pilot}
+        cell_ceiling = ceiling_from_pilot_instances(result["instances"])
+        pilot_cd[key] = {"share": result["share"], "chance": result["chance"],
+                         "pilot_gain_n_minus_o": cell_ceiling["pooled_gain_n_minus_o"]}
+        is_primary = (not math.isnan(cell_ceiling["pooled_gain_n_minus_o"])
+                     and cell_ceiling["pooled_gain_n_minus_o"] >= CEILING_GATE_SIGMA)
+        is_sensitivity = cut_keeps(result["share"], result["chance"])
+        if is_primary:
+            primary_population.append(key)
+        if is_sensitivity:
+            sensitivity_population.append(key)
+        if is_primary or is_sensitivity:
+            ceiling[key] = {**cell_ceiling, "cell": cell, "n_pilot": n_pilot,
+                           "in_primary": is_primary, "in_sensitivity": is_sensitivity}
             cal_key = _calibration_key(cell)
             theta = calibrations[cal_key]["theta"]
             auditor_pilot_detection_by_cell[key] = auditor_pilot_detection(result["instances"], theta)
-        else:
-            dropped_cells.append({"cell": cell, "key": key, "condition": "C/D", "share": result["share"],
-                                  "chance": result["chance"]})
+
+    kept_cd_keys = sorted(set(primary_population) | set(sensitivity_population))
+    kept_cells = [{"cell": cd_cell_by_key[key], "key": key, "condition": "C/D"} for key in kept_cd_keys]
+    dropped_cells = [
+        {"cell": cd_cell_by_key[key], "key": key, "condition": "C/D",
+         "share": pilot_cd[key]["share"], "chance": pilot_cd[key]["chance"]}
+        for key in sorted(cd_cell_by_key) if key not in kept_cd_keys
+    ]
+
+    # ---- A: the fixture's own pilot/cut (bad-source-first share), for the sensitivity set and its
+    # own false-flag-rate reporting -- unrelated to do-no-harm's cells below ----
+    pilot_a: dict = {}
+    a_sensitivity_keys: list = []
+    a_cell_by_key: dict = {}
+    for cell in full_a_cells(grid_k=grid_k, grid_m=grid_m, grid_rho=grid_rho, grid_b=grid_b, grid_s=grid_s):
+        key = _cell_key(cell)
+        a_cell_by_key[key] = cell
+        result = pilot_a_cell(cell, generator, seed_root_pilot, n_pilot)
+        pilot_a[key] = {"share": result["share"], "chance": result["chance"]}
+        if cut_keeps(result["share"], result["chance"]):
+            a_sensitivity_keys.append(key)
+
+    # ---- A: do-no-harm's own cells (amendment 1) -- the primary's base cells, plus the corner, always ----
+    do_no_harm_base_cells: dict = {}
+    for key in primary_population:
+        cell = cd_cell_by_key[key]
+        base = {"K": cell["K"], "M": cell["M"], "rho": cell["rho"], "b": cell["b"], "s": cell["s"]}
+        do_no_harm_base_cells[_cell_key(base)] = base
+    high_bias_corner_keys: list = []
+    if 6 in grid_k and 60 in grid_m and 0.9 in grid_rho and 8.0 in grid_b:
+        # the corner only exists where the configured grid has it at all; a test's own tiny grid_*
+        # override may not, in which case there is no corner to add (the real grid always has it)
+        for s in grid_s:
+            corner = {"K": 6, "M": 60, "rho": 0.9, "b": 8.0, "s": float(s)}
+            corner_key = _cell_key(corner)
+            do_no_harm_base_cells[corner_key] = corner
+            high_bias_corner_keys.append(corner_key)
+            a_cell_by_key.setdefault(corner_key, corner)
+
+    a_run_keys = sorted(set(a_sensitivity_keys) | set(do_no_harm_base_cells))
+    kept_cells += [{"cell": a_cell_by_key[key], "key": key, "condition": "A"} for key in a_run_keys]
+    dropped_cells += [
+        {"cell": a_cell_by_key[key], "key": key, "condition": "A",
+         "share": pilot_a[key]["share"], "chance": pilot_a[key]["chance"]}
+        for key in sorted(pilot_a) if key not in a_run_keys
+    ]
+
+    do_no_harm_a_cells = sorted(k for k in do_no_harm_base_cells if k not in high_bias_corner_keys)
+    primary_cells = [cd_cell_by_key[k] for k in primary_population]
 
     return {
         "grid": {"K": list(grid_k), "M": list(grid_m), "rho": list(grid_rho), "b": list(grid_b),
@@ -816,6 +1006,14 @@ def build_plan(*, generator=GENERATOR, seed_root_calibration: int, seed_root_pil
         "dropped_cells": dropped_cells,
         "ceiling": ceiling,
         "auditor_pilot_detection": auditor_pilot_detection_by_cell,
+        "primary_population": sorted(primary_population),
+        "sensitivity_population": sorted(sensitivity_population),
+        "do_no_harm_a_cells": do_no_harm_a_cells,
+        "high_bias_corner_a_cells": sorted(high_bias_corner_keys),
+        "primary_population_composition": population_composition(primary_cells,
+                                                                  axes=("K", "b", "s", "tau", "q")),
+        "do_no_harm_a_composition": population_composition(list(do_no_harm_base_cells.values()),
+                                                            axes=("K", "b", "s")),
         "n_instances": n_instances,
         "n_cal": n_cal,
         "seeds": {"calibration": seed_root_calibration, "pilot": seed_root_pilot, "run": seed_root_run},
@@ -836,7 +1034,10 @@ def run_plan(plan: dict, *, generator=GENERATOR, n_instances: int | None = None)
             results[key] = {"A": run_cell(cell, "A", generator, seed_root_run, theta, n)}
         else:
             cal_key = _calibration_key(cell)
-            theta = plan["calibrations"][cal_key]["theta"] if cal_key in plan["calibrations"] else float("nan")
+            if cal_key not in plan["calibrations"]:
+                raise KeyError(f"no calibrated theta for {cal_key} ({key}): a missing calibration is a "
+                               f"plan bug, not something run should paper over with nan")
+            theta = plan["calibrations"][cal_key]["theta"]
             results[key] = {
                 "C": run_cell(cell, "C", generator, seed_root_run, theta, n),
                 "D": run_cell(cell, "D", generator, seed_root_run, theta, n),
@@ -844,132 +1045,197 @@ def run_plan(plan: dict, *, generator=GENERATOR, n_instances: int | None = None)
     return results
 
 
+def _p_equals_o_check(rows_c: list) -> float:
+    """P on C must equal O exactly, by construction: this is the max absolute difference over every
+    instance where both are defined. A NaN on one side and a finite value on the other is itself a
+    mismatch (``max(x, nan)`` would silently keep whichever argument happened to come first instead), so
+    it reports as +inf, never silently dropped or stuck."""
+    worst = 0.0
+    for row in rows_c:
+        p_err, o_err = row["consensus_error"]["P"], row["consensus_error"]["O"]
+        p_nan, o_nan = math.isnan(p_err), math.isnan(o_err)
+        if p_nan != o_nan:
+            return float("inf")
+        if not p_nan:
+            worst = max(worst, abs(p_err - o_err))
+    return worst
+
+
 def summarize(plan: dict, results: dict) -> dict:
-    """Turns ``run_plan``'s rows into the primary (S_I, its bootstrap CI and reading), the gap Delta,
-    do-no-harm in A (pooled and at the high-bias corner if present), the ceiling check, detection rates, and
-    the P-on-C-equals-O / C-and-D-give-identical-N checks."""
-    gain_n_minus_i: dict = {}
-    gain_n_minus_o: dict = {}
-    gain_n_minus_phalf: dict = {}
+    """Turns ``run_plan``'s rows into the primary (S_I and S_P-half, bootstrapped together, paired by base
+    instance, over the primary's population), the same measures over the sensitivity set, the gap Delta,
+    do-no-harm (pooled over the primary's own base cells, and at the high-bias corner, both s pooled), the
+    ceiling check, detection rates, blame (A and D kept apart), excluded-instance counts, a breakdown by
+    (tau, q), and the P-on-C-equals-O / C-and-D-give-identical-N checks."""
+    cd_keys = [e["key"] for e in plan["cells"] if e["condition"] == "C/D"]
+    cell_by_key = {e["key"]: e["cell"] for e in plan["cells"]}
+
+    # ---- gather every C/D cell's raw data once, unconditional on population ----
+    gain_n_minus_i: dict = {}      # on D
+    gain_n_minus_o_d: dict = {}    # on D
+    gain_n_minus_phalf: dict = {}  # on C
+    gain_n_minus_o_c: dict = {}    # on C -- paired with gain_n_minus_phalf for the joint bootstrap
     err_i_on_d: dict = {}
     err_p_on_c: dict = {}
-    gain_i_minus_n_a: dict = {}
-    gain_i_minus_n_a_high_bias = None
-    false_flag_rate_a_by_cell: dict = {}
-    detection_by_cell = {}
-    p_equals_o_max_diff = 0.0
-    n_identical_c_d = True
+    detection_by_cell: dict = {}
     p_half_missing_share: dict = {}
+    excluded_count: dict = {}
+    n_instances_run: dict = {}
     rests_counts = {"I": {"tp": 0, "fp": 0, "fn": 0}, "P": {"tp": 0, "fp": 0, "fn": 0}}
-    by_tau_q: dict = {}
     blame_bad_by_arm: dict = {arm: {} for arm in ("N", "I", "P", "P_half", "O")}
     blame_copier_by_arm: dict = {arm: {} for arm in ("N", "I", "P", "P_half", "O")}
+    p_equals_o_max_diff_by_cell: dict = {}
+    n_identical_c_d = True
 
-    for entry in plan["cells"]:
-        key, condition = entry["key"], entry["condition"]
-        cell = entry["cell"]
+    for key in cd_keys:
         cell_results = results.get(key, {})
-
-        if condition == "A":
-            rows = cell_results.get("A", [])
-            diffs = [r["consensus_error"]["I_all"] - r["consensus_error"]["N_all"] for r in rows]
-            gain_i_minus_n_a[key] = diffs
-            false_flag_rate_a_by_cell[key] = false_flag_rate_a(rows)
-            if (cell.get("K"), cell.get("M"), cell.get("rho"), cell.get("b")) == (6, 60, 0.9, 8.0):
-                gain_i_minus_n_a_high_bias = diffs
-            for arm in ("N", "I"):
-                blame_bad_by_arm[arm][key] = [r["blame"][arm]["bad_first_credit"] for r in rows]
-            continue
-
         rows_c = cell_results.get("C", [])
         rows_d = cell_results.get("D", [])
-        n_i = [r["consensus_error"]["N"] - r["consensus_error"]["I"] for r in rows_d
-              if not np.isnan(r["consensus_error"]["N"])]
-        n_o = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_d
-              if not np.isnan(r["consensus_error"]["N"])]
-        gain_n_minus_i[key] = n_i
-        gain_n_minus_o[key] = n_o
+
+        gain_n_minus_i[key] = [r["consensus_error"]["N"] - r["consensus_error"]["I"] for r in rows_d
+                               if not np.isnan(r["consensus_error"]["N"])]
+        gain_n_minus_o_d[key] = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_d
+                                if not np.isnan(r["consensus_error"]["N"])]
         gain_n_minus_phalf[key] = [r["consensus_error"]["N"] - r["consensus_error"]["P_half"] for r in rows_c
                                    if not np.isnan(r["consensus_error"]["N"])]
+        gain_n_minus_o_c[key] = [r["consensus_error"]["N"] - r["consensus_error"]["O"] for r in rows_c
+                                 if not np.isnan(r["consensus_error"]["N"])]
         err_i_on_d[key] = [r["consensus_error"]["I"] for r in rows_d]
         err_p_on_c[key] = [r["consensus_error"]["P"] for r in rows_c]
         detection_by_cell[key] = detection_rates(rows_d)
         p_half_missing_share[key] = float(np.nanmean(
             [r["p_half_missing_share_of_scored"] for r in rows_c])) if rows_c else float("nan")
-        tau_q_key = (cell.get("tau"), cell.get("q"))
-        group = by_tau_q.setdefault(tau_q_key, {"n_i": {}, "n_o": {}})
-        group["n_i"][key] = n_i
-        group["n_o"][key] = n_o
+        excluded_count[key] = sum(1 for r in rows_d if r.get("excluded"))
+        n_instances_run[key] = len(rows_d)
+        p_equals_o_max_diff_by_cell[key] = _p_equals_o_check(rows_c)
 
         for row_d in rows_d:
-            rests_counts["I"]["tp"] += row_d["rests_on_dependent_reports"]["I"]["tp"]
-            rests_counts["I"]["fp"] += row_d["rests_on_dependent_reports"]["I"]["fp"]
-            rests_counts["I"]["fn"] += row_d["rests_on_dependent_reports"]["I"]["fn"]
+            for stat in ("tp", "fp", "fn"):
+                rests_counts["I"][stat] += row_d["rests_on_dependent_reports"]["I"][stat]
         for row_c in rows_c:
-            rests_counts["P"]["tp"] += row_c["rests_on_dependent_reports"]["P"]["tp"]
-            rests_counts["P"]["fp"] += row_c["rests_on_dependent_reports"]["P"]["fp"]
-            rests_counts["P"]["fn"] += row_c["rests_on_dependent_reports"]["P"]["fn"]
+            for stat in ("tp", "fp", "fn"):
+                rests_counts["P"][stat] += row_c["rests_on_dependent_reports"]["P"][stat]
 
-        for arm in ("N", "I", "P", "P_half", "O"):
+        # N/I/O blame come from D (the primary's own condition); P/P-half's only come from C (their chains
+        # are only ever populated there -- on D they would be comparing against an unconditional naive).
+        for arm in ("N", "I", "O"):
             blame_bad_by_arm[arm][key] = [r["blame"][arm]["bad_first_credit"] for r in rows_d]
-            copier_credits = [r["blame"][arm]["copier_first_credit"] for r in rows_d
-                              if r["blame"][arm]["copier_first_credit"] is not None]
-            if copier_credits:
-                blame_copier_by_arm[arm][key] = copier_credits
+            credits = [r["blame"][arm]["copier_first_credit"] for r in rows_d
+                      if r["blame"][arm]["copier_first_credit"] is not None]
+            if credits:
+                blame_copier_by_arm[arm][key] = credits
+        for arm in ("P", "P_half"):
+            blame_bad_by_arm[arm][key] = [r["blame"][arm]["bad_first_credit"] for r in rows_c]
+            credits = [r["blame"][arm]["copier_first_credit"] for r in rows_c
+                      if r["blame"][arm]["copier_first_credit"] is not None]
+            if credits:
+                blame_copier_by_arm[arm][key] = credits
 
         for row_c, row_d in zip(rows_c, rows_d):
-            p_err, o_err = row_c["consensus_error"]["P"], row_c["consensus_error"]["O"]
-            if not (np.isnan(p_err) and np.isnan(o_err)):
-                p_equals_o_max_diff = max(p_equals_o_max_diff, abs(p_err - o_err))
             if row_c["consensus_error"]["N"] != row_d["consensus_error"]["N"] and not (
                     np.isnan(row_c["consensus_error"]["N"]) and np.isnan(row_d["consensus_error"]["N"])):
                 n_identical_c_d = False
 
-    by_tau_q_s_i = {
-        f"tau{tau}_q{q}": s_i_ratio(group["n_i"], group["n_o"]) for (tau, q), group in by_tau_q.items()
+    # ---- A: do-no-harm's two pools (the primary's own base cells, and the corner, both kept apart from
+    # each other and never conflated with A's own false-flag-rate reporting) ----
+    gain_i_minus_n_a: dict = {}
+    gain_i_minus_n_a_corner: dict = {}
+    false_flag_rate_a_by_cell: dict = {}
+    for entry in plan["cells"]:
+        if entry["condition"] != "A":
+            continue
+        key = entry["key"]
+        rows = results.get(key, {}).get("A", [])
+        diffs = [r["consensus_error"]["I_all"] - r["consensus_error"]["N_all"] for r in rows]
+        false_flag_rate_a_by_cell[key] = false_flag_rate_a(rows)
+        if key in plan.get("do_no_harm_a_cells", []):
+            gain_i_minus_n_a[key] = diffs
+        if key in plan.get("high_bias_corner_a_cells", []):
+            gain_i_minus_n_a_corner[key] = diffs  # kept one entry per s -- never overwritten
+        blame_bad_by_arm["N"].setdefault(key, [r["blame"]["N"]["bad_first_credit"] for r in rows])
+        blame_bad_by_arm["I"].setdefault(key, [r["blame"]["I"]["bad_first_credit"] for r in rows])
+
+    def _population_measures(keys: list) -> dict:
+        """Every gated measure, restricted to one C/D population (the primary's or the sensitivity set's):
+        S_I and S_P-half (bootstrapped together, paired by instance), the primary reading, the gap Delta,
+        the ceiling check, and the excluded-instance count, pooled."""
+        sub = lambda d: {k: v for k, v in d.items() if k in keys}  # noqa: E731
+        boots = bootstrap_s_i_and_s_phalf(sub(gain_n_minus_i), sub(gain_n_minus_o_d),
+                                          sub(gain_n_minus_phalf), sub(gain_n_minus_o_c))
+        boots["s_i"]["reading"] = primary_reading(boots["s_i"]["ci95"])
+        return {
+            "s_i": boots["s_i"],
+            "s_p_half": boots["s_p_half"],
+            "gap_delta": gap_delta(sub(err_i_on_d), sub(err_p_on_c)),
+            "ceiling": ceiling_check(sub(gain_n_minus_o_d)),
+            "excluded_instances": {
+                "per_cell": {k: excluded_count[k] for k in keys},
+                "pooled_share": pooled_gain({k: [excluded_count[k] / n_instances_run[k]]
+                                            for k in keys if n_instances_run.get(k)}),
+            },
+            "n_cells": len(keys),
+        }
+
+    primary_keys = [k for k in plan.get("primary_population", []) if k in cell_by_key]
+    sensitivity_keys = [k for k in plan.get("sensitivity_population", []) if k in cell_by_key]
+    primary_measures = _population_measures(primary_keys)
+    sensitivity_measures = _population_measures(sensitivity_keys)
+
+    # ---- by (tau, q): every measure above, recomputed within each (tau, q) slice of the primary's
+    # population (so where inference fails is visible on that axis, not only pooled across it) ----
+    by_tau_q: dict = {}
+    for key in primary_keys:
+        cell = cell_by_key[key]
+        tau_q = (cell.get("tau"), cell.get("q"))
+        by_tau_q.setdefault(tau_q, []).append(key)
+    by_tau_q_measures = {
+        f"tau{tau}_q{q}": _population_measures(keys) for (tau, q), keys in sorted(by_tau_q.items())
     }
+
     rests_recall_precision = {
         "I_on_D": recall_precision_from_counts(**rests_counts["I"]),
         "P_on_C": recall_precision_from_counts(**rests_counts["P"]),
     }
     blame_summary = {
-        arm: {
-            "bad_first_credit": pooled_gain(blame_bad_by_arm[arm]),
-            "copier_first_credit": pooled_gain(blame_copier_by_arm[arm]) if blame_copier_by_arm[arm]
-            else float("nan"),
-        }
-        for arm in ("N", "I", "P", "P_half", "O")
+        "D": {arm: {"bad_first_credit": pooled_gain(blame_bad_by_arm[arm]),
+                    "copier_first_credit": (pooled_gain(blame_copier_by_arm[arm])
+                                            if blame_copier_by_arm[arm] else float("nan"))}
+             for arm in ("N", "I", "O")},
+        "C": {arm: {"bad_first_credit": pooled_gain(blame_bad_by_arm[arm]),
+                    "copier_first_credit": (pooled_gain(blame_copier_by_arm[arm])
+                                            if blame_copier_by_arm[arm] else float("nan"))}
+             for arm in ("P", "P_half")},
     }
 
-    primary = bootstrap_ratio_ci(gain_n_minus_i, gain_n_minus_o)
-    primary["reading"] = primary_reading(primary["ci95"])
-    delta = gap_delta(err_i_on_d, err_p_on_c)
-    ceiling = ceiling_check(gain_n_minus_o)
     dnh_pooled = do_no_harm(gain_i_minus_n_a)
-    dnh_high_bias = do_no_harm({"K6_M60_rho0.9_b8": gain_i_minus_n_a_high_bias}) \
-        if gain_i_minus_n_a_high_bias is not None else None
-    # "Inference at all": I against N on D, paired; "the auditor helps" if the interval excludes 0 in
-    # I's favour (its lower end is above 0).
-    inference_at_all = bootstrap_pooled_mean_ci(gain_n_minus_i)
-    inference_at_all["auditor_helps"] = bool(inference_at_all["ci95"][0] > 0.0)
+    dnh_high_bias = do_no_harm(gain_i_minus_n_a_corner)
+    inference_at_all = bootstrap_pooled_mean_ci(
+        {k: v for k, v in gain_n_minus_i.items() if k in primary_keys})
+    inference_at_all["auditor_helps"] = bool(np.isfinite(inference_at_all["ci95"][0])
+                                             and inference_at_all["ci95"][0] > 0.0)
 
     return {
-        "primary": primary,
-        "gap_delta": delta,
-        "ceiling": ceiling,
-        "do_no_harm": {"pooled": dnh_pooled, "high_bias_corner": dnh_high_bias},
+        "primary": {**primary_measures, "population_composition": plan.get("primary_population_composition", {})},
+        "sensitivity": sensitivity_measures,
+        "by_tau_q": by_tau_q_measures,
+        "do_no_harm": {
+            "pooled": dnh_pooled, "high_bias_corner": dnh_high_bias,
+            "a_composition": plan.get("do_no_harm_a_composition", {}),
+        },
         "inference_at_all": inference_at_all,
         "detection": {"D": detection_by_cell, "A_false_flag_rate": false_flag_rate_a_by_cell},
         "blame": blame_summary,
         "rests_on_dependent_reports": rests_recall_precision,
-        "by_tau_q": {"s_i": by_tau_q_s_i},
         "per_cell": {
-            "s_i": per_cell_ratios(gain_n_minus_i, gain_n_minus_o),
-            "s_p_half": per_cell_ratios(gain_n_minus_phalf, gain_n_minus_o),
+            "s_i": per_cell_ratios(gain_n_minus_i, gain_n_minus_o_d),
+            "s_p_half": per_cell_ratios(gain_n_minus_phalf, gain_n_minus_o_c),
             "p_half_missing_share_of_scored": p_half_missing_share,
         },
         "checks": {
-            "p_on_c_equals_o_max_abs_diff": p_equals_o_max_diff,
+            # the true maximum over every cell's own max (never max(x, nan); a per-cell inf means that
+            # cell hit a P/O nan-mismatch, a real failure, not a dropped comparison)
+            "p_on_c_equals_o_max_abs_diff": (max(p_equals_o_max_diff_by_cell.values())
+                                             if p_equals_o_max_diff_by_cell else 0.0),
             "n_identical_between_c_and_d": n_identical_c_d,
         },
     }
