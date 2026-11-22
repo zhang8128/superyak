@@ -50,9 +50,11 @@ def classify(error):
     """Spec §7's one outcome table: (the row's status, the peer's effect, the words to keep). The effect is 'neutral',
     'failure' or 'reset'; the words are the row's last_error when it's refused, the peer's last_problem on a failure.
     Anything the table doesn't name is a failure, so an unknown fault retries and is never terminal."""
-    from .transport import PinMismatch, PeerAnswer
+    from .transport import PinMismatch, PeerAnswer, RowTimeout
     if isinstance(error, Obsolete):
         return 'withdrawn', 'neutral', None
+    if isinstance(error, RowTimeout):  # claim-crossing transport T1: an atlas write past its own deadline is the row's
+        return 'failed', 'neutral', str(error)
     if isinstance(error, Local):
         inner = error.error
         if isinstance(inner, sqlite3.OperationalError):  # locked, busy, I/O, full: nobody's fault (check 3 SF2)
@@ -369,6 +371,7 @@ class Federation:
             db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (row['peer_id'],))
             db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (row['peer_id'],))
             db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (row['peer_id'],))
+            db.execute('DELETE FROM atlas_received WHERE origin=?', (row['peer_id'],))  # claim-crossing transport R7
             settle_owner_trust(db, now)
             self.store._emit_held(db, epochs)
         return {'ok':True}
@@ -479,6 +482,12 @@ class Federation:
                     action = 'layer.withdraw'
             else:
                 action = 'layer.withdraw'
+        elif action.startswith('atlas.'):  # claim-crossing transport T7: its own envelope, kept in atlas_outgoing
+            from .atlas_transport import prepare as prepare_atlas
+            raw = prepare_atlas(self, db, row, contact)
+            if raw is None:
+                raise Obsolete()
+            return raw
         elif action == 'room.reply':
             try:
                 inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
@@ -554,17 +563,23 @@ class Federation:
         queue or a peer in backoff never fills the page a live peer needs. Each row's outcome comes from classify. On a
         peer's first failure in the pass its other rows wait for the next one. A Problem from an in-process `send=`
         arrives as the PeerAnswer HTTP would give (plan SF7)."""
-        from .transport import send_pinned, PeerAnswer
+        from .transport import send_pinned, PeerAnswer, RowTimeout
         result = {'delivered':0, 'withdrawn':0, 'failed':0, 'refused':0, 'pending':0}
         if not self._sync_lock.acquire(blocking=False):
             return {**result, 'busy':True}
         try:
             self.collect()
             work = self._due_rows(limit)
-            failing = set()
+            failing, atlas_sent = set(), set()
             for row in work:
                 if row['row_peer'] in failing:
                     continue  # its peer failed in this pass: it waits for the next one
+                atlas = row['action'].startswith('atlas.')
+                if atlas:  # claim-crossing transport T1 (A3): one atlas row per peer in a pass
+                    if row['row_peer'] in atlas_sent:
+                        continue
+                    atlas_sent.add(row['row_peer'])
+                row_timeout = False
                 try:
                     card = json.loads(row['card'])
                     prepare = lambda key=row['id']: self._prepared(key)
@@ -574,14 +589,17 @@ class Federation:
                         except Problem as answer:
                             raise PeerAnswer(answer.status, answer.message) from None
                     else:
-                        send_pinned(card, prepare, gate=self.store.dispatch_gate)
+                        send_pinned(card, prepare, gate=self.store.dispatch_gate, scaled=atlas)
                     status, effect, words = 'delivered', 'reset', None
                 except Exception as error:  # noqa: BLE001 - every outcome is classify's; nothing escapes a pass
                     status, effect, words = classify(error)
+                    row_timeout = isinstance(error, RowTimeout)
                 now = self.store.clock()
+                # an atlas row past its own write deadline waits its own backoff, and its peer isn't failing (T1, N1)
+                wait = now + min(3600, 60 * 2 ** min(row['attempts'], 6)) if row_timeout else 0
                 with self.store.transaction() as db:
-                    db.execute("UPDATE outbox SET status=?, attempts=attempts+1, next_attempt=0, last_error=? WHERE id=? "
-                               "AND status IN ('pending','failed')", (status, words if status == 'refused' else None, row['id']))
+                    db.execute("UPDATE outbox SET status=?, attempts=attempts+1, next_attempt=?, last_error=? WHERE id=? "
+                               "AND status IN ('pending','failed')", (status, wait, words if status == 'refused' else None, row['id']))
                     status = db.execute('SELECT status FROM outbox WHERE id=?', (row['id'],)).fetchone()[0]
                     self._peer_outcome(db, row['row_peer'], effect, words, now)
                     if status == 'delivered':
@@ -602,8 +620,10 @@ class Federation:
                 "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
                 "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
                 "WHERE status IN ('pending','failed') AND peer_delivery.mode='push' "
-                "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) ORDER BY event_seq, outbox.id LIMIT ?",
-                (self.store.clock(), min(100, max(1, limit))))]
+                "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) "
+                "AND (outbox.action NOT LIKE 'atlas.%' OR outbox.next_attempt<=?) "  # transport T1: an atlas row's own wait
+                "ORDER BY (outbox.action LIKE 'atlas.%'), event_seq, outbox.id LIMIT ?",  # and atlas rows last (R1)
+                (self.store.clock(), self.store.clock(), min(100, max(1, limit))))]
 
     def _pending_count(self):
         """sync_once's pending count: every row still waiting, for any peer."""
@@ -852,6 +872,11 @@ class Federation:
                     owed['refused'].append({'event_id': event, 'code': answer.status})
                     got['refused'] += 1
                     new += 1
+                    action = value.get('action') if isinstance(value, dict) else None
+                    if isinstance(action, str) and action.startswith('atlas.'):  # transport A5: the words stay here
+                        with self.store.transaction() as db:
+                            db.execute('INSERT OR REPLACE INTO atlas_refused VALUES(?,?,?,?,?)',
+                                       (peer_id, event, action, f'{answer.status} {answer.message}'[:200], self.store.clock()))
                 elif not named:
                     got['unreadable'] += 1
                 continue
@@ -895,6 +920,9 @@ class Federation:
             # rid belongs to the destination peer. Never query local resources.
             author = meta.get('actor')
             message = meta.get('message')
+        elif action.startswith('atlas.'):  # claim-crossing transport T7: the sending ship's owner is the author
+            ship = db.execute("SELECT owner_id FROM users WHERE id=? AND kind='ship'", (meta.get('ship'),)).fetchone()
+            author = ship['owner_id'] if ship else None
         elif action in ('layer.release','layer.withdraw'):
             resource = db.execute('SELECT owner_id FROM layers WHERE id=?', (rid,)).fetchone()
             author = resource['owner_id'] if resource else None
@@ -941,6 +969,13 @@ class Federation:
                     if current:
                         snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (row['resource_id'],resource['active_revision'])).fetchone()[0]) if resource['active_revision'] else {}
                         action = 'layer.release' if contact['id'] in snapshot.get('audience_users', []) else 'layer.withdraw'
+                elif action.startswith('atlas.'):  # transport T7: its own title, never "Room unavailable"
+                    meta = json.loads(row['metadata'])
+                    title = ('Atlas publication' if action == 'atlas.publication' else 'Atlas notice') + (
+                        f": {meta['title']}" if meta.get('title') else '')
+                    current = True
+                    ship = db.execute('SELECT username FROM users WHERE id=?', (meta.get('ship'),)).fetchone()
+                    correlation = {**correlation, 'ship': ship['username'] if ship else None}
                 elif action == 'room.reply':
                     inbox = db.execute("SELECT revision,payload FROM inbox WHERE origin=? AND resource_id=? AND kind='room' AND recipient=?", (contact['peer_id'],row['resource_id'],actor)).fetchone()
                     title = json.loads(inbox['payload'])['title'] if inbox and inbox['payload'] else 'Received room'
@@ -989,6 +1024,7 @@ class Federation:
         nothing itself."""
         with self.store.transaction() as db:
             db.execute('UPDATE peer_delivery SET next_attempt=NULL')
+            db.execute("UPDATE outbox SET next_attempt=0 WHERE action LIKE 'atlas.%' AND status='failed'")  # transport T1
             db.execute("INSERT INTO peer_meta VALUES('sync_requests', '1') "
                        "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER) + 1")
 
@@ -1003,6 +1039,19 @@ class Federation:
         value = parse(raw)
         if not isinstance(value.get('origin'),str) or not re.fullmatch(r'[0-9a-f]{64}',value['origin']):
             raise Problem(403, 'Unknown or unpaired peer')
+        if not (isinstance(value.get('action'), str) and value['action'].startswith('atlas.')):
+            return self._receive(value)
+        # Claim-crossing transport N3 and the approving check: an atlas receive waits at most RECEIVE_BOUND for the gate
+        # and SQLite, and a passing fault is a 503, peer-scoped and retried, never a 500 and never a refusal.
+        from .atlas_transport import RECEIVE_BOUND
+        from .dispatch import GateTimeout
+        try:
+            with self.store.bounded(RECEIVE_BOUND):
+                return self._receive(value)
+        except (sqlite3.OperationalError, GateTimeout):
+            raise Problem(503, 'Peer busy: try again') from None
+
+    def _receive(self, value):
         with self.store.transaction() as db:
             peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (value.get('origin'),)).fetchone()
             if not peer:
@@ -1021,14 +1070,23 @@ class Federation:
                     raise Problem(409, 'Event ID already used')
                 return {'ok':True, 'duplicate':True}
             try:
-                self._apply(db, value)
+                applied = self._apply(db, value)
             except (TypeError, KeyError, AttributeError, ValueError):
                 raise Problem(400, 'Invalid event payload') from None
             db.execute('INSERT INTO receipts VALUES(?,?,?,?)', (origin,value['event_id'],digest,self.store.clock()))
-            return {'ok':True, 'duplicate':False}
+            from .atlas_transport import DUPLICATE
+            return {'ok':True, 'duplicate':applied is DUPLICATE}  # an atlas payload this ship holds (transport T6)
 
     def _apply(self, db, e):
         action, p, origin, rid, revision = e['action'], e['payload'], e['origin'], e['resource_id'], e['revision']
+        if action.startswith('atlas.'):  # claim-crossing transport T3, T6
+            from . import atlas_transport
+            if action not in atlas_transport.ACTIONS:
+                raise Problem(400, 'Unknown peer action')
+            try:
+                return atlas_transport.apply(self, db, e)
+            except sqlite3.IntegrityError:  # a deterministic fault on the new table: the row's, never a 500 (N3)
+                raise Problem(400, 'Invalid atlas payload') from None
         if action == 'room.reply':
             return self._reply(db, e)
         if action not in ('layer.release','layer.withdraw','room.roster','room.message','room.withdraw'):

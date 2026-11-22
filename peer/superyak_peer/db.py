@@ -37,6 +37,7 @@ from .connector_reads import ConnectorReads, READS_SCHEMA
 from .connector_apps import ConnectorApps
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
+from .atlas_transport import AtlasTransport, ATLAS_SCHEMA
 from .dispatch import DispatchGate
 
 SCHEMA = '''
@@ -66,7 +67,7 @@ CHECKPOINT_WAIT = 0.1  # store-wal-mode D2: TRUNCATE's busy wait, so a long read
 _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 _bounded = threading.local()  # public-route-bound Task 6: this thread's lane deadline, on the store's monotonic clock
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, OwnerTrust, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, OwnerTrust, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps, AtlasTransport):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
     live = None  # serve's LiveSet, set by create_app (public-route-bound Task 2); a CLI's Store has none
@@ -102,7 +103,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 raise ValueError(f'{self.db_path} is not a regular file') from None
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + OWNER_TRUST_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + OWNER_TRUST_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA + ATLAS_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]  # under the gate (reading())

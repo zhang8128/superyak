@@ -189,6 +189,46 @@ must be online to accept and distribute replies; receipt by one participant neve
 confers roster-management authority. Local replies remain durably visible as
 pending/failed until accepted and echoed by the origin.
 
+`atlas.publication` and `atlas.notice` (claim-crossing transport, the spec
+`docs/superpowers/specs/2026-11-22-claim-crossing-transport-design.md`):
+
+- **Payloads:** `atlas.publication`'s is `{package}` and `atlas.notice`'s is
+  `{notice}`. A package is one Atlas sourced publication, and a notice one
+  source notice, exactly as Atlas made it. A payload's canonical JSON is at most
+  1 MiB. The resource id is the payload's SHA-256, and the revision is 1.
+- **Who sends to whom:** a ship, whose owner is an admin on its peer, sends to
+  one ship on the paired peer. The contact must have a current typed code (an
+  owner trust alone doesn't count), and its peer must be one the lessons chain
+  lists.
+- **The sender's checks,** before anything is queued:
+  - every artifact is issued as `urn:superyak:peer:<its own id>`;
+  - a carried entry is its own or the destination's;
+  - no artifact has attestations;
+  - the package's policy grants the destination `retain` by its exact URI,
+    holds no `*` in any selector, and names no `reshare`.
+- **The receiver's checks:** the same issuers, with the origin as issuer, and a
+  ship as the recipient. A refusal is a 400 with its own words.
+- **What the receiver keeps:** the signed envelope and the sender's signing
+  key, keyed by origin, recipient and payload digest. A payload already held is
+  acknowledged as a duplicate, and an origin may keep at most 64 MiB.
+- **A busy receiver:** the receive waits at most 2 s for the gate and SQLite,
+  then answers 503, which is peer-scoped.
+- **Unpairing:** an unpair, a hold or restore's reconcile deletes what that
+  origin or contact delivered.
+- **Pushing:** connect and the pinned handshake keep the 3 s deadline, and a
+  failure there is the peer's. The dispatch gate is released once the envelope
+  is committed, before the write. So a hold that commits during the write meets
+  an attempt already in flight, as it does after any write.
+- **The row's own deadline:** the write and the answer get `3 s + bytes /
+  PULL_RATE`. A failure at or past that deadline, judged by the clock rather
+  than by the exception's class, is the row's alone. The row waits its own
+  backoff of `min(3600, 60 × 2^attempts)` s, and the peer's other rows keep
+  flowing.
+- **Scheduling:** atlas rows go after a pass's other rows, at most one per peer
+  in a pass.
+- **A receiver without these actions** answers 400 "Unknown peer action", and
+  only that row is refused.
+
 ## Durable dispatch and limits
 
 `Federation.collect()` materializes the currently uncollected metadata-only local

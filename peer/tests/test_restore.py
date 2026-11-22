@@ -2537,7 +2537,8 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'retired_peers',  # owner trust: every retirement the replaced file has, its peer unpaired
     'trust_confirmations',  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
     'trust_cap_refusals',  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
-    'lessons_addable'}  # lessons room adds: emptied, so an older listing never vouches for what a newer CONFIRM dropped
+    'lessons_addable',  # lessons room adds: emptied, so an older listing never vouches for what a newer CONFIRM dropped
+    'atlas_received'}  # claim-crossing transport R7: what an origin unpaired since the copy delivered is deleted
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
@@ -2552,6 +2553,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
     'crossings',  # ship home and crossing (plan Task 2): the network half of each answered crossing, a record only
+    'atlas_outgoing', 'atlas_refused',  # claim-crossing transport: an outbox row's payload, and a puller's refusal words
     }
 
 
