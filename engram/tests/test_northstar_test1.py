@@ -1198,3 +1198,15 @@ class TestAfterCorrectionScoringBug:
         # The control question never moved: B-cache's unchanged "1985" is still right.
         assert after["b_cache"]["qk"]["em"] is True
         assert after["b_cache"]["qk"]["stale"] is True  # trivially, since nothing moved for a control
+
+
+def test_a_donor_that_normalizes_equal_to_the_original_is_never_drawn():
+    # Rio Grande's nit on 03c70b76: scoring compares with exact()'s normalization, so a donor differing only in case,
+    # articles or punctuation would score as the original; the draw must exclude it, whatever the seed.
+    from experiments.northstar.test1 import choose_substitutes
+    qualifying = [{"id": "a", "answer": "The Beatles", "answer_class": "other_name"},
+                  {"id": "b", "answer": "the beatles", "answer_class": "other_name"},
+                  {"id": "c", "answer": "Beatles", "answer_class": "other_name"},
+                  {"id": "d", "answer": "Rolling Stones", "answer_class": "other_name"}]
+    for seed in range(40):
+        assert choose_substitutes(qualifying, [0], seed=seed)[0] == "Rolling Stones"

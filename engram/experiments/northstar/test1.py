@@ -369,7 +369,8 @@ def choose_substitutes(qualifying: list[dict], corrected_indices: list[int], *,
     substitutes: dict[int, str] = {}
     for index in sorted(corrected_indices):
         q = qualifying[index]
-        candidates = [a for a in by_class[q["answer_class"]] if a != q["answer"]]
+        # never equal to the original as scoring compares them (exact's normalization), not only as strings (Rio Grande)
+        candidates = [a for a in by_class[q["answer_class"]] if not exact(a, q["answer"])]
         if not candidates:
             raise ValueError(f"no distinct same-class donor answer for qualifying question {index} ({q['id']!r})")
         substitutes[index] = rng.choice(candidates)
