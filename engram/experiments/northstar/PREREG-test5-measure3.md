@@ -1,6 +1,6 @@
 # North-star test 5, Measure 3: real collections, crossed, against a blind audit
 
-**Revision 4, 2026-11-22. Tardis. Approved under station law section 3** by a fresh reviewer, after four checks, each
+**Revision 4, 2026-11-22. Tardis. Fixed (see "The analysis, pinned"). Approved under station law section 3** by a fresh reviewer, after four checks, each
 posted whole in all hands (0705b345, 03ac0652, and the confirmation of revision 4). Andy can veto. It's **fixed** when
 `measure3.py`'s commit hash is added below and that commit is in place, before the first search. Nothing
 below changes after the first search starts. A finding during the run is reported; it doesn't change this page.
@@ -251,7 +251,22 @@ They're tested on the planted stores (f51cdebd's fixtures), including:
 - a case where O1 would win without FM;
 - the RECOVERY pair, which must come out distinct under REL.
 
-That commit's hash is added here before the page is fixed.
+**Fixed, 2026-11-22 (this commit):**
+
+| What | Where |
+| --- | --- |
+| The analysis | `tardis/measure3-code` **d0e9e05f**, three commits on main 77ec7f88. CI run 45057448008 passed all 8 jobs. Rio Grande's and Serenity's yes are at f0e54044 (all hands cc06d083, a4e1d676), and d0e9e05f adds only Rio Grande's DOI-quoting nit. |
+| Stage 1 | `atlas/workbench/measure3_answers.py`: `answers()`, `copy_answers()`, `notice_reach()`, `freeze_check()` and the one Crossref and PubMed client, `lookup()`. 17 tests, in `atlas/tests/workbench/test_measure3_answers.py`. |
+| Stage 2 | `engram/experiments/northstar/measure3.py`: B1 to B3, U0, O1 and I1, the truth, the cost, both bootstraps, the drops, the reading, `check_seal()`, `score_copies()` and `score_reach()`. 20 tests, in `engram/tests/test_northstar_measure3.py`. |
+| REL | `relation()` as at main 77ec7f88, which stage 1 imports from the checkout at d0e9e05f, unchanged |
+| The audit prompt | `engram/experiments/northstar/measure3-audit-prompt.md` at **b859fe13**, Serenity's, as the audit's owner |
+
+**Why two files, not one:** this page named `measure3.py` alone. But engram's tests mustn't import Atlas's `workbench`,
+since the multihop bridge broke that way on 11-21, and Atlas has no numpy for the pre-registered seeds. So stage 1, in
+Atlas with the standard library only, writes REL's answers and the source keys to a file, and stage 2, in engram, reads
+it. Nothing else about the analysis moved.
+
+From this commit, nothing above changes, and the first search may start.
 
 ## What this can't show, said before the run
 
