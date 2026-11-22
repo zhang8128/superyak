@@ -173,3 +173,20 @@ def test_validate_refuses_descriptor_endpoints_that_dont_match():
     package["descriptor"] = _reseal(package["descriptor"])
     with pytest.raises(ValueError, match="Descriptor references"):
         validate_sourced(package)
+
+
+def test_a_publication_can_carry_a_foreign_claim_exactly_as_its_issuer_sealed_it():
+    pi = publish_sourced(bundle(), config())
+    carried = [{"claim": pi["claims"][0], "snapshot": pi["snapshot"]}]
+    tardis = publish_sourced(bundle(), config(issuer="urn:superyak:fixture:tardis", carried=carried))
+    assert tardis["carried"] == carried
+    assert tardis["carried"][0]["claim"]["digest"] == pi["claims"][0]["digest"]  # the same digest on both sides
+    assert validate_sourced(tardis) is tardis
+
+
+def test_a_carried_claim_must_name_its_carried_snapshot():
+    pi = publish_sourced(bundle(), config())
+    other = publish_sourced(bundle(), config(item_ids=["C2"]))
+    with pytest.raises(ValueError, match="carried"):
+        publish_sourced(bundle(), config(issuer="urn:superyak:fixture:tardis",
+                                         carried=[{"claim": pi["claims"][0], "snapshot": other["snapshot"]}]))

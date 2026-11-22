@@ -248,7 +248,11 @@ A notice needs `read`. Acting on it is the owner's act, above. Consent isn't tra
 4. Tardis's own policy allows `read` of the Pi's publication;
 5. `third`'s policy allows Tardis to `retain`.
 
-The fixtures' policies grant exactly the actions each case uses, and one case has `third`'s policy refuse `reshare`.
+The fixtures' policies grant exactly the actions each case uses, and one case has a fourth store's policy refuse
+`reshare`.
+
+- **Amendment 2 (the build, 2026-11-22):** the refusal is in a fourth store's policy, not `third`'s. "Copied twice
+  through `third`" needs `third` to allow the Pi `reshare`, so `third` can't also refuse it.
 
 A policy passed on inside another store's publication, as `third`'s reaches Tardis inside the Pi's, counts only when
 it is attested by its issuer, or obtained from its issuer directly. The transport spec owns how. In the fixtures, every

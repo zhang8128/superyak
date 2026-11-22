@@ -1,0 +1,327 @@
+{
+ "carried": [],
+ "claims": [
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "f08b0b80439345753e1f7255fbb665074bce930f7122b3a924d7467b6f753b4a"
+   },
+   "id": "urn:superyak:fixture:fourth:claim:b8832a8f2363ee6583c4f736fd28ff3845c8802cb72e44c3cb51398bb1745214",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:fourth",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:fourth:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "8fd95f325e195ef6ad321c51ba30b615348bf65c8ac76943f439c5ad6563f6c6"
+     },
+     "origin": "urn:superyak:fixture:fourth:collection",
+     "record_id": "F-consent-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "fba9290fa46743a40cffbe71d254ffe54cf7f312bf259238ffceb69f1aae1205"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "76082faff3747ef2dd5f4e8304a344f58ee3fb397cb10f3949d6a4a85ffba5ed"
+   },
+   "id": "urn:superyak:fixture:fourth:claim:e2e4ddb155d171e3b125b672c0d70401957ddbb57831ab7a199b66ba2b33b100",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:fourth",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:fourth:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "0c74e1a00c6fab359515022a900146302ae3d9239f6960ab858962ec03579e0a"
+     },
+     "origin": "urn:superyak:fixture:fourth:collection",
+     "record_id": "F-consent-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "fba9290fa46743a40cffbe71d254ffe54cf7f312bf259238ffceb69f1aae1205"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  }
+ ],
+ "descriptor": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "fa9f756bba32dda4b7018889ccff6063dbc08e364c4b1199aed514253b26c306"
+  },
+  "id": "urn:superyak:fixture:fourth:lighthousedescriptor:86dbe0dd0065de70dd6dec8e10d571ba42ac516865e262a7f9fc2188b4a64bfb",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:fourth",
+  "kind": "LighthouseDescriptor",
+  "payload": {
+   "actions": [
+    "read",
+    "link_overlap",
+    "retain",
+    "reshare"
+   ],
+   "artifactEndpoints": [
+    {
+     "kind": "Snapshot",
+     "locator": "urn:superyak:fixture:fourth:snapshot:b530ae3916141df4fc99012feb1097c2798f05655e783c7293faf0995c51ae6c"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:fourth:claim:b8832a8f2363ee6583c4f736fd28ff3845c8802cb72e44c3cb51398bb1745214"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:fourth:claim:e2e4ddb155d171e3b125b672c0d70401957ddbb57831ab7a199b66ba2b33b100"
+    },
+    {
+     "kind": "ConnectionPolicy",
+     "locator": "urn:superyak:fixture:fourth:connectionpolicy:26d43d209a5dc3af8479309cbb03e8ea0558227099ab6c713f2bd1dba905d407"
+    }
+   ],
+   "name": "Planted fourth",
+   "profiles": [
+    {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    }
+   ],
+   "protocolVersions": [
+    "0.1"
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.descriptor+json",
+  "protocolVersion": "0.1"
+ },
+ "format": "atlas-sourced-publication",
+ "policy": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "ec6347faaae7b536d49abfb73164ccf1b4bc89cdf9372666da96d93331cc3055"
+  },
+  "id": "urn:superyak:fixture:fourth:connectionpolicy:26d43d209a5dc3af8479309cbb03e8ea0558227099ab6c713f2bd1dba905d407",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:fourth",
+  "kind": "ConnectionPolicy",
+  "payload": {
+   "rules": [
+    {
+     "actions": [
+      "retain"
+     ],
+     "audiences": [
+      "self"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:fourth:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "fourth-lets-pi-retain",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:pi"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    },
+    {
+     "actions": [
+      "reshare"
+     ],
+     "audiences": [
+      "onward"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:fourth:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "deny",
+     "id": "fourth-refuses-pi-reshare",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:pi"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+  "protocolVersion": "0.1"
+ },
+ "snapshot": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "fba9290fa46743a40cffbe71d254ffe54cf7f312bf259238ffceb69f1aae1205"
+  },
+  "id": "urn:superyak:fixture:fourth:snapshot:b530ae3916141df4fc99012feb1097c2798f05655e783c7293faf0995c51ae6c",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:fourth",
+  "kind": "Snapshot",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:fourth:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "lineage": [],
+   "model": {
+    "items": [
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "f-consent-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "F-consent-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Consent claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "f-consent-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "F-consent-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Consent claim b"
+     }
+    ],
+    "origin": "urn:superyak:fixture:fourth:collection",
+    "relations": [],
+    "schema_version": 1,
+    "sources": [
+     {
+      "citation": "",
+      "id": "f-consent-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:consent source a:2024",
+       "url": "url:https://journal.example/consent/a/1"
+      },
+      "title": "Consent source a",
+      "url": "https://journal.example/consent/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "f-consent-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:consent source b:2024",
+       "url": "url:https://journal.example/consent/b/1"
+      },
+      "title": "Consent source b",
+      "url": "https://journal.example/consent/b/1",
+      "year": 2024
+     }
+    ],
+    "title": "Planted store: fourth"
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   }
+  },
+  "payloadMediaType": "application/vnd.lighthouse.snapshot+json",
+  "protocolVersion": "0.1"
+ },
+ "version": 1
+}

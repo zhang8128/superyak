@@ -1,0 +1,790 @@
+{
+ "authorization": [
+  {
+   "allowed": true,
+   "policy_of": "pi",
+   "request": {
+    "action": "read",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "self",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:third:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:third",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": true,
+   "policy_of": "third",
+   "request": {
+    "action": "retain",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "self",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:third:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:pi",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": true,
+   "policy_of": "third",
+   "request": {
+    "action": "reshare",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "onward",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:third:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:pi",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": true,
+   "policy_of": "tardis",
+   "request": {
+    "action": "read",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "self",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:pi:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:pi",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": true,
+   "policy_of": "third",
+   "request": {
+    "action": "retain",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "self",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:third:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:tardis",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": true,
+   "policy_of": "fourth",
+   "request": {
+    "action": "retain",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "self",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:fourth:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:pi",
+    "purpose": "research"
+   }
+  },
+  {
+   "allowed": false,
+   "policy_of": "fourth",
+   "request": {
+    "action": "reshare",
+    "at": "2026-11-22T00:00:00Z",
+    "attestations": [],
+    "audience": "onward",
+    "claimMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "context": "urn:superyak:fixture:fourth:context",
+    "domain": "research",
+    "evidence": [],
+    "profile": "urn:superyak:profile:atlas-sourced",
+    "publisher": "urn:superyak:fixture:pi",
+    "purpose": "research"
+   }
+  }
+ ],
+ "pairs": [
+  {
+   "a": {
+    "record_id": "P-copied-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-copied-a",
+    "store": "tardis"
+   },
+   "case": "copied",
+   "link": {
+    "record_id": "P-copied-a",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-twice-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-twice-a",
+    "store": "tardis"
+   },
+   "case": "copied twice",
+   "link": {
+    "record_id": "P-twice-a",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-sibling-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-sibling-a",
+    "store": "tardis"
+   },
+   "case": "sibling copies",
+   "link": {
+    "record_id": "H-sibling-a",
+    "store": "third"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-carried-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "carried": "P-carried-a",
+    "store": "tardis"
+   },
+   "case": "carried",
+   "link": {
+    "record_id": "P-carried-a",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-bare-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-bare-a",
+    "store": "tardis"
+   },
+   "case": "copy of a claim with no evidence",
+   "link": {
+    "record_id": "P-bare-a",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-shared-x-a",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-shared-x-a",
+    "store": "tardis"
+   },
+   "case": "shared unresolved digest",
+   "link": {
+    "unresolved": "shared-a"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-empty-a",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-empty-a",
+    "store": "tardis"
+   },
+   "case": "both empty"
+  },
+  {
+   "a": {
+    "record_id": "P-half-a",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-half-a",
+    "store": "tardis"
+   },
+   "case": "one empty"
+  },
+  {
+   "a": {
+    "record_id": "P-lone-x-a",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-lone-x-a",
+    "store": "tardis"
+   },
+   "case": "unresolved digest"
+  },
+  {
+   "a": {
+    "record_id": "P-two-dois-a",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-two-dois-a",
+    "store": "tardis"
+   },
+   "case": "two DOIs one title"
+  },
+  {
+   "a": {
+    "record_id": "P-forms-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-forms-a",
+    "store": "tardis"
+   },
+   "case": "one DOI written three ways"
+  },
+  {
+   "a": {
+    "record_id": "P-pct-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-pct-a",
+    "store": "tardis"
+   },
+   "case": "percent-encoded DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-angle-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-angle-a",
+    "store": "tardis"
+   },
+   "case": "DOI in angle brackets"
+  },
+  {
+   "a": {
+    "record_id": "P-one-doi-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-one-doi-a",
+    "store": "tardis"
+   },
+   "case": "shared url, one DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-drift-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-drift-a",
+    "store": "tardis"
+   },
+   "case": "title drift"
+  },
+  {
+   "a": {
+    "record_id": "P-pub-doi-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-pub-doi-a",
+    "store": "tardis"
+   },
+   "case": "publisher url against DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-http-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-http-a",
+    "store": "tardis"
+   },
+   "case": "http against https"
+  },
+  {
+   "a": {
+    "record_id": "P-www-a",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-www-a",
+    "store": "tardis"
+   },
+   "case": "www against none"
+  },
+  {
+   "a": {
+    "record_id": "P-sici-a",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-sici-a",
+    "store": "tardis"
+   },
+   "case": "two SICI DOIs of one issue"
+  },
+  {
+   "a": {
+    "record_id": "P-proc-a",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-proc-a",
+    "store": "tardis"
+   },
+   "case": "one proceedings url, two DOIs"
+  },
+  {
+   "a": {
+    "record_id": "P-not-doi-a",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-not-doi-a",
+    "store": "tardis"
+   },
+   "case": "doi.org path that isn't a DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-arxiv-a",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-arxiv-a",
+    "store": "tardis"
+   },
+   "case": "arXiv preprint against journal DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-overlap-a",
+    "store": "pi"
+   },
+   "answer": "overlapping",
+   "b": {
+    "record_id": "T-overlap-a",
+    "store": "tardis"
+   },
+   "case": "overlapping"
+  },
+  {
+   "a": {
+    "record_id": "P-indep-a",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-indep-a",
+    "store": "tardis"
+   },
+   "case": "independent"
+  },
+  {
+   "a": {
+    "record_id": "P-lean-a",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-lean-a",
+    "store": "tardis"
+   },
+   "case": "leans on a copy by relation (stated limit)"
+  },
+  {
+   "a": {
+    "record_id": "P-copied-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-copied-b",
+    "store": "tardis"
+   },
+   "case": "copied",
+   "link": {
+    "record_id": "P-copied-b",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-twice-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-twice-b",
+    "store": "tardis"
+   },
+   "case": "copied twice",
+   "link": {
+    "record_id": "P-twice-b",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-sibling-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-sibling-b",
+    "store": "tardis"
+   },
+   "case": "sibling copies",
+   "link": {
+    "record_id": "H-sibling-b",
+    "store": "third"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-carried-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "carried": "P-carried-b",
+    "store": "tardis"
+   },
+   "case": "carried",
+   "link": {
+    "record_id": "P-carried-b",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-bare-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-bare-b",
+    "store": "tardis"
+   },
+   "case": "copy of a claim with no evidence",
+   "link": {
+    "record_id": "P-bare-b",
+    "store": "pi"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-shared-x-b",
+    "store": "pi"
+   },
+   "answer": "copied",
+   "b": {
+    "record_id": "T-shared-x-b",
+    "store": "tardis"
+   },
+   "case": "shared unresolved digest",
+   "link": {
+    "unresolved": "shared-b"
+   }
+  },
+  {
+   "a": {
+    "record_id": "P-empty-b",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-empty-b",
+    "store": "tardis"
+   },
+   "case": "both empty"
+  },
+  {
+   "a": {
+    "record_id": "P-half-b",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-half-b",
+    "store": "tardis"
+   },
+   "case": "one empty"
+  },
+  {
+   "a": {
+    "record_id": "P-lone-x-b",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-lone-x-b",
+    "store": "tardis"
+   },
+   "case": "unresolved digest"
+  },
+  {
+   "a": {
+    "record_id": "P-two-dois-b",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-two-dois-b",
+    "store": "tardis"
+   },
+   "case": "two DOIs one title"
+  },
+  {
+   "a": {
+    "record_id": "P-forms-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-forms-b",
+    "store": "tardis"
+   },
+   "case": "one DOI written three ways"
+  },
+  {
+   "a": {
+    "record_id": "P-pct-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-pct-b",
+    "store": "tardis"
+   },
+   "case": "percent-encoded DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-angle-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-angle-b",
+    "store": "tardis"
+   },
+   "case": "DOI in angle brackets"
+  },
+  {
+   "a": {
+    "record_id": "P-one-doi-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-one-doi-b",
+    "store": "tardis"
+   },
+   "case": "shared url, one DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-drift-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-drift-b",
+    "store": "tardis"
+   },
+   "case": "title drift"
+  },
+  {
+   "a": {
+    "record_id": "P-pub-doi-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-pub-doi-b",
+    "store": "tardis"
+   },
+   "case": "publisher url against DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-http-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-http-b",
+    "store": "tardis"
+   },
+   "case": "http against https"
+  },
+  {
+   "a": {
+    "record_id": "P-www-b",
+    "store": "pi"
+   },
+   "answer": "same sources",
+   "b": {
+    "record_id": "T-www-b",
+    "store": "tardis"
+   },
+   "case": "www against none"
+  },
+  {
+   "a": {
+    "record_id": "P-sici-b",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-sici-b",
+    "store": "tardis"
+   },
+   "case": "two SICI DOIs of one issue"
+  },
+  {
+   "a": {
+    "record_id": "P-proc-b",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-proc-b",
+    "store": "tardis"
+   },
+   "case": "one proceedings url, two DOIs"
+  },
+  {
+   "a": {
+    "record_id": "P-not-doi-b",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-not-doi-b",
+    "store": "tardis"
+   },
+   "case": "doi.org path that isn't a DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-arxiv-b",
+    "store": "pi"
+   },
+   "answer": "unknown",
+   "b": {
+    "record_id": "T-arxiv-b",
+    "store": "tardis"
+   },
+   "case": "arXiv preprint against journal DOI"
+  },
+  {
+   "a": {
+    "record_id": "P-overlap-b",
+    "store": "pi"
+   },
+   "answer": "overlapping",
+   "b": {
+    "record_id": "T-overlap-b",
+    "store": "tardis"
+   },
+   "case": "overlapping"
+  },
+  {
+   "a": {
+    "record_id": "P-indep-b",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-indep-b",
+    "store": "tardis"
+   },
+   "case": "independent"
+  },
+  {
+   "a": {
+    "record_id": "P-lean-b",
+    "store": "pi"
+   },
+   "answer": "independent",
+   "b": {
+    "record_id": "T-lean-b",
+    "store": "tardis"
+   },
+   "case": "leans on a copy by relation (stated limit)"
+  }
+ ],
+ "spec": "docs/superpowers/specs/2026-11-22-claim-crossing-design.md, revision 6 (84fafe71) and amendment 1",
+ "unresolved": {
+  "lone-a": {
+   "algorithm": "sha-256",
+   "value": "0690c1deba75062a04e23541d09384d5392fd0c6750476e7f0e9397f15185379"
+  },
+  "lone-b": {
+   "algorithm": "sha-256",
+   "value": "1c6716e4561f74a15f3155c1399ed45fd21316518a456a00c05e844b3afbce98"
+  },
+  "shared-a": {
+   "algorithm": "sha-256",
+   "value": "f2a5faf918eed6ec6f6a9ebe88f00aed99022ff8825e14ce24746f0b3eef1c5c"
+  },
+  "shared-b": {
+   "algorithm": "sha-256",
+   "value": "ddcab1280a7956e45a42c2120b063323c90adaf497372d6eab001a4b56346125"
+  }
+ }
+}

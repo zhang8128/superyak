@@ -137,7 +137,8 @@ def _keyed(source):
 def publish_sourced(bundle, config):
     """What lighthouse.publish makes, under the sourced profile: each source carries its keys, each Claim names its
     Snapshot and, for a copy, the Claims it was copied from (config["copied_from"]: item id -> digest references)."""
-    _keys(config, {"issuer", "name", "origin", "context", "item_ids", "issued_at"}, {"rules", "copied_from", "lineage"})
+    _keys(config, {"issuer", "name", "origin", "context", "item_ids", "issued_at"},
+          {"rules", "copied_from", "lineage", "carried"})
     issuer = _uri(config["issuer"])
     _uri(config["origin"])
     _text(config["name"])
@@ -176,8 +177,18 @@ def publish_sourced(bundle, config):
     descriptor = _artifact("LighthouseDescriptor", issuer, config["issued_at"], {
         "name": config["name"], "protocolVersions": ["0.1"], "profiles": [SOURCED_PROFILE], "actions": ACTIONS,
         "artifactEndpoints": [{"kind": a["kind"], "locator": a["id"]} for a in [snapshot, *claims, policy]]})
+    carried = [_carried(entry) for entry in _list(config.get("carried", []))]
     return {"format": SOURCED_FORMAT, "version": 1, "descriptor": descriptor, "snapshot": snapshot,
-            "claims": claims, "policy": policy, "carried": []}
+            "claims": claims, "policy": policy, "carried": carried}
+
+
+def _carried(entry):
+    """A foreign Claim kept exactly as its issuer sealed it, with the foreign Snapshot it names (spec C4)."""
+    _keys(entry, {"claim", "snapshot"})
+    foreign, held = verify(entry["claim"], "Claim"), verify(entry["snapshot"], "Snapshot")
+    if foreign["payload"]["snapshotDigests"] != [held["digest"]]:
+        raise ValueError("A carried claim doesn't name its carried snapshot")
+    return {"claim": deepcopy(foreign), "snapshot": deepcopy(held)}
 
 
 def validate_sourced(package):
@@ -233,9 +244,6 @@ def validate_sourced(package):
     expected_endpoints = [{"kind": a["kind"], "locator": a["id"]} for a in [snapshot, *claims, policy]]
     if declaration["artifactEndpoints"] != expected_endpoints:
         raise ValueError("Descriptor references do not match publication artifacts")
-    for carried in _list(package["carried"]):
-        _keys(carried, {"claim", "snapshot"})
-        foreign, held = verify(carried["claim"], "Claim"), verify(carried["snapshot"], "Snapshot")
-        if foreign["payload"]["snapshotDigests"] != [held["digest"]]:
-            raise ValueError("A carried claim doesn't name its carried snapshot")
+    for entry in _list(package["carried"]):
+        _carried(entry)
     return package
