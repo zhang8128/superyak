@@ -50,7 +50,12 @@ gives the old answer.
   - E used 137 calls, 34% of B-all's 400, under the 60% bar.
 - **Provenance alone, E against E-all: identical on every one of the 400** (CI 0.0 to 0.0).
   - Asking again the 263 corrected questions whose cited sources hadn't changed recovered no right answer.
-  - So targeting by provenance lost nothing and saved two-thirds of the calls.
+  - So on corrections to cited sources, targeting by provenance lost nothing and saved two-thirds of the calls.
+  - **Scope (Rio Grande, all hands 230fbbc3):** every correction here changes a document a question already cites. A
+    question citing none of them could change only if its retrieval moved, so "identical" largely follows from how
+    the corrections were planted. The corrected index did shift BM25's statistics, and no answer changed, but that
+    is weak evidence. Targeting's real failure mode is a correction that makes a document relevant to a question that
+    never cited it, and this test doesn't exercise it. The real-retractions test should.
 - **By class:**
   - **year, 67 questions:** +4.48 (CI −6.09 to +15.05), borderline;
   - **person, 100 questions:** 0.0 (CI −8.36 to +8.36), borderline;
@@ -72,7 +77,7 @@ gives the old answer.
 
 ## How to read it
 
-- **What it shows:** provenance makes updating cheaper at no loss.
+- **What it shows:** on corrections to cited sources, provenance makes updating cheaper at no loss.
   - Knowing which answers rest on a corrected source let E ask again a third of the questions and match both
     re-asking everything with its own retrieval and a stronger conventional pipeline.
   - That's the efficiency half of the north star's claim, measured at 400 corrections.
