@@ -31,6 +31,9 @@ record is worth across the plausible regime, so:
   gate, applied per cell. A cell where double counting barely moves conclusions can't inform S_I, and one where it does
   can, however easy or hard the copier is to detect.
 - **The fixture's kept cells** (158) are reported as a sensitivity reading, with the same measures.
+- **The gated population's composition** is reported beside S_I: how many cells passed the gate per b, s and K, and per
+  τ and q. The gate selects on whether a record matters (mostly b and K), not on how hard detection is (τ and q), but
+  it over-represents large b and small K, so equal-cell weighting is shown, not assumed (the approving check).
 - **Do no harm** runs on A over the base cells (K, M, ρ, b, s) of the primary's population, pooled, and at the
   high-bias corner (K6, M60, ρ0.9, b8, both values of s), whatever any cut says.
 - **Excluded instances** (no scored item) are counted per cell and pooled, and a cell whose N − O can't be computed
