@@ -5,13 +5,16 @@ Counted on main d330c898 and branch `v2` 7a78136e on 2026-11-20. Kept by Serenit
 
 ## What we are building
 
-A layer where agents that forget share the paths they took and what they found, under their owners' rules, with
-homes for people. Andy, 2026-11-19: "another layer of the internet, from schools to businesses. To research."
+An environment that lets finite intelligences keep what they find, challenge it, find new routes and leave the next
+one better equipped, with homes for the people they work for. **North star** (Andy, 2026-11-22): his essay's claim,
+measured, in [docs/north-star.md](docs/north-star.md). Andy, 2026-11-19: "another layer of the internet, from schools
+to businesses. To research."
 
 ## Up next
 
-Someone outside Andy's ships asks a lighthouse a scoped question and gets an answer with a receipt. This is v2's
-line (proposed by Serenity); the five goals in [docs/goals.md](docs/goals.md) stand unchanged.
+North-star test 1: one environment end to end. A frozen corpus, an answer with its sources, then a retraction and a
+revised answer that keeps the earlier belief, against a strong conventional baseline. Then tests 2 and 3. The five
+goals in [docs/goals.md](docs/goals.md) stand, now with a sixth for the north star.
 
 The rail is measured by the distinct things it carried between machines, never by its trips (Tardis's lesson 26).
 On 2026-11-20 it had carried 3 memories.
@@ -27,7 +30,7 @@ On 2026-11-20 it had carried 3 memories.
 | The agreement for sharing | `lighthouse/` (protocol v0.1, a TypeScript kit), `engram/lighthouse_protocol.py`, `atlas/workbench/lighthouse_wire.py` | Used by Engram's recall crossing. Kit untouched since 2026-09-11 |
 | The station: where ships and people meet | `peer/` (26,886 lines) and `agent/` (9,516) | Live on the Pi: nine `superyak-*` services running there on 2026-11-20, by `systemctl --user list-units`. Its own API for rooms; `peer/superyak_peer/crossing.py` carries the protocol's recall and read frames between peers |
 | Teams of builders | `team/` (9,955 lines) | Live on the Mac |
-| Evidence for research | `atlas/` (8,334 lines) | Last touched 2026-10-27 |
+| Evidence for research | `atlas/` (8,334 lines) | Last touched on main 2026-10-27; `retraction_impact` (#9) rides train 1144b. North-star tests 1 and 5 build here |
 | Frames | Outside this repository | Not connected to anything here |
 | Lab | `tuning/`, `deploy/`, `research_tasks/`, `research_poc/` | Untouched since 2026-09-13. They move under `lab/` |
 | Support, not a layer | `docs/` (specs, plans, reports), `scripts/` (hooks, measures), `tests/`, `.github/` (CI), `.superyak/` (checklists), `.superpowers/` | In use |
@@ -48,7 +51,7 @@ One word, three things: "lighthouse" is the protocol kit, Engram's publisher, an
 
 - Rio Grande (the Pi): the station, merges, deploys.
 - Tardis: the kernel and store, federation, the public route, CI, and the visitor's view.
-- Serenity (the Mac): the room, memory, this map, and trains (the law names Rio Grande and Serenity as the two that merge).
+- Serenity (the Mac): the room, memory, this map, the north star (Andy, 11-22), and trains (the law names Rio Grande and Serenity as the two that merge).
 - Andy: the law, admissions and direction.
 
 ## Rules
