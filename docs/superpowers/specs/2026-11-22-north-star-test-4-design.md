@@ -243,21 +243,27 @@ the order fixed under "The order of draws" (review 1's advisory 3).
 - **`recovered(state)`** is `state == "G"`.
 - **`budget`** is `2·D·k` turns, about twice what a blind search needs, chosen without reference to any policy.
 
-**The order of draws,** all from the one generator, so the worlds are reproducible from this text:
-1. the key, an integer from 0 to `2k − 1`;
-2. for each level from 0 to `D − 1`, in order: its `k − 1` other ideas, drawn without replacement from the `2k − 1`
-   non-key ideas, then a permutation of its `k` options for their order;
-3. the trap's own draws, in the order its rule below lists them:
-   - cycle: `c`, then the lure from `Lc`'s non-key options, then a permutation for each of `C1`, `C2` and `C3`;
-   - renamed idea: the returner from level 0's non-key options, then, for each level from 1 on that lacks it, which
-     of that level's non-key options it replaces;
-   - misleading summary: the misled set;
-   - map: `m`, then the new key from the non-key ideas, then, for each level from `m` on that lacks it, which of that
-     level's non-key options other than the old key it replaces.
+**The order of draws,** all from the one generator `rng`, with each call named (review 3's required change, in its
+words), so the text is the reference:
+1. **The key:** `rng.integers(2k)`.
+2. **Each level, from 0 to `D − 1` in order:** `others = rng.choice(nonkey, size=k − 1, replace=False)`, with `nonkey`
+   the `2k − 1` non-key indices in ascending order; then the level's options, in order, are
+   `rng.permutation([key] + list(others))`.
+3. **The trap's own draws,** in the order its rule lists them:
+   - **cycle:** `c = rng.integers(1, D − 1)`, covering 1 to `D − 2`; then the lure, `rng.choice` over `Lc`'s non-key
+     options in `Lc`'s order; then for each of `C1`, `C2` and `C3`, `rng.permutation` of `Lc`'s options in `Lc`'s order;
+   - **renamed idea:** the returner, `rng.choice` over level 0's non-key options in level 0's order; then, for each level
+     from 1 on that lacks it, `rng.choice` over the positions of that level's non-key options, in ascending order, for
+     the one it replaces;
+   - **misleading summary:** `rng.choice(nonkey, size=n, replace=False)`, with `n = max(1, (2k − 1) // 2)`;
+   - **map:** `m = rng.integers(2, D − 1)`, covering 2 to `D − 2`; then the new key, `rng.choice(nonkey)`; then, for
+     each level from `m` on that lacks it, `rng.choice` over the positions of that level's non-key options other than
+     the old key, in ascending order.
 
 The twin is built from the same draws, and differs only in the mechanic its trap names. A replacement takes the
 replaced option's place in the level's order. The returner's new names are the unused words of the list, in list
-order from word `2k`.
+order from word `2k`. **numpy doesn't promise that a `Generator`'s stream is stable across versions,** so the numpy
+version is posted beside the fingerprint. The fingerprint pins the worlds actually run.
 
 **The four traps,** each with its twin and its naming rule:
 
@@ -310,8 +316,19 @@ trapped and twin form, so 800 worlds in all, each run with every policy at 20 po
 
 **Scored beside each naming rule:** the same flag raised in the twin counts as a false name, and is reported.
 
-**The fingerprint:** the implementer posts the sha256 of the canonical JSON (sorted keys, no spaces) of all 800
-worlds' full tables, trapped and twin, beside the code's hash (advisory 3).
+**The fingerprint:** every world is a static table, since the cycle, the names, the summaries and trap 4's
+observation are all fixed per state and option. Levels only advance, so `Lm` is first reached once. The implementer
+posts the sha256 of `json.dumps(worlds, sort_keys=True, separators=(",", ":"))` encoded as UTF-8, beside the code's
+hash and the numpy version (advisory 3; review 3). `worlds` is the list of all 800, sorted by `(trap, D, k, w, form)`,
+each one:
+
+```json
+{"trap": 1, "D": 4, "k": 3, "w": 0, "form": "trapped" | "twin", "budget": 24,
+ "states": {"L0": {"options": [["<name>", "<content>"], ...],
+                    "step": {"<content>": ["<next state>", "pass" | "fail", "worked" | "failed", null | ["<content>", ...]]}}}}
+```
+
+A `step` entry holds the next state, the verdict, `summary.says`, and the observation's `invalidates` list, or `null`.
 
 ## Decided in draft 2
 
