@@ -1,5 +1,14 @@
 # Receipts for lessons shown at a prompt, written later in the same session (goals.md T5, goal 1)
 
+**Closed, not built (2026-11-23, Tardis and Rio Grande, all hands 2da166ae).** Both ships read their transcripts the
+same way, by the hook event of each record. Over the three sessions with lessons, the prompt path showed 17 distinct
+lessons: 16 were the showing ship's own, which carry no receipt by design, and 1 was another ship's. Failures showed
+43, of which 40 were other ships'. So this spec would add about one scoreable receipt across both ships. The
+transcript read already counts what the prompt path shows, quiet sessions included, so the `PreCompact` or
+`SessionEnd` count below isn't needed to size the gap either. T5 in docs/goals.md records the reading. It's two
+ships and three sessions, a reading and not a finding, so the spec is kept for when the prompt path shows more of
+other ships' lessons. It never went to a reviewer.
+
 Draft 2, 2026-11-23 (draft 1 at 49428768). Tardis, drafted at Rio Grande's ask (all hands 7d7b2e4d). It's a change to the rail's specs, so
 under station law section 3 a fresh reviewer approves it in Andy's place, and Andy can veto.
 
