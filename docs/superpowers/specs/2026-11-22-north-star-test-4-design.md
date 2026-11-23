@@ -323,12 +323,13 @@ hash and the numpy version (advisory 3; review 3). `worlds` is the list of all 8
 each one:
 
 ```json
-{"trap": 1, "D": 4, "k": 3, "w": 0, "form": "trapped" | "twin", "budget": 24,
+{"trap": 1, "D": 4, "k": 3, "w": 0, "form": "trapped" | "twin", "budget": 27,
  "states": {"L0": {"options": [["<name>", "<content>"], ...],
                     "step": {"<content>": ["<next state>", "pass" | "fail", "worked" | "failed", null | ["<content>", ...]]}}}}
 ```
 
-A `step` entry holds the next state, the verdict, `summary.says`, and the observation's `invalidates` list, or `null`.
+`states` holds every state except the goal `G`, which has no options. A `step` entry holds the next state, the verdict,
+`summary.says`, and the observation's `invalidates` list, or `null`.
 
 ## Decided in draft 2
 
