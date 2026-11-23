@@ -1117,8 +1117,15 @@ def reset_config(config_dir: str | os.PathLike, signin_files: Iterable[str]) -> 
 
 
 def _fresh_dir(path: str | os.PathLike) -> None:
-    """Remove and recreate a directory under /var/tmp, mode 0700, refusing a symlink or another owner's directory."""
+    """Remove and recreate a directory under /var/tmp, mode 0700, refusing a symlink or another owner's directory.
+    The path must be absolute and resolve to a direct child of /var/tmp, never /var/tmp itself (Rio Grande's read,
+    ee19164a), so no Walker built with another path can clear it."""
     target = Path(path)
+    # The resolved parent is compared with the resolved base, since on macOS /var is a link to /private/var
+    # (Rio Grande's read, c21d7d83).
+    if not target.is_absolute() or Path(os.path.realpath(target)).parent != Path(os.path.realpath("/var/tmp")) \
+            or Path(os.path.normpath(target)).parent != Path("/var/tmp"):
+        raise HarnessStop(f"{target} isn't a direct child of /var/tmp")
     if target.is_symlink():
         raise HarnessStop(f"{target} is a symlink")
     if target.exists():
