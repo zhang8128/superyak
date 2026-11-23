@@ -1,6 +1,6 @@
 # Test 4, stage B: do real turns fall into the traps, and does the record get them out? (a proposal)
 
-Draft 3, 2026-11-23. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
+Draft 4, 2026-11-23. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
 fresh reviewer approves it in Andy's place, and Andy can veto.
 
 - **Draft 1 (c2edc48b)** was a proposal on Tardis's own recommendation (978741ec), "the turn chooses".
@@ -13,6 +13,18 @@ fresh reviewer approves it in Andy's place, and Andy can veto.
   half, which was hashed first (`tardis/test4b-arms` 587ce392, all hands b6821042). Tardis wrote the arms, so it didn't
   write the worlds. Draft 3 also replaces draft 1's wording for the three new traps with Serenity's definitions, as the
   world builder found they disagreed. And it says a turn has no tools, as the world builder asked.
+- **Draft 3 (b3e92d5f)** went to a fresh reviewer: approved with six required changes, W1 to W6 (review 1, beside this
+  spec, d6bd56c0). It found no fitting and no leaks either way, and rebuilt all 1,000 worlds from the text.
+  **Draft 4 makes all six.**
+  - The question, the arms, the harness, the measures and the size are rewritten from W1 to W5.
+  - **Two edits touch "The worlds",** the blind builder's section. Both are mechanical clarifications the reviewer
+    prescribed, never rule changes: stage A's 64 words are copied in, and "the run's i-th turn" counts run turns from 1.
+    So are three more: trap 5's twin has `n = 4`, a planted failing summary defaults to the plain failure, and the
+    exports' return shapes are stated.
+  - **One edit touches the hashed arms (W1(e)):** a null summary's rendering, and with it the advice's wording, as the
+    reviewer advised. The arms are re-hashed at `tardis/test4b-arms` cbfe2fda (local): `test4b_arms.py`
+    `c1cc0bc32d79366d…` and its test `b6927da75d736fd5…`. The diff from 587ce392 is 2 files, +10 −2, and it's
+    flagged for the re-check.
 
 Stage A (test 4's spec, approved; result 4af2eb13) chose B's traps by its own rules: **the renamed idea**, by its CI
 rule, and **the misleading summary**, by its reads clause. Long cycles, keys that vary by state, and a change without
@@ -20,90 +32,171 @@ an observation are designed fresh here, never from A's numbers (9b, 9c and 9e in
 
 ## The question
 
-When each turn is a fresh agent that forgets everything but the record, does it fall into a renamed failed idea or a
-misleading summary? Does the record, or the record with structure, get it out within one turn budget?
+When each turn is a fresh agent that forgets everything but the record, does it fall into one of five traps planted
+in that record?
+- a renamed failed idea;
+- a misleading summary;
+- a long cycle;
+- a state-varying key;
+- a change without an observation.
+
+And does the record, or the record with structure, get it out within one turn budget? Each trap is answered on its
+own, never pooled (W4).
 
 ## Why the turn chooses
 
 In the approved sketch, a policy chooses and the turn only does the work. Then only the summary trap reaches a real
-agent, and B would repeat A at a higher cost. Here **the turn chooses**: it reads what its arm gives it, picks one
-approach, works it, and writes its summary. The arms differ only in what the turn is given.
+agent, and B would repeat A at a higher cost. Here **the turn chooses:** it reads what its arm gives it, picks one
+patch, and writes a summary. The harness applies the patch and runs the frozen test, since a turn has no tools. The
+arms differ only in what the turn is given.
 
 ## The worlds: small code tasks whose approaches are patches
 
 - **A world** is a small code task: a function, a frozen test, and `k` candidate patches. Each patch has a written
   description, which is its name, and a diff. **Its content is frozen as the sha256 of the patched target file,
-  normalized:** CRLF becomes LF, trailing whitespace is stripped from each line, and trailing blank lines are dropped.
-  So whitespace and hunk order can't split one idea into two keys. "The same idea" is exact against a given base,
-  and B needs no rule for when two written descriptions are one idea. When the base file moves (the state-varying
-  trap), the same idea gets a new key, as that trap intends.
+  normalized:** CRLF becomes LF, trailing whitespace is stripped from each line, trailing blank lines are dropped, and
+  the lines are joined by LF with one final LF.
+  - So whitespace and hunk order can't split one idea into two keys. "The same idea" is exact against a given base,
+    and B needs no rule for when two written descriptions are one idea.
+  - When the base file moves (the state-varying trap), the same idea gets a new key, as that trap intends.
 - **Exactly one patch passes the frozen test.** The world half's own test checks that before any turn runs. The smoke
   run for this draft found why it's needed: a toy median task's test let the mean pass too.
-- **A turn's work:** apply the chosen patch to a fresh copy, run the frozen test, and report `verdict`, written by the
-  harness from the test's exit code, never by the turn. The turn also writes its `summary`.
-- **Recovered** means a turn applied the passing patch.
+- **The harness's work, not the turn's:** apply the chosen patch to a fresh copy, run the frozen test, and record
+  `verdict` from the test's exit code. The turn's own `summary` goes beside it.
+- **Recovered** means a run turn's chosen patch passed.
 - **The traps,** each with an untrapped twin as in stage A:
   - **renamed idea:** a patch that failed returns with a new description and the same diff;
   - **misleading summary:** the record's summary of a failed patch says "worked";
   - **long cycle (new):** failing patches whose planted summaries lead into one another and back;
   - **state-varying key (new):** the base file moves, so the same failed idea comes back with a new key;
   - **change without an observation (new):** the passing patch's record entry has no verdict, because its turn timed
-    out, so recovering means re-trying an approach that was never checked.
+    out. So recovering means re-trying an approach that was never checked.
 - **Who builds them:** the rules are in "The worlds" below, written blind to the arms. A separate fresh agent
   implements them from that section and the spec, blind to the arms too, as in stage A.
 
 ## The arms, under one budget
 
-Each turn is a fresh `claude -p` worker in the visitor walk's approved wrapper: bubblewrap, an empty home, its own
-sign-in, and `--unshare-pid` (`tardis/visitor-walk-spec`, approved at 344e425a). The model is Sonnet 5.5.
-**A turn has no tools** (`--tools ""`, and an empty MCP config): it reads its prompt and replies. It can't apply or
-test a patch itself, so it can't sidestep a trap by running all five. The harness applies the chosen patch and runs the
-frozen test, as "The worlds" says.
+Each turn is one `claude -p` call, Sonnet 5.5, in the harness's frozen invocation below. **A turn has no tools:** it
+reads its prompt and replies. It can't apply or test a patch itself, so it can't sidestep a trap by running all five.
 
 | Arm | What a turn is given, beside the task and the open patches |
 | --- | --- |
 | **R0** | Nothing: the forgetting baseline |
 | **R1** | The record as it is: each earlier turn's patch description, its diff, its verdict and its summary. It holds no content key, so noticing a repeat is the turn's own work |
-| **R2** | R1, plus stage A's adaptive-by-content policy's choice and flags, computed from the content keys and shown as advice the turn may ignore. That's the structure R2 adds |
+| **R2** | R1, plus advice from stage A's adaptive-by-content policy, computed from the content keys. **The advice shows the policy's choice and its `repeat` flags only (W2).** `contradiction` can't fire there, because the advice rebuilds `says` from `verdict`; `cycle` and `premise` aren't shown; and entries with a null verdict are left out of its counts |
 
 - **A turn's output** is one JSON object: `{"choice": <index>, "summary": <text>, "flags": [...]}`, with the flags
   from stage A's contract. Malformed output is a stall, and that turn is spent.
-- **The budget:** with `k = 5` (one passing patch and four failing), 7 turns per world, counted in model calls. Tokens and wall time are recorded beside them, never
-  scored.
+- **The budget:** with `k = 5` (one passing patch and four failing), 7 run turns per world, counted in model calls,
+  stalls included. Tokens and wall time are recorded beside them, never scored.
 
-## Measures, fixed before any turn
+## The harness (W1)
 
-- **The trap effect,** per arm and world: the recovery rate in the trapped world minus its twin's, over that
-  world's seeded repeats.
-- **The primary:** R1 minus R0, and R2 minus R1, as the mean over worlds of the difference in trap effects, with a 95%
-  bootstrap CI over worlds. The resample count and seed are fixed in the pre-registration that follows this proposal.
-- **Named:** a turn's flag that names the trap, by stage A's naming rules, reported beside the primary, never inside
-  it. False names in the twins are reported too.
-- **Activity, reported, never scored:** distinct diffs tried in runs that don't recover.
+**Who writes it:** a third fresh agent, from "The arms", "The harness", "Measures" and the two halves' exports, as
+"The worlds" and the arms module give them. It never reads either half's code beyond those exports. Its code is hashed
+before any turn runs.
 
-## The size, from a pilot (stage A's V8)
+- **(a) The turn's frozen invocation:** the visitor walk's wrapper, as `tardis/visitor-walk-spec` 344e425a freezes it:
+  systemd scope, bubblewrap with Tardis's home hidden, `--unshare-pid`, and `env -i`.
+  - It runs `claude -p` with `--tools ""`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`, `--model
+    claude-sonnet-5-5` and `--output-format stream-json --verbose`. It doesn't pass `--allowedTools` or a permission
+    mode, since a turn has no tools to permit.
+  - **The per-turn timeout** is 120 seconds. The reply is the `result` text of stream-json's result event.
+  - **On every turn,** the init event must list no tools and no MCP servers. If it lists any, the run is a machine
+    fault and void.
+- **(b) Nothing outside the prompt names the trap, form, arm or world.** Each turn runs in one empty working directory,
+  `/var/tmp/t4b-turn/`, made fresh for every turn. Its name is the same for every turn, and the environment is the
+  wrapper's. Claude Code's system prompt shows the working directory, so a name that carried the world would leak it.
+- **(c) A stall,** meaning a malformed reply or a timeout, is spent.
+  - It writes no record entry and raises no flags.
+  - The harness counts run turns itself: `i` is the run turn's number from 1, stalls included. So trap 4's base still
+    moves before every run turn, stalled or not.
+  - A naming rule's "first run call" is the first run call whose reply was read.
+- **(d) Run entries:**
+  - `summary` is the turn's own text, written before its verdict exists;
+  - `says` is null on run entries, since nothing reads it there;
+  - `state` follows "The worlds" state rule;
+  - `name` is the description as offered, and `diff` and `content` are the applied patch's on that turn's base.
+- **(e) Field mapping:** the world's `name` becomes the arms' `description`. A null `summary` renders as "none (its
+  turn ended before it wrote one)". That's one reviewer-required change to the hashed arms, made and re-hashed, beside
+  this draft.
+- **(f) R2's inputs:** `keys` holds one key per record entry, the null-verdict entry included, then one per open patch.
+  The advice seed is the repeat's index, 0, 1 or 2.
+- **(g) Its sign-in:** the turns use a sign-in of their own, made once by Andy, never Tardis's. It's in its own config
+  directory, reset to the sign-in's files before every turn, as the visitor walk's is.
 
-- **Before the pilot, each trap's ceiling is counted without running anything:** the share of worlds in which the
-  trap can fire within 7 turns. A trap that can't fire within the budget is changed by its builder before any turn
-  runs, never after.
-- **The pilot** is 3 worlds per trap, in both forms, in all three arms, with one repeat. That's 5 × 3 × 2 × 3 = 90
-  runs, at most 90 × 7 = 630 turns.
-- It fixes three things: the turn's cost, the variance of the trap effect, and the number of worlds B needs.
-- **The stop rule:** if B's size passes a ceiling fixed with Andy's budget in the pre-registration, B stops, as v2's
-  stage 2 pilot did.
+## What each arm sees of each trap (W2)
+
+These were checked by the reviewer on a rebuild of all 1,000 worlds, rendered through the hashed arms.
+- **R0's prompt is byte-identical** between the trapped and twin forms in traps 2, 3 and 5, in 100 of 100 worlds each.
+  It has no record, so R0's trap effect is zero in expectation in every trap.
+- **R2's advice text is identical between forms** in traps 2, 3 and 5, over 100 of 100 worlds and seeds 0 to 19. So in
+  those traps, R2 can differ from R1 only in how a turn reads the same advice.
+- **In trap 4, R1 sees the failed idea under its own planted name,** with identical changed lines. Only the hunk header
+  and the revision lines move. So trap 4 barely reaches R1. It's aimed at R2's key: at w = 0, the advice names a failed
+  patch in 34% of seeds, against 17.5% in the twin.
+
+## Measures, fixed before any turn (W4, W5)
+
+- **The trap effect,** per arm and world: the recovery rate in the trapped form minus its twin's, over the world's
+  three repeats.
+- **"Does it fall in" (primary, per trap):** R1's trap effect minus R0's, and R2's minus R0's. **The expected sign is
+  negative:** a trap the record carries lowers recovery for a reader of the record. R0's effect is zero in expectation,
+  so it adds only noise.
+- **"Does the record get it out" (primary, per trap):** recovery in the trapped form, R1 minus R0 and R2 minus R0.
+  **The expected sign is positive** where the record helps despite the trap.
+- **Both are reported per trap, never pooled.** Each is the mean over worlds, with a 95% percentile bootstrap CI over
+  worlds: 10,000 resamples, a fresh `numpy.random.default_rng(20261130)` per trap, and `numpy.quantile`'s default
+  method, as stage A has it.
+- **Named:** the turn's flag at the rule's call, by "The worlds" rules. It's reported beside the primaries, never
+  inside them, with false names in the twins.
+  - **`repeat`'s value is read as an open patch's number (W3),** and scored as that patch's key at that call. For trap
+    3, named equals raised, since a `cycle` note can't name a key.
+  - **Disclosed:** the prompt defines `repeat` as "under another description", which trap 4 never shows. It defines
+    `premise` as "changed what earlier verdicts mean", which trap 5's unchecked entry doesn't do.
+- **Activity, reported, never scored:** distinct patch indices tried, in runs that don't recover. In trap 4 every diff
+  is distinct by construction, so diffs wouldn't count activity.
+
+## The size, from a pilot, every number fixed before it (W5)
+
+- **Before the pilot:** each trap's ceiling is counted without running anything, by "The worlds" rule. Blind exposure
+  is reported beside it as the informative number, since the ceiling is 1.0 in every world by construction.
+- **The pilot:** `w` 0 to 2 per trap, in both forms, in all three arms, with **3 repeats** and R2's advice seeds 0 to 2.
+  That's 5 × 3 × 2 × 3 × 3 = 270 runs, at most 270 × 7 = 1,890 turns.
+- **The worlds the main run needs, from a frozen formula:** per trap, `N = ceil((2 × 1.96 × σ / 0.30) ** 2)` worlds.
+  - That gives a CI on the primary about ±0.15 wide.
+  - σ is the pilot's per-world standard deviation of the primary difference, with a floor of 0.30, since 3 pilot
+    worlds give two degrees of freedom per trap.
+  - With the floor, N is at least 16.
+- **The ceiling, in turns:** the main run takes at most 20 worlds per trap. That's 20 × 5 × 2 × 3 × 3 × 7 = 12,600
+  turns, and Andy can veto it as a budget.
+  - **If N passes 20 or the turns run out,** B runs 20 worlds per trap, reports the CI it reached, and labels any trap
+    whose CI is wider than ±0.15 underpowered.
+  - **If the pilot's measured cost per turn** makes 12,600 turns more than Andy's budget, B stops, as v2's stage 2
+    pilot did.
+- **An estimate of the pilot's cost:** a turn reads about 1,500 to 3,000 tokens and writes about 100. So the pilot is
+  about 3 to 6 million tokens, and 5 to 11 hours of wall time at 10 to 20 seconds a turn. That's an estimate, not
+  measured. The pilot measures it.
 
 ## What this can't show, said before the run
 
 - **Patch worlds are authored.** A real research or coding task rarely has `k` named candidates and one frozen test.
 - **R2's advice comes from stage A's policy,** so R2 tests that policy's advice to a real agent, not structure in
   general.
+  - **R2's bandit explores, which costs on its own.** In trap 5, in both forms, the advice names a failed patch in 125
+    of 200 seeds, so R2 − R1 may come out negative from exploration alone.
 - **The turn is Sonnet 5.5,** and other models may fall into the traps differently.
+- **Trap 5 is expected to show nothing.** The arms show a null verdict plainly, and the opening says exactly one patch
+  passes. So with four fails on record, the passing patch is the only one not shown failing, in both forms.
+- **Trap 2 is in its weakest form:** "fail" sits on the same line as "It worked."
+- **Trap 3's cycle is three patches,** and with `k = 5` it can be four at most. So "long" here means three, which
+  stage A called a detour.
 
 ## Decided in draft 2, from Serenity's answer
 
 1. **The turn chooses.** R2 tests the policy, as advice.
 2. **Patch worlds for B.** v2's room items can be a later stage.
-3. **The three new traps** are Serenity's, written into "The worlds" (still to come):
+3. **The three new traps** are Serenity's, written into "The worlds":
    - **a long cycle:** failing patches whose summaries lead into one another and back. The record leads into it, and
      exposure is reported, so a null can't pass for an escape;
    - **a state-varying key:** the base moves, so the same idea makes a new key;
@@ -160,8 +253,8 @@ disjoint from stage A's 20261129. One `numpy.random.default_rng` built from it m
 order, and a world and its twin share them:
 1. `fn = rng.integers(8)`, into `fold_counts, mix_tally, ledger_sum, score_rows, pack_marks, blend_bins, trail_check,
    vote_digest`;
-2. `words = rng.choice(64, size=5, replace=False)`: patch `i` gets word `words[i]` of stage A's list, and the other
-   59, in list order, are spares;
+2. `words = rng.choice(64, size=5, replace=False)`: patch `i` gets word `words[i]` of this list of 64 words, stage A's,
+   in order: amber, basin, cedar, delta, ember, fjord, garnet, harbor, iris, jasper, kestrel, lantern, meadow, nectar, onyx, pepper, quarry, raven, saffron, timber, umber, velvet, willow, xenon, yarrow, zephyr, acorn, birch, cobalt, dune, elm, flint, grove, heron, indigo, juniper, kelp, lichen, maple, nickel, oak, pine, quartz, reed, slate, thistle, upland, vale, walnut, yew, zinc, alder, bramble, clover, dahlia, egret, fern, gorse, hazel, ivy, jade, kiln, lupin, moss. The other 59, in list order, are spares;
 3. `mult = rng.integers(2, 100, size=5)`;
 4. `offset = rng.choice(numpy.arange(1, 50), size=5, replace=False)`;
 5. `modulus = rng.integers(1000, 10000, size=5)`;
@@ -179,13 +272,14 @@ pilot uses `w` 0 to 2. The main run uses `w` from 3 on, as many as the pre-regis
   `n + 1` to `n + 7`. Only run turns count toward the budget, and a planted entry is never a recovery.
 - **A planted entry** uses its patch's first name, its diff on `bases[0]`, and one of three summaries. The failure is
   `Applied the {word} patch. The test failed.` A pointer adds ` Try the {next word} patch next.` to the failure. The
-  lie is `Applied the {word} patch. It worked.`
+  lie is `Applied the {word} patch. It worked.` A planted failing entry's summary is the plain failure unless its
+  trap says otherwise.
 - **An entry** holds `turn`, `state`, `index`, `name` (as applied), `diff`, `content`, `verdict` (`"pass"`, `"fail"`
   or `null`), `summary` (text or `null`), `says` and `observation`. `says` is `"worked"`, `"failed"` or `null`, and
   the world writes it on planted entries. `observation` is always `null`.
 - **`state`** is `"S{j}"` for the base the next turn uses, or `"G"` after a pass. A run starts at `"S0"`. It's for
   R2's policy, and it moves only in trap 4.
-- **Open patches:** all five at every call, in index order. The run's `i`-th turn uses `bases[min(i, len(bases) -
+- **Open patches:** all five at every call, in index order. The run's `i`-th turn (`i` counts run turns from 1) uses `bases[min(i, len(bases) -
   1)]`. Patch `i` is offered as `names[i][min(c, len(names[i]) - 1)]`, where `c` counts the entries that applied it.
 - **Recovered,** in every trap and form, means a run turn passed, which happens exactly when it applied `p`. The run
   stops there.
@@ -221,7 +315,7 @@ pilot uses `w` 0 to 2. The main run uses `w` from 3 on, as many as the pre-regis
      now.
 5. **A change without an observation** (`n = 5`). The four failing patches fail at turns 1 to 4, in `order`. Turn 5
    applied `p` and timed out, so its `verdict`, `summary` and `says` are `null`.
-   - **Twin:** the same entries without turn 5, so `p` is untried, not unchecked. Recovery means re-trying the patch
+   - **Twin:** the same entries without turn 5, so its `n` is 4 and `p` is untried, not unchecked. Recovery means re-trying the patch
      that was never checked.
    - **Fires:** applying a failed patch while `p` has no verdict. **Named:** `premise` at the first run call, with
      turn 5.
@@ -257,8 +351,13 @@ pilot uses `w` 0 to 2. The main run uses `w` from 3 on, as many as the pre-regis
 - **Naming:** each rule fires on a hand-built run that raises its flag at the named call. It doesn't fire for the
   flag one call later, one call earlier (a record one shorter, which no run makes), or in the twin, where it's a
   false name. A wrong value fails "named" but passes "raised".
-- **Exports:** `worlds()`, `open_patches(world, record)` and `firing(world, record)`. There are also `named`,
-  `raised` and `false_named`, each `(world, record, flags_per_call) -> bool` as in stage A.
+- **Exports:**
+  - `worlds()`;
+  - `open_patches(world, record)`, which returns the five open patches in index order, each
+    `{"name", "diff", "content"}`;
+  - `firing(world, record)`, which returns the run turn numbers whose applied patch took the trap's bait;
+  - `named(world, record, flags_per_call)`, which returns True, False or None, as in stage A's contract;
+  - `raised` and `false_named`, which return a bool.
 
 **The fingerprint** is the sha256 of `json.dumps(worlds, sort_keys=True, separators=(",", ":"))`, encoded as UTF-8.
 - **It's posted** with the code's hash and the numpy version, since numpy doesn't promise its stream across versions.
