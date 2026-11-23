@@ -1,0 +1,395 @@
+# Claims that cross with their sources' identity (north-star test 5, Rio Grande's half)
+
+Revision 6, 2026-11-22. Rio Grande (the Pi). Board item `north:5-two-lighthouses-keep-source-identity`. Under station
+law section 3, a fresh reviewer approves it in Andy's place, and Andy can veto.
+
+- **Revision 1 (e3fc031f)** went to a fresh reviewer, who asked for a revision with ten findings (all hands 1d808ee0).
+- **Revision 2 (9044070d)** answered those, F1 to F10. Its re-check approved it with six required changes and six
+  advisory ones (bbf3c93b).
+- **Revision 3 (696e9605)** made all twelve, named C1 to C12 below. Its second re-check approved it with five required
+  changes and five advisory ones (512c6253).
+- **Revision 4 (c4d99bc9)** made all ten, named D1 to D10 below. Its third check approved it with three changes and
+  one advisory (all hands e0482aee).
+- **Revision 5 (2dc10917)** made all four, named E1 to E4 below. Its last check asked for two more and one advisory.
+- **This revision** makes those three, named G1 to G3 below.
+
+## Why
+
+Andy, 2026-11-22, at Serenity's terminal: "i'd use this essay as a bit of a north star, can you captain and
+reorient?" Test 5 of [docs/north-star.md](../../north-star.md) asks two lighthouses, the Pi's and Tardis's, to exchange
+evidence while keeping each source's identity. Copied evidence must be told from independent confirmation, a
+correction in one must reach what the other built on it, and their accounts are compared without forcing agreement.
+Today the crossing carries recall and read of memories only. No claim crosses.
+
+## The split, agreed (all hands 983200e5, 76c735c8, daf52d30, 1102371c)
+
+- **This spec (Rio Grande):** the source keys, the sourced publication, notices and how they're applied, the
+  comparison, and the planted stores with known answers.
+- **Tardis (T1):** the receiver's rule `relation(a, b)`, written test-first on these planted stores, and a second
+  Lighthouse, so evidence travels both ways.
+- **Tardis with Serenity (test 6):** the sheaf and n-category machinery against this plain rule, on the same data.
+
+## What exists, and what this builds beside
+
+- **Lighthouse 0.1.** The TypeScript is `lighthouse/packages/protocol/src/schemas.ts`; the stricter Python is
+  `atlas/workbench/lighthouse_wire.py`, and every fixture must pass it.
+  - A `Snapshot` has `profile`, `signature`, `context`, `model` and `lineage`.
+  - A `Claim` has `profile`, `signature`, `context`, `sentenceMediaType`, `sentence`, `snapshotDigests` and
+    `provenance`.
+  - `profile` and `signature` are `{"id": <URI>, "version": <text>}`, `context` is `{id, path}`, and a digest
+    reference is `{"algorithm": "sha-256", "value": <64 hex>}`. Issuers and artifact ids are URIs.
+  - Trust is local, deny-by-default and non-transitive. `read`, `derive`, `retain` and `reshare` are independent
+    actions (the protocol plan's principles).
+- **Atlas's projection** (`atlas/workbench/lighthouse.py`):
+  - `publish` seals one Snapshot per publication, holding the selected items, their relations and their sources, and
+    one Claim per item naming that Snapshot.
+  - `overlap` authorizes, then compares same-origin records side by side, and says "Different declared collection
+    origins require an explicit correspondence." across origins.
+  - Its validator and `overlap` hard-check their profile, and `publish` hard-codes its profile, signature, sentence
+    type and an empty `provenance`.
+- **The new code lives in its own module** (C3). That's `atlas/workbench/sourced.py`, with its own `publish_sourced`,
+  `validate_sourced`, `relation` (Tardis's) and `compare_sourced`, all built on `lighthouse_wire`'s `seal`, `verify`
+  and `authorize`. It uses profile `{"id": "urn:superyak:profile:atlas-sourced", "version": "1"}` and signature
+  `{"id": "urn:superyak:atlas-sourced", "version": "1"}`. `lighthouse.py` and its profile are unchanged.
+- **Atlas's records** (`validation.py`):
+  - a source has `id`, `title`, `url` (required, http or https), `year` and `citation`, and no revision;
+  - `store.retraction_impact(source_ids)` is read-only, takes local source ids and reports items, with relations
+    inside each item's `path`;
+  - only `set_status` writes the audit history.
+
+## A source's keys (C5, C6, C8)
+
+One function, `source_key(record)`, version `source_key/1`, pinned by the profile version, gives each source:
+
+- **A url key, `url:<url>`, always present, and strong unless amendment 3 makes it weak,** since Atlas requires a url. The scheme becomes `https`. The host is
+  lowercased with a leading `www.` removed, a default port is removed, and the fragment and one trailing slash are
+  removed. The query is kept, since the title key catches a tracking query that splits one page into two keys.
+  - **Amendment 3 (the build, 2026-11-22; Serenity's nit in all hands 378610a0, option 1 in 3aecf732; a fresh
+    reviewer approved it, with these words):** a url key is strong only when the key has a non-empty path or a query
+    after the host. A bare site root (`https://journal.example`, `/`, `/#top`, `https://journal.example:8443/`,
+    `https://doi.org/`) names a publisher, not a work, and two different articles cited only by it would otherwise
+    match. It keeps its `url:` key, for display and for a notice's report, but only a DOI or the title key can make it
+    match, and a notice names such a match by "title", never "url". A root path with a query, such as Wikipedia's
+    `/?curid=123&oldid=1001`, names one page and stays strong; so does `https://journal.example//`, whose key keeps a
+    `/` path.
+    - **What changes:** only the comparison's rule 3 and a match's name. The key function and every published key are
+      unchanged. The fixtures' answers are written by hand, so regenerating them proves nothing here; what does is that
+      the stores' one bare root, `https://doi.org/` in `tardis.json`'s case 21a, is paired with `https://doi.org/help`
+      and a different title, so it's independent under both rules, and Tardis's 115 relation tests pass on the
+      amended rule.
+    - **Known limits:** a page with a path that still names only a site, such as `/index.html`, `/en/`, `/journal` or
+      `https://doi.org/help`, stays strong, and so does a root whose query only tracks (`/?utm_source=feed`). Both
+      lean toward "not independent", the safe direction (C12). The amendment goes the other way in one case: one work
+      cited only by a site root under two title spellings is now distinct. Copies keep their title, so finding copies
+      is unaffected. These are recorded, not ruled, until a real crossing shows one.
+- **A DOI key, `doi:<doi>`, strong, when one is found:**
+  - **From a doi.org url** (host `doi.org`, `dx.doi.org` or `www.doi.org`, over http or https):
+    - **What's taken:** the whole path after the host, with its leading `/` removed, percent-decoded and lowercased.
+      Its query and fragment are not part of it.
+    - **Cleaning:** an optional leading `doi:` and one trailing `/` are removed (D5).
+    - **The check:** it's a DOI key only when what's left starts with `10.` and a digit. So `https://doi.org/` and
+      `https://doi.org/help` give no DOI key.
+      - **Amendment 1 (the build, 2026-11-22):** what's left must also have the citation pattern's shape: `10.`, 4
+        to 9 digits, a `/` and at least one more character. A bare registrant prefix such as `https://doi.org/10.5555`
+        is not a DOI. It keeps only its url key.
+    - **Why it's taken whole:** the path never goes through the regex, so `%3C` and `%3E`, `<` and `>`, stay in it
+      (C5).
+  - **From the citation,** only when the url gave none: the first match of `10\.\d{4,9}/[-._;()/:<>A-Za-z0-9]+`,
+    case insensitive, after percent-decoding. `<` and `>` are in the class, so a SICI DOI in a citation is kept whole
+    and keys equal to its url form (D3).
+    - **Stripping:** remove trailing `.`, `,`, `;` and `:`, and a closing `)`, `]` or `>` whenever the
+      match holds more closing than opening ones of that kind (G3). Do it repeatedly until none is left, so `doi:10.5555/x.)` gives `10.5555/x`, and
+      `<https://doi.org/10.5555/x>.` gives `10.5555/x` (E1).
+    - **Then lowercase it.**
+    - **More than one distinct DOI** in the citation gives no DOI key.
+- **A title key, `title:<title>:<year>`, weak,** from `store._normalized_title`: NFKC, casefold, and punctuation and
+  symbols turned to spaces. A title that normalises to nothing gives **no title key**, and a missing title key never
+  equals anything (C8).
+
+**Comparing two sources gives one of three results:**
+
+These are checked in order, and the first that holds wins (D1):
+
+1. **Distinct by DOI:** both have DOI keys, the DOIs differ, and their **titles** differ, or one has none. A DOI
+   decides, so this holds even when they share a url, such as one proceedings PDF holding two papers. Here, and in rule
+   2, titles are compared by the normalised title alone, without the year (E4).
+2. **Unclear:** both have DOI keys, the DOIs differ, and their titles are equal. A preprint and its journal version
+   look like this even in different years, and so do two editorials (C7, E4). The cost is that two different works
+   with one generic title and two DOIs can never count as independent of each other, which errs safe.
+3. **Match:** any of one source's strong keys equals any of the other's, or their title keys are equal.
+4. **Unclear by year:** their titles are equal and their years differ (G1). A preprint kept by its arXiv url and its
+   journal version under a DOI look like this. Atlas requires a url, and preprints are usually kept by that page, so
+   this is the most common real form of the double count.
+5. **Distinct:** anything else. No strong key is shared, and the titles differ, or one is missing.
+
+Two different DOI keys are never a match, whatever else is equal. When only one side has a DOI (C6), rules 1 and 2
+don't apply.
+
+A strong key proves sameness, never difference. The receiver recomputes every key from the record, and refuses a
+publication whose keys don't match its own computation.
+
+**Accepted cost (C12):** a generic title, such as "Editorial" 2024, matches across a url key and a DOI key. It merges
+two different works, so the answers err towards not-independent, and retraction reports can over-reach. The report
+names how each source matched ("by url", "by DOI", "by title"), so a person can see it.
+
+## The sourced publication (C3, C4)
+
+`publish_sourced` makes what `publish` makes, under the new profile, with these differences:
+
+- **Each source in the Snapshot's model carries `keys`:**
+  `{"url": ..., "doi": ... or null, "title": ... or null, "fn": "source_key/1"}`.
+  `validate_sourced` accepts the field. When a receiver keeps a copy in its own Atlas store, `keys` is dropped before
+  `normalize_source`.
+- **What leaves each item, before sealing:**
+  - its own `provenance` map, which holds session ids and paths;
+  - `reviewed_by`, which becomes `""` on proposed, source_reported and withdrawn records;
+  - `reviewed_at`, which becomes `""` too.
+
+  A `reviewed` record crosses with `reviewed_by` set to the publishing issuer's URI, which names a lighthouse, not a
+  person, and its `reviewed_at` kept. Both pass `normalize_item`. So no **reviewer's** name crosses (C3).
+- **Other names do cross (D4).** Citations carry published authors' names, as bibliographic data. `summary`, evidence
+  notes and `context` are free text and could hold anything. A publication crosses only under its owner's ledger
+  (below). The fixtures' authors and texts are fictional.
+- **`lineage`** names the issuer's previous sourced Snapshot of the same collection, if there is one.
+- **Each Claim:**
+  - its sentence is `{"origin", "record_id", "content_digest"}`, as `publish`'s is;
+  - its `sentenceMediaType` is `application/vnd.superyak.atlas-sourced-claim+json`;
+  - `snapshotDigests` names its Snapshot;
+  - `provenance` names the digest of each Claim this record was copied from.
+- **A copy** is a record taken from another publication and kept in this store, with its provenance link. The link is
+  its identity as a copy. Its status, and any later edit, are not. A difference between a copy and its original is
+  what the comparison shows.
+- **A derived record is not a copy:** one that cites or builds on another is an Atlas relation, and roots don't follow
+  relations.
+- **A carried Claim** is a foreign Claim, kept exactly as its issuer sealed it, with the foreign Snapshot it names
+  (C4). A publication can list them under `carried`, so a store can hold the other side's claim itself, with the same
+  digest.
+
+**A claim's roots** are the sources its record's evidence names in its own Snapshot. To these it adds the roots of each
+Claim in its `provenance`, transitively.
+
+**Its chain** is the set of Claim digests its `provenance` reaches, transitively, counting a digest whether or not
+the receiver can resolve it. Digests are content addresses, so two claims naming one digest name one thing (C9). A
+digest the receiver can't resolve to an artifact it holds is **unresolved**.
+
+## The answers, in order
+
+For a pair of claims, A from one store and B from the other, the first rule that holds gives the answer:
+
+1. **copied:** A and B have the same digest, or one's digest is in the other's chain, or their chains share a digest,
+   resolved or not. The last is sibling copies. The answer names the linking digest.
+2. **unknown:** either has no roots, or either has an unresolved digest in its chain.
+3. **same sources:** every root of A matches a root of B, and every root of B matches a root of A.
+4. **overlapping:** at least one root of A matches a root of B.
+5. **independent:** every root of A is distinct from every root of B. Here **distinct** means distinct, not unclear.
+6. **unknown:** anything else. That's when some pair of roots is unclear (C7).
+
+**Stated limit (C10):** the answer reads the two claims' own provenance only. If Tardis's B is supported, through a
+relation in Tardis's store, by Tardis's copy of the Pi's A, and B cites its own source, then (A, B) is independent.
+B's own evidence is independent of A's, even though B leans on a copy of A. A retraction under A reaches B through
+`retraction_impact`'s `supports`, when step 2 matches the copy's own local source. Step 3 alone doesn't follow
+relations (D9). A planted case pins both: the copy matched in step 2, so B is reached, and a copy whose local source
+is keyed another way, so only the copy is reached, through step 3.
+
+## Notices, and how they're applied (C2)
+
+A notice is a Claim under the new profile, with `sentenceMediaType` `application/vnd.superyak.source-notice+json`,
+`snapshotDigests` naming the Snapshot or Snapshots it refers to, and an empty `provenance`.
+
+- **A retraction:**
+  `{"notice": "retraction", "record_id": <the source's id in the named Snapshot>, "keys": <its keys>, "reason": "..."}`.
+- **A correction:**
+  `{"notice": "correction", "old": {"snapshot": <digest>, "record_id": ..., "keys": ...}, "new": {"snapshot": <digest>,
+  "record_id": ..., "keys": ...}, "reason": "..."}`.
+  It carries both key sets and the record's id in both Snapshots, so a change of DOI or url is explicit.
+
+**Applying a notice is a report, never a write.** The receiver:
+
+1. **Gathers the sources it means.** That's the notice's source, plus every source joined to it by a correction notice
+   the receiver holds, transitively. **Joined** means the same Snapshot and record id as a correction's `old` or `new`,
+   never a key match, so a generic title can't cascade (D8). A retraction by a new DOI then reaches records keyed by
+   the old one. The receiver first recomputes each notice's `keys` from the Snapshot it names, and refuses a notice
+   whose keys don't match (D7).
+2. **Matches its own sources:** it computes `source_key` over every source in its own store, and collects every local
+   id that matches any gathered source. Duplicates within a store are all collected, and each is named with how it
+   matched.
+   - **Amendment 4 (the build, 2026-11-22; board item `spec:claim-notice-lists-unclear-sources`):** a local source
+     that matches no gathered source but compares "unclear" with one (rule 2 or rule 4) is listed under `unclear`,
+     once per gathered record it's unclear against, with that record's Snapshot and id. It gets no impact (step 4
+     runs on matched ids only), since nothing shows it's the same work. But the report's outcome is then "unclear",
+     not "no impact", which would claim more than the rule knows. The outcome is "reported" when step 2's matches,
+     step 3 or step 5 found anything; "unclear" when only this list did; and "no impact" when nothing did. **Why:** a
+     planted case. Without the correction N4, the retraction N5 (by the corrected record's new DOI) matches nothing
+     of Tardis's, yet Tardis's `t-copied-a-1` carries the old DOI and the same title: rule 2's "unclear". The report
+     said "no impact" for a source that is the same work. The five planted reports are unchanged except for an empty
+     `unclear` list, derived by hand: in each, every source unclear against one gathered record matches another.
+     The list is sorted by source id, then Snapshot digest, then record id, so the same holdings give the same report.
+     A source that matches two gathered records is named by the first it matches in gathering order, the notice's
+     own record first, as before (the fresh reviewer's finding 3).
+3. **Lists its claims reached through a chain:** every local claim whose roots, followed through its chain, include
+   a gathered source. These are listed with the verdict "reached through its chain", separate from step 4's output.
+   A copy whose own local source is keyed another way is caught here.
+4. **For a retraction,** calls `retraction_impact(step 2's ids)`, when there is at least one. Its items, each with its
+   verdict and `path`, are the report's main part. It follows `supports` and `challenges`, so a belief built on a
+   retracted source is reported even when it isn't a root. With no ids and nothing from step 3, the report is "no
+   impact", or "unclear" when step 2 listed an unclear source (amendment 4).
+5. **For a correction,** steps 1 to 3 run as for a retraction, and then (D6):
+   - each local claim whose roots, followed through its chain, include `old`'s record is "built on the corrected
+     record";
+   - each that includes `new`'s record is "on the corrected record".
+
+   Atlas can't tell revisions apart, so this comes from the artifacts. A corrected record gets a new local source id
+   in the store that corrects it, since Atlas sources can't be changed in place, and `import_bundle` refuses a
+   conflicting source id (D10).
+6. **Changes nothing.** A status change is the receiving owner's own act, through `set_status`, with the owner as
+   actor and the notice's digest in the reason. That act writes the earlier belief into the audit history.
+
+## Authorization (C11)
+
+Every step goes through `lighthouse_wire.authorize`, with this profile and the artifact's media type. For each action,
+the table says whose policy is evaluated, and who goes in the request's `publisher` field (D2):
+
+| Action | What it allows | Whose policy | `publisher` in the request |
+| --- | --- | --- | --- |
+| `read` | read a publication or a notice | the receiver's | the artifact's issuer |
+| `link_overlap` | compute answers and comparisons against the receiver's own claims | the receiver's | the artifact's issuer |
+| `retain` | keep a copy, or a carried Claim, in the receiver's store | the original publisher's | the receiver |
+| `reshare` | publish a copy onward | the original publisher's | the store that would republish |
+
+Every request also carries these fields, which `authorize` requires. Every fixture policy rule names a pattern for
+each, as `overlap`'s requests do (E2):
+
+- `domain` is `"research"`;
+- `context` is the publishing Snapshot's context id;
+- `purpose` is `"research"`;
+- `audience` is `"self"` for `read`, `link_overlap` and `retain`, and `"onward"` for `reshare`.
+
+A rule's `publishers` pattern names the counterparty in both directions: the issuer for the receiver's own policy,
+and the receiver or the republisher for the original publisher's.
+
+So `read` and `link_overlap` are the receiver's choice of whom to listen to, as in `overlap`. `retain` and `reshare`
+are the original publisher's consent to how its claims are kept and passed on, so the receiver asks with the
+publisher's own policy, which travels in the publication.
+
+A notice needs `read`. Acting on it is the owner's act, above. Consent isn't transitive. "Copied twice through `third`" needs all five of these (G2):
+
+1. the Pi's own policy allows `read` of `third`'s publication;
+2. `third`'s policy allows the Pi to `retain`;
+3. `third`'s policy allows the Pi to `reshare`;
+4. Tardis's own policy allows `read` of the Pi's publication;
+5. `third`'s policy allows Tardis to `retain`.
+
+The fixtures' policies grant exactly the actions each case uses, and one case has a fourth store's policy refuse
+`reshare`.
+
+- **Amendment 2 (the build, 2026-11-22):** the refusal is in a fourth store's policy, not `third`'s. "Copied twice
+  through `third`" needs `third` to allow the Pi `reshare`, so `third` can't also refuse it.
+
+A policy passed on inside another store's publication, as `third`'s reaches Tardis inside the Pi's, counts only when
+it is attested by its issuer, or obtained from its issuer directly. The transport spec owns how. In the fixtures, every
+policy is read from its own file (E3).
+
+`verify` checks only a digest, and an issuer names itself. So on a real crossing, who sent a publication or a notice
+must come from the transport's authenticated peer (follow-up, below), never from the artifact alone.
+
+## Accounts compared, not forced to agree
+
+For every pair answered copied, same sources or overlapping, `compare_sourced` shows both records side by side, as
+`overlap` does for one origin: each publisher's record, its sources with how they matched, and the relations that
+touch it. The source keys are the correspondence `overlap` asks for across origins. Whether the two records agree
+isn't decided. They're shown, and the notice reports show what a notice would do on each side.
+
+## The planted stores (C4)
+
+`atlas/tests/fixtures/claim_crossing/` holds everything below, all fixed in one commit before any run:
+
+- **The publications:** `pi.json`, `tardis.json` and `third.json`, each `publish_sourced`'s full output, with a fixed
+  `issued_at` so every digest reproduces. The issuers are `urn:superyak:fixture:pi`, `urn:superyak:fixture:tardis` and
+  `urn:superyak:fixture:third`.
+- **Their policies**, and **`notices.json`**.
+- **`expected.json`:** for each pair, the answer and its linking digest; for each notice, the exact output of steps 1
+  to 5. Counts are per case.
+- **Local ids:** each store's sources have their own ids (`pi-S1`, `t-S1`).
+- **DOIs:** under `10.5555/superyak-fixture-...`. That's a test prefix used in Crossref's examples, not formally
+  reserved, so the suffixes are plainly synthetic, and nothing resolves a DOI.
+- **Items:** fictional, `proposed` or `source_reported`, with one `reviewed` record, whose `reviewed_by` crosses as
+  the issuer's URI.
+
+**Cases, each with at least two pairs:**
+
+- **Copied:**
+  - copied;
+  - copied twice through `third`;
+  - sibling copies of one `third` claim;
+  - a carried Claim, the identical digest on both sides;
+  - a copy of a claim with no evidence, which is copied because rule 1 comes first;
+  - both chains sharing one unresolved digest, which is copied (C9).
+- **Unknown:**
+  - both root sets empty;
+  - one empty against one not;
+  - one unresolved digest that isn't shared;
+  - two different DOIs with one title and year, which is unclear.
+- **Same sources:**
+  - one DOI as `https://doi.org/10.5555/superyak-fixture-a1`, as `http://dx.doi.org/10.5555/SUPERYAK-FIXTURE-A1`,
+    and as `doi: 10.5555/superyak-fixture-a1.)` in a citation;
+  - a doi.org url with `%3C` and `%3E`;
+  - the same publisher url on both sides, one with a citation DOI and one without (C6);
+  - title drift under one DOI;
+  - a publisher url against a DOI with the same title and year;
+  - http against https;
+  - `www.` against none.
+- **Different, not merged:**
+  - two SICI-style DOIs from one issue, `…(199806)49:8<693::…` and `…49:8<701::…`, are two different sources, once
+    in url form and once in citation form (C5, D3);
+  - one SICI DOI in url form on one side and citation form on the other is the same source (D3);
+  - a DOI written `<https://doi.org/10.5555/superyak-fixture-a1>.` in a citation is the same source as its url form
+    (E1);
+  - a preprint DOI (2023) and its journal DOI (2024), one title, is unclear (E4);
+  - a preprint kept by its arXiv url (2023, no DOI) and its journal version under a DOI (2024), one title, is unclear
+    by year (G1);
+  - a SICI DOI wrapped as `<doi:10.1002/(SICI)…;2-0>` in a citation is the same source as its url form (G3);
+  - two papers sharing one proceedings url, with different DOIs and titles, are distinct by DOI (D1);
+  - `https://doi.org/` and `https://doi.org/help` give no DOI key (D5).
+- **Overlapping:** one source shared, by key or by title, and one source each.
+- **Independent:**
+  - disjoint DOIs with different titles;
+  - disjoint urls with different titles;
+  - the C10 limit: a record that leans, by relation, on a copy and cites its own source.
+- **Refused:** a `reshare` that `third`'s policy doesn't allow.
+- **Notices:**
+  - a retraction by DOI that reaches the other side's url-keyed copy, by title and through its chain;
+  - a retraction reached through a copied chain;
+  - a retraction with no match, which reports "no impact";
+  - a correction that changes the DOI, then a retraction by the new DOI, which reaches records keyed by the old one;
+  - a correction in a publication of two claims, which names only the claim built on the corrected record.
+
+## Measure
+
+Fixed in the fixtures' commit, before the run (goals R1 and T1):
+
+1. **On the planted stores,** `relation` gives every pair its expected answer and linking digest.
+2. **The notices' reports** equal `expected.json`'s, entry for entry.
+3. **Real crossings,** once Tardis's Lighthouse and the transport stand. What's reported is the count of each answer,
+   every "unknown" with its reason, and every copied, same sources or overlapping pair side by side. It's never a score.
+
+**The pairs for real crossings (C1)** are fixed in a commit before the run, and are the union of three sets:
+
+- claims about the same thing: items whose titles match by `store._normalized_title`, which is what
+  `store.duplicates` uses;
+- claims whose roots share a match;
+- claims linked by a chain.
+
+The first set is what lets a real crossing show "independent".
+
+A failure is a result, written in `docs/north-star.md`'s row 5.
+
+## What this spec does not do
+
+- **The transport.** It's a follow-up spec, after the rule passes on fixtures. It owns who sent what: a sender comes
+  from the crossing's authenticated peer, never from an artifact's self-named issuer.
+- **Permissions.** Anything that crosses machines for real does so under each owner's ledger. A real crossing waits
+  on an allow its owner signs, and for the Pi and Tardis that's Andy's.
+- **Agreement.** Neither side's account is changed. The rule reports the relation, the comparison shows both, and
+  each store keeps its own belief and history.
+- **An "issuer chain".** Lighthouse has none: each artifact has one issuer. "Chain" here means only the `provenance`
+  digests between Claims.

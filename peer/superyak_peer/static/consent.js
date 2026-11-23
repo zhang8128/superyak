@@ -19,6 +19,16 @@ const RETRY = {
   too_many_attempts: "Too many attempts. Try again later.",
 };
 const LOST = "The connection to your home was lost. Try again.";
+const BUSY = "Your home is busy just now. Try again in a moment.";
+
+// Public-route-bound Task 5: a 503 marked x-superyak-busy was refused before the home did anything (spec R3), so it's
+// asked again once, after its Retry-After (at most 5 s) and up to 1 s more, so pages turned away together don't all come
+// back together. A 503 without the mark (a proxy's, or the home's own failure) is never asked again.
+function busyWait(response) {
+  if (response.status !== 503 || response.headers.get("x-superyak-busy") !== "1") return null;
+  const after = Number.parseInt(response.headers.get("retry-after") || "1", 10);
+  return (Math.min(Number.isFinite(after) && after >= 0 ? after : 1, 5) + Math.random()) * 1000;
+}
 
 function el(tag, attributes = {}, ...children) {
   const node = document.createElement(tag);
@@ -37,17 +47,25 @@ function show(...nodes) {
 
 // Every route this page posts to answers JSON. Anything else is something in the way, like a portal's page, a proxy's
 // error or an answer cut short, so it reads as a lost connection whatever its status, as the app's api() does
-// (fix:a-200-that-isnt-the-home-reads-as-sent). A 200 of some other page used to read as signed in, and the page was
-// left on "Signing in..." with nothing more said (fix:consent-page-reads-any-200-as-the-home).
+// (fix:a-200-that-isnt-the-home-reads-as-sent), except a home still marked busy after the one wait, which reads as busy.
+// A 200 of some other page used to read as signed in, and the page was left on "Signing in..." with nothing more said
+// (fix:consent-page-reads-any-200-as-the-home).
 async function post(path, body) {
   try {
-    const response = await fetch(path, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    });
+    let response;
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch(path, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const wait = attempt === 0 ? busyWait(response) : null;
+      if (wait === null) break;
+      await new Promise((done) => setTimeout(done, wait));
+    }
+    const busy = busyWait(response) !== null;   // still busy after the one wait: said as busy, not as lost
     const isJson = (response.headers.get("content-type") || "").includes("application/json");
     const data = isJson ? await response.json().catch(() => null) : null;
-    if (!data || typeof data !== "object" || Array.isArray(data)) return { ok: false, data: {} };
-    return { ok: response.ok, data };
+    if (!data || typeof data !== "object" || Array.isArray(data)) return { ok: false, data: {}, busy };
+    return { ok: response.ok, data, busy };
   } catch {
     return { ok: false, data: {} };
   }
@@ -82,7 +100,7 @@ function signIn(message = "", csrf = null) {
     if (answer.ok && isConsentView(answer.data)) return consent(answer.data);
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
-    status.textContent = RETRY[code] || LOST;
+    status.textContent = answer.busy ? BUSY : RETRY[code] || LOST;
   });
   show(el("h1", { tabindex: "-1" }, "Connect an app to your home"),
     el("p", { class: "lede" }, "Sign in to choose what it can read. Your password is checked here, on your home."),
@@ -137,7 +155,7 @@ function consent(view) {
     if (answer.ok && typeof answer.data.redirect === "string" && answer.data.redirect) return location.assign(answer.data.redirect);  // only the shape checked (Tardis, 7d182323)
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
-    status.textContent = LOST;
+    status.textContent = answer.busy ? BUSY : LOST;
     deny.disabled = false;
     update();
   };

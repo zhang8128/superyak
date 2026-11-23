@@ -173,21 +173,63 @@ def test_unshared_peer_source_cannot_be_published(tmp_path):
     assert 'unexposed' in result['errors'][0]['error']
 
 
-def test_deadline_bounded_concurrency_and_call_budget(tmp_path):
-    import time
-    class Slow(FixtureProvider):
+@pytest.mark.parametrize('slow_save', [False, True], ids=['fast', 'slow-checkpoint'])
+def test_deadline_bounded_concurrency_and_call_budget(tmp_path, monkeypatch, slow_save):
+    """A cell at its deadline returns with its two concurrent requests still in flight, each counted as missing
+    usage. The module's clock stands still until both requests are in flight, then passes the deadline, so the test
+    races nothing. It used to race the machine: under load the checkpoint before sending outlasted a 0.25 s deadline,
+    both reservations were withdrawn unsent (`requests` 0, on the Pi and in CI), and a 1 s wall-clock bound failed
+    too. `slow_save` stands in for that load: a 1 s checkpoint."""
+    import time as real_time
+    from deploy.stampede import experiment
+
+    class Clock:
+        def __init__(self):
+            self.base, self.jump = real_time.monotonic(), 0.0
+
+        def monotonic(self):
+            return self.base + self.jump
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    clock = Clock()
+    lock, started, finished = threading.Lock(), [], []
+    release = threading.Event()
+
+    class Blocked(FixtureProvider):
         def generate(self, messages, **kwargs):
-            time.sleep(.5)
+            with lock:
+                started.append(1)
+                if len(started) == 2:
+                    clock.jump = 10.0  # both in flight: the clock passes the 0.25 s deadline
+            release.wait(10)
+            finished.append(1)
             return super().generate(messages, **kwargs)
+
+    monkeypatch.setattr(experiment, 'time', clock)
+    if slow_save:
+        checkpoint = experiment._checkpoint
+
+        def slow(*args, **kwargs):
+            real_time.sleep(1.0)
+            return checkpoint(*args, **kwargs)
+        monkeypatch.setattr(experiment, '_checkpoint', slow)
     cfg = config()
     cfg['cell_seconds'] = .25
-    start = time.monotonic()
-    result = run_cell(cell(), cfg, tmp_path/'l', tmp_path/'d', Slow())
-    assert time.monotonic() - start < 1
+    try:
+        result = run_cell(cell(), cfg, tmp_path/'l', tmp_path/'d', Blocked())
+        assert finished == []  # it returned at the deadline while both requests were still blocked
+    finally:
+        release.set()
+    assert len(started) == 2
     assert result['status'] == 'deadline'
     assert result['completed_turns'] == 0
     assert result['usage']['requests'] == 2
     assert result['usage']['missing_usage_requests'] == 2
+
+
+def test_call_budget_stops_a_cell_and_holds_on_resume(tmp_path):
     cfg = config(max_calls_per_cell=1)
     p = FixtureProvider()
     result = run_cell(cell(), cfg, tmp_path/'l2', tmp_path/'d2', p)

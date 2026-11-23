@@ -1,0 +1,62 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "Local data that agrees across the first edge and not the second. It does not glue, and the residual names the edge.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "local": {
+  "a": [
+   1,
+   0
+  ],
+  "b": [
+   1,
+   0
+  ],
+  "c": [
+   1,
+   1
+  ]
+ },
+ "expect": {
+  "dim_h0": 2,
+  "dim_h1": 0,
+  "glued": false,
+  "residual_edges": [
+   1
+  ],
+  "residuals": [
+   0,
+   1
+  ],
+  "distance_squared": 0.6666666666666666
+ }
+}

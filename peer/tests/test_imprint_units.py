@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -266,13 +267,33 @@ def owner_dry_run(base, *args):
     done = subprocess.run(['make', '-n', '--no-print-directory', '-C', str(REPO), *args], env={**os.environ, 'HOME': str(Path(base) / 'home')},
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
+    return simple_commands(done.stdout)
+
+
+CONTROL = {'if', 'then', 'else', 'fi', '[', 'exit', 'test', 'cd'}      # shell structure, not a program the target runs
+ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=.*', re.S)
+
+
+def simple_commands(script):
+    """The programs a recipe's dry run would start, in order: continued lines joined, split at the shell's operators,
+    with assignments (rc=0, or before a program), control words, `[ … ]` tests, `exit`, the usage guard's `test -n` and `cd` left out. Revision 9
+    made imprint-send a small script (rc=0; (…) || rc=$?; if …; then … --refused; …), which a split on ' && ' can't read."""
     commands = []
-    for line in done.stdout.splitlines():
+    for line in script.replace('\\\n', ' ').splitlines():
         if line.startswith('test -n'):          # the usage guard
             continue
-        for part in line.split(' && '):
-            if part.strip() != 'cd engram':
-                commands.append(shlex.split(part))
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        current = []
+        for token in list(lexer) + [';']:
+            if token in (';', '&&', '||', '(', ')', '|', '{', '}'):
+                while current and (current[0] in ('then', 'else') or ASSIGNMENT.fullmatch(current[0])):
+                    current.pop(0)          # a control word, or an assignment before the program it names
+                if current and current[0] not in CONTROL:
+                    commands.append(current)
+                current = []
+            else:
+                current.append(token)
     return commands
 
 
@@ -280,8 +301,10 @@ def test_the_owner_targets_run_the_spec_commands(tmp_path):
     assert owner_dry_run(tmp_path, 'imprint-plan', 'IMPRINT_ARGS=--lanes work --layers episode,semantic --days 90') == [
         AGENT + ['imprint', 'context'],
         ENGRAM + ['plan', '--project-root', str(REPO), '--lanes', 'work', '--layers', 'episode,semantic', '--days', '90']]
-    assert owner_dry_run(tmp_path, 'imprint-send', 'PLAN=7c41') == [ENGRAM + ['build', '--plan', '7c41', '--if-needed'],
-                                                                   AGENT + ['imprint', 'send', '--plan', '7c41']]
+    assert owner_dry_run(tmp_path, 'imprint-send', 'PLAN=7c41') == [     # which one runs when: test_imprint_agent.py
+        ENGRAM + ['build', '--plan', '7c41', '--if-needed'],
+        AGENT + ['imprint', 'send', '--plan', '7c41', '--refused'],        # on the engram step's exit 5 (revision 9, 6)
+        AGENT + ['imprint', 'send', '--plan', '7c41']]
     assert owner_dry_run(tmp_path, 'imprint-shorten', 'ID=c0a8', 'DAYS=30')[-1][-4:] == ['--id', 'c0a8', '--days', '30']
     assert owner_dry_run(tmp_path, 'imprint-withdraw', 'ID=c0a8') == [AGENT + ['imprint', 'withdraw', '--id', 'c0a8']]
     assert owner_dry_run(tmp_path, 'imprint-read', 'PLAN=7c41', 'START=5', 'LIMIT=2') == [
@@ -353,3 +376,10 @@ def test_verify_resolves_a_short_id_and_refuses_an_unknown_or_ambiguous_one(tmp_
     assert done.returncode == 2 and calls == [] and 'ffff' in done.stdout + done.stderr
     done, calls = owner_run(tmp_path / 'c', 'imprint-verify', 'ID=c0a8', folders=('c0a8aaaa-1', 'c0a8bbbb-2'))
     assert done.returncode == 2 and calls == []
+
+
+def test_simple_commands_keeps_a_command_after_its_assignments():
+    """Serenity's nit on ebdd33b0: a line such as `VAR=x cmd` names a program, so it's kept without its assignments;
+    only a bare assignment such as `rc=0` is left out, with the shell's control words."""
+    script = 'rc=0; (cd engram && FOO=1 BAR=2 uv run imprint.py build) || rc=$?; \\\n  if [ $rc -eq 5 ]; then exit 5; fi\nX=1\n'
+    assert simple_commands(script) == [['uv', 'run', 'imprint.py', 'build']]

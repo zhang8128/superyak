@@ -662,6 +662,25 @@ def test_4_a_late_connection_refuses_an_unverified_change(tmp_path, monkeypatch)
         _state(tmp_path)
 
 
+@pytest.mark.parametrize("read", ["state", "append"])
+def test_4_a_ledger_moved_aside_under_an_open_connection_reads_as_changed(tmp_path, read):
+    """Board fix:ledger-moved-aside-reads-changed. The key's stat names the file at the ledger's path, and a ledger moved
+    aside leaves none there: a change, as a replaced file is (S7 above), not a bare FileNotFoundError. A writer's key read
+    is the same read, once sizing its busy wait passes the missing file over."""
+    _created(tmp_path)
+    led = Ledger.open_read_only(tmp_path) if read == "state" else Ledger.open(tmp_path)
+    try:
+        led.state()
+        os.replace(ledger_path(tmp_path), tmp_path / "aside.db")
+        with pytest.raises(LedgerUnreadable, match="the ledger changed during this read; retry"):
+            if read == "state":
+                led.state()
+            else:
+                led._append("x", "y", "z", "terminal", {}, at=1)
+    finally:
+        led.close()
+
+
 def test_4_a_late_connection_accepts_a_verified_write_that_landed_after_the_check(tmp_path, monkeypatch):
     """The re-check's Must-fix 2: an ordinary append landing mid-build is verified (its marker, and this process's
     memo), as today's lazy reads allow by design: the rows up to the State's seq read the same later."""

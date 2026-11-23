@@ -249,6 +249,7 @@ def hold_contact(db, contact, now):
     db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')", (contact['id'],))
     db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
                (contact['peer_id'], contact['user_id']))
+    db.execute('DELETE FROM atlas_received WHERE origin=? AND actor=?', (contact['peer_id'], contact['user_id']))  # R7
 
 
 def _owner_failed(db, peer_id, owner_user_id):

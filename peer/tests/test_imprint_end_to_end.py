@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(not (AGENT / 'superyak_agent').is_dir() or not (
 if (AGENT / 'superyak_agent').is_dir():
     sys.path[:0] = [str(AGENT), str(AGENT.parent / 'team')]
 
-from imprint_support import station
+from imprint_support import stamp_at, station
 from test_imprint_confirm import confirm
 
 MAKE_SOURCE = '''
@@ -85,6 +85,7 @@ def test_an_imprint_end_to_end(tmp_path, monkeypatch):
     plan = json.loads(planned.stdout)['id']
     built = engram('build', '--plan', plan, '--superyak-home', str(home), '--engram-home', str(engram_home))
     assert built.returncode == 0, built.stderr
+    now[0] = stamp_at(home)        # revision 9: the agent's clock starts at the send check's stamp
 
     assert agent.send(plan[:8]) == 'waiting-for-you'
     folder = next(p.parent for p in (home / 'imprints').glob('*/send.json'))

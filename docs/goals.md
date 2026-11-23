@@ -23,38 +23,43 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
    - nothing of a person's leaves without their consent;
    - no unfixed security hole is described anywhere public;
    - the public route is live with "a login in front of everything".
+6. **The north star: the environment measurably helps a finite mind.** Andy, 2026-11-22, at Serenity's terminal:
+   "i'd use this essay as a bit of a north star, can you captain and reorient?" His essay's tests, in our words, are
+   in [north-star.md](north-star.md). Measure: each test's row there moves only with a run fixed before it ran, its
+   numbers and its failures. Goals 1 to 5 are read in its light: the rail is the record outside the loop (1), the
+   community is a research community (3), outside use is people using it (4), and 2 and 5 are the floor it stands on.
 
-## Serenity (the Mac): memory, the Mac, and partner reviews
+## Serenity (the Mac): the north star, research, and partner reviews
 
-- S1 (goal 1): write the Mac's lessons, and lay them when the room opens. **Drafted 2026-10-27; waiting for
-  the room.**
-- S2 (goals 1 and 5): build compress-no-auto, so Andy's store stops turning his prompts into "knowledge". Then copy
-  his store to the Pi, only after imprints merges and with his confirmation in the browser.
-- S3 (goal 2): merge chat paging, and measure it from the Mac after deploy.
-- S4 (goal 4): spec the connector, so a scientist or doctor in Claude or ChatGPT can use their own home. Read-only
-  first, with nothing clinical going to a cloud model.
-- S5 (goals 3 and 5): give an explicit yes or no on partners' safety code within one check-in cycle of it being
-  ready.
+Refreshed 2026-11-22 toward goal 6, on Andy's word that day. The 10-27 lines (lessons drafted, compress-no-auto, chat
+paging, the connector spec) are done or superseded; the connector went live on 11-21.
+- S1 (goal 6): north-star test 1, one environment end to end, with a retraction, against a hybrid baseline. Measure: a
+  run fixed in a commit before it runs, on held-out questions with matched evidence, reporting accuracy, source
+  support, calibration and cost, failures included.
+- S2 (goal 6): tests 2 and 3, the strong baselines and small against large, on S1's harness.
+- S3 (goal 6): test 7, an evidence auditor on Atlas (which sources are independent, what would count against a
+  conclusion), after #12's negative router result.
+- S4 (goal 4): the connector is live; a sign-in by an invited person who isn't Andy, before the README promises it.
+- S5 (goals 3 and 5): an explicit yes or no on partners' safety code within one check-in cycle, naming the head's CI.
 
-## Rio Grande (the Pi): the station, merges and deploys
+## Rio Grande (the Pi): the station, merges, deploys, and north-star test 5
 
-Refreshed 2026-11-08, after an outside read found the 11-03 lines stale, and R3 and R6 on 2026-11-10. Each tied to an
-overarching goal:
-- R1 (goal 1): the first blind lessons crossing. The lessons-room adds landed on 11-04 (b12b8452). Adding Tardis's
-  account needs Andy's word at Rio Grande's terminal, by CLAUDE.md's lessons-room steps; then Tardis lays its lessons
-  and each side runs the task committed by hash. Measure: the receipt and transcript of each blind session, and its
-  `helped` or `misled`.
-- R2 (goal 1): use, before more structure. The n-category store held 16 recall rows here, 2 of them used, and Tardis
-  has about 33, so the rail is short of use, not of mathematics. Both ships recall in real work and log what helped
-  (`log_outcome`), never recalls made for the count. Measure: used recalls per day on each ship, then E1′'s one run once
-  a log holds a few hundred, read against its pre-registered outcomes.
-- R3 (goal 1): the n-category store, stage 3 of the plan on issue #2 (spec `2026-11-07-ncat-store.md`), on Tardis's
-  kernel. It landed with the kernel in train-1111 (9bf56122): `engram/ncat_store.py`. Nothing more is built on it
-  until R2 shows real use. Measure: on the Pi, 10,000 recall rows rebuilt in under 10 s and a 200-road session in
-  under 5 ms, under 256 MB (0.9 s, 3.7 ms and 66 MB at 2ab883e1), and the store holding real sessions.
-- R4 (goals 2 and 5): the chats people use. The send fix and room updates (train-1107f, 1c585762) landed with train-1109
-  on Andy's word on 2026-11-09, with a 200 that isn't the home and recall's transfers kept to one lane; the send
-  fix's reader leftovers follow. Measure: the 97 wrong-room probes pass on main, and a new message shows within 6 s in an open paged room.
+Refreshed 2026-11-22 toward goal 6, on Andy's word that day (at Serenity's terminal), with the split for test 5
+agreed with Tardis (all hands 983200e5, 76c735c8). R5 and R6 stand as they were; the 11-08 lines R1 to R4 are done or
+folded in below.
+- R1 (goal 6, test 5): two lighthouses that keep each source's identity. Rio Grande's half: the claim-crossing spec,
+  what a claim carries across (its text, and each source's store id, record id and revision), and the planted pair of
+  stores with known answers (some claims copied through another store, some independently sourced). A retraction on
+  one side reaches what the other built on it through Atlas's `retraction_impact`, and the two accounts are compared
+  without forcing agreement. Tardis's half is the receiver's rule and a second Lighthouse (T1). Measure, fixed in a
+  commit before the run: the receiver calls every planted claim copied or independent correctly; then real crossings
+  both ways.
+- R2 (goal 6, test 6): test 5's data, handed to Tardis's test 6 (T2). Folds in `spec:sheaf-over-crossings`.
+- R3 (goal 1): the crossing's next step, from 3 memories to 8, waits on Andy's two allow lines (all hands 5ec424d4).
+  Nothing more is built there until test 5 needs it. Measure: distinct memories delivered across machines.
+- R4 (the floor): the station, merges and deploys, and CI flakes fixed test-first (the nudge test, the announcer and
+  room-timing, 11-21 and 11-22), with `ops:heavy-work-lock` next. Measure: trains rebuilt for a red already on GitHub,
+  toward none.
 - R5 (goals 3 and 2): ships that talk without waste. A mention is answered only by a reply to that mention (R7), so
   replies elsewhere left mentions to read-only runs two hours later; reply to the mention itself, one mention per ask,
   and `spec:mention-reaches-the-working-session` if that isn't enough. Hold the purpose, not the queue: post when
@@ -67,28 +72,28 @@ overarching goal:
   step 3, a personal Tailscale account and the share, so a one-page note for the person playing Sam
   (`docs/two-people-for-sam.md`) spends its words there, and on the codes the two of them read aloud and type.
   Measure: someone who isn't a ship pairs with Andy and sends one message.
-- Parked, not dropped: memory that follows the ship (spec approved; waits on R2), and owner trust's restore follow-ups
-  (on the board).
+- Parked, not dropped: memory that follows the ship (spec approved), the n-category store's use (now test 6's
+  question), and owner trust's restore follow-ups (on the board).
 
-## Tardis: federation, the public route, CI, and the visitor's view
+## Tardis: federation, the public route, CI, the visitor's view, and north-star tests 4 and 5
 
-Refreshed 2026-11-10, in Tardis's words (a station room post). Each line is tied to an overarching goal:
-- T1 (goal 1): rail B. Tardis joins the lessons room through Andy's owner trust, which he grants at the Pi's terminal
-  (train-1114, which it needed, is on main), then lays its own lessons. Measure: the two-part pass test (all hands
-  bd7b170b), a receipt of a Tardis lesson on the Pi and of a Pi lesson on Tardis, each within a day of the CONFIRM.
-- T2 (goals 1 and 3): the crossing in use, with deadlines end to end (the embedder client in train-1112, the frame's in
-  train-1114, the peer's lessons client in train-1117), and the embedder dropping an asker that has gone. 8 crossings
-  ever, the last on 11-04. Measure: recalls in real work, logged helped or misled, and no embed in the publisher's log
-  waiting past its asker.
-- T3 (goal 1): the n-category core in C++, as Andy asked on #2. The C kernel and the store are on main (train-1111). The
-  C++20 port, phase 1 of Defiant's plan (`tardis/ncat-cpp`), waits for a reader, with the C kernel as its differential
-  oracle; it runs under the store as the store's one caller. Phase 2 is built only when the store holds real sessions
-  from both ships, a few hundred used recalls, since the rail is short of use, not of mathematics (R2). Measure: phase
-  1's gate (the same answers on every corpus, benchmarks within 20%), then that use count, then phase 2's exponents.
-- T4 (goal 4): `two-people.md` kept true at every train (each label and number checked against main), for R6's first
-  real walk, which is Rio Grande's to run. Voice: GitHub issues as the queue (#3), once Andy has tried replies read
-  back. Measure: the guide's checks after each train, and R6's walk getting through.
-- T5 (goals 2 and 5): CI, and partner reads from the bundle itself.
-- Done since 11-08: the embedder client half (train-1112), the kernel on main (train-1111), the mark's true words
-  (train-1113), goal 2's before and after for the downloads build (train-1115, in `docs/measures/goal-2.md`), the sheaf
-  standard's outside read, and partner reads of the ledger fix, the trust command and train-1116.
+Refreshed 2026-11-22 toward goal 6, in Tardis's words (all hands 76c735c8), and T2 on 2026-11-23; its own to point,
+and Andy can veto:
+- T1 (goal 6, test 5): the receiver's copied-or-independent rule, on Tardis's crossing and receiver code, starting as
+  a plain rule: a copy is the same root source arriving by another store, and independent means a different root.
+  And #12's second Lighthouse, a push identity on Tardis: today only Tardis asks the Pi, and test 5 needs evidence
+  both ways. Measure, fixed before the run: every planted claim called copied or independent correctly, then real
+  crossings both ways.
+- T2 (goal 4, the visitor's view): test 6 is closed (row 6: identity, graded and `ncat`, each stopped and checked), so
+  this line turns to the gap every review since 11-22 names. **A visitor's first hour:** someone outside the three
+  ships, given only the README, runs Superyak and asks it one research question. First a fresh agent that has never
+  seen the repo walks that path, and each place it stalls is logged and fixed, one blocker per train. Then a person
+  outside us does it: a visitor at Andy's table, or a collaborator Andy admits. Measure, fixed before the walk: the
+  steps finished unaided, and whether the question gets a sourced answer.
+- T3 (goal 6, test 4, with Serenity): stuck-agent traps in the time-loop room (a cycle, a renamed failed idea, a
+  misleading summary, a map-breaking observation). Fixed, random and adaptive exploration under one budget, scored on
+  recovery, not activity.
+- T4 (the floor): CI, partner reads from the bundle, and the README and `two-people.md` kept true at each train.
+- T5 (goal 1): receipts' outcomes within their day, and what they show. Measure: the helped share over scored
+  receipts, by how the lesson matched (`make lesson-outcomes`), with unscored receipts counted apart. On 11-23
+  Tardis's 47 were 3 helped: 2 of 6 by words, and 1 of 41 by angle. The crossing waits on Andy's allow.

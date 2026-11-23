@@ -180,9 +180,21 @@ def ignore_signals():
         signal.signal(caught, signal.SIG_IGN)
 
 
+signalled = False  # set before Stopped is raised, so a raise that something swallows still stops the run
+
+
 def stop_on_signal(*_):
+    global signalled
+    signalled = True
     ignore_signals()  # a second one, close behind, mustn't arrive outside the try
     raise Stopped
+
+
+def stop_if_signalled():
+    """A signal that lands in code that swallows exceptions, such as Popen.__del__ ("Exception ignored in"), loses its
+    Stopped, and the first signal has set the rest to be ignored: the flag it left is what stops the run then."""
+    if signalled:
+        raise Stopped
 
 
 def main(argv=None):
@@ -213,6 +225,8 @@ def main(argv=None):
     began, ended = time.monotonic(), None
     deadline = began + args.deadline
     when = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    global signalled
+    signalled = False
     for caught in CAUGHT:
         signal.signal(caught, stop_on_signal)
     try:
@@ -223,6 +237,7 @@ def main(argv=None):
                 for pair in pairs[turn:] + pairs[:turn]:
                     if pair in stopped:
                         continue
+                    stop_if_signalled()
                     if not first:
                         time.sleep(min(args.gap_ms / 1000, max(0, deadline - time.monotonic())))
                     first = False

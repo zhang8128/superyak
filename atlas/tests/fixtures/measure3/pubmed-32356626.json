@@ -1,0 +1,35 @@
+{
+ "note": "Trimmed to the fields measure3_answers' client reads, from the live response fetched on 2026-11-22.",
+ "result": {
+  "32356626": {
+   "articleids": [
+    {
+     "idtype": "pubmed",
+     "idtypen": 1,
+     "value": "32356626"
+    },
+    {
+     "idtype": "pmc",
+     "idtypen": 8,
+     "value": "PMC7206931"
+    },
+    {
+     "idtype": "pmcid",
+     "idtypen": 5,
+     "value": "pmc-id: PMC7206931;"
+    },
+    {
+     "idtype": "doi",
+     "idtypen": 3,
+     "value": "10.1056/NEJMoa2007621"
+    }
+   ],
+   "pubdate": "2020 Jun 18",
+   "title": "Cardiovascular Disease, Drug Therapy, and Mortality in Covid-19.",
+   "uid": "32356626"
+  },
+  "uids": [
+   "32356626"
+  ]
+ }
+}

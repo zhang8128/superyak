@@ -1,8 +1,10 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import asyncio
 import functools
+import math
 import hmac
 import re
+import sqlite3
 import ipaddress
 import logging
 import time
@@ -17,9 +19,12 @@ from starlette.routing import Match, Mount
 from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from . import counting, tags
 from .agent_version import agent_update
-from .auth import DEVICE_LIFETIME
+from .auth import DEVICE_LIFETIME, token_hash
 from .common import Problem, valid_utf8
+from .dispatch import GateTimeout
+from .live_set import LiveSet
 from .connector import MCP_BODY_MAX, REGISTER_BODY_MAX
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
@@ -176,17 +181,41 @@ class BrowserBoundary:
             await send(message)
         await self.app(scope, bounded_receive, secure_send)
 
+CREDENTIAL_MAX = 128  # public-route-bound Task 3: a public credential longer than this is junk, refused unhashed
+BUSY = 'This home is busy; try again shortly'
+BUSY_HEADERS = [(b'retry-after', b'1'), (b'x-superyak-busy', b'1')]  # spec R3: safe to retry, nothing was done
+
+
+class Busy(Exception):
+    """A full public lane (public-route-bound spec R3): 503 with Retry-After: 1 and x-superyak-busy: 1."""
+
+
 class PublicRoute:
     """Public route spec 2: default deny for public (Funnel) requests. Outermost, so it runs before the body is read.
     A public request passes to an allow-listed route, or with a valid session or ship key (checked, not just present;
     the route's own check still decides). Anything else gets 401 under /api/, which app.js acts on, and 404 elsewhere.
-    Tailnet requests pass untouched."""
-    def __init__(self, app, *, store, router):
-        self.app, self.store, self.router = app, store, router
+    Tailnet requests pass untouched, every lookup as before and outside every lane.
+
+    Public-route-bound Task 3: serve's live set is asked first, so a junk credential costs no read. A present bearer
+    key decides alone, as the routes use it; a key the set lacks (one the CLI made after serve started) is looked up in
+    the miss lane, and joins the set if it passes. With no key, a session cookie the set lacks is no cookie."""
+    def __init__(self, app, *, store, router, miss):
+        self.app, self.store, self.router, self.miss = app, store, router, miss
 
     async def __call__(self, scope, receive, send):
         if scope['type'] not in ('http', 'websocket'):
             return await self.app(scope, receive, send)
+        if not counting.on():
+            return await self._call(scope, receive, send)
+        # public-route-bound plan, Task 0: what follows on this request, its workers included, is counted under it, by
+        # its route's path (never the request's own, which would make a bucket per path a client sends)
+        token = counting.request(getattr(dispatched(self.router, scope), 'path', None), is_public(scope))
+        try:
+            return await self._call(scope, receive, send)
+        finally:
+            counting.reset(token)
+
+    async def _call(self, scope, receive, send):
         try:  # only the classification and the lookup: 401 would tell the dock client its key was revoked
             refusal = await self.refusal(scope)
         except Exception as error:  # noqa: BLE001
@@ -198,6 +227,7 @@ class PublicRoute:
             return await WebSocketClose()(scope, receive, send)
         response = JSONResponse({'error': refusal[1]}, refusal[0])
         response.raw_headers.extend(SECURITY_HEADERS)
+        response.raw_headers.extend(refusal[2] if len(refusal) > 2 else ())
         await response(scope, receive, send)
 
     async def refusal(self, scope):
@@ -210,14 +240,37 @@ class PublicRoute:
             return None
         request = Request(scope)  # Starlette's cookie parser and bearer_key, so this sees what the route will
         key, token = bearer_key(request), request.cookies.get(COOKIE)
-        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):
-            return None
+        try:
+            if await (self.key_valid(key) if key is not None else self.session_valid(token)):
+                return None
+        except Busy:
+            return (503, BUSY, BUSY_HEADERS)
         return (401, 'Sign in required') if scope['path'].startswith('/api/') else (404, 'Not found')
 
-    def valid(self, key, token):
-        """In a worker, as the inbox wait's store calls are: the store gate is a blocking flock."""
-        return bool(key is not None and self.store.ship_key_is_valid(key)
-                    or token is not None and self.store.session_is_valid(token))
+    async def key_valid(self, key):
+        """A present key decides alone (Task 3, P6). One the live set holds is looked up as before; one it lacks waits
+        in the miss lane, and joins the set if it passes. The lookups run in a worker: the store gate is a blocking
+        flock."""
+        if not 0 < len(key) <= CREDENTIAL_MAX:
+            return False
+        hashed = token_hash(key)
+        if self.store.live.has(hashed, 'ship_key', self.store.clock()):
+            return await run_in_threadpool(self.store.ship_key_is_valid, key)
+        if await self.miss.run(self.missed, key):
+            self.store.live.add('ship_key', hashed, math.inf, None)
+            return True
+        return False
+
+    def missed(self, key):
+        return self.store.ship_key_is_valid(key)  # in the miss lane, so counted as its work
+
+    async def session_valid(self, token):
+        """With no key: a session the live set lacks is no session, and costs no read."""
+        if token is None or len(token) > CREDENTIAL_MAX:
+            return False
+        if not self.store.live.has(token_hash(token), 'session', self.store.clock()):
+            return False
+        return await run_in_threadpool(self.store.session_is_valid, token)
 
     def allowed(self, scope):
         """Whether the route the router dispatches this request to is on the allow-list, for this method."""
@@ -227,22 +280,89 @@ class PublicRoute:
     def listed(route, method):
         return isinstance(route, (APIRoute, Mount)) and method in PUBLIC_ROUTES.get(route.path, ())
 
+REFUSAL_PAUSE = 0.1  # the public sign-in lane's pause before a full lane's 429, in seconds (see SignInLane)
+REFUSAL_HELD_MAX = 64  # refusals paused at once at most; past it, a refusal is answered at once
+
+
 class SignInLane:
     """Public route spec 3: all of Store.login runs in a worker under its lane's own limiter, so sign-ins never compete
     with sync routes for anyio's shared threads. `size` sign-ins at a time with `queue` waiting; a full lane answers
-    429 without hashing or counting."""
-    def __init__(self, size, queue):
-        self.size, self.queue, self.inside = size, queue, 0
+    429 without hashing or counting.
+
+    With `pause`, a full lane waits that long before its 429, holding no thread and doing no work, so a sender that
+    waits for each answer gets at most one refusal per pause per connection. The landing comparison found the cheap 429
+    let a 16-connection flood deliver 500 a second where main's slower answers held it to 155, and the person paid for
+    it (breakout 77c6e4, device c16). 0.1 s holds those 16 to at most 160 a second, a ceiling. At most `held_max` wait
+    at once, so a flood over many connections can't make the pause hold a socket each: past it, a refusal is answered
+    at once. A closed loop over more than `held_max` connections therefore gets that many paused and the rest at once;
+    the pause closes the measured case, not the class. A sign-in the lane admits is never paused.
+
+    A cancelled caller (shutdown, a cancel scope) gives its place back at once. A caller that disconnects doesn't:
+    uvicorn's h11 only marks the cycle disconnected and doesn't cancel the handler, so its place comes back when its
+    pause ends, and its 429 is dropped.
+
+    Only the public lane pauses (create_app), and every route that signs in through `sign_in_lane` shares it, so each
+    pauses alike when it's full: POST /api/login, the connector's POST /authorize/signin, POST
+    /api/imprints/{id}/confirm, and the owner-trust grant and renew (POST /api/connections/{contact_id}/trust, POST
+    /api/owner-trust/{grant_id}/renew); POST /api/local-demo/login too, which exists only with --local-demo."""
+    def __init__(self, size, queue, name, *, pause=0.0, held_max=0):
+        if pause > 0 and held_max <= 0:
+            raise ValueError('a lane that pauses needs held_max > 0, or it would never pause')
+        self.size, self.queue, self.inside, self.name = size, queue, 0, name
+        self.pause, self.held_max, self.held = pause, held_max, 0
         self.limiter = anyio.CapacityLimiter(size)
+
+    def refused(self):
+        return Problem(429, 'Too many sign-ins at once; try again shortly')
+
+    async def _refuse(self):
+        if self.pause > 0 and self.held < self.held_max:
+            self.held += 1  # only the event loop changes it
+            try:
+                await anyio.sleep(self.pause)
+            finally:
+                self.held -= 1  # on a cancel (shutdown, a scope) at once; a disconnected caller keeps it to the end
+        raise self.refused()
 
     async def run(self, call, *args, **kwargs):
         if self.inside >= self.size + self.queue:
-            raise Problem(429, 'Too many sign-ins at once; try again shortly')
+            await self._refuse()
         self.inside += 1  # only the event loop changes it
         try:
-            return await anyio.to_thread.run_sync(functools.partial(call, *args, **kwargs), limiter=self.limiter)
+            return await anyio.to_thread.run_sync(functools.partial(self._counted, call, *args, **kwargs), limiter=self.limiter)
         finally:
             self.inside -= 1
+
+    def _counted(self, call, *args, **kwargs):
+        with counting.lane(self.name):  # what runs in a lane is counted as its work (public-route-bound Task 0)
+            return call(*args, **kwargs)
+
+LANE_BOUND = 2.0  # public-route-bound Task 6: the longest a public lane's work waits for the gate or for SQLite
+
+
+class PublicLane(SignInLane):
+    """Public-route-bound Tasks 3 and 6: a lane public requests wait in before their store work (the miss lane's
+    lookup, published layers' reads). Full, it answers 503 busy and calls the store zero times. Its work runs under
+    the store's bound, so neither the dispatch gate nor SQLite's busy wait holds a slot past LANE_BOUND; work that
+    meets either is answered busy too, as nothing was done."""
+    def __init__(self, size, queue, name, *, store):
+        super().__init__(size, queue, name)
+        self.store = store
+
+    def refused(self):
+        return Busy()
+
+    def _counted(self, call, *args, **kwargs):
+        try:
+            with self.store.bounded(LANE_BOUND):
+                return super()._counted(call, *args, **kwargs)
+        except GateTimeout:
+            raise Busy() from None
+        except sqlite3.OperationalError as error:
+            if 'locked' not in str(error):
+                raise
+            raise Busy() from None
+
 
 async def body(request, limit=None):
     if limit is not None and len(await request.body()) > limit:
@@ -357,6 +477,13 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         raise ValueError('Federation requires HTTPS')
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
+    store.live = LiveSet()  # public-route-bound Task 2: every live credential row, loaded once, before serve answers
+    store.live.load_live_rows(store)
+    with store.transaction() as db:  # Task 7a: every label's tag key, made if missing, before serve answers
+        store.tag_keys = tags.every_label_key(db)
+        store.untagged = tags.StartSet()  # Task 7b: the untagged ones live now, which only shrinks
+        store.untagged.load(db, store.clock())
+        store.spent = tags.SpentSet()  # and the tagged ones spent from now on, each until its exp
     if federation_endpoint:
         store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
@@ -364,7 +491,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.sync_enabled = sync_enabled
     app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
     # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
-    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8), tailnet=SignInLane(1, 4), known=SignInLane(1, 4))
+    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8, 'public', pause=REFUSAL_PAUSE, held_max=REFUSAL_HELD_MAX), tailnet=SignInLane(1, 4, 'tailnet'), known=SignInLane(1, 4, 'known'))
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
@@ -377,11 +504,20 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.assets = assets
     app.mount('/assets', AssetApp(assets), name='assets')  # exact keys from the table: no path is normalized
     app.add_middleware(BrowserBoundary, router=app.router, allowed_origins=allowed_origins, assets=assets)
-    app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
+    app.state.miss_lane = PublicLane(1, 4, 'miss', store=store)  # public-route-bound Task 3
+    app.state.layer_lane = PublicLane(4, 32, 'layers', store=store)  # Task 6: it admits 36, and the 37th is busy
+    app.state.redeem_lane = PublicLane(1, 4, 'redeem', store=store)  # Task 7b, kept for good
+    app.add_middleware(PublicRoute, store=store, router=app.router, miss=app.state.miss_lane)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
     async def problem(request, exc):
         return JSONResponse({'error': exc.message}, status_code=exc.status)
+
+    @app.exception_handler(Busy)
+    async def busy(request, exc):  # a full public lane, or its work out of time: the marked 503 (spec R3)
+        response = JSONResponse({'error': BUSY}, status_code=503)
+        response.raw_headers.extend(BUSY_HEADERS)
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request, exc):
@@ -402,10 +538,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return Response(page.body, media_type=page.content_type)
 
     @app.get('/api/health')
-    def health():
+    def health(request: Request):
         """Spec 2026-10-14 S6: one database read, no session, nothing but ok. A database error goes to the 500 handler
         above. It says only that the station is up: the main app is public through Tailscale Funnel by Andy's choice
-        (2026-10-14), so this route is public too and must never say more. The access-request door has no such route."""
+        (2026-10-14), so this route is public too and must never say more. The access-request door has no such route.
+        Public-route-bound Task 8: a public request reads nothing, so a flood of public health checks costs the store
+        nothing; it says only that serve answers. Over the tailnet it reads as before, so the sitting's check still
+        finds a store that can't be read."""
+        if is_public(request.scope):
+            return {'ok': True}
         with store.transaction() as db:
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
@@ -415,7 +556,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         the imprint confirm's password (R19) both take it, so a confirm is laned as a sign-in is (review S3)."""
         public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
         lane = lanes.public if public else lanes.tailnet
-        if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
+        # public-route-bound Task 4: a device cookie over 128 characters, or one serve's live set lacks, skips the
+        # pre-lane read; it goes through the public lane, where Store.login checks it as before
+        known = (public and device is not None and len(device) <= CREDENTIAL_MAX
+                 and store.live.has(token_hash(device), 'device', store.clock()))
+        if known and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
         return lane, public, device
     app.state.sign_in_lane = sign_in_lane  # the connector's sign-in (Task 5) is laned and counted the same way
@@ -612,8 +757,16 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
         data = await body(request, SIGN_IN_BODY_MAX)
-        # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
-        return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
+        token, fields = data.get('token'), (data.get('username'), data.get('name'), data.get('password'))
+        if not is_public(request.scope):  # the tailnet's own path, outside the public lane (P8)
+            # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
+            return await run_in_threadpool(store.redeem, token, *fields)
+        # public-route-bound Task 7b: checked in memory first, so junk, a wrong tag, an expired or another label's tag,
+        # an unknown kid or a made-up untagged token is refused with no read, no lock and no place in the lane
+        label = tags.redeemable(store.tag_keys, store.untagged, store.spent, token, store.clock())
+        if label is None:
+            raise Problem(400, 'Invitation unavailable')
+        return await app.state.redeem_lane.run(store.redeem, token, *fields, label=label)
 
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
@@ -788,8 +941,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.active_layer(key, actor(request))
 
     @app.get('/public/layers/{key}')
-    def public_get(key: str):
-        return store.active_layer(key, public=True)
+    async def public_get(key: str, request: Request):
+        if is_public(request.scope):  # Task 6: a public reader waits in the layers' lane; the tailnet reads as before
+            return await app.state.layer_lane.run(store.active_layer, key, public=True)
+        return await run_in_threadpool(store.active_layer, key, public=True)
 
     @app.get('/api/files')
     def files(request: Request):
@@ -810,8 +965,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return download(store.download_file(actor(request), key, layer_id=layer_id))
 
     @app.get('/public/layers/{layer_id}/files/{key}')
-    def public_file_get(layer_id: str, key: str):
-        return download(store.download_file(None, key, layer_id=layer_id, public=True))
+    async def public_file_get(layer_id: str, key: str, request: Request):
+        if is_public(request.scope):
+            return download(await app.state.layer_lane.run(store.download_file, None, key, layer_id=layer_id, public=True))
+        return download(await run_in_threadpool(store.download_file, None, key, layer_id=layer_id, public=True))
 
     @app.get('/api/chats')
     def chats(request: Request):

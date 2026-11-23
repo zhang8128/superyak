@@ -272,11 +272,13 @@ it too, since the words are a literal piece of the command. Its long form:
 - Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
   partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
   same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
-- The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named:
-  engram's test_knowledge.py, TestKuzuFulltextIndices' two tests and TestBoundedKuzuDriver's one. The Pi's kernel
-  uses 16 KB pages (`getconf PAGESIZE`), and Kuzu 0.11.3 can't release a frame on them (`ops:kuzu-on-16k-pages`).
-  A failure counts as known only after the same test fails the same way on main, on the same machine; read this
-  line before re-deriving one (Rio Grande, 2026-10-29, re-derived the Kuzu three).
+- The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named.
+  Engram's three real-Kuzu tests (test_knowledge.py: TestKuzuFulltextIndices' two, TestBoundedKuzuDriver's one) skip
+  on the Pi with the page-size reason since dfba2c3e, where they used to fail. The Pi's kernel uses 16 KB pages
+  (`getconf PAGESIZE`) and Kuzu 0.11.3 can't release a frame on them, so the knowledge graph is off there
+  (`ops:kuzu-on-16k-pages`). A failure counts as known only after the same test fails the same way on main, on the
+  same machine; read this line before re-deriving one (Rio Grande re-derived the Kuzu three on 2026-10-29, and again
+  on 2026-11-22).
 - Several branches may merge as a train, each with its own section 2 verdict from the approver the law names and,
   where it changes safety code, each partner's yes. Each reviewed head is merged `--no-ff`, in order, on a branch
   from main, and each merge is clean: no conflict and no hand edit. A branch whose merge stops leaves the train,
@@ -298,7 +300,10 @@ it too, since the words are a literal piece of the command. Its long form:
 - GitHub CI's result is read, including the jobs the Pi can't run: a pushed head's before its merge, and main's after
   the push. A red job holds the merge until its failing test is named and either fixed, or shown to fail the same
   way on main and put on the board (Tardis's T5, 2026-10-29: a comment-only head went red on an engram flake, and no
-  one read it).
+  one read it). The section 2 reader reads the reviewed head's CI before its yes and names the result in the
+  verdict: green, still running, or red with its failing test named. A head that was never pushed says so (Rio
+  Grande, 2026-11-21: a yes on multihop-smoke 9d14c2df went to train 1144 about four hours after its CI had gone
+  red, 16 bridge tests broken by an import; three ships agreed the rule, all hands 29fc2c26).
 - The `only-include` lists name every new module and test file, and the package builds and imports in a clean
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
   by test_packaging (retired there, see "Retiring an item"); check any other package's list by hand.

@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from contextlib import closing
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 import sqlite3
 import unicodedata
@@ -329,6 +330,105 @@ class Store:
                 reachable.append(items[destination])
                 queue.append(destination)
         return reachable
+
+    def retraction_impact(self, retracted):
+        """What retracting one or more sources does to what depends on them, read-only (issue #9).
+
+        Grounding: an active item is grounded when it cites a source not retracted, or when a grounded item supports it
+        through an active, grounded `supports` relation. A relation is grounded when it cites a source not retracted,
+        or cites none. Grounding is a least fixed point from cited sources, so a cycle can't keep itself alive, and a
+        source cited many times counts once. It's computed before and after the retraction.
+
+        Reached: the active items citing a retracted source, the objects of active relations citing one, and everything
+        reachable from those along active `supports` and `challenges` relations. Each reached item, once, in reaching
+        order, with the first path that reached it: "unsupported" (grounded before, not after), "challenge lost" (a
+        challenger of it lost its grounding), "still supported", or "not grounded before either". Nothing is written."""
+        if isinstance(retracted, str):
+            retracted = [retracted]
+        if not isinstance(retracted, (list, tuple, set, frozenset)) or not retracted:
+            raise WorkbenchError("retracted must be a source ID or a non-empty list of them")
+        if not all(isinstance(value, str) for value in retracted):
+            raise WorkbenchError("retracted must hold source IDs")
+        sources = {record["id"] for record in self._records("sources")}
+        retracted = set(retracted)
+        unknown = sorted(retracted - sources)
+        if unknown:
+            raise WorkbenchError(f"source not found: {unknown[0]}")
+        items = {r["id"]: r for r in self._records("items") if r["status"] != "withdrawn"}
+        relations = [r for r in self._records("relations")
+                     if r["status"] != "withdrawn" and r["subject"] in items and r["object"] in items]
+        cited = lambda record: {entry["source_id"] for entry in record.get("evidence", [])}
+
+        def grounded(gone):
+            relation_ok = lambda r: not cited(r) or bool(cited(r) - gone)
+            held = {key for key, record in items.items() if cited(record) - gone}
+            changed = True
+            while changed:
+                changed = False
+                for r in relations:
+                    if (r["predicate"] == "supports" and r["subject"] in held and r["object"] not in held
+                            and relation_ok(r)):
+                        held.add(r["object"])
+                        changed = True
+            return held
+
+        before, after = grounded(set()), grounded(retracted)
+        out_edges = defaultdict(list)
+        for r in sorted(relations, key=lambda r: (r["subject"], r["object"], r["id"])):
+            if r["predicate"] in {"supports", "challenges"}:
+                out_edges[r["subject"]].append(r)
+        path, order, lost_challenge = {}, [], set()
+        queue = deque()
+        for key in sorted(items):
+            hit = sorted(cited(items[key]) & retracted)
+            if hit:
+                path[key] = [hit[0], key]
+                order.append(key)
+                queue.append(key)
+        for r in sorted(relations, key=lambda r: r["id"]):
+            hit = sorted(cited(r) & retracted)
+            if hit and r["object"] not in path:
+                path[r["object"]] = [hit[0], r["id"], r["object"]]
+                order.append(r["object"])
+                queue.append(r["object"])
+        while queue:
+            current = queue.popleft()
+            for r in out_edges[current]:
+                target = r["object"]
+                if r["predicate"] == "challenges" and current in before and current not in after:
+                    lost_challenge.add(target)
+                if target not in path:
+                    path[target] = path[current] + [target]
+                    order.append(target)
+                    queue.append(target)
+
+        def verdict(key):
+            if key in before and key not in after:
+                return "unsupported"
+            if key in lost_challenge:
+                return "challenge lost"
+            return "still supported" if key in after else "not grounded before either"
+
+        return {"retracted": sorted(retracted),
+                "items": [{"id": key, "kind": items[key]["kind"], "title": items[key]["title"],
+                           "verdict": verdict(key), "grounded_before": key in before, "grounded_after": key in after,
+                           "path": path[key]} for key in order]}
+
+    def history_as_of(self, record_id, at):
+        """What was believed about one item or relation at time `at` (ISO 8601 UTC, as the audit rows write it): its
+        status then, and the status changes up to then, from the append-only audit history."""
+        if not isinstance(at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", at):
+            raise WorkbenchError("at must be an ISO 8601 UTC time like 2026-11-21T12:00:00Z")
+        current = self.get(record_id)
+        events = [event for event in self.export_bundle()["history"] if event.get("record_id") == record_id]
+        upto = [event for event in events if event["timestamp"] <= at]
+        if upto:
+            status = upto[-1]["to_status"]
+        elif events:
+            status = events[0]["from_status"]
+        else:
+            status = current["status"]
+        return {"id": record_id, "status": status, "events": upto}
 
     def set_status(self, record_id, status, reason, actor):
         if status not in STATUSES:

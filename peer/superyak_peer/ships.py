@@ -154,11 +154,15 @@ class Ships:
         and no presence; the route's own ship_for_key still writes those afterwards."""
         if not isinstance(key, str) or not 0 < len(key) <= 128:
             return False
+        hashed = token_hash(key)
         with self.reading() as db:
-            return db.execute(
+            live = db.execute(
                 "SELECT 1 FROM ship_keys JOIN users ON users.id=ship_keys.ship_id WHERE key_hash=? AND revoked IS NULL AND users.kind='ship'",
-                (token_hash(key),),
+                (hashed,),
             ).fetchone() is not None
+        if not live and self.live is not None:  # public-route-bound Task 2: no live row, so out of serve's live set
+            self.live.remove('ship_key', hashed)
+        return live
 
     def revoke_presented_key(self, key):
         with self.transaction() as db:

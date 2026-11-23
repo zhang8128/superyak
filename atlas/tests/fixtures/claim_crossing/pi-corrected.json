@@ -1,0 +1,187 @@
+{
+ "carried": [],
+ "claims": [
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "eea8b8b854d431a780023ef1bf39070dba8ea9645a11e04e0a56c8584c63a44c"
+   },
+   "id": "urn:superyak:fixture:pi:claim:a34bd401bf74fe367fff9b7918d4f5df0c7d358cd1e6ba874cd70f01f71ad45c",
+   "issuedAt": "2026-11-22T01:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "cdfa302a49ca134f28e98aa46b5811adf47316725b2492aa819c030fd2f885ac"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-copied-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "3f8ddb5a77af998579f9c87881b3ef21bfdc2ae0018def0a134140ca86ac01bd"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  }
+ ],
+ "descriptor": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "bddd29e0e696a85c0e9cbdd05014d97ccf08433bd79df4e7b82cc047393cf70a"
+  },
+  "id": "urn:superyak:fixture:pi:lighthousedescriptor:9e566d80cd79be3e887a37c51f60e77d9987203848c4c7e31e7b9168a1dd87c3",
+  "issuedAt": "2026-11-22T01:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "LighthouseDescriptor",
+  "payload": {
+   "actions": [
+    "read",
+    "link_overlap",
+    "retain",
+    "reshare"
+   ],
+   "artifactEndpoints": [
+    {
+     "kind": "Snapshot",
+     "locator": "urn:superyak:fixture:pi:snapshot:1e451d15778b67349681044c849690be08c264fc9f60121d1884404261027d10"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:a34bd401bf74fe367fff9b7918d4f5df0c7d358cd1e6ba874cd70f01f71ad45c"
+    },
+    {
+     "kind": "ConnectionPolicy",
+     "locator": "urn:superyak:fixture:pi:connectionpolicy:da506c8a9c8a9f31aa00eaeef23d49764b9ace97158a1a0a7aa628e6d446b0fb"
+    }
+   ],
+   "name": "Planted pi, corrected",
+   "profiles": [
+    {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    }
+   ],
+   "protocolVersions": [
+    "0.1"
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.descriptor+json",
+  "protocolVersion": "0.1"
+ },
+ "format": "atlas-sourced-publication",
+ "policy": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "9c2635170ad49010153315c3a83a9c9105cac7d52edea9de191f38d0e5344f2a"
+  },
+  "id": "urn:superyak:fixture:pi:connectionpolicy:da506c8a9c8a9f31aa00eaeef23d49764b9ace97158a1a0a7aa628e6d446b0fb",
+  "issuedAt": "2026-11-22T01:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "ConnectionPolicy",
+  "payload": {
+   "rules": []
+  },
+  "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+  "protocolVersion": "0.1"
+ },
+ "snapshot": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "3f8ddb5a77af998579f9c87881b3ef21bfdc2ae0018def0a134140ca86ac01bd"
+  },
+  "id": "urn:superyak:fixture:pi:snapshot:1e451d15778b67349681044c849690be08c264fc9f60121d1884404261027d10",
+  "issuedAt": "2026-11-22T01:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Snapshot",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "lineage": [
+    {
+     "algorithm": "sha-256",
+     "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+    }
+   ],
+   "model": {
+    "items": [
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-copied-a-1-v2"
+       }
+      ],
+      "facets": {},
+      "id": "P-copied-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Copied claim a"
+     }
+    ],
+    "origin": "urn:superyak:fixture:pi:collection",
+    "relations": [],
+    "schema_version": 1,
+    "sources": [
+     {
+      "citation": "",
+      "id": "pi-copied-a-1-v2",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-copied-a-v2",
+       "fn": "source_key/1",
+       "title": "title:copied source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-copied-a-v2"
+      },
+      "title": "Copied source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-copied-a-v2",
+      "year": 2024
+     }
+    ],
+    "title": "Planted store: pi, corrected"
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   }
+  },
+  "payloadMediaType": "application/vnd.lighthouse.snapshot+json",
+  "protocolVersion": "0.1"
+ },
+ "version": 1
+}

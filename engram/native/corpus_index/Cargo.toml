@@ -1,0 +1,19 @@
+[package]
+name = "corpus-index"
+version = "0.1.0"
+edition = "2021"
+description = "A dependency-free BM25 keyword index with a link graph over a frozen Wikipedia corpus, for multi-hop retrieval."
+
+[[bin]]
+name = "corpus-index"
+path = "src/main.rs"
+
+[lib]
+name = "corpus_index"
+path = "src/lib.rs"
+
+# Deliberately no [dependencies]: std only, so it builds with `cargo build --offline`
+# in an environment with no crates.io access.
+
+[profile.release]
+opt-level = 3

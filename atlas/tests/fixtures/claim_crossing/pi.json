@@ -1,0 +1,4162 @@
+{
+ "carried": [],
+ "claims": [
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "00331b8bae03d929f7e3469272074ca6d87ad87b07a367645860eaed16f0d03c"
+   },
+   "id": "urn:superyak:fixture:pi:claim:317a0e7b6037de1c0e606e874b507185b1b8c1544e07d0e68ec77677cbffedb1",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "2a4717a6fa0cf7abf9962b56b7178d22bda3e6f9a9c57b965e6c5a8ecd78115c"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-angle-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "7c83f9727b380490059d2d552b12131f977b71769610edd3954a05b8d1d26383"
+   },
+   "id": "urn:superyak:fixture:pi:claim:ad7d6b3efe3fd8f00d2519748e988b9777e98afd32019e822e2686c5b47db8e0",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "8aca470f6b4c32b4a94455f1000dd3724fd90b903d91f3af6a2d9a71559276dc"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-angle-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "7f379a6adf7263eac53f9f86acf48da2918ed64ad5772962c709dca914f6be5e"
+   },
+   "id": "urn:superyak:fixture:pi:claim:ca622f091b65dc209bf4723a744d4677fe4a5a357177270be1fd69e4c6666f6e",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "6644ee5935d5074e1bbce91e43e1f2df443b8f5fce3c203dc362b985afb0f828"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-arxiv-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "01341214a1cf3db67096251ad171d3e0c42eb1fccd6e09506ea9dc618fe87ef9"
+   },
+   "id": "urn:superyak:fixture:pi:claim:c2ba24b93178a84894f33ee1b84f9731451fe60c53ba85ca12495f3d86ab5d1d",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "bcf1a98cddeb64cbff67bab102a7ccc009f4ad28da1c39480d03b50c74803fe3"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-arxiv-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "dc3a92b4cab7aca1085d7dd522364e28fdf7a5545921b29a078a54916304012d"
+   },
+   "id": "urn:superyak:fixture:pi:claim:3da927c7e960cbf81a4800088ccc2049ac043ae17a12d961b8f628d4927e1d94",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "08ad6e70318fa3de85ea53932f6e4beda4598448e41a06f03429b86157bd81b4"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-bare-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "92ad0c02ca5c30d5f102f7242fbefa40e8a5f5931f0be84eac278c116254b964"
+   },
+   "id": "urn:superyak:fixture:pi:claim:95073cac49b775410ac4fc44d544d5f89bf440bde06368b634e2e2ed38832174",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "64bbc018bd09ea8c16b15d1cce3085ffc00ff968b04a8b1bf2e5b3a108fa1cd6"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-bare-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "3a2cc1c5827c7a57b239abd7e755a3ba5073fc441e6fc348d52dd847a877b517"
+   },
+   "id": "urn:superyak:fixture:pi:claim:119de38c0eaca134e075b0b7d5d3ce3047bd856e1c9c05b590bc05805d35bfe8",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "31d30d23a307291ce91be86f3d45c85e1b6cc2fcf1927123a05179a20af5a540"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-carried-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "ae6178e82008368fdfdae6b09d42b6c398e4135ca38ad727a73a600579d48453"
+   },
+   "id": "urn:superyak:fixture:pi:claim:c1d048d1bf2fef4abcd812acc9fabca0051bd535cef83d783a4c8e0eeaa49b1c",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "4856f8e9c76a7ec7cac23cf63c083f4c9935da14b9928f24fd9bfb52fc75d60a"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-carried-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "dfcdd746be8cb34d78530fa217ad2e9890e9eb6dea51cc7f082cfc076ad053a4"
+   },
+   "id": "urn:superyak:fixture:pi:claim:baacce4d26faaa0980f8f4d57156c50a5977ee313f84bec1cede08c613cc52f4",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "0fb149908bc61e4aa5b7aff286fe113ae6ec768728b535f996d4088e60f295be"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-copied-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "ec9eb794d54a45b3d7b82148539508715ee964d4f6708e01e532287178e326ae"
+   },
+   "id": "urn:superyak:fixture:pi:claim:84bfd833ebc70472b1229081dd4ce4d2834d5f7e298c7469938dd560c72ac8f2",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "b5525e3597d1921a76de1ef2fdb5dcdceb02c9a59a298e9c9d2cf6580665caea"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-copied-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "890f98b8fa1468bf8f6addc91d7512df019c50e462beda1e0fb8a4a06779a362"
+   },
+   "id": "urn:superyak:fixture:pi:claim:8c4a681e1ce5453d243db87147d2d2053c46e46a28cd02c4e5572b186889e978",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "9547f2cc02814571973f91d32c834e9b580e36f21c9328ce0bdebfce3b9858b8"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-drift-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "5e58ad0231f66ba6ece945eba91dd62aee7c08e18284cf39dfa87314e9dede35"
+   },
+   "id": "urn:superyak:fixture:pi:claim:5ae5dd13a0dfc8e1e739e89cd8ebd78bc8abe7f8c88e76b5d4469224210450fe",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "e184446b39d5aead966198de36e3e0448628e276eb9b41be80aaf149aa20397c"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-drift-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "441b5b55efac8ba507cdeb1816ef793292d3c11fb2fb4ccf95595722793453a6"
+   },
+   "id": "urn:superyak:fixture:pi:claim:bceb46992d55b709c929cc4a413f3e53c7908cf4d52e0c29d317418072bda791",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "ebe019f309bb5b14aef073c7759e36775a094c91b2780e5850dd065c0508bdf4"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-empty-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "5ccac2d27307ab958980402df19a1afc98167d72235411e28978158ec319ddc4"
+   },
+   "id": "urn:superyak:fixture:pi:claim:b0ca6d898bde3df91ef00cd17e875c3a1bcc06d36e37668fd845a729b2533802",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "75c83b54eee8fdc55d5015e4f7f94d4233d5d1f059b12d0bad21254b7acc661d"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-empty-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "a2de29a909e37b1987ab380a315bb5a8def9bc5d7778099fa8b6dba91b27a133"
+   },
+   "id": "urn:superyak:fixture:pi:claim:ae69fd344f7ee0925fca372e849d68a0625db0923b0c14ef06b14e4a64ef36df",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "5a00d7903f0b04fc588a9d64a14a6e802ddd593326febbc62a44fe8ab390d6dd"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-forms-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "6240f0431356bda50fa7e5e147eebc82286cb19bca1fc9b06f804fc9b2c3441b"
+   },
+   "id": "urn:superyak:fixture:pi:claim:4b55294347c21c576db030a322dfe078af55b3a46fc4c784cf5e8c06f37c1db4",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "97106fc84693744c1fdc8495a87936514dccd3f50250c05c0b53a1c3172ed251"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-forms-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "9300a314ce7a13d46cac083dc7332e132fd28caefc9ff4aced8d4972db3b4df4"
+   },
+   "id": "urn:superyak:fixture:pi:claim:d29df7830bccdd9822c0e799ed55a720c378f16530692cf343c46e248a8469c3",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "f4e38cf193d1fcca898029c74e6a6054eb34f4a2896f38822568d76697714142"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-half-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "81a29bc9084298087dca45c5725e089b439e910995121cf04c2541d51c00781b"
+   },
+   "id": "urn:superyak:fixture:pi:claim:82127a6718a21b7107ca5adbfa1373dfce70228b944c4481c82cf4d5388738b2",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "6ab78d99adcb6a07f80eee8ac2147bb84c86c42f5edfecfc29402fe5eafbb2a8"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-half-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "5f5fb6c910312837476826997670a3a8b2fed21d5dae9b3397bda5683af8ea86"
+   },
+   "id": "urn:superyak:fixture:pi:claim:cf99010bb05d72b33673197b08345bb23d9c98babf1f4ded460a5b9b7a1e2391",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "941e0560fc78d0fb58ec9b1889a1d37dcf82187a9ed64ba47668d99902d08924"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-http-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "baba6da18203bbcc437e5ef3710d441cb8a00198eda715d42a1d1d796447e8b1"
+   },
+   "id": "urn:superyak:fixture:pi:claim:30f8269001978e67811b3f5585ad2280a0bd3990a42d04e2c5a285085615003e",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "63441051e22913c09fc7bf94dc9749a4c435fb3ef06c5524191fbef57bcf9c75"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-http-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "ad973f9675598fe4a1a95e6792a91f25acaa20a2de30f532e8f65df8ed630a9e"
+   },
+   "id": "urn:superyak:fixture:pi:claim:dc1c63a3b8a59909dcf253545eb4a301be40233c9504860b77e66948daf2426c",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "4d2666f213ea656d9af821e7bba42d20f53540a2bf91f44a48a8043c201622e9"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-indep-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "11fb4998c2940796b0b75b8ff786d837ac7680129547a8a00177ef46189b9cdd"
+   },
+   "id": "urn:superyak:fixture:pi:claim:6b31bd5877cbbf7ec2b6784ebb42963c467e8aff53feb9942bbe0e7f31106190",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "63725ebc7a44673dc20037244c0c32e2640e10213d9f24ef5a6b85253d5f750d"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-indep-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "6ec7934115fb7946ec96ed02db1cae571bd03bf724d9135f6fc70037415f1412"
+   },
+   "id": "urn:superyak:fixture:pi:claim:97cad8e27d9a9035c11c2f6af2415915c133a9061314ebf9dd2a0e381340d833",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "9ff0628446cfc733e7156f6030ee28ba5253203d96ce240b70e54f812377b005"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-lean-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "b7a7e80b9e7befa0e1b01256a0e7001d525d921bc237cc09b2b652f7c687d0ff"
+   },
+   "id": "urn:superyak:fixture:pi:claim:0eb8d08beb8100337b84558334e9affb45b2fe373e82624c837631ed69e3547a",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "08d5a159a784283e96daab391610c34a71cc62e1b48a224aa2b1845752ccfe3f"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-lean-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "2fe220f518f5dd69409408c6d6b22e3935f690d317cc12eebea252c4d8e717c7"
+   },
+   "id": "urn:superyak:fixture:pi:claim:e4d6926750b49fb9074ae25392ca76e71b33d119f1f03eeead8b87fbc2633c73",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "48a75c59d4d811bc56f9f2969377a5e2ded2f52bcab9e5017d37b6e18e6cbb1a"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-lone-x-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "5b5dee88b03c9fd3b4a077eada6a585451ccb58db6cecb38e979f19d973388ba"
+   },
+   "id": "urn:superyak:fixture:pi:claim:e6dbb0ff0c7449e80d65f957fa1c8636df42a83e4c2308c8787236c02f56e891",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "cac9291f396053cfe4d4c60ccac301dec638194fa5999b90c43aed20ca66fce6"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-lone-x-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "32aa71077154dac9e534b72052f9ce49cee79db8f675993350e155bc222605a8"
+   },
+   "id": "urn:superyak:fixture:pi:claim:84c1c0a05c7112d49e2237150ab09353cfcc4b17e50d33a00f1d305401ffec29",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "b1176d7734cf0370976c9407547a6bb20497bcf3642ff6cfcdc802ae8328e0b5"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-not-doi-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "7bcb5b98841c42392d9872b291454a250de757ca6fb03c3a9954559c0a38c084"
+   },
+   "id": "urn:superyak:fixture:pi:claim:7ba5d26deb2e36788214abe77fc9edb0702280dba57567662b2dc9eb9be8cea6",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "e5e949521518caea8651e02ee48e846efe99a01e19cb67f74bb115fe72f38bdf"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-not-doi-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "4019d42dbd027587f3415591001423b75b60576f4c7cd6096c9c4f62305692c8"
+   },
+   "id": "urn:superyak:fixture:pi:claim:c76d11fcac3a93da68810f3963246adc251273ac75d3b719c556fc04aa59c66f",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "3cb13d92436b8c4215af6bfbfc35041efb8522b6c0f7fb7a11470ee265fd9c85"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-one-doi-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "6a3bc89d9c401205282e1cd8a3b9b16b5d1eedf60c1c18975b9697a46f7650f8"
+   },
+   "id": "urn:superyak:fixture:pi:claim:148d194ce09db31b0a159a9338a18737384b04ebca0560d222da5e90175bec39",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "d082e24c1d001a3a6759f59e1b96f6d4c766f337bca3dbec17e3e5223de96ca0"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-one-doi-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "9a3382bdc936aea8139d5eab3fe2bf85444f1ca040df0e0022153225451587d8"
+   },
+   "id": "urn:superyak:fixture:pi:claim:1e320050a180ec1a164f7e1f2283324a6fae5d7e61d40ea75c15cddb964015a7",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "2084e2999a7da31779281dfe160a9a8eb7dc0e2d2a37751b84a12ddeecf584fb"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-overlap-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "794545de0f0318d595c6dd1ca6b2873cd3e3993a3cde61e581f69796e4f62a22"
+   },
+   "id": "urn:superyak:fixture:pi:claim:67d43f9601b5947ef2708905877cc84f88268f5f157f2233bb5d3cd03128ce40",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "14dd426fdbcc92538b62926ad2550f498dae7064fc4ca2482f399cf1cf235537"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-overlap-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "43367d0c1f8d5a2abf2839fdf21b15d0a3365b9d891b98efdac2164cfd9a4626"
+   },
+   "id": "urn:superyak:fixture:pi:claim:de7bb9614209e754849236e283aae8d1f65949880a556b8032e93ccc34a02b6e",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "fb6278ad448b148ddf897e1035c80b2879731ef00dd5070383c2a59be2231e2a"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-pct-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "e90a24b4b251e5ae73e915b5277daba7989c4955a8b823e0c96b24be98c7adde"
+   },
+   "id": "urn:superyak:fixture:pi:claim:8d930e5ea320808b65591552fc34c189bab69d9a87126de080f904a2a65df9ba",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "75bd5f9ef40d04e7a005d2d675291d9c461efc283da87983b35f87367b6c3496"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-pct-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "b401a87a46465ffbb9404b8ccf3ba7be4c50620af2747a2331b261c3fdf6c90d"
+   },
+   "id": "urn:superyak:fixture:pi:claim:89cf0d3679a9de8ebff09f1ae9d8ff7cc45362ef834c946c38d556b673579361",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "4469b82e62cd4e9751c8d26763f0d95aeed5c014adbf8c4cd91a900f078af795"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-proc-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "debfaeeb903cb4a041accfed322bbf6e5fe2e1290fa6a679f11da7b5500dc8c4"
+   },
+   "id": "urn:superyak:fixture:pi:claim:610a32d9d577c1339eecc0fec94f1e39e1893a0e5fb14878d85678ae06491519",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "c87c6b0ecbecd302d784987d1eb4d16bc57a2e7929e5aa1dd090af9ac91dfe13"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-proc-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "1c71de8164cefcad776acb6c1f5cf6e8a135226d5580af9dccbf4a17652eb58c"
+   },
+   "id": "urn:superyak:fixture:pi:claim:79a2401836bb15a8e5f37154e6d8a353f6fb6000d79a208d6dcba5acae0fac35",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "4687945b5bd184438d165ff8c5b3c3200571185dd2b13b27506e50111f8a7a84"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-pub-doi-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "27493e5249e81cde4c25d5077064b14b51ab466afb006a365c4c41201f112aae"
+   },
+   "id": "urn:superyak:fixture:pi:claim:b1a5d1b417cd64c11c0169cbe57220a25bf3c4fda299d590fdd17acaa00bbada",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "5bc6750f3ef7b2350635507bde7926c608a4e1f1e5e909539296c84879d7ed63"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-pub-doi-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "87ef30540552272349921f8f0357c573b34ca11c9e8222a448cb412d6c98791a"
+   },
+   "id": "urn:superyak:fixture:pi:claim:d07f6e306497223bb2374a9545ac47d5b3f8f851fdbecb071e85d7e40cc8ccfa",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "f2a5faf918eed6ec6f6a9ebe88f00aed99022ff8825e14ce24746f0b3eef1c5c"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "5f4bc3624e3fcbbe04fd6c8f21dc3cf5e4b4fcb0fc37ed808b32dc2f53849be7"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-shared-x-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "4956845197192ae374f3b00c82322b7c1170e5c37892aa4d15404ed8fdddfbbf"
+   },
+   "id": "urn:superyak:fixture:pi:claim:66b4ebd1842cbd32b33e9f984e996e17b7aea00c27f1152df0ac79d141595bc9",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "ddcab1280a7956e45a42c2120b063323c90adaf497372d6eab001a4b56346125"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "5f01e30d67bf5a7bc67476925d4645f7cf7708e2d6e3a80011bd5512a1a612bf"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-shared-x-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "a41b08c02a0bda2f3fadf57a1038501814a98a885afaa88bc800a9045257a762"
+   },
+   "id": "urn:superyak:fixture:pi:claim:bc9dbd8f612ad5157c54d7b30702949f903f73f567cf7eb4bcfa5cdc3ec759a0",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "bc68c433eefe92271298dbfff4a9d74e93270ce69aa6a796e7bdd8ac83b17a35"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "c482396b6b3e19ce20638b8bea24643347495e4e3f183cb3ebe0e493a617b653"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-sibling-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "b18bca1977c8ea71e8be1c71fa76623c1b4eea4e7d02967a901bde6b90681c0c"
+   },
+   "id": "urn:superyak:fixture:pi:claim:42ff2c91ada3fdd3128ec5aaab2fa5d928f4d0c0620e87e91c4216408ac29a8d",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "c08b8e7c8abc01fb921c3f968c3c7ef9908f6e76178f51a10fba901c640c5768"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "0ec17d30e90401730959f7a2b0a10433b28bc14fe2f258bd7cff4ea3a4befc94"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-sibling-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "04589b71f3b5e68b923ab74b021e2effaf2af8f2da580202d46bfede78c1d9f1"
+   },
+   "id": "urn:superyak:fixture:pi:claim:84f044915ffcb6180996d8243b1f3e54cbcc274421c132e339ab8bae39166592",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "cf2f79032801b4a58da68db786c0f2ffce2b10c540085a192742f53f8431046a"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-sici-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "009813912eae846a4cf897023c8e92a18d52a357c23f07c3856a67cb06c55544"
+   },
+   "id": "urn:superyak:fixture:pi:claim:79069e52f4f55a26e04604384f34afef7ca294423a303d32a7ed727f1b1c924f",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "adc014a890ad37cc3720c4e53c6537f8e894c8ba8b70d3ddd5c493d9315d79b1"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-sici-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "3bf7b3141b3ed457def30c42eabf7fc944bdee51c33cf6c5fefac2a3927a662f"
+   },
+   "id": "urn:superyak:fixture:pi:claim:c2c539c25f9508ed106ddfebdab9debc748681a1174d1176b620ff208d372771",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "dd0a21ed2d78ecc14998228e471f50243d41db711038a095050cba2ee7aecf84"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "32cc96f7df24fb0f2eac0e9ca9b2954c8115ef41198bd0a939714581bb5beb86"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-twice-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "109b3ee55f0485d95d940bd84463062de5357ee24e86af9e3a5e2f66f26d6638"
+   },
+   "id": "urn:superyak:fixture:pi:claim:77f6fcc8218949083e544993c5914a9815fa9b98915cd5fdcef3102019e17de8",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [
+     {
+      "algorithm": "sha-256",
+      "value": "86da603c896098467bbc4992dcd52c911915849bae899093897067fe4aa0558c"
+     }
+    ],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "61fac13e27205a16f1b9318c7204f84ba3b082a637874f9d054925d9915eaf75"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-twice-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "421177202940909d8de781c33cd59051c3c4616d48a76cd83d644b807bd1d089"
+   },
+   "id": "urn:superyak:fixture:pi:claim:cab419a4e9a82d20513620cca7d3aeba4ee0764f4e41a5ef5842cb5b7f858c77",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "121e33c03b60595401077714e39ebdf1d452f1e6886dca0930aa96a4f6ae9d4e"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-two-dois-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "24104deb428c59fa112807c13dae3dd653f66b97042413170109fdea66d89c67"
+   },
+   "id": "urn:superyak:fixture:pi:claim:9658b08179164a4f9d11278ecac1cd8ffc52e04a7cbd7548193616419e14d88d",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "99c616263aa15df192efcc2689d40dae3ff6f4aaf897fba6917c397dce09cdf2"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-two-dois-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "63accf577cb5384cdb0c8a53afff96cb7de2c16097a87a70ff38f1d54e56ba65"
+   },
+   "id": "urn:superyak:fixture:pi:claim:77ad3733892366cd820c04fd9652249198dd4c32e8f61e1d2089fd94d2940aea",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "6fe602db49f647c81ea9036a3ca7a50809762e7422d0f2e5cf60a36a50df8c43"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-www-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "df58898afb6b109023edbc53de352de61130b6823ec4af435f7f32d30684bb0a"
+   },
+   "id": "urn:superyak:fixture:pi:claim:159d8db4e6cec7fe664c9863fa21d6b1beb6d5c8d9323fc4293e760e327fd792",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:pi",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:pi:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "1acbe5f2a4ae13fdb5ed47ca5cf5a9f9808a43c00da843315a4927a37d196d30"
+     },
+     "origin": "urn:superyak:fixture:pi:collection",
+     "record_id": "P-www-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  }
+ ],
+ "descriptor": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "acb314b425c3b2de85b55ba2c8e00fb26763d54003ccf682b9f2e4825fefb06e"
+  },
+  "id": "urn:superyak:fixture:pi:lighthousedescriptor:7ba17e27d4f610aacc1080d4913b7d5051a1c2eda6af4a8114a2dcf131cbc66f",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "LighthouseDescriptor",
+  "payload": {
+   "actions": [
+    "read",
+    "link_overlap",
+    "retain",
+    "reshare"
+   ],
+   "artifactEndpoints": [
+    {
+     "kind": "Snapshot",
+     "locator": "urn:superyak:fixture:pi:snapshot:d8eb4ea826693e6dd171a572ea1a0dd52279e19f4f45a4f5e1602361dd1146b3"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:317a0e7b6037de1c0e606e874b507185b1b8c1544e07d0e68ec77677cbffedb1"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:ad7d6b3efe3fd8f00d2519748e988b9777e98afd32019e822e2686c5b47db8e0"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:ca622f091b65dc209bf4723a744d4677fe4a5a357177270be1fd69e4c6666f6e"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:c2ba24b93178a84894f33ee1b84f9731451fe60c53ba85ca12495f3d86ab5d1d"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:3da927c7e960cbf81a4800088ccc2049ac043ae17a12d961b8f628d4927e1d94"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:95073cac49b775410ac4fc44d544d5f89bf440bde06368b634e2e2ed38832174"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:119de38c0eaca134e075b0b7d5d3ce3047bd856e1c9c05b590bc05805d35bfe8"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:c1d048d1bf2fef4abcd812acc9fabca0051bd535cef83d783a4c8e0eeaa49b1c"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:baacce4d26faaa0980f8f4d57156c50a5977ee313f84bec1cede08c613cc52f4"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:84bfd833ebc70472b1229081dd4ce4d2834d5f7e298c7469938dd560c72ac8f2"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:8c4a681e1ce5453d243db87147d2d2053c46e46a28cd02c4e5572b186889e978"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:5ae5dd13a0dfc8e1e739e89cd8ebd78bc8abe7f8c88e76b5d4469224210450fe"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:bceb46992d55b709c929cc4a413f3e53c7908cf4d52e0c29d317418072bda791"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:b0ca6d898bde3df91ef00cd17e875c3a1bcc06d36e37668fd845a729b2533802"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:ae69fd344f7ee0925fca372e849d68a0625db0923b0c14ef06b14e4a64ef36df"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:4b55294347c21c576db030a322dfe078af55b3a46fc4c784cf5e8c06f37c1db4"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:d29df7830bccdd9822c0e799ed55a720c378f16530692cf343c46e248a8469c3"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:82127a6718a21b7107ca5adbfa1373dfce70228b944c4481c82cf4d5388738b2"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:cf99010bb05d72b33673197b08345bb23d9c98babf1f4ded460a5b9b7a1e2391"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:30f8269001978e67811b3f5585ad2280a0bd3990a42d04e2c5a285085615003e"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:dc1c63a3b8a59909dcf253545eb4a301be40233c9504860b77e66948daf2426c"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:6b31bd5877cbbf7ec2b6784ebb42963c467e8aff53feb9942bbe0e7f31106190"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:97cad8e27d9a9035c11c2f6af2415915c133a9061314ebf9dd2a0e381340d833"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:0eb8d08beb8100337b84558334e9affb45b2fe373e82624c837631ed69e3547a"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:e4d6926750b49fb9074ae25392ca76e71b33d119f1f03eeead8b87fbc2633c73"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:e6dbb0ff0c7449e80d65f957fa1c8636df42a83e4c2308c8787236c02f56e891"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:84c1c0a05c7112d49e2237150ab09353cfcc4b17e50d33a00f1d305401ffec29"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:7ba5d26deb2e36788214abe77fc9edb0702280dba57567662b2dc9eb9be8cea6"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:c76d11fcac3a93da68810f3963246adc251273ac75d3b719c556fc04aa59c66f"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:148d194ce09db31b0a159a9338a18737384b04ebca0560d222da5e90175bec39"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:1e320050a180ec1a164f7e1f2283324a6fae5d7e61d40ea75c15cddb964015a7"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:67d43f9601b5947ef2708905877cc84f88268f5f157f2233bb5d3cd03128ce40"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:de7bb9614209e754849236e283aae8d1f65949880a556b8032e93ccc34a02b6e"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:8d930e5ea320808b65591552fc34c189bab69d9a87126de080f904a2a65df9ba"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:89cf0d3679a9de8ebff09f1ae9d8ff7cc45362ef834c946c38d556b673579361"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:610a32d9d577c1339eecc0fec94f1e39e1893a0e5fb14878d85678ae06491519"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:79a2401836bb15a8e5f37154e6d8a353f6fb6000d79a208d6dcba5acae0fac35"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:b1a5d1b417cd64c11c0169cbe57220a25bf3c4fda299d590fdd17acaa00bbada"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:d07f6e306497223bb2374a9545ac47d5b3f8f851fdbecb071e85d7e40cc8ccfa"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:66b4ebd1842cbd32b33e9f984e996e17b7aea00c27f1152df0ac79d141595bc9"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:bc9dbd8f612ad5157c54d7b30702949f903f73f567cf7eb4bcfa5cdc3ec759a0"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:42ff2c91ada3fdd3128ec5aaab2fa5d928f4d0c0620e87e91c4216408ac29a8d"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:84f044915ffcb6180996d8243b1f3e54cbcc274421c132e339ab8bae39166592"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:79069e52f4f55a26e04604384f34afef7ca294423a303d32a7ed727f1b1c924f"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:c2c539c25f9508ed106ddfebdab9debc748681a1174d1176b620ff208d372771"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:77f6fcc8218949083e544993c5914a9815fa9b98915cd5fdcef3102019e17de8"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:cab419a4e9a82d20513620cca7d3aeba4ee0764f4e41a5ef5842cb5b7f858c77"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:9658b08179164a4f9d11278ecac1cd8ffc52e04a7cbd7548193616419e14d88d"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:77ad3733892366cd820c04fd9652249198dd4c32e8f61e1d2089fd94d2940aea"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:pi:claim:159d8db4e6cec7fe664c9863fa21d6b1beb6d5c8d9323fc4293e760e327fd792"
+    },
+    {
+     "kind": "ConnectionPolicy",
+     "locator": "urn:superyak:fixture:pi:connectionpolicy:e4204b2ebf002ea6804f5f65d5961850888882dcf8867c321a340fa81604345f"
+    }
+   ],
+   "name": "Planted pi",
+   "profiles": [
+    {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    }
+   ],
+   "protocolVersions": [
+    "0.1"
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.descriptor+json",
+  "protocolVersion": "0.1"
+ },
+ "format": "atlas-sourced-publication",
+ "policy": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "ec7e125bc3fbeba557db0c9fb41465f89d9dd4ff6afeb28235c2d4f0930c57ef"
+  },
+  "id": "urn:superyak:fixture:pi:connectionpolicy:e4204b2ebf002ea6804f5f65d5961850888882dcf8867c321a340fa81604345f",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "ConnectionPolicy",
+  "payload": {
+   "rules": [
+    {
+     "actions": [
+      "read",
+      "link_overlap"
+     ],
+     "audiences": [
+      "self"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:tardis:context",
+      "urn:superyak:fixture:third:context",
+      "urn:superyak:fixture:fourth:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "pi-reads",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:tardis",
+      "urn:superyak:fixture:third",
+      "urn:superyak:fixture:fourth"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    },
+    {
+     "actions": [
+      "retain"
+     ],
+     "audiences": [
+      "self"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:pi:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "pi-lets-tardis-retain",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:tardis"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+  "protocolVersion": "0.1"
+ },
+ "snapshot": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"
+  },
+  "id": "urn:superyak:fixture:pi:snapshot:d8eb4ea826693e6dd171a572ea1a0dd52279e19f4f45a4f5e1602361dd1146b3",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:pi",
+  "kind": "Snapshot",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:pi:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "lineage": [],
+   "model": {
+    "items": [
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-angle-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-angle-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Angle claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-angle-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-angle-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Angle claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-arxiv-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-arxiv-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Arxiv claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-arxiv-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-arxiv-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Arxiv claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [],
+      "facets": {},
+      "id": "P-bare-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "proposed",
+      "summary": "A fictional result.",
+      "title": "Bare claim a"
+     },
+     {
+      "context": {},
+      "evidence": [],
+      "facets": {},
+      "id": "P-bare-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "proposed",
+      "summary": "A fictional result.",
+      "title": "Bare claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-carried-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-carried-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Carried claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-carried-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-carried-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Carried claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-copied-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-copied-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Copied claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-copied-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-copied-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Copied claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-drift-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-drift-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Drift claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-drift-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-drift-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Drift claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [],
+      "facets": {},
+      "id": "P-empty-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "proposed",
+      "summary": "A fictional result.",
+      "title": "Empty claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [],
+      "facets": {},
+      "id": "P-empty-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "proposed",
+      "summary": "A fictional result.",
+      "title": "Empty claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-forms-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-forms-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Forms claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-forms-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-forms-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Forms claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-half-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-half-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Half claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-half-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-half-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Half claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-http-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-http-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Http claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-http-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-http-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Http claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-indep-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-indep-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Indep claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-indep-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-indep-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Indep claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-lean-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-lean-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Lean claim A a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-lean-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-lean-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Lean claim A b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-lone-x-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-lone-x-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Lone-x claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-lone-x-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-lone-x-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Lone-x claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-not-doi-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-not-doi-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Not-DOI claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-not-doi-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-not-doi-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Not-DOI claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-one-doi-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-one-doi-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "One-DOI claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-one-doi-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-one-doi-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "One-DOI claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-overlap-a-1"
+       },
+       {
+        "locator": "p2",
+        "note": "",
+        "source_id": "pi-overlap-a-2"
+       }
+      ],
+      "facets": {},
+      "id": "P-overlap-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Overlap claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-overlap-b-1"
+       },
+       {
+        "locator": "p2",
+        "note": "",
+        "source_id": "pi-overlap-b-2"
+       }
+      ],
+      "facets": {},
+      "id": "P-overlap-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Overlap claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-pct-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-pct-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Percent claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-pct-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-pct-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Percent claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-proc-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-proc-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Proc claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-proc-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-proc-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Proc claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-pub-doi-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-pub-doi-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Pub-DOI claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-pub-doi-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-pub-doi-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Pub-DOI claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-shared-x-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-shared-x-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Shared-x claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-shared-x-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-shared-x-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Shared-x claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-sibling-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-sibling-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sibling claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-sibling-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-sibling-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sibling claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-sici-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-sici-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sici claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-sici-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-sici-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sici claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-twice-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-twice-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Twice claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-twice-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-twice-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Twice claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-two-dois-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-two-dois-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Two-DOIs claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-two-dois-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-two-dois-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Two-DOIs claim P b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-www-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-www-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Www claim P a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "pi-www-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "P-www-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Www claim P b"
+     }
+    ],
+    "origin": "urn:superyak:fixture:pi:collection",
+    "relations": [],
+    "schema_version": 1,
+    "sources": [
+     {
+      "citation": "",
+      "id": "pi-angle-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-angle-a",
+       "fn": "source_key/1",
+       "title": "title:angle source p a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-angle-a"
+      },
+      "title": "Angle source P a",
+      "url": "https://doi.org/10.5555/superyak-fixture-angle-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-angle-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-angle-b(2026)1:2<3::sy>4.0.co;2-b",
+       "fn": "source_key/1",
+       "title": "title:angle source p b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-angle-b(2026)1:2%3C3::sy%3E4.0.co;2-b"
+      },
+      "title": "Angle source P b",
+      "url": "https://doi.org/10.5555/superyak-fixture-angle-b(2026)1:2%3C3::sy%3E4.0.co;2-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-arxiv-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:preprint and journal a:2023",
+       "url": "url:https://arxiv.org/abs/2601.00001"
+      },
+      "title": "Preprint and journal a",
+      "url": "https://arxiv.org/abs/2601.00001",
+      "year": 2023
+     },
+     {
+      "citation": "",
+      "id": "pi-arxiv-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:preprint and journal b:2023",
+       "url": "url:https://arxiv.org/abs/2601.00002"
+      },
+      "title": "Preprint and journal b",
+      "url": "https://arxiv.org/abs/2601.00002",
+      "year": 2023
+     },
+     {
+      "citation": "",
+      "id": "pi-carried-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:carried source a:2024",
+       "url": "url:https://journal.example/carried/a/1"
+      },
+      "title": "Carried source a",
+      "url": "https://journal.example/carried/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-carried-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:carried source b:2024",
+       "url": "url:https://journal.example/carried/b/1"
+      },
+      "title": "Carried source b",
+      "url": "https://journal.example/carried/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-copied-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-copied-a",
+       "fn": "source_key/1",
+       "title": "title:copied source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-copied-a"
+      },
+      "title": "Copied source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-copied-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-copied-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-copied-b",
+       "fn": "source_key/1",
+       "title": "title:copied source b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-copied-b"
+      },
+      "title": "Copied source b",
+      "url": "https://doi.org/10.5555/superyak-fixture-copied-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-drift-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-drift-a",
+       "fn": "source_key/1",
+       "title": "title:a study of drift part a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-drift-a"
+      },
+      "title": "A Study of Drift, Part a.",
+      "url": "https://doi.org/10.5555/superyak-fixture-drift-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-drift-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-drift-b",
+       "fn": "source_key/1",
+       "title": "title:a study of drift part b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-drift-b"
+      },
+      "title": "A Study of Drift, Part b.",
+      "url": "https://doi.org/10.5555/superyak-fixture-drift-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-forms-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-forms-a",
+       "fn": "source_key/1",
+       "title": "title:forms source p a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-forms-a"
+      },
+      "title": "Forms source P a",
+      "url": "https://doi.org/10.5555/superyak-fixture-forms-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-forms-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-forms-b",
+       "fn": "source_key/1",
+       "title": "title:forms source p b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-forms-b"
+      },
+      "title": "Forms source P b",
+      "url": "https://doi.org/10.5555/superyak-fixture-forms-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-half-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:half source a:2024",
+       "url": "url:https://journal.example/half/a/1"
+      },
+      "title": "Half source a",
+      "url": "https://journal.example/half/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-half-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:half source b:2024",
+       "url": "url:https://journal.example/half/b/1"
+      },
+      "title": "Half source b",
+      "url": "https://journal.example/half/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-http-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:http source p a:2024",
+       "url": "url:https://journal.example/http/a/1"
+      },
+      "title": "Http source P a",
+      "url": "http://journal.example/http/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-http-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:http source p b:2024",
+       "url": "url:https://journal.example/http/b/1"
+      },
+      "title": "Http source P b",
+      "url": "http://journal.example/http/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-indep-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-indep-a-p",
+       "fn": "source_key/1",
+       "title": "title:indep source p a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-indep-a-p"
+      },
+      "title": "Indep source P a",
+      "url": "https://doi.org/10.5555/superyak-fixture-indep-a-p",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-indep-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:indep source p b:2024",
+       "url": "url:https://journal.example/indep-p/b/1"
+      },
+      "title": "Indep source P b",
+      "url": "https://journal.example/indep-p/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-lean-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-lean-a-a",
+       "fn": "source_key/1",
+       "title": "title:lean source a a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-lean-a-a"
+      },
+      "title": "Lean source A a",
+      "url": "https://doi.org/10.5555/superyak-fixture-lean-a-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-lean-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-lean-b-a",
+       "fn": "source_key/1",
+       "title": "title:lean source a b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-lean-b-a"
+      },
+      "title": "Lean source A b",
+      "url": "https://doi.org/10.5555/superyak-fixture-lean-b-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-lone-x-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:lone x source p a:2024",
+       "url": "url:https://journal.example/lone-x-p/a/1"
+      },
+      "title": "Lone-x source P a",
+      "url": "https://journal.example/lone-x-p/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-lone-x-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:lone x source p b:2024",
+       "url": "url:https://journal.example/lone-x-p/b/1"
+      },
+      "title": "Lone-x source P b",
+      "url": "https://journal.example/lone-x-p/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-not-doi-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:not doi page p a:2024",
+       "url": "url:https://doi.org/help"
+      },
+      "title": "Not-DOI page P a",
+      "url": "https://doi.org/help",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-not-doi-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:not doi page p b:2024",
+       "url": "url:https://doi.org/10.5555"
+      },
+      "title": "Not-DOI page P b",
+      "url": "https://doi.org/10.5555",
+      "year": 2024
+     },
+     {
+      "citation": "doi:10.5555/superyak-fixture-one-doi-a",
+      "id": "pi-one-doi-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-one-doi-a",
+       "fn": "source_key/1",
+       "title": "title:one doi source the sequel a:2024",
+       "url": "url:https://journal.example/one-doi/a/1"
+      },
+      "title": "One-DOI source, the sequel a",
+      "url": "https://journal.example/one-doi/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "doi:10.5555/superyak-fixture-one-doi-b",
+      "id": "pi-one-doi-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-one-doi-b",
+       "fn": "source_key/1",
+       "title": "title:one doi source the sequel b:2024",
+       "url": "url:https://journal.example/one-doi/b/1"
+      },
+      "title": "One-DOI source, the sequel b",
+      "url": "https://journal.example/one-doi/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-overlap-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-overlap-a",
+       "fn": "source_key/1",
+       "title": "title:overlap shared a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-overlap-a"
+      },
+      "title": "Overlap shared a",
+      "url": "https://doi.org/10.5555/superyak-fixture-overlap-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-overlap-a-2",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:overlap own p a:2024",
+       "url": "url:https://journal.example/overlap-p/a/2"
+      },
+      "title": "Overlap own P a",
+      "url": "https://journal.example/overlap-p/a/2",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-overlap-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-overlap-b",
+       "fn": "source_key/1",
+       "title": "title:overlap shared b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-overlap-b"
+      },
+      "title": "Overlap shared b",
+      "url": "https://doi.org/10.5555/superyak-fixture-overlap-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-overlap-b-2",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:overlap own p b:2024",
+       "url": "url:https://journal.example/overlap-p/b/2"
+      },
+      "title": "Overlap own P b",
+      "url": "https://journal.example/overlap-p/b/2",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-pct-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-pct-a(2026)1:2<3::sy>4.0.co;2-a",
+       "fn": "source_key/1",
+       "title": "title:percent source p a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-pct-a(2026)1:2%3C3::sy%3E4.0.co;2-a"
+      },
+      "title": "Percent source P a",
+      "url": "https://doi.org/10.5555/superyak-fixture-pct-a(2026)1:2%3C3::sy%3E4.0.co;2-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-pct-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-pct-b(2026)1:2<3::sy>4.0.co;2-b",
+       "fn": "source_key/1",
+       "title": "title:percent source p b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-pct-b(2026)1:2%3C3::sy%3E4.0.co;2-b"
+      },
+      "title": "Percent source P b",
+      "url": "https://doi.org/10.5555/superyak-fixture-pct-b(2026)1:2%3C3::sy%3E4.0.co;2-b",
+      "year": 2024
+     },
+     {
+      "citation": "doi:10.5555/superyak-fixture-proc-a-1",
+      "id": "pi-proc-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-proc-a-1",
+       "fn": "source_key/1",
+       "title": "title:proceedings paper one a:2024",
+       "url": "url:https://proc.example/a/vol12.pdf"
+      },
+      "title": "Proceedings paper one a",
+      "url": "https://proc.example/a/vol12.pdf",
+      "year": 2024
+     },
+     {
+      "citation": "doi:10.5555/superyak-fixture-proc-b-1",
+      "id": "pi-proc-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-proc-b-1",
+       "fn": "source_key/1",
+       "title": "title:proceedings paper one b:2024",
+       "url": "url:https://proc.example/b/vol12.pdf"
+      },
+      "title": "Proceedings paper one b",
+      "url": "https://proc.example/b/vol12.pdf",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-pub-doi-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:publisher or doi a:2024",
+       "url": "url:https://journal.example/pub-doi/a/1"
+      },
+      "title": "Publisher or DOI a",
+      "url": "https://journal.example/pub-doi/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-pub-doi-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:publisher or doi b:2024",
+       "url": "url:https://journal.example/pub-doi/b/1"
+      },
+      "title": "Publisher or DOI b",
+      "url": "https://journal.example/pub-doi/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-shared-x-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:shared x source p a:2024",
+       "url": "url:https://journal.example/shared-x-p/a/1"
+      },
+      "title": "Shared-x source P a",
+      "url": "https://journal.example/shared-x-p/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-shared-x-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:shared x source p b:2024",
+       "url": "url:https://journal.example/shared-x-p/b/1"
+      },
+      "title": "Shared-x source P b",
+      "url": "https://journal.example/shared-x-p/b/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-sibling-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sibling-a",
+       "fn": "source_key/1",
+       "title": "title:sibling source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sibling-a"
+      },
+      "title": "Sibling source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-sibling-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-sibling-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sibling-b",
+       "fn": "source_key/1",
+       "title": "title:sibling source b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sibling-b"
+      },
+      "title": "Sibling source b",
+      "url": "https://doi.org/10.5555/superyak-fixture-sibling-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-sici-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sici-a(2026)1:2<693::sy>4.0.co;2-x",
+       "fn": "source_key/1",
+       "title": "title:sici article one a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sici-a(2026)1:2%3C693::sy%3E4.0.co;2-x"
+      },
+      "title": "Sici article one a",
+      "url": "https://doi.org/10.5555/superyak-fixture-sici-a(2026)1:2%3C693::sy%3E4.0.co;2-x",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-sici-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sici-b(2026)1:2<693::sy>4.0.co;2-x",
+       "fn": "source_key/1",
+       "title": "title:sici article one b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sici-b(2026)1:2%3C693::sy%3E4.0.co;2-x"
+      },
+      "title": "Sici article one b",
+      "url": "https://doi.org/10.5555/superyak-fixture-sici-b(2026)1:2%3C693::sy%3E4.0.co;2-x",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-twice-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-twice-a",
+       "fn": "source_key/1",
+       "title": "title:twice source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-twice-a"
+      },
+      "title": "Twice source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-twice-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-twice-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-twice-b",
+       "fn": "source_key/1",
+       "title": "title:twice source b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-twice-b"
+      },
+      "title": "Twice source b",
+      "url": "https://doi.org/10.5555/superyak-fixture-twice-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-two-dois-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-two-dois-a-pre",
+       "fn": "source_key/1",
+       "title": "title:two dois one title a:2023",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-two-dois-a-pre"
+      },
+      "title": "Two DOIs one title a",
+      "url": "https://doi.org/10.5555/superyak-fixture-two-dois-a-pre",
+      "year": 2023
+     },
+     {
+      "citation": "",
+      "id": "pi-two-dois-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-two-dois-b-pre",
+       "fn": "source_key/1",
+       "title": "title:two dois one title b:2023",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-two-dois-b-pre"
+      },
+      "title": "Two DOIs one title b",
+      "url": "https://doi.org/10.5555/superyak-fixture-two-dois-b-pre",
+      "year": 2023
+     },
+     {
+      "citation": "",
+      "id": "pi-www-a-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:www source p a:2024",
+       "url": "url:https://journal.example/www/a/1"
+      },
+      "title": "Www source P a",
+      "url": "https://www.journal.example/www/a/1",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "pi-www-b-1",
+      "keys": {
+       "doi": null,
+       "fn": "source_key/1",
+       "title": "title:www source p b:2024",
+       "url": "url:https://journal.example/www/b/1"
+      },
+      "title": "Www source P b",
+      "url": "https://www.journal.example/www/b/1",
+      "year": 2024
+     }
+    ],
+    "title": "Planted store: pi"
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   }
+  },
+  "payloadMediaType": "application/vnd.lighthouse.snapshot+json",
+  "protocolVersion": "0.1"
+ },
+ "version": 1
+}

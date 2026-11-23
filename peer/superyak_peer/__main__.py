@@ -340,6 +340,51 @@ def admin_account(store, username):
     return row['id']
 
 
+def _ship_id(db, username):
+    row = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (username,)).fetchone()
+    if not row:
+        raise ValueError('Unknown ship on this peer')
+    return row['id']
+
+
+def atlas_command(args, store):
+    """`atlas-send`, `atlas-received` and `atlas-deliveries` (claim-crossing transport T2, T6, T7): trusted-local, run
+    by a ship on its own peer. Every name and word printed is one safe line."""
+    from .atlas_transport import kept_file, kept_name
+    from .ships import safe_line, short_id
+    with store.transaction() as db:  # not reading(): only the reads test_reading_moves names leave the gate
+        ship = _ship_id(db, args.as_ship)
+        if args.command == 'atlas-send':
+            prefix = short_id(args.contact.removeprefix('remote_'))  # a plain prefix: % and _ match only themselves
+            found = [r['id'] for r in db.execute('SELECT id FROM remote_contacts')
+                     if r['id'].removeprefix('remote_').lower().startswith(prefix)]
+            if len(found) != 1:
+                raise ValueError('No contact has that short id' if not found else 'That short id names more than one contact')
+    if args.command == 'atlas-send':
+        queued = store.atlas_send(ship, found[0], args.kind, json.loads(args.file.read_text()))
+        print(f"Queued {args.kind} {queued['id']} ({queued['digest'][:12]}): it goes with the next delivery pass.")
+    elif args.command == 'atlas-deliveries':
+        for row in store.atlas_deliveries(ship, retry=args.retry_key):
+            words = f" ({safe_line(row['last_error'], 120)})" if row['last_error'] else ''
+            print(f"{row['id']}  {row['kind']}  {row['status']}{words}  {safe_line(row['title'] or '-', 60)}")
+    else:
+        held, refused, receiver, paired = store.atlas_received_for(ship)
+        args.out.mkdir(parents=True, exist_ok=True)
+        # the trust root Atlas's received() takes from its caller (Rio Grande's 3): origins paired and listed at export
+        (args.out / 'origins.json').write_text(json.dumps({'paired': paired}, indent=2) + '\n')
+        from .atlas_transport import verify_kept
+        written = 0
+        for row in held:
+            kept = kept_file(row, receiver)
+            verify_kept(kept)  # checked again before it leaves the store (RG2)
+            (args.out / kept_name(row)).write_text(json.dumps(kept, indent=2) + '\n')
+            written += 1
+        print(f'Wrote {written} to {args.out}')
+        for row in refused:
+            print(f"Refused when pulled: {row['action']} {row['event_id']} from {row['origin'][:12]}: "
+                  f"{safe_line(row['words'], 160)}")
+
+
 def federation_here(store):
     """A Federation that never makes an identity: card --endpoint does that, naming its host (SF2)."""
     from .federation import Federation, NO_IDENTITY
@@ -669,6 +714,26 @@ def main(argv=None):
     export_kind.add_argument('--endpoint')
     export_kind.add_argument('--pull', action='store_true')
     export_ship.add_argument('--out', type=Path, required=True)
+    atlas_send = commands.add_parser('atlas-send', help="A ship sends an Atlas publication or notice to a contact "
+                                     "(claim-crossing transport T2)")
+    atlas_send.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_send.add_argument('--as', dest='as_ship', required=True, help='the sending ship, a username on this peer')
+    atlas_send.add_argument('--to', dest='contact', required=True, help="the contact's short id (connections lists them)")
+    atlas_send.add_argument('--kind', choices=['publication', 'notice'], required=True)
+    atlas_send.add_argument('--file', type=Path, required=True, help='the package or notice, as JSON')
+    atlas_got = commands.add_parser('atlas-received', help="Write a ship's received Atlas payloads out, each signature "
+                                    "checked again (transport T6)")
+    atlas_got.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_got.add_argument('--as', dest='as_ship', required=True)
+    atlas_got.add_argument('--out', type=Path, required=True)
+    atlas_check = commands.add_parser('atlas-verify', help="Check a written Atlas file's sender and signature, from the "
+                                      "file alone (transport T6)")
+    atlas_check.add_argument('file', type=Path)
+    atlas_rows = commands.add_parser('atlas-deliveries', help="A ship's own Atlas deliveries, and a retry of one "
+                                     "(transport T7)")
+    atlas_rows.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    atlas_rows.add_argument('--as', dest='as_ship', required=True)
+    atlas_rows.add_argument('--retry', dest='retry_key')
     deliveries = commands.add_parser('deliveries', help="An admin's deliveries, one safe line each (federation pull P10)")
     deliveries.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     deliveries.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
@@ -873,6 +938,7 @@ def main(argv=None):
     serve.add_argument('--public-origin', help="The remote connector's issuer: one of --origin, its public https name. Without it the connector's routes don't exist")
     serve.add_argument('--connector-callback', help="The one redirect the connector accepts (default claude.ai's)")
     args = parser.parse_args(argv)
+    held = []  # descriptors this command holds while it runs (serve's serve.lock), closed when main() returns
     try:
         if args.command == 'bootstrap-super-admin':
             user = Store(args.data_dir).bootstrap_super_admin(args.username, args.name, args.activation_file, renew_activation=args.renew_activation)
@@ -1160,6 +1226,15 @@ def main(argv=None):
             for path, value in zip(paths, (card, assertion)):
                 path.write_text(json.dumps(value, indent=2) + '\n')
             print('\n'.join(map(str, paths)))
+        elif args.command in ('atlas-send', 'atlas-received', 'atlas-deliveries'):
+            atlas_command(args, Store(args.data_dir))
+        elif args.command == 'atlas-verify':
+            from .atlas_transport import verify_kept
+            try:
+                value = verify_kept(json.loads(args.file.read_text()))
+            except (ValueError, OSError) as error:
+                parser.exit(1, f'atlas-verify: {error}\n')
+            print(f"Verified: {value['action']} from {value['origin'][:12]}, event {value['event_id']}")
         elif args.command == 'deliveries':
             store = Store(args.data_dir)
             print(describe_deliveries(federation_here(store).status(admin_account(store, args.as_user))))
@@ -1278,6 +1353,13 @@ def main(argv=None):
             uvicorn.run(create_door(args.data_dir), host=args.host, port=args.port, access_log=False,
                         timeout_graceful_shutdown=SHUTDOWN_GRACE)  # status polls carry ?secret=
         else:
+            # public-route-bound plan, Task 0: a measure's scratch serve counts its store work and writes it when it
+            # stops, by Ctrl-C or SIGTERM. First, so a refused switch has written nothing (--peer-tls, --sync).
+            measure = os.environ.get('SUPERYAK_MEASURE_COUNTS')
+            write_counts = None
+            if measure:
+                from .counting import start_measuring
+                write_counts = start_measuring(args.data_dir, measure)
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
                 ipv4_loopback = loopback and ipaddress.ip_address(args.host).version == 4
@@ -1291,41 +1373,70 @@ def main(argv=None):
                 raise ValueError('--public-origin needs --proxy-headers: behind Funnel every sender would be 127.0.0.1, one shared bucket for the sign-in holds')
             if args.proxy_headers and (not ipv4_loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
                 raise ValueError('Proxy headers require an IPv4 loopback bind, explicit HTTPS origins, and no local demo')
+            # Each refusal that reads only its arguments, then the model config and the port: all before serve.lock, so
+            # a refused serve makes nothing (public-route-bound plan, Task 1)
+            if args.peer_tls and (args.tls_cert or args.tls_key):
+                raise ValueError('Choose generated peer TLS or explicit TLS files')
+            if args.federation_endpoint and not args.peer_tls:
+                raise ValueError('Federation serving requires --peer-tls to match its exported certificate')
+            if not loopback and not (args.peer_tls or (args.tls_cert and args.tls_key)):
+                raise ValueError('Remote binds require TLS certificate and key')
+            if bool(args.tls_cert) != bool(args.tls_key):
+                raise ValueError('TLS requires both certificate and key')
+            from .models import load_config
+            model_config = load_config(args.model_config)
+            other = 8081 if args.port == 8080 else 8080
+            refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
+            # Task 1: one serve per data dir, taken before the identity and the store, so a second serve touches nothing
+            from .dispatch import serve_lock
+            held.append(serve_lock(args.data_dir))
             if args.peer_tls:
                 from .identity import PeerIdentity
                 from urllib.parse import urlsplit
-                if args.tls_cert or args.tls_key:
-                    raise ValueError('Choose generated peer TLS or explicit TLS files')
                 host = urlsplit(args.federation_endpoint).hostname if args.federation_endpoint else args.host
                 from .signatures import refuse_a_lost_identity_before_the_store
                 refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before the identity is loaded or made with its hosts
                 identity = PeerIdentity.load_or_create(args.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
                 args.tls_cert, args.tls_key = identity.cert_path, identity.key_path
-            if args.federation_endpoint and not args.peer_tls:
-                raise ValueError('Federation serving requires --peer-tls to match its exported certificate')
             tls = bool(args.tls_cert and args.tls_key)
-            if not loopback and not tls:
-                raise ValueError('Remote binds require TLS certificate and key')
-            if bool(args.tls_cert) != bool(args.tls_key):
-                raise ValueError('TLS requires both certificate and key')
             if args.sync:  # one process syncs a directory: this one, or federate (federation pull plan, dispatch.py)
                 from .dispatch import federation_lock
                 sync_lock = federation_lock(args.data_dir)  # noqa: F841 - held for the life of the server
             from .app import TRUSTED_PROXY, create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
-            from .models import load_config
-            model_config = load_config(args.model_config)
-            other = 8081 if args.port == 8080 else 8080
-            refuse_a_taken_port(args.host, args.port, f'choose another: HOME_PORT={other} with make, or --port {other}')
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=None if args.local_demo else agent_version.load(), imprints_dir=args.imprints_dir,
                              public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
-                        proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
-                        timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            stopping = []  # the signal serve's own handler took, so only that SystemExit writes the counts
+            if write_counts is not None:
+                import signal
+
+                def stopped(signum, frame):
+                    stopping.append(signum)
+                    raise SystemExit(128 + signum)
+                # uvicorn puts this handler back after its graceful shutdown and raises SIGTERM again (0.52.4
+                # server.py:333-340): with the default one the process dies there and the counts are lost
+                previous = signal.signal(signal.SIGTERM, stopped)
+            try:
+                uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
+                            proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False,
+                            timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            except SystemExit:  # SIGTERM, by the handler above; uvicorn's own exits (3, a failed start) write nothing
+                if write_counts is not None and stopping:
+                    write_counts()
+                raise
+            else:  # Ctrl-C: uvicorn.run returns
+                if write_counts is not None:
+                    write_counts()
+            finally:
+                if write_counts is not None:
+                    signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
+    finally:
+        for fd in held:
+            os.close(fd)
 
 if __name__ == '__main__':
     main()

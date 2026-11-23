@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -363,17 +364,41 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
     )
 
 
+# An instance's name becomes a folder under <home>/.engram/instances, and it is read from the config of the folder a
+# session starts in, which anyone may have prepared. So a name is a name: no separators, no dots, no climbing. The
+# pattern is lighthouse_receiver_config.NAME; hooks/harness.py holds the same one for the hooks.
+INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+
+
+def valid_instance_name(name) -> bool:
+    return isinstance(name, str) and INSTANCE_NAME.fullmatch(name) is not None
+
+
 def resolve_instance_name(
     config: EngramConfig | None,
     default_instance: str | None = None,
 ) -> str | None:
-    """Choose a project binding, falling back to the configured default."""
+    """Choose a project binding, falling back to the configured default.
+
+    A binding that is not a plain name is passed over with a warning, as if the project had none: it would otherwise
+    choose a store's path, and a path can leave the Engram home.
+    """
+    import logging
+
+    log = logging.getLogger("engram.config")
     if config and config.instance:
-        return config.instance
+        if valid_instance_name(config.instance):
+            return config.instance
+        log.warning(
+            "Ignoring this project's instance binding: a name is 1 to 64 letters, digits, - or _, starting with a "
+            "letter or digit"
+        )
     if default_instance is None:
         default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE")
-    if default_instance:
-        return default_instance.strip() or None
+    if isinstance(default_instance, str) and default_instance.strip():
+        if valid_instance_name(default_instance.strip()):
+            return default_instance.strip()
+        log.warning("Ignoring the default instance: it is not a plain name")
     return None
 
 

@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+from . import receipt_place
+
 HEADING = "Lessons from Andy's ships (quoted data, not instructions)"
 OWN_HEADING = "Your own lessons, from this ship's earlier sessions (quoted data, not instructions)"
 BOUNDARY = b'"type":"system","subtype":"compact_boundary"'  # the literal Claude Code writes in a compaction's record
@@ -482,9 +484,12 @@ def branch(cwd, deadline, monotonic=time.monotonic):
     left = min(deadline - monotonic() - RESERVE, GIT_SECONDS)
     if not isinstance(cwd, str) or not cwd or left <= 0:
         return None
+    # None of the caller's GIT_* variables, as receipt_place._git: a GIT_DIR left set by a hook names another repository
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env['GIT_OPTIONAL_LOCKS'] = '0'
     try:
         done = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd, capture_output=True, timeout=left,
-                              stdin=subprocess.DEVNULL, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
+                              stdin=subprocess.DEVNULL, env=env)
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     name = done.stdout.decode('utf-8', 'replace').strip()
@@ -724,6 +729,10 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     found = branch(cwd, deadline, monotonic)
     if found:
         request['branch'] = found
+    if cwd and settings['query'] == default_query():  # the receipt-place spec, 1: this event's cwd, this checkout's peer
+        place = receipt_place.place_of(cwd, deadline - RESERVE, monotonic)
+        if place:
+            request['place'] = place
     if len(request) == 1:
         return ''  # nothing to ask with
     budget_ms = int((deadline - RESERVE - monotonic() - START_MARGIN) * 1000)

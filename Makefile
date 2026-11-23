@@ -303,10 +303,14 @@ imprint-read:
 	@test -n "$(PLAN)" || { echo 'Usage: make $@ PLAN=<first 4+ characters of a plan> [START=0 LIMIT=1]'; exit 2; }
 	$(OWNER_ENGRAM) read --plan "$(PLAN)"$(if $(START), --start "$(START)")$(if $(LIMIT), --limit "$(LIMIT)")
 
+# The engram step asks the ledger again before each send (store-imprint revision 9). Its exit 5 means it refused while
+# a request is at the station: the agent's send --refused then withdraws an unfinished one and says what was held.
 imprint-send:
 	@test -n "$(PLAN)" || { echo 'Usage: make $@ PLAN=<first 4+ characters of a plan>'; exit 2; }
-	$(OWNER_ENGRAM) build --plan "$(PLAN)" --if-needed
-	$(OWNER_AGENT) send --plan "$(PLAN)"
+	rc=0; ($(OWNER_ENGRAM) build --plan "$(PLAN)" --if-needed) || rc=$$?; \
+	  if [ $$rc -eq 5 ]; then $(OWNER_AGENT) send --plan "$(PLAN)" --refused; exit $$?; fi; \
+	  [ $$rc -eq 0 ] || exit $$rc; \
+	  $(OWNER_AGENT) send --plan "$(PLAN)"
 
 # What the station says, then each local imprint's receipts checked and entered in the use list. A failing step does not
 # stop the others; the target fails if any did.

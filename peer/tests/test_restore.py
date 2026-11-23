@@ -2537,7 +2537,8 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'retired_peers',  # owner trust: every retirement the replaced file has, its peer unpaired
     'trust_confirmations',  # owner trust: read for the replaced file's paused windows and each ship's trust as it settles
     'trust_cap_refusals',  # owner trust: read to name refusals at the cap since the copy (a compromise sign); kept as is
-    'lessons_addable'}  # lessons room adds: emptied, so an older listing never vouches for what a newer CONFIRM dropped
+    'lessons_addable',  # lessons room adds: emptied, so an older listing never vouches for what a newer CONFIRM dropped
+    'atlas_received'}  # claim-crossing transport R7: what an origin unpaired since the copy delivered is deleted
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
@@ -2552,6 +2553,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
     'crossings',  # ship home and crossing (plan Task 2): the network half of each answered crossing, a record only
+    'atlas_outgoing', 'atlas_refused',  # claim-crossing transport: an outbox row's payload, and a puller's refusal words
     }
 
 
@@ -3336,3 +3338,45 @@ def test_without_a_replaced_file_a_copy_from_before_the_reason_records_the_resto
     assert code == 0, err
     assert grants_in(copy)[live]['revoked_why'] == 'restore'
 
+
+
+def test_step_6_refuses_while_a_serve_holds_its_lock_and_installs_nothing(tmp_path, capsys):
+    """Public-route-bound Task 9: the install runs under `flock -n -E 75` on the data dir's serve.lock, so a serve that
+    step 3 didn't stop (one by hand) makes it refuse, in words, and install nothing."""
+    from superyak_peer.dispatch import serve_lock
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    run_runbook(tmp_path, 3, '')
+    data = tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse'
+    data.mkdir(parents=True, exist_ok=True)
+    held = serve_lock(data)
+    try:
+        out, installed = step_6(tmp_path, copy.parent)
+    finally:
+        os.close(held)
+    assert installed is None and 'NOT installed: serve still runs on this dir' in out and 'INSTALLED' not in out.split(), out
+    out, installed = step_6(tmp_path, copy.parent)  # once it's stopped, the same step installs
+    assert installed is not None and out.split()[-1] == 'INSTALLED', out
+
+
+def test_step_6_installs_under_the_lock_and_never_replaces_it(tmp_path, capsys):
+    """The Task 1 reader's per-inode note: flock holds per file, so an install that made a new serve.lock would let a
+    second serve lock it beside the first. The lock's inode is the same after, and it's free again."""
+    from superyak_peer.dispatch import serve_lock
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    run_runbook(tmp_path, 3, '')
+    data = tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse'
+    data.mkdir(parents=True, exist_ok=True)
+    os.close(serve_lock(data))  # as the last serve left it
+    inode = (data / 'serve.lock').stat().st_ino
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is not None and out.split()[-1] == 'INSTALLED', out
+    assert (data / 'serve.lock').stat().st_ino == inode
+    os.close(serve_lock(data))

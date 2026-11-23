@@ -126,11 +126,17 @@ def built_home(tmp_path, parts=1):
                                                                 'sha256': hashlib.sha256(data).hexdigest(), 'parts': hashes}}
     (local / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True))
     (local / 'request.json').write_text(json.dumps({'imprint_id': IMPRINT_ID}, sort_keys=True))
-    for name in ('objects.json', 'subjects.json'):
+    for name in ('objects.json', 'subjects.json', 'sources.json'):
         (local / name).write_text('')
+    stamp(home)                                     # the send check's, as make imprint-send's engram step writes it
     (home / 'imprints' / 'plans' / f'{PLAN_FILE}.json').write_text(json.dumps({'id': PLAN_FILE, 'imprint_id': IMPRINT_ID}))
     (home / 'station.json').write_text(json.dumps({'station': 'http://station', 'key': 'key'}))
     return home
+
+
+def stamp(home, at=NOW, imprint_id=IMPRINT_ID):
+    """The engram step's `checked.json` (store-imprint revision 9, asked 5), `at` seconds on the fake clock."""
+    (home / 'imprints' / IMPRINT_ID / 'checked.json').write_text(json.dumps({'imprint_id': imprint_id, 'at': at, 'seq': 7}))
 
 
 def sent_home(tmp_path):
@@ -190,6 +196,8 @@ def test_the_first_run_returns_once_the_link_is_printed(tmp_path, monkeypatch):
 
 def test_a_rerun_while_requested_prints_the_link_again(tmp_path):
     station, lines = FakeStation(), []
+    # the fake clock's one poll jumps past the stamp's 300 s: the wait ends with it, still waiting for the yes
+    # (revision 9, asked 7; the code reader's N1)
     assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'waiting-for-you'
     assert IMPRINT_ID[:4] in lines[0] and REQUEST_ID[:4] in lines[0] and 'AB12CD34' in lines[0]
     assert '#imprint?code=AB12CD34' in lines[1] and len(lines) == 2
@@ -276,6 +284,7 @@ def test_the_link_reaches_a_pipe_before_the_send_ends(tmp_path):
     """A session reads the command's stdout through a pipe, where print is block-buffered: each line is flushed."""
     station, home = PipedStation(), built_home(tmp_path)
     (home / 'station.json').write_text(json.dumps({'station': station.url, 'key': 'key'}))
+    stamp(home, at=int((home / 'station.json').stat().st_mtime))   # the real clock: time.time is the fake one here
     env = {k: v for k, v in os.environ.items() if not k.lower().endswith('_proxy')} | {'HOME': str(tmp_path)}
     argv = [sys.executable, str(Path(__file__).resolve().parents[1] / 'run_agent.py'), 'imprint', 'send', '--plan', PLAN,
             '--home', str(home), '--wait', '30']
@@ -578,3 +587,162 @@ def test_a_malformed_manifest_is_a_clean_refusal_and_sends_nothing(tmp_path, man
     with pytest.raises(ImprintRefused, match='manifest'):
         Imprint(home, station.client()).send(PLAN)
     assert not [c for c in station.calls if c.method == 'PUT']
+
+
+# ---- store-imprint revision 9: the send goes on only with the check's stamp, and a refusal reaches the agent ------
+
+@pytest.mark.parametrize('case', ['none', 'stale', 'future', 'another', 'unreadable'])
+def test_no_request_leaves_without_a_fresh_stamp(tmp_path, case):
+    station, home = FakeStation(), built_home(tmp_path)
+    path = home / 'imprints' / IMPRINT_ID / 'checked.json'
+    if case == 'none':
+        path.unlink()
+    elif case == 'unreadable':
+        path.write_text('{')
+    else:
+        stamp(home, at={'stale': NOW - 301, 'future': NOW + 1}.get(case, NOW),
+              imprint_id='0' * 8 + IMPRINT_ID[8:] if case == 'another' else IMPRINT_ID)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).send(PLAN) == 'check-again'
+    assert station.calls == [] and any('make imprint-send again' in line for line in lines)
+
+
+def test_a_stamp_300_s_old_still_sends_the_request(tmp_path):
+    station, home = FakeStation(), built_home(tmp_path)
+    stamp(home, at=NOW - 300)
+    assert Imprint(home, station.client()).send(PLAN) == 'waiting-for-you'
+    assert [c.method for c in station.calls] == ['POST']
+
+
+def test_no_manifest_leaves_on_a_stale_stamp(tmp_path):
+    station, home = FakeStation(status='allowed'), sent_home(tmp_path)
+    stamp(home, at=NOW - 301)
+    assert Imprint(home, station.client()).send(PLAN) == 'check-again'
+    assert station.order() == [] and [c.method for c in station.calls] == ['GET']
+
+
+def test_the_stamp_is_read_again_before_the_first_part(tmp_path, monkeypatch):
+    station, home = FakeStation(status='allowed'), sent_home(tmp_path)
+    stamp(home, at=NOW - 299)
+    clock = [float(NOW)]
+    monkeypatch.setattr(imprint_module.time, 'time', lambda: clock[0])
+    real = station.transport
+
+    def slow(method, url, headers, data):
+        if url.endswith('/manifest'):
+            clock[0] += 5                           # the manifest's PUT takes the stamp past 300 s
+        return real(method, url, headers, data)
+    station.transport = slow
+    assert Imprint(home, station.client()).send(PLAN) == 'check-again'
+    assert station.order() == ['manifest']
+
+
+def test_the_wait_for_the_yes_ends_with_the_stamp(tmp_path, monkeypatch):
+    station, home = FakeStation(status='requested'), sent_home(tmp_path)
+    stamp(home, at=NOW)
+    clock = [float(NOW)]
+    monkeypatch.setattr(imprint_module.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(imprint_module.time, 'sleep', lambda s: clock.__setitem__(0, clock[0] + s))
+    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN, wait=540) == 'waiting-for-you'
+    assert NOW + 300 <= clock[0] < NOW + 300 + imprint_module.POLL_SECONDS + 1
+
+
+def refused_home(tmp_path, count=2, imprint_id=IMPRINT_ID):
+    home = sent_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'refused.json').write_text(json.dumps(
+        {'imprint_id': imprint_id, 'at': NOW, 'count': count}))
+    return home
+
+
+@pytest.mark.parametrize('state, held, said', [('requested', [], 'nothing of the package'),
+                                               ('allowed', [0, 1], '2 of its parts')])
+def test_a_refusal_while_the_upload_is_unfinished_withdraws(tmp_path, state, held, said):
+    station, home = FakeStation(status=state, holds=held), refused_home(tmp_path)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).refused(PLAN) == 'refused'
+    assert f'/api/imprints/{REQUEST_ID}/withdraw' in station.paths() and station.order() == []
+    text = ' '.join(lines)
+    assert IMPRINT_ID[:4] in text and REQUEST_ID[:4] in text and said in text and 'withdrawn' in text
+    assert "don't allow it" in text and '2 memories would now stay home' in text
+
+
+@pytest.mark.parametrize('state', ['received', 'approved'])
+def test_a_refusal_after_the_upload_leaves_withdrawing_to_the_owner(tmp_path, state):
+    station, home = FakeStation(status=state), refused_home(tmp_path)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).refused(PLAN) == 'refused'
+    assert not any(p.endswith('/withdraw') for p in station.paths())
+    assert 'whole package' in ' '.join(lines) and f'make imprint-withdraw ID={IMPRINT_ID[:4]}' in ' '.join(lines)
+
+
+def test_a_refusal_of_an_admitted_imprint_says_withdrawing_is_the_owners(tmp_path):
+    """Admitted, the station holds it as received or approved would: the owner is told, and the run is refused
+    (Serenity's question on 1d0de86a). The local copy goes, as D24 says."""
+    station, home = FakeStation(status='admitted'), refused_home(tmp_path)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).refused(PLAN) == 'refused'
+    local = home / 'imprints' / IMPRINT_ID
+    assert not any(p.endswith('/withdraw') for p in station.paths())
+    assert f'make imprint-withdraw ID={IMPRINT_ID[:4]}' in ' '.join(lines) and 'admitted' in ' '.join(lines)
+    assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()
+
+
+@pytest.mark.parametrize('state, reason, said', [('declined', None, 'declined'), ('deleted', 'withdrawn', 'deleted')])
+def test_a_refusal_of_an_ended_imprint_reports_and_drops_the_copy(tmp_path, state, reason, said):
+    station, home = FakeStation(status=state, reason=reason), refused_home(tmp_path)
+    assert Imprint(home, station.client()).refused(PLAN) == said
+    local = home / 'imprints' / IMPRINT_ID
+    assert not any(p.endswith('/withdraw') for p in station.paths())
+    assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()
+
+
+def test_a_refusal_for_another_imprint_is_not_acted_on(tmp_path):
+    station, home = FakeStation(), refused_home(tmp_path, imprint_id='0' * 8 + IMPRINT_ID[8:])
+    with pytest.raises(imprint_module.ImprintRefused):
+        Imprint(home, station.client()).refused(PLAN)
+    assert station.calls == []
+
+
+def test_check_again_and_refused_exit_codes(tmp_path):
+    home = built_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'checked.json').unlink()
+    done = run_agent(['imprint', 'send', '--plan', PLAN], home)
+    assert done.returncode == 3 and 'STATUS: check-again' in done.stdout
+    from superyak_agent.__main__ import STATUS_CODES
+    assert STATUS_CODES['check-again'] == 3 and STATUS_CODES['refused'] == 1
+
+
+@pytest.mark.parametrize('engram_exit, says, code', [(5, ['agent send --plan abcd --refused'], 0),
+                                                       (2, [], 2), (0, ['agent send --plan abcd'], 0)])
+def test_the_recipe_hands_a_refusal_to_the_agent(engram_exit, says, code):
+    """make imprint-send: the engram step's exit 5 runs `send --refused` instead of `send`; any other failure stops."""
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run(['make', '-s', '-C', str(root), 'imprint-send', 'PLAN=abcd',
+                           f'OWNER_ENGRAM=cd engram && sh -c "exit {engram_exit}" --',
+                           'OWNER_AGENT=test -d agent/superyak_agent && echo agent'],   # the agent runs from the root
+                          capture_output=True, text=True, timeout=60)
+    assert [line for line in done.stdout.splitlines() if line.startswith('agent')] == says
+    assert (done.returncode == 0) == (code == 0), done.stderr
+
+
+
+def test_a_later_run_with_no_stamp_while_requested_ends_at_once(tmp_path, monkeypatch):
+    """No stamp, so nothing can be sent: the run shows the link again and ends with check-again, not a 540 s wait
+    (the code reader's 4)."""
+    station, home = FakeStation(status='requested'), sent_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'checked.json').unlink()
+    def no_wait(seconds):
+        raise AssertionError('a run with no stamp waited for the yes')
+    monkeypatch.setattr(imprint_module.time, 'sleep', no_wait)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).send(PLAN) == 'check-again'
+    assert any('AB12CD34' in line for line in lines)
+
+
+def test_a_finished_imprint_with_no_stamp_is_still_reported(tmp_path):
+    """After D24 no check runs and no stamp is written: the agent reports the station's word (the reader's 5c)."""
+    station, home = FakeStation(status='admitted'), sent_home(tmp_path)
+    local = home / 'imprints' / IMPRINT_ID
+    (local / 'checked.json').unlink()
+    assert Imprint(home, station.client()).send(PLAN) == 'admitted'
+    assert not (local / 'imprint.db').exists() and not (local / 'sources.json').exists()

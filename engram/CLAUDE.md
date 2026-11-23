@@ -146,6 +146,15 @@ Observational, read-only (`Storage.open_read_only`): `python
 lighthouse_sheaf.py --store a=/p/a.db --store b=/p/b.db --semantic a:ID`.
 Spec: docs/superpowers/specs/2026-09-29-lighthouse-sheaf-design.md.
 
+**Sheaf kernel:** `sheaf_kernel.c` (C11, no dependencies) is a cellular sheaf
+on a graph with any restriction maps: coboundary, Laplacian, energy, H^0 and
+H^1, and the nearest global section. The two measures above are that engine
+with identity maps, and both run in it wherever it builds (compiled on first
+use, as the n-category kernel is); the numpy code stays as the fallback and
+as the oracle the kernel is tested against. `ENGRAM_SHEAF_BACKEND=numpy` or
+`native` names one. It refuses values that are not finite and sizes past its
+limits. Spec: docs/superpowers/specs/2026-11-20-sheaf-kernel-design.md.
+
 **Persistence (Layer 4):** Single-linkage filtrations (exact, via MST) give
 each episode a redundancy (nearest-neighbor coverage) and uniqueness
 (survival across merge scales); resonance history adds generativity
@@ -226,6 +235,10 @@ feed fails on `node_name_and_summary`). Separate from identity layers.
 The Kuzu database opens with a bounded buffer pool (`[graph] buffer_pool_mb`,
 default 256) through `knowledge._bounded_kuzu_driver`; graphiti's own driver
 takes Kuzu's default of 80% of system RAM in every server process.
+On a Linux kernel with pages over 4 KB (the Pi 5's are 16 KB), Kuzu 0.11.3 fails every statement ("Releasing physical
+memory associated with a frame failed ... Invalid argument"), so the graph is off there and says why once
+(`knowledge.kuzu_unsupported_reason`); tests that open a real Kuzu database skip with that reason. A 4 KB-page kernel
+turns it on.
 
 **Store identity:** Every store carries `meta.instance_id` and
 `instance_id_origin` (migration 028, assigned by the migration runner inside
@@ -271,8 +284,10 @@ only refuses or narrows: the daemon never serves `group:outside-home`, `share` r
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
 refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and
 two more hold: the `shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate
-G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens
-it. Under `enforce`,
+G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id once the gate is raised,
+and removes every house's mark under a never-raised `gate off`, so `gate off` opens it. A house that carries the
+ledger's id while the gate was never raised reads `closed` (an older or rebuilt copy of the ledger, a first raise cut
+short, or a `gate off` from before 2026-11-19); `engram-permissions gate` says which move fits. Under `enforce`,
 `remember(genome=True)` of delivered content is refused. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
 without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
@@ -289,8 +304,10 @@ taken mid-write without its journal) that tore one row per column. The projectio
 index page. `Ledger.state()` checks it before it serves a State, and every act and append checks the state it builds
 on the same way: a state this process verified (its memo) or a writer marked (`.engram/permissions.verified`, which
 only writers write) is trusted, and any other runs the full check, seconds on the Pi. Not every read checks it: the
-gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do some
-direct reads, such as the imprint filter's (`store_row`, its co-subject and refusal queries). A ledger that fails
+gate's own read (`effective_gate`, which reads `meta` past its index and checks the head) does not, nor do the
+direct reads `Ledger.store_row` and `Ledger.latest_lane_note`, which no production code calls now. The imprint filter
+reads every ledger fact from one State per plan, read and build (`LedgerFacts`), and reads the key and the log's row
+at that State's seq once more before it saves anything (store-copy spec revision 8). A ledger that fails
 reads as unreadable. The recovery is `engram-permissions rebuild --out <dir>`, which replays the log and says whether
 the old tables matched it, then moving the copy into place with every Engram process stopped.
 
@@ -339,6 +356,9 @@ An agent asks through the `permit` tool (a proposal the owner signs, unless a gr
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `lighthouse_sheaf.py` | Cross-store sheaf cohesion — per-topic disagreement between lighthouses, scoped trust, read-only CLI |
+| `sheaf_kernel.c` | The sheaf engine in C11 — general restriction maps, Laplacian, cohomology, and the two measures above |
+| `sheaf_native.py` | The kernel from Python — `Sheaf`, `cohesion`, `glue`, `basis`, `sym_eig`; picks kernel or numpy |
+| `native_build.py` | Builds a C file into this user's own cache with a fixed compiler and environment |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
 | `paths.py` | Layer 5 — path signatures of sessions and semantic journeys, different-route detection (observational) |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |

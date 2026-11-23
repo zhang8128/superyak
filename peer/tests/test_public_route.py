@@ -386,7 +386,9 @@ def test_the_middleware_writes_nothing_for_a_ship_key(env):
 
 @pytest.mark.parametrize('failing', ['ship_key_is_valid', 'session_is_valid'])
 def test_a_failed_lookup_answers_503_never_401(env, monkeypatch, caplog, failing):
-    """Spec 2: the dock client reads 401 as "revoked" and would forget its key, so an internal failure is 503."""
+    """Spec 2: the dock client reads 401 as "revoked" and would forget its key, so an internal failure is 503. A key
+    the live set lacks is looked up in the miss lane, whose "database is locked" is the marked busy 503 (public-route-bound
+    Task 6: nothing was done, so it's safe to ask again); a session's lookup is in no lane and keeps the unmarked one."""
     app, clients, users, clock = env
     ship, key = docked(app.state.store, users[0]['id'])
 
@@ -396,9 +398,14 @@ def test_a_failed_lookup_answers_503_never_401(env, monkeypatch, caplog, failing
     credentials = {'authorization': f'Bearer {key}'} if failing == 'ship_key_is_valid' else {'cookie': f'superyak_session={clients[0].cookies.get("superyak_session")}'}
     with caplog.at_level(logging.WARNING):
         response = public(app, **credentials).get('/api/chats')
-    assert answer(response) == (503, {'error': 'Try again shortly'})
     assert all(response.headers.get(name) == value for name, value in SECURITY.items())
-    assert 'OperationalError' in caplog.text and 'database is locked' not in caplog.text
+    if failing == 'ship_key_is_valid':
+        assert answer(response) == (503, {'error': 'This home is busy; try again shortly'})
+        assert response.headers['x-superyak-busy'] == '1' and response.headers['retry-after'] == '1'
+    else:
+        assert answer(response) == (503, {'error': 'Try again shortly'})
+        assert 'x-superyak-busy' not in response.headers  # a page never asks again after this one
+        assert 'OperationalError' in caplog.text and 'database is locked' not in caplog.text
     assert clients[0].get('/api/chats').status_code == 200  # tailnet requests never look
 
 

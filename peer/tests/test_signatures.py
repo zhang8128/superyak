@@ -1,5 +1,7 @@
 """Station signatures over records (spec A step 3, merge 3a: G1-G6 of 2026-10-15-grants-step3-design.md)."""
 import base64
+import socket
+
 import pytest
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, canonical, make_ship_assertion, verify_record
 from test_instructions import activate, docked, new_layer, ship_client
@@ -426,8 +428,11 @@ def test_a_lost_identity_is_not_replaced_silently(tmp_path, capsys, monkeypatch)
             start()
     served = []
     monkeypatch.setattr(uvicorn, 'run', lambda *args, **kwargs: served.append(args))  # a start that got this far would serve
+    with socket.socket() as probe:  # a free port: on the Pi the live lighthouse holds serve's default, 7435, and serve
+        probe.bind(('127.0.0.1', 0))  # refuses a taken port before G4b's check
+        port = probe.getsockname()[1]
     for argv in (['card', '--data-dir', store.data_dir, '--username', 'andy', '--endpoint', 'https://peer.example:7435'],
-                 ['serve', '--data-dir', store.data_dir, '--peer-tls']):
+                 ['serve', '--data-dir', store.data_dir, '--peer-tls', '--port', port]):
         code, out, err = run_cli(capsys, *argv)
         assert code == 1 and 'identity.json' in err and 'station-new-identity' in err, (argv[0], err)
     assert served == [] and not (store.data_dir / 'identity.json').exists()  # no new key from any of them

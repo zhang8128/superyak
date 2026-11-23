@@ -192,10 +192,16 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    elif [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] || ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a peer.sqlite3 file is already in the data directory; do not go on (read step 6)'
    elif ls -d "$ASIDE"/restored.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a journal is beside restored.sqlite3, so a reconcile did not finish; do not go on (read step 6)'
    elif ! python3 -I -c 'import datetime, json, os, pathlib, sqlite3, sys; db = sqlite3.connect(pathlib.Path(sys.argv[1]).absolute().as_uri() + "?mode=ro", uri=True); row = db.execute("SELECT value FROM system_meta WHERE key = ?", ("restore_reconcile",)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", ("system_meta",)).fetchone() else None; mark = json.loads(row[0]) if row else None; ok = bool(mark) and mark["path"] == os.path.abspath(sys.argv[1]) and mark["at"] >= os.stat(sys.argv[2]).st_mtime; print("step 5 ran " + datetime.datetime.fromtimestamp(mark["at"], datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ") + (", replaced file compared" if mark["replaced"] else ", replaced file NOT compared") if ok else "no step 5 mark"); sys.exit(not ok)' "$ASIDE/restored.sqlite3" "$ASIDE/chosen.sqlite3" 2>/dev/null; then echo "NOT installed: step 5 hasn't run on this copy; do not go on (read step 6)"
-   elif install -m 600 "$ASIDE/restored.sqlite3" ~/.local/share/superyak/lighthouse/peer.sqlite3; then echo INSTALLED
-   else echo 'NOT installed: the install failed; do not go on (read step 6)'
+   else flock -n -E 75 ~/.local/share/superyak/lighthouse/serve.lock install -m 600 "$ASIDE/restored.sqlite3" ~/.local/share/superyak/lighthouse/peer.sqlite3; rc=$?
+     if [ "$rc" -eq 0 ]; then echo INSTALLED
+     elif [ "$rc" -eq 75 ]; then echo 'NOT installed: serve still runs on this dir; stop it as in step 3, then run this step again'
+     else echo 'NOT installed: the install failed; do not go on (read step 6)'
+     fi
    fi
    ```
+   The install runs holding the data directory's `serve.lock`, so a serve that step 3 didn't stop (one started by
+   hand) refuses to start under it, and while that serve runs the install refuses. It writes only `peer.sqlite3`,
+   never the directory or `serve.lock` itself, since the lock holds per file and a new one would let a second serve in.
    Go on only when it prints `INSTALLED`. If it prints `NOT installed`, do not go on, and read which case you are in:
    - **Only `peer.sqlite3-…` sidecars are in the data directory, no `peer.sqlite3`:** step 4 (or 10.2, in a rollback)
      was cut short while it moved the set; the stray case moves a stray's `peer.sqlite3` last, so it never leaves
@@ -226,6 +232,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
      the reconcile exits 0, then run step 6 again. Nothing was installed.
    - **A journal is beside `restored.sqlite3`:** a reconcile was killed. Run step 5 again (its first line keeps the
      staged copy, and the reconcile rolls the killed run back), and the `UNPAIR=` run too if you made one; then step 6.
+   - **Serve still runs on this dir:** something started the lighthouse, or a serve by hand, after step 3. Stop it as
+     in step 3 (`fuser -v` as in step 4 shows a process holding the data directory), then run step 6 again. Nothing was
+     installed.
    - **The install failed:** its error says why. `$ASIDE/restored.sqlite3` must exist: set `ASIDE` again as at the top
      if it is not set, and run step 5 if it hasn't made the file. Then run step 6 again; if the failed install left a
      partial file in the data directory, step 6 sends you to the stray case.

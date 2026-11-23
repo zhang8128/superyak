@@ -31,6 +31,51 @@ except ImportError:
         return value if isinstance(value, str) and re.fullmatch(r"^codex:[0-9]+$", value) else None
 
 
+_INSTANCE_NAME = None
+
+
+def instance_name(*candidates):
+    """The first candidate that is a plain instance name, or None. A hook reads the name from the config of the
+    folder the session starts in and from the environment; either could hold a path, and a path can leave the Engram
+    home. The pattern is config.INSTANCE_NAME."""
+    global _INSTANCE_NAME
+    if _INSTANCE_NAME is None:
+        import re
+        _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+    for candidate in candidates:
+        if isinstance(candidate, str) and _INSTANCE_NAME.fullmatch(candidate):
+            return candidate
+    return None
+
+
+PASSED_OVER = ("this folder's Engram config names an instance that is not a plain name (1 to 64 letters, digits, - "
+               "or _), so it was passed over")
+
+
+def default_instance():
+    """ENGRAM_DEFAULT_INSTANCE when it is a plain name, with the spaces around it removed as the server removes them.
+    One that is set and is not a plain name is passed over, and stderr says so."""
+    raw = (os.environ.get("ENGRAM_DEFAULT_INSTANCE") or "").strip()
+    name = instance_name(raw)
+    if raw and name is None:
+        print("# engram: ENGRAM_DEFAULT_INSTANCE is not a plain name, so it was passed over", file=sys.stderr)
+    return name
+
+
+def binding(project_value, default):
+    """The instance a hook uses: the project's binding when it is a plain name, else ``default``. With it, a sentence
+    when the project's binding was passed over, else None, and stderr gets that sentence too. It never repeats what
+    the folder wrote. A session that quietly used another store than its folder asked for would keep doing so, so
+    the hooks say it (the fix's reader, finding 1)."""
+    name = instance_name(project_value)
+    if name is not None:
+        return name, None
+    if not project_value:
+        return default, None
+    print(f"# engram: {PASSED_OVER}", file=sys.stderr)
+    return default, PASSED_OVER
+
+
 def read_context() -> dict:
     """Parse harness selection + hook payload into one dict.
 

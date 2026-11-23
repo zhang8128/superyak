@@ -1,0 +1,519 @@
+{
+ "carried": [],
+ "claims": [
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "bc68c433eefe92271298dbfff4a9d74e93270ce69aa6a796e7bdd8ac83b17a35"
+   },
+   "id": "urn:superyak:fixture:third:claim:8e41e9fe95ee42f9a4cdf8840759080a0c50f9762573d28aa6676c8954bff251",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:third",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:third:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "17bfd110ae9cfaa09fa92744b233e4711da1ea958f56976b516370d1eb456fa3"
+     },
+     "origin": "urn:superyak:fixture:third:collection",
+     "record_id": "H-sibling-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "3245bfbd6b1e7ac965b43e16ae995b44564d2854f30627ad8a332e71cd39e4d1"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "c08b8e7c8abc01fb921c3f968c3c7ef9908f6e76178f51a10fba901c640c5768"
+   },
+   "id": "urn:superyak:fixture:third:claim:d85089273dc25e6ebe4fb486be876b71bdda7561f08a83cd0d91b94077606b1c",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:third",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:third:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "2aa66da78010b97c3b23b5e38f3b6b80d43bc11870fbc22cc4c8a821f883944a"
+     },
+     "origin": "urn:superyak:fixture:third:collection",
+     "record_id": "H-sibling-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "3245bfbd6b1e7ac965b43e16ae995b44564d2854f30627ad8a332e71cd39e4d1"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "dd0a21ed2d78ecc14998228e471f50243d41db711038a095050cba2ee7aecf84"
+   },
+   "id": "urn:superyak:fixture:third:claim:2bb1ba9638c4871445d6647c5b4f707f389a73f49003eaa488fb000333393000",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:third",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:third:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "dd6619ba91be4c236ed1be2d8b6227461adc1dcfb4e0ceef88dc8a0e8f411607"
+     },
+     "origin": "urn:superyak:fixture:third:collection",
+     "record_id": "H-twice-a"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "3245bfbd6b1e7ac965b43e16ae995b44564d2854f30627ad8a332e71cd39e4d1"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  },
+  {
+   "digest": {
+    "algorithm": "sha-256",
+    "value": "86da603c896098467bbc4992dcd52c911915849bae899093897067fe4aa0558c"
+   },
+   "id": "urn:superyak:fixture:third:claim:6c906a6477b17b70fb1b34cf29f2d8fed4d660d90bc6d509d85aadef992b2cfb",
+   "issuedAt": "2026-11-22T00:00:00Z",
+   "issuer": "urn:superyak:fixture:third",
+   "kind": "Claim",
+   "payload": {
+    "context": {
+     "id": "urn:superyak:fixture:third:context",
+     "path": [
+      "research",
+      "fixture"
+     ]
+    },
+    "profile": {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    },
+    "provenance": [],
+    "sentence": {
+     "content_digest": {
+      "algorithm": "sha-256",
+      "value": "3301de4c7c49c7683f11e78a7ced5620edaac1c6e6d9a70bc6b09ba287da05dc"
+     },
+     "origin": "urn:superyak:fixture:third:collection",
+     "record_id": "H-twice-b"
+    },
+    "sentenceMediaType": "application/vnd.superyak.atlas-sourced-claim+json",
+    "signature": {
+     "id": "urn:superyak:atlas-sourced",
+     "version": "1"
+    },
+    "snapshotDigests": [
+     {
+      "algorithm": "sha-256",
+      "value": "3245bfbd6b1e7ac965b43e16ae995b44564d2854f30627ad8a332e71cd39e4d1"
+     }
+    ]
+   },
+   "payloadMediaType": "application/vnd.lighthouse.claim+json",
+   "protocolVersion": "0.1"
+  }
+ ],
+ "descriptor": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "3f7f353db60f7bea7c7dda1ebe8a12362415fcb8305d6a5b0574a0315f1bd05c"
+  },
+  "id": "urn:superyak:fixture:third:lighthousedescriptor:2c1f29f3d45c3d95cfdbf93f672579c855ea34dd9ab3017542e89f7ccdb5eff4",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:third",
+  "kind": "LighthouseDescriptor",
+  "payload": {
+   "actions": [
+    "read",
+    "link_overlap",
+    "retain",
+    "reshare"
+   ],
+   "artifactEndpoints": [
+    {
+     "kind": "Snapshot",
+     "locator": "urn:superyak:fixture:third:snapshot:03d15fceba22e89efe4b1e39221623012aa54af29d0495de35ba0f41c3d65e8f"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:third:claim:8e41e9fe95ee42f9a4cdf8840759080a0c50f9762573d28aa6676c8954bff251"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:third:claim:d85089273dc25e6ebe4fb486be876b71bdda7561f08a83cd0d91b94077606b1c"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:third:claim:2bb1ba9638c4871445d6647c5b4f707f389a73f49003eaa488fb000333393000"
+    },
+    {
+     "kind": "Claim",
+     "locator": "urn:superyak:fixture:third:claim:6c906a6477b17b70fb1b34cf29f2d8fed4d660d90bc6d509d85aadef992b2cfb"
+    },
+    {
+     "kind": "ConnectionPolicy",
+     "locator": "urn:superyak:fixture:third:connectionpolicy:e1bc27adfa28c2459700dabf1b338dce7934a60660e83ce00fa7ff9286501226"
+    }
+   ],
+   "name": "Planted third",
+   "profiles": [
+    {
+     "id": "urn:superyak:profile:atlas-sourced",
+     "version": "1"
+    }
+   ],
+   "protocolVersions": [
+    "0.1"
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.descriptor+json",
+  "protocolVersion": "0.1"
+ },
+ "format": "atlas-sourced-publication",
+ "policy": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "3e97376de70492883ab3cedf50c58bebdb99c8d363602748b365745703667f76"
+  },
+  "id": "urn:superyak:fixture:third:connectionpolicy:e1bc27adfa28c2459700dabf1b338dce7934a60660e83ce00fa7ff9286501226",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:third",
+  "kind": "ConnectionPolicy",
+  "payload": {
+   "rules": [
+    {
+     "actions": [
+      "retain"
+     ],
+     "audiences": [
+      "self"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:third:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "third-lets-pi-retain",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:pi"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    },
+    {
+     "actions": [
+      "reshare"
+     ],
+     "audiences": [
+      "onward"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:third:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "third-lets-pi-reshare",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:pi"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    },
+    {
+     "actions": [
+      "retain"
+     ],
+     "audiences": [
+      "self"
+     ],
+     "claimMediaTypes": [
+      "application/vnd.superyak.atlas-sourced-claim+json"
+     ],
+     "contexts": [
+      "urn:superyak:fixture:third:context"
+     ],
+     "domains": [
+      "research"
+     ],
+     "effect": "allow",
+     "id": "third-lets-tardis-retain",
+     "profiles": [
+      "urn:superyak:profile:atlas-sourced"
+     ],
+     "publishers": [
+      "urn:superyak:fixture:tardis"
+     ],
+     "purposes": [
+      "research"
+     ],
+     "requiredAttestations": [],
+     "requiredEvidence": [],
+     "validFrom": "2026-01-01T00:00:00Z",
+     "validUntil": "2027-12-31T23:59:59Z"
+    }
+   ]
+  },
+  "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+  "protocolVersion": "0.1"
+ },
+ "snapshot": {
+  "digest": {
+   "algorithm": "sha-256",
+   "value": "3245bfbd6b1e7ac965b43e16ae995b44564d2854f30627ad8a332e71cd39e4d1"
+  },
+  "id": "urn:superyak:fixture:third:snapshot:03d15fceba22e89efe4b1e39221623012aa54af29d0495de35ba0f41c3d65e8f",
+  "issuedAt": "2026-11-22T00:00:00Z",
+  "issuer": "urn:superyak:fixture:third",
+  "kind": "Snapshot",
+  "payload": {
+   "context": {
+    "id": "urn:superyak:fixture:third:context",
+    "path": [
+     "research",
+     "fixture"
+    ]
+   },
+   "lineage": [],
+   "model": {
+    "items": [
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "h-sibling-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "H-sibling-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sibling claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "h-sibling-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "H-sibling-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Sibling claim b"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "h-twice-a-1"
+       }
+      ],
+      "facets": {},
+      "id": "H-twice-a",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Twice claim a"
+     },
+     {
+      "context": {},
+      "evidence": [
+       {
+        "locator": "p1",
+        "note": "",
+        "source_id": "h-twice-b-1"
+       }
+      ],
+      "facets": {},
+      "id": "H-twice-b",
+      "kind": "claim",
+      "reviewed_at": "",
+      "reviewed_by": "",
+      "status": "source_reported",
+      "summary": "A fictional result.",
+      "title": "Twice claim b"
+     }
+    ],
+    "origin": "urn:superyak:fixture:third:collection",
+    "relations": [],
+    "schema_version": 1,
+    "sources": [
+     {
+      "citation": "",
+      "id": "h-sibling-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sibling-a",
+       "fn": "source_key/1",
+       "title": "title:sibling source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sibling-a"
+      },
+      "title": "Sibling source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-sibling-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "h-sibling-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-sibling-b",
+       "fn": "source_key/1",
+       "title": "title:sibling source b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-sibling-b"
+      },
+      "title": "Sibling source b",
+      "url": "https://doi.org/10.5555/superyak-fixture-sibling-b",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "h-twice-a-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-twice-a",
+       "fn": "source_key/1",
+       "title": "title:twice source a:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-twice-a"
+      },
+      "title": "Twice source a",
+      "url": "https://doi.org/10.5555/superyak-fixture-twice-a",
+      "year": 2024
+     },
+     {
+      "citation": "",
+      "id": "h-twice-b-1",
+      "keys": {
+       "doi": "doi:10.5555/superyak-fixture-twice-b",
+       "fn": "source_key/1",
+       "title": "title:twice source b:2024",
+       "url": "url:https://doi.org/10.5555/superyak-fixture-twice-b"
+      },
+      "title": "Twice source b",
+      "url": "https://doi.org/10.5555/superyak-fixture-twice-b",
+      "year": 2024
+     }
+    ],
+    "title": "Planted store: third"
+   },
+   "profile": {
+    "id": "urn:superyak:profile:atlas-sourced",
+    "version": "1"
+   },
+   "signature": {
+    "id": "urn:superyak:atlas-sourced",
+    "version": "1"
+   }
+  },
+  "payloadMediaType": "application/vnd.lighthouse.snapshot+json",
+  "protocolVersion": "0.1"
+ },
+ "version": 1
+}

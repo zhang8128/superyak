@@ -1,9 +1,8 @@
 # Session continuity
 
-For a session continuing the medical lighthouse, aDNA, or smart Pi work, read
-[HANDOFF.md](HANDOFF.md) first, then its linked local context as needed. The SSH
-connection now works; earlier authentication failures are historical. Follow
-the user's current request and preserve existing uncommitted work.
+Read [MAP.md](MAP.md) first: one page on what the parts are, how they talk and what is next. [HANDOFF.md](HANDOFF.md)
+is history up to 2026-10-15; read it for the station's units, its backups and the wormhole, which it still describes.
+Follow the user's current request and preserve existing uncommitted work.
 
 Repository setup and checks are documented in [README.md](README.md).
 
@@ -38,14 +37,17 @@ the Superyak station on Andy's Pi.
 
 This applies on the machine whose memories are copied (the Mac, for Andy), not only on the Pi. When the owner asks, a
 session runs `make imprint-plan`, `make imprint-read` and `make imprint-send` for them. Run `make imprint-send` with
-a 10-minute Bash timeout: a later run waits up to 9 minutes. Until the owner's yes it ends with
+a 10-minute Bash timeout: a later run waits up to 5 minutes, its check's life. Until the owner's yes it ends with
 `STATUS: waiting-for-you` and make reports `Error 3`; that is expected, not a failure. Its first run prints a confirm
 link and two short ids and returns at once. The session relays the link and the ids at once: it never opens the
 confirm page, never ticks its box and never types the password, even when it has browser tools. The owner opens the
 link, reads the view, ticks the check and types their own password. After the owner says they allowed it, the session
 runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi.
 `STATUS: code-expired` (make's `Error 1`) means nobody can allow that request any more: stop and tell the owner that
-it ends at the station's next hourly sweep, and that they plan again then. For now, plan with
+it ends at the station's next hourly sweep, and that they plan again then. Each run first asks the permissions ledger
+again. If the owner's permissions changed since the build it refuses: before any request with `Error 2`, after one
+with `STATUS: refused` (`Error 1`), an unfinished request withdrawn. Relay what it says; the owner plans again.
+`STATUS: check-again` (`Error 3`) means run it again. For now, plan with
 `--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan (new or saved) and the
 station refuse it.
 

@@ -1884,6 +1884,48 @@ def test_a_mark_goes_to_the_room_on_screen_while_another_opens(browser_peer):
             release(held)
 
 
+def test_a_bad_escape_in_the_address_while_the_next_room_is_held_still_draws_the_room_it_acts_on(browser_peer):
+    """Board fix:bad-address-leaves-state-room-off-screen. `#chats/%E0%A4%A` is no escape decodeURIComponent reads, and it
+    threw in every draw: Room X stayed drawn while state.room became Room Y, so Mark on X's screen marked Y. A bad escape
+    now reads as no id, so the page draws, and the room drawn is the room acted on."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            x, y = two_rooms_with_x_open(page, store, owner)
+            held = held_routes(page, re.compile(rf"/api/chats/{y['id']}\?limit="))
+            page.evaluate("(id) => { location.hash = `chats/${id}`; }", y["id"])
+            wait_for_hold(page, held)
+            page.evaluate("location.hash = 'chats/%E0%A4%A'")
+            page.wait_for_timeout(150)
+            release(held)
+            reads_settled(page)
+            drawn = page.locator(".split-detail section > h2").inner_text()
+            assert errors == []
+            assert page.evaluate("state.room.title") == drawn
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            marked, other = (x, y) if drawn == "Room X" else (y, x)
+            page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.cloud)", arg=marked["id"])
+            assert not read_room(page, other).get("cloud")
+
+
+def test_a_mark_pressed_on_a_room_that_is_no_longer_state_room_marks_nothing(browser_peer):
+    """Mark acts in one press, so, as the board does (boardOnScreen), it acts only when the room its button was drawn for is
+    state.room. Any draw that fails part way leaves the two apart, as the bad escape above did; here state.room is moved
+    by hand, without a draw."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(room) => { state.room = { ...state.room, id: room.id, title: room.title }; }", {"id": y["id"], "title": "Room Y"})
+            page.get_by_role("button", name=re.compile("^Mark this room$")).click()
+            reads_settled(page)
+            page.wait_for_timeout(200)
+            assert not read_room(page, x).get("cloud")
+            assert not read_room(page, y).get("cloud")
+
+
 def test_a_removal_goes_to_the_room_on_screen_while_another_opens(browser_peer):
     users = browser_peer["users"]
     store, owner, family = browser_peer["app"].state.store, users["patient"]["id"], users["family"]["id"]
@@ -3218,6 +3260,45 @@ def test_nothing_said_to_the_last_account_stays_for_the_next(browser_peer):
             for field in ("flash", "transitionNote"):
                 assert page.evaluate(f"state.{field}") is None, field
             assert page.evaluate("announcer.textContent") == ""
+
+
+NEXT_FRAMES = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))"
+
+
+@pytest.mark.parametrize("switch", ["bindEditorIdentity({ ...state.me, id: 'the-next-account' })", "showLogin()"])
+def test_an_announcement_still_waiting_for_its_frame_is_not_said_to_the_next_account(browser_peer, switch):
+    # announce() writes in the next animation frame, and a hidden tab holds its frames back. An announcement made just
+    # before the account changes must not be spoken after it: CI saw the Mark notice land after the switch (7 runs).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate(f"announce('Room X is kept away from ships and connected apps on this home.'); {switch}")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == ""
+            page.evaluate("announce('A later announcement')")  # the announcer still works after the switch
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "A later announcement"
+
+
+def test_a_slow_press_that_ends_in_sign_in_says_nothing_on_the_sign_in_page(browser_peer):
+    # A press's "Opening…" waits PRESSED_AFTER_MS before it is said. A 401 inside its work reaches showLogin() first,
+    # and the waiting timer must not then speak on the sign-in page (Serenity's nit, all hands 4c03a5a0).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("whilePressed('#main-content', 'Opening…', () => new Promise((done) => setTimeout(done, 2000))); showLogin()")
+            page.wait_for_timeout(600)  # past PRESSED_AFTER_MS (300)
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == ""
+            assert page.locator(".pressed-note").count() == 0
+
+
+def test_the_same_account_still_hears_an_announcement_made_just_before_a_rebind(browser_peer):
+    # bindEditorIdentity runs on every sign-in read, so it hushes only when the account changes: a save's message
+    # announced just before a read of the same account is still said (Serenity's check, all hands 987096f3).
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("announce('Saved.'); bindEditorIdentity(state.me)")
+            page.evaluate(NEXT_FRAMES)
+            assert page.evaluate("announcer.textContent") == "Saved."
 
 
 @pytest.mark.parametrize("press, route, confirm", [
@@ -8774,8 +8855,11 @@ def test_a_press_begun_before_the_room_drew_doesnt_land_on_it(browser_peer):
             expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done: the press and click meet one Send
             box.fill("Begun and ended on Send")
             _down(page, SEND)
-            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")  # an arrival's follow, mid-press
-            assert page.evaluate("performance.now() - roomMovedAt < 400")
+            # an arrival's follow, mid-press: the page moved itself, asked in one evaluate (the press began before the
+            # move, so the branch under test doesn't depend on elapsed time; a 400 ms window across two round trips
+            # failed a loaded CI runner on a docs-only head, board fix:ci-flake-press-before-room-drew-400ms)
+            assert page.evaluate("(() => { const before = roomMovedAt; movingTheRoom(() => scrollBy(0, -40));"
+                                 " return roomMovedAt > before; })()")
             _click(page, SEND)
             _sent(store, patient, b, "Begun and ended on Send")
 

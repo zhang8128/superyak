@@ -74,6 +74,15 @@ def station(tmp_path, imprints_dir=_TEST_ROOT, allowed_origins=('http://testserv
                    ships['serenity'], ships['rio-grande'], ids)
 
 
+def stamp_at(home):
+    """Revision 9: the `at` of the built imprint's send-check stamp (checked.json), which the engram step writes with the
+    real clock. A test that runs the agent on a clock of its own starts that clock here, as the stamp is only good for
+    300 s from it and never in the future (agent/superyak_agent/imprint.py, _checked)."""
+    from pathlib import Path
+    [stamp] = (Path(home) / 'imprints').glob('*/checked.json')
+    return json.loads(stamp.read_text())['at']
+
+
 def sha256_canonical(record):
     return hashlib.sha256(canonical(record)).hexdigest()
 

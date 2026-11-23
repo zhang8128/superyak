@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(not (AGENT / 'superyak_agent').is_dir() or not (
 if (AGENT / 'superyak_agent').is_dir():
     sys.path[:0] = [str(AGENT), str(AGENT.parent / 'team')]
 
-from imprint_support import station
+from imprint_support import stamp_at, station
 from test_imprint_confirm import confirm
 
 REPORT = os.environ.get('IMPRINT_THROWAWAY_REPORT')
@@ -130,6 +130,7 @@ def test_throwaway_store_a(tmp_path, monkeypatch):
     # 3. Build, send, the owner's yes, the approval, admission.
     built = engram('build', '--plan', plan_id, '--superyak-home', str(home), '--engram-home', str(engram_home))
     assert built.returncode == 0, built.stderr
+    now[0] = stamp_at(home)        # revision 9: the agent's clock starts at the send check's stamp
     report['send_1'] = agent.send(plan_id[:8])
     folder = next(p.parent for p in (home / 'imprints').glob('*/send.json'))
     imprint_id = folder.name

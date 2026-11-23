@@ -1,0 +1,57 @@
+{
+ "standard": "superyak-sheaf/1",
+ "kind": "vector",
+ "why": "A 4-cycle with identity maps: the constant sheaf. H0 and H1 both have the stalk's dimension.",
+ "nodes": [
+  {
+   "id": "a",
+   "dim": 2
+  },
+  {
+   "id": "b",
+   "dim": 2
+  },
+  {
+   "id": "c",
+   "dim": 2
+  },
+  {
+   "id": "d",
+   "dim": 2
+  }
+ ],
+ "edges": [
+  {
+   "tail": "a",
+   "head": "b",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "b",
+   "head": "c",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "c",
+   "head": "d",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  },
+  {
+   "tail": "d",
+   "head": "a",
+   "dim": 2,
+   "tail_map": "identity",
+   "head_map": "identity"
+  }
+ ],
+ "expect": {
+  "dim_h0": 2,
+  "dim_h1": 2
+ }
+}

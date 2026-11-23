@@ -36,7 +36,8 @@ def outcomes(store):
 def add_receipt(store, key, ship_id, lesson_id, created=LESSON_TIME):
     """A receipt written straight to the table, for the ids and ages a query can't produce."""
     with store.transaction() as db:
-        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (key, created, ship_id, lesson_id, 'x', None))
+        db.execute('INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle) VALUES(?,?,?,?,?,?)',
+                   (key, created, ship_id, lesson_id, 'x', None))   # names its columns (receipt-place spec 3)
 
 
 def laid(lessons_station, *bodies):
@@ -120,7 +121,8 @@ def test_another_ships_receipt_is_refused(lessons_peers):
     # Written straight to the table: a receipt for the Pi's ship, held on the Tardis peer, whose one ship is tardis.
     other = tardis.lessons_ship('other', 'andy')['id']
     with tardis.transaction() as db:
-        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', ('c' * 32, LESSON_TIME, other, 'a' * 64 + ':' + 'b' * 64, 'x', None))
+        db.execute('INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle) VALUES(?,?,?,?,?,?)',
+                   ('c' * 32, LESSON_TIME, other, 'a' * 64 + ':' + 'b' * 64, 'x', None))
     with pytest.raises(Problem) as caught:
         tardis.lesson_outcome('c' * 32, 'helped')
     assert str(caught.value) == lessons.OUTCOME_UNKNOWN and caught.value.status == 404
@@ -217,7 +219,11 @@ def test_outcomes_list_newest_first_with_ids_ship_lesson_and_outcome_and_section
     two = store.lesson_outcome(second, 'unused')
     store.lesson_repeat(hashes, 'receipt', 'on')
     rows, counts = store.lesson_outcomes()
-    assert counts == {'receipts': 2, 'outcomes': 2, 'helped': 1, 'misled': 0, 'unused': 1, 'queries': 2, 'verified_repeats': 1}
+    unknown = {'receipts': 2, 'outcomes': 2, 'helped': 1, 'misled': 0, 'unused': 1}     # a request with no place
+    none = {'receipts': 0, 'outcomes': 0, 'helped': 0, 'misled': 0, 'unused': 0}
+    assert counts == {'receipts': 2, 'outcomes': 2, 'helped': 1, 'misled': 0, 'unused': 1, 'queries': 2, 'verified_repeats': 1,
+                      'by_place': {'superyak': none, 'other': none, 'unknown': unknown},
+                      'by_kind': {'words': unknown, 'near': none, 'middle': none, 'far': none}}   # both matched by words
     assert [r['id'] for r in rows] == [two['id'], one['id']] and set(rows[0]) == {
         'id', 'created', 'ship', 'receipt_id', 'lesson_id', 'outcome'}
     done = run_lessons('outcomes', '--data-dir', store.data_dir)
@@ -226,13 +232,21 @@ def test_outcomes_list_newest_first_with_ids_ship_lesson_and_outcome_and_section
     assert done.stdout.splitlines() == [
         f"{two['id'][:8]}  rio-grande  lesson {lessons.short_lesson_id(lessons_of[second])}  receipt {second[:8]}  unused",
         f"{one['id'][:8]}  rio-grande  lesson {lessons.short_lesson_id(lessons_of[first])}  receipt {first[:8]}  helped",
-        'Coverage: 2 outcomes on 2 receipts. Helped 1, misled 0, unused 1. Verified repeats: 1 in 2 queries (50.0 per 100).']
+        'Coverage: 2 outcomes on 2 receipts. Helped 1, misled 0, unused 1. Verified repeats: 1 in 2 queries (50.0 per 100).',
+        'In Superyak sessions: 0 outcomes on 0 receipts. Helped 0, misled 0, unused 0.',
+        'In other sessions: 0 outcomes on 0 receipts. Helped 0, misled 0, unused 0.',
+        'Unknown place, including receipts from before this change: 2 outcomes on 2 receipts. Helped 1, misled 0, unused 1.',
+        'Verified repeats are counted over all places: a query keeps no place.',
+        'By words, a lesson value found in the turn: 2 receipts, 2 scored, 0 unscored. Helped 1, misled 0, unused 1.',
+        'By angle, under 0.80 rad: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.',
+        'By angle, 0.80 to 0.90 rad: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.',
+        'By angle, 0.90 rad and over: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.']
     for text in ('Copy a hash', 'Quote a glob', 'zsh expands'):
         assert text not in done.stdout
     limited = lessons.describe_outcomes(*store.lesson_outcomes(limit=1))
-    assert len(limited.splitlines()) == 2 and 'Coverage: 2 outcomes on 2 receipts.' in limited
+    assert len(limited.splitlines()) == 10 and 'Coverage: 2 outcomes on 2 receipts.' in limited
     assert lessons.describe_outcomes([], {**counts, 'queries': 0}) == 'No outcomes on this peer yet.'
-    assert lessons.describe_outcomes(rows, {**counts, 'queries': 0}).endswith('Verified repeats: 1 in 0 queries (- per 100).')
+    assert 'Verified repeats: 1 in 0 queries (- per 100).' in lessons.describe_outcomes(rows, {**counts, 'queries': 0})
 
 
 def test_the_verbs_run_through_the_cli(lessons_station):

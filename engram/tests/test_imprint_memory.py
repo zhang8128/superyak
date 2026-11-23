@@ -40,9 +40,16 @@ def bounds_store(tmp_path):
 
 
 @PI
-@pytest.mark.parametrize("step", ["plan", "read", "build", "admit", "count", "import-receipts"])
+@pytest.mark.parametrize("step", ["plan", "read", "build", "plan-deny", "read-deny", "build-deny", "admit", "count",
+                                  "import-receipts", "send", "send-deny"])
 def test_pi_every_process_at_the_cap(cap_store, step):
-    peak = child_peak_rss(cmd=cap_command(cap_store, step), env=cap_store.env)
+    cmd = cap_command(cap_store, step)
+    started = time.monotonic()
+    peak = child_peak_rss(cmd=cmd, env=cap_store.env)
+    if step.startswith("send"):                                 # revision 9: the check's time, kept under 60 s
+        seconds = time.monotonic() - started
+        print(step, f"{seconds:.1f} s")
+        assert seconds < 60, (step, seconds)
     assert peak < PEAK_BUDGET, (step, mib(peak))
     if step == "admit":                                         # no analysis lost to a MemoryError (review I4)
         assert analysis_errors(cap_store) == []
@@ -53,7 +60,7 @@ def test_pi_every_process_at_the_cap(cap_store, step):
             assert uses.conn.execute("SELECT count(*) FROM uses").fetchone()[0] > 0
         finally:
             uses.close()
-    print(step, mib(peak), "MiB, base", mib(base_peak(step)), "MiB")
+    print(step, mib(peak), "MiB, base", mib(base_peak(step.removesuffix("-deny"))), "MiB")
 
 
 @PI
