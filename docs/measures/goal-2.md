@@ -256,3 +256,44 @@ the ship `tardis`, from 11:34:21Z to 11:34:41Z. All 40 reads were ok, and each m
     more than this.
   - Funnel's second address wasn't measured.
   - The Mac's own path is still Serenity's to take.
+
+## The rerun on a quiet Pi, 2026-11-23, main f44411d0, from Tardis
+
+**When and how:** the rerun was taken after train 1151's suite ended at 12:26Z, with the Pi's load average at 1.95 and
+falling, while Rio Grande kept off its CPU (all hands 3dbbcc03). It's the same method, with **Funnel's second public
+address pinned as a third path**, `funnel2`.
+- **First paint:** `first_paint_rounds.py run --label quiet --rounds 4 --runs 10 --pin funnel=208.111.34.11 --pin
+  funnel2=208.111.35.209`, from 12:39:37Z to 12:42:07Z. That's 240 loads, none failed, kept in
+  [`data/goal-2-2026-11-23-quiet.jsonl`](data/goal-2-2026-11-23-quiet.jsonl) (sha256 `c7113802dbec0f53…`).
+- **The room read:** `room_read_timing.py --runs 20 --limit 100` with the same two pins, from 12:42:15Z to 12:42:49Z.
+  All 60 reads were ok.
+
+**The sign-in form,** p50 / p95, and loads over 600 ms of 40:
+
+| Path | Cache | busy Pi (above) | quiet Pi | first paint, quiet, p50 / p95 |
+|---|---|---|---|---|
+| Funnel, 208.111.34.11 | cold | 272 / 1,179 ms, 5 | 366 / 1,286 ms, 6 | 276 / 924 ms |
+| Funnel, 208.111.35.209 | cold | not taken | 275 / 554 ms, 2 | 224 / 388 ms |
+| Tailnet | cold | 105 / 223 ms, 0 | 95 / 122 ms, 0 | 72 / 88 ms |
+| Funnel, 208.111.34.11 | warm | 133 / 195 ms, 0 | 129 / 176 ms, 0 | 80 / 108 ms |
+| Funnel, 208.111.35.209 | warm | not taken | 126 / 143 ms, 0 | 80 / 96 ms |
+| Tailnet | warm | 69 / 87 ms, 0 | 60 / 75 ms, 0 | 36 / 44 ms |
+
+**The room read, quiet Pi,** 100 messages, 189 KB:
+
+| Path | p50 | p95 | max | TLS p50 | first byte p50 |
+|---|---|---|---|---|---|
+| Tailnet | 83 ms | 92 ms | 93 ms | 27 ms | 79 ms |
+| Funnel, 208.111.34.11 | 412 ms | 694 ms | 710 ms | 161 ms | 254 ms |
+| Funnel, 208.111.35.209 | 253 ms | 277 ms | 282 ms | 109 ms | 195 ms |
+
+**What it says:**
+- **The tailnet's tail was the Pi's load.** Its cold p95 is back to 122 ms on a quiet Pi, from 223 on a busy one.
+- **Funnel's tail is the route, and it's one address.** On a quiet Pi, 208.111.34.11's cold form p95 is still about
+  1.3 s, and its room read p50 is 412 ms, over goal 2's 400 ms. 208.111.35.209 meets both bars at the same moment, with
+  a room read p95 of 277 ms and a cold form p95 of 554 ms. Its first byte and TLS are faster, too.
+- **Public DNS gives a visitor both addresses,** so some share of visitors' connections reach the slow one. That's
+  the next goal 2 lead, and Funnel's two addresses are Tailscale's, not the Pi's. What can be measured from here is
+  which address a visitor gets, and how often each is slow.
+- **What it can't say:** two readings, 70 minutes apart, from one machine, through one home connection. The slow
+  address may be slow from Tardis's network only, or at this hour. A reading from another network would tell.
