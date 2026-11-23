@@ -168,11 +168,19 @@ def plain_text(name):
 
 def bridge_env():
     """The environment of our own pushes: it tells the gate this pusher is the bridge, not the lattice."""
-    return {**os.environ, 'STATION_VAULT_PUSHER': 'bridge'}
+    return {**git_env(), 'STATION_VAULT_PUSHER': 'bridge'}
+
+
+def git_env():
+    """The caller's environment without its GIT_* variables, as receipt_place._git: a GIT_DIR or GIT_WORK_TREE left set
+    by a git hook, or by a session started inside one, would point every vault call at that other repository. The
+    gate's own script (PRE_RECEIVE) runs inside git's hook, where git sets GIT_DIR, so it keeps its environment."""
+    return {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
 
 
 def set_config(bare, key, value):
-    subprocess.run(['git', '-C', str(bare), 'config', '--replace-all', key, value], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(bare), 'config', '--replace-all', key, value], check=True, capture_output=True,
+                   env=git_env())
 
 
 def install_gate(bare, branch='main', limit=True):
@@ -204,7 +212,7 @@ class Vault:
 
     def git(self, *args, check=True, env=None):
         result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True, text=True,
-                                errors='replace', env=env)
+                                errors='replace', env=git_env() if env is None else env)
         if check and result.returncode:
             raise VaultError(f'git {args[0]} failed: {result.stderr.strip()[:300]}')
         return result
@@ -219,9 +227,10 @@ class Vault:
             raise VaultError(f'{bare} or {clone} already exists')
         bare.parent.mkdir(parents=True, exist_ok=True)
         clone.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'init', '-q', '--bare', '-b', branch, str(bare)], check=True, capture_output=True)
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', branch, str(bare)], check=True, capture_output=True,
+                       env=git_env())
         install_gate(bare, branch, limit=False)  # the first push carries the whole template, which may be big
-        subprocess.run(['git', 'clone', '-q', str(bare), str(clone)], check=True, capture_output=True)
+        subprocess.run(['git', 'clone', '-q', str(bare), str(clone)], check=True, capture_output=True, env=git_env())
         vault = cls(clone, branch=branch)
         vault.git('symbolic-ref', 'HEAD', f'refs/heads/{branch}')
         attributes = clone / vault.git('rev-parse', '--git-path', 'info/attributes').stdout.strip()
@@ -259,7 +268,7 @@ class Vault:
     def listing(self, *args):
         """NUL-separated output of a git listing command, as a list of paths (or fields) with surrogate-escaped
         undecodable bytes, so an odd file name cannot raise."""
-        result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True)
+        result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True, env=git_env())
         if result.returncode:
             raise VaultError(f'git {args[0]} failed: {result.stderr.decode("utf-8", "replace").strip()[:300]}')
         return [part.decode('utf-8', 'surrogateescape') for part in result.stdout.split(b'\0') if part]
