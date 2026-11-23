@@ -484,9 +484,12 @@ def branch(cwd, deadline, monotonic=time.monotonic):
     left = min(deadline - monotonic() - RESERVE, GIT_SECONDS)
     if not isinstance(cwd, str) or not cwd or left <= 0:
         return None
+    # None of the caller's GIT_* variables, as receipt_place._git: a GIT_DIR left set by a hook names another repository
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env['GIT_OPTIONAL_LOCKS'] = '0'
     try:
         done = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd, capture_output=True, timeout=left,
-                              stdin=subprocess.DEVNULL, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
+                              stdin=subprocess.DEVNULL, env=env)
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     name = done.stdout.decode('utf-8', 'replace').strip()

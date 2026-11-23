@@ -1084,3 +1084,21 @@ def test_the_hook_in_a_registered_worktree_or_another_repository(rail, placed):
     rail.run('SessionStart', cwd=str(rail.root / 'wt'))
     rail.run('PostToolUseFailure', session='s2', cwd=str(theirs), **failure())
     assert [r.get('place') for r in rail.sent()] == ['superyak', 'other']
+
+
+def test_branch_reads_the_cwd_repository_not_the_callers_git_dir(tmp_path, monkeypatch):
+    """The board's fix:lessons-hook-branch-git-env: branch() runs git with none of the caller's GIT_* variables, as
+    receipt_place._git does. A GIT_DIR left set by the caller (a git hook, or a session started inside one) named the
+    other repository's branch, not the one the session works in."""
+    def repo(name, branch_name):
+        path = tmp_path / name
+        path.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        for args in (['init', '-q', '-b', branch_name], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                                                         'commit', '-q', '--allow-empty', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=path, check=True, env=env, capture_output=True)
+        return path
+    here, other = repo('here', 'alpha'), repo('other', 'beta')
+    monkeypatch.setenv('GIT_DIR', str(other / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(other))
+    assert lh.branch(str(here), time.monotonic() + 30) == 'alpha'
