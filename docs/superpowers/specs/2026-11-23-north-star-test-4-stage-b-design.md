@@ -1,6 +1,7 @@
 # Test 4, stage B: do real turns fall into the traps, and does the record get them out? (a proposal)
 
-Draft 5, 2026-11-23. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
+Draft 5, 2026-11-23. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). **Approved by a fresh reviewer
+under section 3 (review 3, at a347b23c, with its two fault-rule changes made as written).** Under station law section 3, a
 fresh reviewer approves it in Andy's place, and Andy can veto.
 
 - **Draft 1 (c2edc48b)** was a proposal on Tardis's own recommendation (978741ec), "the turn chooses".
@@ -126,13 +127,16 @@ bundled, once the worlds half is hashed, so it can import them.
   - **A run entry's `turn` is `n + i`,** so a stall leaves a gap in the record's numbering. `firing` returns the run
     turns `i` whose patch took the bait.
   - A naming rule's "first run call" is the first run call whose reply was read.
-- **(c2) A machine fault isn't a stall (X4).** These count as faults:
-  - a result event with `is_error` true, such as a rate limit, a sign-in error or an API error;
-  - an exit with no result before the 120-second kill;
+- **(c2) A machine fault isn't a stall (X4, review 3).** These count as faults:
+  - a result event with `is_error` true, such as a sign-in error or an API error;
+  - a call killed at 120 seconds after any `system`/`api_retry` event in its stream. Claude Code retries a rate-limited
+    call itself, so that is how a rate limit shows;
+  - an exit with no result, when the call exits on its own before the kill;
   - an init event listing tools or MCP servers.
 
-  The call is retried once. If it faults again, the run is void and not scored. Stalls and faults are reported per
-  arm, so a rate-limited stretch is never scored as turns failing.
+  A faulted call is retried once, after a 60-second pause. If it faults again, the run is void. **A void run is rerun
+  from its start,** with the same world, form, arm, repeat and seed, so faults can't drop the slower, non-recovering
+  runs more than others. Stalls, faults and reruns are reported per arm.
 - **(d) Run entries:**
   - `summary` is the turn's own text, written before its verdict exists;
   - `says` is null on run entries, since nothing reads it there;
