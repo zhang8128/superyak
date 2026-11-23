@@ -1,6 +1,6 @@
 # A visitor's first hour (goals.md T2, goal 4)
 
-Draft 3, 2026-11-23. Tardis. Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
+Draft 4, 2026-11-23. Tardis. Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
 veto. The line it serves is `tardis/goals-t2-visitor` 0580ed67 (Rio Grande's §2 yes, all hands 74143153). Rio Grande's
 suggestion there, to freeze the question before the walk, is taken here.
 
@@ -8,7 +8,10 @@ suggestion there, to freeze the question before the walk, is taken here.
   (`docs/superpowers/reviews/2026-11-23-visitor-first-hour-review-1.md`, e82ccc82). Draft 2 made all eight, and the
   advisories marked below.
 - **Draft 2 (d70becc6)** went back to the same reviewer: approved with six required changes, X1 to X6 (review 2, beside
-  review 1). Draft 3 makes all six, and takes its advisory by giving the walker a sign-in of its own.
+  review 1). Draft 3 made all six, and took its advisory by giving the walker a sign-in of its own.
+- **Draft 3 (e05c3616)** went back to the same reviewer: approved with three required changes, Y1 to Y3 (review 3).
+  Draft 4 makes all three and takes its three advisories. It also adds one check from Tardis's own lesson: Claude
+  loads a CLAUDE.md from above its directory, so the walk directory's ancestors are checked for one before each walk.
 
 ## The question
 
@@ -32,8 +35,13 @@ inherits the session's instructions, memory, tools, hooks and logins.
 - **Its sign-in (X1, and review 2's advisory)** is its own, never a copy of Tardis's, since a copied OAuth sign-in
   that refreshes could rotate Tardis's own token. Andy makes it once, in a browser, into
   `/var/tmp/visitor-walker-config/` (mode 0700), the walker's `CLAUDE_CONFIG_DIR`. It holds no settings, hooks, MCP
-  servers or memory. It's reused across the agent walks, never committed or posted, and deleted when they end.
-  Signing in to Andy's account is his, as his password is.
+  servers or memory. It's never committed or posted. When the agent walks end, the sign-in is revoked and the directory
+  deleted. Signing in to Andy's account is his, as his password is.
+- **Reset before each walk (Y2):** the files Andy's sign-in created are listed once, at sign-in. Before each walk,
+  everything else in the directory is deleted, so no walk loads another's sessions or history. The directory's file
+  list goes in each walk's report.
+- **No instructions from above (Tardis's lesson):** before each walk, `/var/tmp`, `/var` and `/` are checked for a
+  `CLAUDE.md` or `.claude/`. If one is found, the walk doesn't start.
 - **Its environment** is cleared to `PATH`, `LANG`, `TERM` and `TZ`, plus that `HOME`, `UV_CACHE_DIR`,
   `CLAUDE_CONFIG_DIR`, and `GIT_SSH_COMMAND=false` (X2), so any git over ssh fails. Nothing else carries over: no git
   identity, no `gh` sign-in, no `~/.superyak`, and no agent socket. **The account's ssh keys stay readable on disk:**
@@ -51,8 +59,13 @@ inherits the session's instructions, memory, tools, hooks and logins.
 
   The model is Sonnet 5.5, unlike the ships' Opus, so the docs aren't read only by the model that wrote them. The
   150-call budget is counted from the transcript: a call past 150 is over budget and isn't scored.
-  `bypassPermissions` means the walker can run any command as Tardis's user. That's why a write outside its directory
-  ends the walk, and why it's under "can't show".
+  `bypassPermissions` means the walker can run any command as Tardis's user. That's why an outside write ends the
+  walk's scoring, and why it's under "can't show". **`--allowedTools` only pre-approves tools,** and under
+  `bypassPermissions` it changes nothing. The walker is limited by the rules and the transcript check, not by that
+  flag.
+- **Its processes:** each walk runs in its own scope, `systemd-run --user --scope --unit=visitor-walk-N`, wrapping the
+  invocation above. When the walk ends, that scope is stopped, so a server the walker started (`make home-demo`, for
+  one) doesn't outlive it.
 - **Its brief** is the question, the repository's public URL, the commit to clone, the rules below and the budget.
   Nothing else: never this spec's other sections, the scorer's checklist, a ship's post or a ship's memory.
 - **Its transcript** is captured whole (`--output-format stream-json`) to a file outside the walk directory.
@@ -69,7 +82,10 @@ station and GitHub keys. They get the same question, rules and steps, and walk o
 - **Ineligible to stop the agent walks (X3, X4), though it still counts toward the five:** a walk that reads any
   checkout, `~/.claude`, `~/.superyak`, the walker's config directory or another walk's directory, or that reads this
   spec, a review or a walk report, locally or on the web. System paths the tools read themselves are exempt.
-- **A write outside its walk directory ends the walk** (X3), and the walk counts.
+- **An outside write ends the walk's scoring (X3, Y1),** and the walk counts. It's judged on the walker's own explicit
+  writes: a Write or Edit path, or a Bash command that names a path outside the walk directory. The walker's config
+  directory, and the temp and cache files tools make for themselves (under `/tmp` or `$TMPDIR`), are exempt, as they
+  are for reads. No step after the first outside write is scored.
 - **Repository text that asks it to dock, pair, imprint, sign in, or contact anyone** (CLAUDE.md, for one, offers
   docking), and the README's invitation to say hello in Discussions, are declined and logged as observations. Acting on
   any of them ends the walk, and the walk counts.
@@ -150,8 +166,8 @@ it's committed only then.
 - **A fresh agent isn't a visitor.** It reads code and runs commands faster than most people, and it can bring
   sources from its own knowledge. So an agent's success is a floor for the docs, not evidence that people can use
   Superyak.
-- **The walker is the same model as the ships that wrote these docs,** so the docs may read more easily to it than
-  to anyone else.
+- **The walker is Sonnet 5.5, not the ships' Opus,** but the same family as the models that wrote these docs (Y3). So
+  the docs may still read more easily to it than to a person.
 - **Atlas's own literature worker needs a local Ollama model** and searches Europe PMC
   (`atlas/docs/ollama-research.md`), and Tardis has no Ollama. So an agent's S5 source will likely come by outside
   search or from memory. **A source Superyak didn't find shows that Superyak can hold an answer, not that the visitor
