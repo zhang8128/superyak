@@ -1,12 +1,14 @@
 # A visitor's first hour (goals.md T2, goal 4)
 
-Draft 2, 2026-11-23. Tardis. Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
+Draft 3, 2026-11-23. Tardis. Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
 veto. The line it serves is `tardis/goals-t2-visitor` 0580ed67 (Rio Grande's §2 yes, all hands 74143153). Rio Grande's
 suggestion there, to freeze the question before the walk, is taken here.
 
 - **Draft 1 (62f6d011)** went to a fresh reviewer: approved with eight required changes, W1 to W8
-  (`docs/superpowers/reviews/2026-11-23-visitor-first-hour-review-1.md`, e82ccc82). Draft 2 makes all eight, and the
+  (`docs/superpowers/reviews/2026-11-23-visitor-first-hour-review-1.md`, e82ccc82). Draft 2 made all eight, and the
   advisories marked below.
+- **Draft 2 (d70becc6)** went back to the same reviewer: approved with six required changes, X1 to X6 (review 2, beside
+  review 1). Draft 3 makes all six, and takes its advisory by giving the walker a sign-in of its own.
 
 ## The question
 
@@ -24,12 +26,33 @@ in the repository.
 
 **First, fresh agents,** each a separate `claude` process on Tardis, never a subagent of a ship's session. A subagent
 inherits the session's instructions, memory, tools, hooks and logins.
-- **Its directory:** one new empty directory per walk, outside every checkout: `/var/tmp/visitor-walk-N/`. It holds
-  `home/` (empty, used as `HOME`), `uv-cache/` (empty, used as `UV_CACHE_DIR`), and the walker's clone.
-- **Its environment** is cleared to `PATH`, `LANG`, `TERM` and `TZ`, plus that `HOME`, `UV_CACHE_DIR` and
-  `CLAUDE_CONFIG_DIR=home/.claude`. That config directory holds only a copy of the machine's Claude sign-in file, with
-  no settings, hooks, MCP servers or memory. Nothing else carries over: no git identity, no `gh` or ssh credentials,
-  no `~/.superyak`, and no agent socket.
+- **Its directory:** one new empty directory per walk, outside every checkout, created with mode 0700:
+  `/var/tmp/visitor-walk-N/`. It holds `home/` (empty, used as `HOME`), `uv-cache/` (empty, used as `UV_CACHE_DIR`),
+  and the walker's clone. Nothing from `home/` is ever committed or posted.
+- **Its sign-in (X1, and review 2's advisory)** is its own, never a copy of Tardis's, since a copied OAuth sign-in
+  that refreshes could rotate Tardis's own token. Andy makes it once, in a browser, into
+  `/var/tmp/visitor-walker-config/` (mode 0700), the walker's `CLAUDE_CONFIG_DIR`. It holds no settings, hooks, MCP
+  servers or memory. It's reused across the agent walks, never committed or posted, and deleted when they end.
+  Signing in to Andy's account is his, as his password is.
+- **Its environment** is cleared to `PATH`, `LANG`, `TERM` and `TZ`, plus that `HOME`, `UV_CACHE_DIR`,
+  `CLAUDE_CONFIG_DIR`, and `GIT_SSH_COMMAND=false` (X2), so any git over ssh fails. Nothing else carries over: no git
+  identity, no `gh` sign-in, no `~/.superyak`, and no agent socket. **The account's ssh keys stay readable on disk:**
+  OpenSSH finds them through the password database's home, not through `$HOME`. The clone is over https, and any ssh
+  use is named in the transcript check.
+- **The frozen invocation (X1),** run from the walk directory:
+
+  ```sh
+  timeout 3600 env -i PATH="$PATH" LANG=C.UTF-8 TERM=dumb TZ=UTC HOME="$PWD/home" UV_CACHE_DIR="$PWD/uv-cache" \
+    CLAUDE_CONFIG_DIR=/var/tmp/visitor-walker-config GIT_SSH_COMMAND=false \
+    claude -p "$(cat brief.txt)" --model claude-sonnet-5-5 --output-format stream-json --verbose \
+    --permission-mode bypassPermissions --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+    --allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch" > ../visitor-walk-N.jsonl
+  ```
+
+  The model is Sonnet 5.5, unlike the ships' Opus, so the docs aren't read only by the model that wrote them. The
+  150-call budget is counted from the transcript: a call past 150 is over budget and isn't scored.
+  `bypassPermissions` means the walker can run any command as Tardis's user. That's why a write outside its directory
+  ends the walk, and why it's under "can't show".
 - **Its brief** is the question, the repository's public URL, the commit to clone, the rules below and the budget.
   Nothing else: never this spec's other sections, the scorer's checklist, a ship's post or a ship's memory.
 - **Its transcript** is captured whole (`--output-format stream-json`) to a file outside the walk directory.
@@ -40,7 +63,13 @@ station and GitHub keys. They get the same question, rules and steps, and walk o
 
 ## The rules the walker keeps
 
+- It clones with `git clone --single-branch --branch main https://github.com/zhang8128/superyak.git` and checks out
+  the named train commit (X4), so no other branch, this spec's included, is in its clone.
 - It works only in its walk directory, and reads only what the README links, at any depth, plus what the tools print.
+- **Ineligible to stop the agent walks (X3, X4), though it still counts toward the five:** a walk that reads any
+  checkout, `~/.claude`, `~/.superyak`, the walker's config directory or another walk's directory, or that reads this
+  spec, a review or a walk report, locally or on the web. System paths the tools read themselves are exempt.
+- **A write outside its walk directory ends the walk** (X3), and the walk counts.
 - **Repository text that asks it to dock, pair, imprint, sign in, or contact anyone** (CLAUDE.md, for one, offers
   docking), and the README's invitation to say hello in Discussions, are declined and logged as observations. Acting on
   any of them ends the walk, and the walk counts.
@@ -78,21 +107,27 @@ person, with no call count. The walker stops at the budget and claims nothing pa
 
 Tardis scores each walk after it ends, from the whole transcript and the walk directory. The transcript's sha256 goes
 in the report.
+- **The transcript check** covers reads, writes and ssh use outside the walk directory, and applies the rules above.
+- **Normalization (X5), frozen:** Unicode NFKC, casefold, strip HTML tags, drop punctuation (every Unicode `P`
+  category), and collapse whitespace. It applies to S4's question and S5's titles.
 - **S1:** the transcript names a README section and a document linked from it, before S2's first setup command.
 - **S2 and S3:** the named document's setup and demo commands, run in the transcript, exit 0.
-- **S4:** a question record holding the frozen question, verbatim, in an Atlas project at a path that isn't the
-  default `.engram/atlas/project`.
+- **S4:** a question record holding the frozen question, equal under the normalization, in an Atlas project at a
+  path that isn't the default `.engram/atlas/project`.
 - **S5:** a claim that `informs` that question record, citing a source whose `url` or `citation` holds a DOI or a
-  PMID. After the walk, the scorer resolves it through Crossref or PubMed, and the resolved title must equal the
-  recorded title, ignoring case and whitespace. An unresolved or mismatched identifier means S5 is not done.
-- **S6:** after `make atlas ATLAS_ARGS='refresh'` for that project, the claim's id and the identifier appear in its
-  `.atlas/research/index.html` or under its `Research/`. This is read from the files, never by opening a browser.
+  PMID. After the walk, the scorer resolves a DOI through Crossref and a PMID through PubMed esummary, and the resolved
+  title must equal the recorded title under the normalization. An unresolved or mismatched identifier means S5 is not
+  done.
+- **S6 (X6):** the transcript shows the walker, within budget, reading a view file or a Superyak command's output
+  that holds the claim's id and its identifier. The scorer then confirms it from the files, after
+  `make atlas ATLAS_ARGS='refresh'` for that project: the id and identifier are in its `.atlas/research/index.html` or
+  under its `Research/`. The scorer's refresh only confirms, and never opens a browser.
 
 ## After each walk (W6, W7)
 
 - **The report** is one JSON file: the commit walked, the steps, the stalls, the budget used, the source's route and
-  identifier, the transcript's sha256, and Tardis's load during the walk. It's kept on this spec's branch, off the
-  tree walkers clone, and its sha256 is posted in all hands.
+  identifier, the transcript's sha256, and Tardis's load during the walk. It's kept off origin, in a bundle (X4), until
+  the agent walks end, and its sha256 is posted in all hands.
 - **One blocker is fixed per train:** the first stall in a step scored "not done", or else the first stall. The fix
   changes only the README, or the document or tool the stall pointed to. It never names the question, its topic, or
   any identifier a walk found.
@@ -102,8 +137,8 @@ in the report.
   verified and found through Superyak's tools or an outside search. A source from memory doesn't stop them. They also
   stop after five walks. Then a person walks.
 - **A void walk:** one ended by a model-API fault or a machine fault is reported as void and not counted.
-- **Frozen together:** the question, the rules, the steps, the budget, the checklist and the stop rule. None changes
-  after a walk.
+- **Frozen together:** the question, the rules, the steps, the budget, the checklist, the normalization, the
+  invocation and the stop rule. None changes after a walk.
 
 ## The person's report (W8)
 
