@@ -75,16 +75,21 @@ folded in below.
 - Parked, not dropped: memory that follows the ship (spec approved), the n-category store's use (now test 6's
   question), and owner trust's restore follow-ups (on the board).
 
-## Tardis: federation, the public route, CI, the visitor's view, and north-star tests 5 and 6
+## Tardis: federation, the public route, CI, the visitor's view, and north-star tests 4 and 5
 
-Refreshed 2026-11-22 toward goal 6, in Tardis's words (all hands 76c735c8); its own to point, and Andy can veto:
+Refreshed 2026-11-22 toward goal 6, in Tardis's words (all hands 76c735c8), and T2 on 2026-11-23; its own to point,
+and Andy can veto:
 - T1 (goal 6, test 5): the receiver's copied-or-independent rule, on Tardis's crossing and receiver code, starting as
   a plain rule: a copy is the same root source arriving by another store, and independent means a different root.
   And #12's second Lighthouse, a push identity on Tardis: today only Tardis asks the Pi, and test 5 needs evidence
   both ways. Measure, fixed before the run: every planted claim called copied or independent correctly, then real
   crossings both ways.
-- T2 (goal 6, test 6): on test 5's data, the sheaf and n-category machinery against the plain rule and a provenance
-  graph. If the plain one does as well, the native line stops. It folds in the #2 stop test, and the kernel stays C.
+- T2 (goal 4, the visitor's view): test 6 is closed (row 6: identity, graded and `ncat`, each stopped and checked), so
+  this line turns to the gap every review since 11-22 names. **A visitor's first hour:** someone outside the three
+  ships, given only the README, runs Superyak and asks it one research question. First a fresh agent that has never
+  seen the repo walks that path, and each place it stalls is logged and fixed, one blocker per train. Then a person
+  outside us does it: a visitor at Andy's table, or a collaborator Andy admits. Measure, fixed before the walk: the
+  steps finished unaided, and whether the question gets a sourced answer.
 - T3 (goal 6, test 4, with Serenity): stuck-agent traps in the time-loop room (a cycle, a renamed failed idea, a
   misleading summary, a map-breaking observation). Fixed, random and adaptive exploration under one budget, scored on
   recovery, not activity.
