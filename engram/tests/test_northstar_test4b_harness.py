@@ -397,16 +397,59 @@ def test_a_repeat_value_that_isnt_a_patch_number_stays_as_written(given):
     assert result["named"] is False and result["raised"] is True
 
 
-def test_trap_4_maps_a_repeat_number_to_the_key_on_that_calls_moved_base():
+def test_trap_4_logs_the_key_at_that_call_and_scores_the_key_as_recorded():
     wd = world(4)
     n = len(wd["planted"])
     planted_idea = wd["planted"][0]["index"]
     script = Script([reply(wd["passing"], flags=[{"repeat": planted_idea}])])
     result = H.run(wd, "R2", 0, call_turn=script)
     now = W.open_patches(wd, list(wd["planted"]), 1)[planted_idea]["content"]
-    assert result["flags_per_call"][n] == [{"repeat": now}]
+    assert result["flags_per_call"][n] == [{"repeat": now}]  # logged: the key at that call
     assert now != wd["planted"][0]["content"]  # the key moved with the base
+    assert result["scoring_flags_per_call"][n] == [{"repeat": wd["planted"][0]["content"]}]  # scored: as recorded
+    assert wd["planted"][0]["content"] == wd["patches"][0][planted_idea]["content"]
     assert result["named"] is True
+
+
+@pytest.mark.parametrize("arm", ["R1", "R2"])
+def test_trap_4_is_named_after_a_stalled_first_turn(arm):
+    """Review, required change 1: after a stall, the first read call's base is bases[2], whose key the rule doesn't
+    take; the key as recorded (bases[0]) is what it scores."""
+    wd = world(4)
+    n = len(wd["planted"])
+    planted_idea = wd["planted"][0]["index"]
+    script = Script([H.TurnResult.stall("timeout"), reply(wd["passing"], flags=[{"repeat": planted_idea}])])
+    result = H.run(wd, arm, 0, call_turn=script)
+    at_call = W.open_patches(wd, list(wd["planted"]), 2)[planted_idea]["content"]
+    assert result["stall_turns"] == [1]
+    assert result["flags_per_call"][n] == [{"repeat": at_call}]
+    assert result["scoring_flags_per_call"][n] == [{"repeat": wd["patches"][0][planted_idea]["content"]}]
+    assert result["named"] is True and result["raised"] is True
+    # The at-that-call key alone would have lost it, which is the change's reason.
+    assert W.named(wd, result["record"], result["flags_per_call"]) is False
+
+
+def test_trap_4_is_named_with_no_stall_too():
+    wd = world(4)
+    planted_idea = wd["planted"][1]["index"]  # the other planted idea, failed at turn 2
+    result = H.run(wd, "R1", 0, call_turn=Script([reply(wd["passing"], flags=[{"repeat": str(planted_idea)}])]))
+    assert result["stall_turns"] == [] and result["named"] is True
+
+
+@pytest.mark.parametrize("stall_first", [False, True])
+def test_trap_1_naming_is_unaffected_by_the_scoring_map(stall_first):
+    wd = world(1)
+    n = len(wd["planted"])
+    returner = wd["planted"][0]["index"]
+    outcomes = [H.TurnResult.stall("timeout")] if stall_first else []
+    outcomes += [reply(wd["passing"], flags=[{"repeat": returner}])]
+    result = H.run(wd, "R1", 0, call_turn=Script(outcomes))
+    assert result["scoring_flags_per_call"] == result["flags_per_call"]  # one base: the two maps agree
+    assert result["flags_per_call"][n] == [{"repeat": wd["planted"][0]["content"]}]
+    assert result["named"] is True
+    wrong = failing(wd, returner)
+    result = H.run(wd, "R1", 0, call_turn=Script(outcomes[:-1] + [reply(wd["passing"], flags=[{"repeat": wrong}])]))
+    assert result["named"] is False and result["raised"] is True
 
 
 def test_a_twin_scores_false_names_and_trap_3_scores_raised():
@@ -423,6 +466,22 @@ def test_map_flags_only_touches_repeat():
     patches = [{"content": f"key{x}"} for x in range(5)]
     flags = [{"repeat": "2"}, {"contradiction": "1"}, {"premise": 5}, {"cycle": "3"}]
     assert H.map_flags(flags, patches) == [{"repeat": "key2"}, {"contradiction": "1"}, {"premise": 5}, {"cycle": "3"}]
+
+
+def test_string_contradiction_and_premise_values_are_counted():
+    two = world(2)
+    five = world(5)
+    runs = [
+        H.run(two, "R1", 0, call_turn=Script([reply(two["passing"], flags=[{"contradiction": "1"}])])),
+        H.run(two, "R2", 0, call_turn=Script([reply(two["passing"], flags=[{"contradiction": 1}])])),
+        H.run(
+            five, "R1", 0,
+            call_turn=Script([reply(five["passing"], flags=[{"premise": "5"}, {"contradiction": "2"}])]),
+        ),
+    ]
+    assert runs[0]["named"] is False and runs[1]["named"] is True  # the worlds take only an integer turn
+    assert H.string_turn_values(runs) == {"contradiction": 2, "premise": 1}
+    assert H.string_turn_values(runs[1:2]) == {"contradiction": 0, "premise": 0}
 
 
 # ------------------------------------------------------------------ the bootstrap and the size
@@ -546,6 +605,22 @@ def test_provenance_names_the_three_modules_the_fingerprint_and_numpy():
         name = Path(module.__file__).name
         assert found[name] == hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
     assert found["fingerprint"] == W.fingerprint() and found["numpy"] == np.__version__
+
+
+def test_the_arm_order_is_drawn_per_world_and_repeat():
+    for trap in (1, 2, 3, 4, 5):
+        for w in (0, 1, 2):
+            for repeat in (0, 1, 2):
+                drawn = np.random.default_rng([20261202, trap, w, repeat]).permutation(3)
+                assert H.arm_order(trap, w, repeat) == [["R0", "R1", "R2"][int(k)] for k in drawn]
+    orders = {tuple(H.arm_order(t, w, r)) for t in (1, 2, 3, 4, 5) for w in (0, 1, 2) for r in (0, 1, 2)}
+    assert len(orders) > 1  # the pilot doesn't always run R0, R1, R2
+
+
+def test_a_stopped_series_restarts_whole():
+    assert "restarted whole" in H.RESTART_RULE and "never" in H.RESTART_RULE
+    assert "restarts whole" in H.MachineDown.__doc__
+    assert H.score(fake_runs(1))["restart_rule"] == H.RESTART_RULE
 
 
 def test_the_pilot_is_270_runs():
@@ -688,6 +763,23 @@ def test_a_pilot_slice_end_to_end_through_the_stub():
     assert stalls == stub.kinds["stall"] + stub.kinds["malformed"] > 0
     assert sum(a["stalls_by_reason"].get("malformed", 0) for a in per_arm.values()) > 0
     assert len(pauses) == stub.kinds["fault"] - 1  # every fault pauses but the one that voided
+    for arm, block in per_arm.items():  # stalls per arm and per form
+        assert set(block["by_form"]) == {"trapped", "twin"}
+        for name in ("runs", "stalls", "stalls_in_voided_attempts", "faults", "reruns"):
+            assert sum(block["by_form"][f][name] for f in H.FORMS) == block[name]
+        assert set(block["string_turn_values"]) == {"contradiction", "premise"}
+    assert report["string_turn_values"] == {"contradiction": 0, "premise": 0}  # the stub sends only repeat flags
+
+    # The arms ran in each world's drawn order, both forms alike, and the report records every order.
+    assert report["arm_orders"] == [
+        {"trap": t, "w": 0, "repeat": 0, "order": H.arm_order(t, 0, 0)} for t in (1, 2, 3, 4, 5)
+    ]
+    assert [r["position"] for r in runs] == list(range(30))
+    for k, wd in enumerate(worlds):
+        block = runs[3 * k : 3 * k + 3]
+        assert all(r["trap"] == wd["trap"] and r["form"] == wd["form"] for r in block)
+        assert [r["arm"] for r in block] == H.arm_order(wd["trap"], wd["w"], 0) == block[0]["arm_order"]
+    assert report["restart_rule"] == H.RESTART_RULE
     for r in runs:
         n = len(world(r["trap"], r["w"], r["form"])["planted"])
         turns = [e["turn"] for e in r["record"][n:]]

@@ -37,9 +37,16 @@ What it does:
 - **The real call_turn** (`RealTurn`, `turn_argv`, `classify`): the frozen invocation, run under the systemd scope,
   bubblewrap and `env -i`, with stream-json parsed and classified. It is never run by the tests.
 - **Scoring** (`score`): recovery; the six primary differences per trap, each the mean over worlds with a 95%
-  percentile bootstrap CI over worlds; naming through `named` (traps 1, 2, 4 and 5) and `raised` (trap 3), with
-  `repeat` values mapped from an open patch's number to its key at that call; false names in the twins; activity;
-  firing turns; stalls, faults and reruns per arm; tokens and wall time beside them, never scored.
+  percentile bootstrap CI over worlds; naming through `named` (traps 1, 2, 4 and 5) and `raised` (trap 3), with a
+  `repeat` number mapped to that patch's key on `bases[0]` (its key as recorded) at the naming rule's call, while
+  the logged flags keep the key at that call; false names in the twins; activity; firing turns; how many
+  `contradiction` and `premise` values arrived as strings; stalls per arm and form, faults and reruns per arm;
+  tokens and wall time beside them, never scored.
+- **Arm order** (`arm_order`): within each world and repeat, the arms run in the order
+  `numpy.random.default_rng([20261202, trap, w, repeat]).permutation(3)` over R0, R1, R2 (review advisory), so time
+  effects don't fall on one arm. The report records every order.
+- **A stopped series restarts whole.** When `MachineDown` (or any HarnessError) stops a series, it is run again from
+  its first run, never resumed with chosen runs; nothing here resumes.
 - **Size** (`pilot_size`): `N = ceil((2 * 1.96 * sigma / 0.30) ** 2)`, sigma the largest of the trap's six per-world
   standard deviations (ddof = 1), floored at 0.30.
 
@@ -107,6 +114,12 @@ PRIMARIES = (
     ("get_out/R2-R1", "get_out", "R2", "R1", None),
 )
 
+ARM_ORDER_SEED = 20261202  # numpy.random.default_rng([20261202, trap, w, repeat]).permutation(3), over ARMS
+STRING_TURN_FLAGS = ("contradiction", "premise")
+RESTART_RULE = (
+    "A series that MachineDown (or any HarnessError) stops is restarted whole, from its first run; it is never "
+    "resumed, and no runs are chosen to keep."
+)
 
 
 class HarnessError(RuntimeError):
@@ -120,7 +133,10 @@ class HarnessStop(HarnessError):
 
 
 class MachineDown(HarnessError):
-    """A run voided more than MAX_RERUNS times in a row. The series stops rather than drop it."""
+    """A run voided more than MAX_RERUNS times in a row. The series stops rather than drop it.
+
+    A series it stops restarts whole, from its first run, once the machine is fixed. It never resumes from where it
+    stopped and never keeps chosen runs, so faults can't select which runs count. Nothing in this module resumes."""
 
 
 # ------------------------------------------------------------------ what a call returns
@@ -340,6 +356,24 @@ def map_flags(flags: Sequence[Mapping], patches: Sequence[Mapping]) -> list[dict
     return out
 
 
+def scoring_flags(
+    world: Mapping, flags_per_call: Sequence[Sequence[Mapping]], raw_flags_per_call: Sequence[Sequence[Mapping]]
+) -> list[list[dict]]:
+    """The flags `named`, `raised` and `false_named` are given (review: required change 1).
+
+    At the naming rule's call, the first read call (slot n), a `repeat` number becomes that patch's key on
+    `bases[0]`, its key "as recorded", which the rule accepts for traps 1 and 4 whatever `i` is. Mapping it to the
+    key at that call instead fails trap 4 after a stalled first turn: that call's base is then `bases[2]` or later,
+    while the rule accepts the key as recorded or as offered at i = 1. Every other slot is the logged flags, which
+    keep the at-that-call mapping for the record. Traps 1, 2, 3 and 5 and every twin have one base, so there the two
+    mappings agree."""
+    n = len(world["planted"])
+    out = [list(flags) for flags in flags_per_call]
+    if len(out) > n:
+        out[n] = map_flags(raw_flags_per_call[n], world["patches"][0])
+    return out
+
+
 # ------------------------------------------------------------------ one run
 
 
@@ -527,14 +561,15 @@ def run(
     flags_per_call = attempt["flags_per_call"]
     n = len(world["planted"])
     read_any = len(flags_per_call) > n
+    scoring = scoring_flags(world, flags_per_call, attempt["raw_flags_per_call"])
     named = raised = None
     false_named = None
     if world["form"] == "trapped":
         if read_any:
-            named = worlds_half.named(world, record, flags_per_call)
-            raised = bool(worlds_half.raised(world, record, flags_per_call))
+            named = worlds_half.named(world, record, scoring)
+            raised = bool(worlds_half.raised(world, record, scoring))
     else:
-        false_named = bool(worlds_half.false_named(world, record, flags_per_call))
+        false_named = bool(worlds_half.false_named(world, record, scoring))
     run_entries = record[n:]
     return {
         "trap": int(world["trap"]),
@@ -557,6 +592,7 @@ def run(
         "seconds": seconds,
         "record": record,
         "flags_per_call": flags_per_call,
+        "scoring_flags_per_call": scoring,
         "raw_flags_per_call": attempt["raw_flags_per_call"],
         "firing": firing_turns(world, record),
         "named": None if named is None else bool(named),
@@ -594,24 +630,36 @@ def run_series(
     max_reruns: int = MAX_RERUNS,
     on_run: Callable[[dict], Any] | None = None,
 ) -> list[dict]:
-    """Every run of `worlds` x `arms` x `repeats`. The verdict command is checked once first.
+    """Every run of `worlds` x `arms` x `repeats`, from the first, in one pass. The verdict command is checked once
+    first.
 
-    Reading: the order is repeat, then world (by trap, w, form), then arm, so drift over a long series falls on every
-    arm and both forms alike."""
+    The order is repeat, then world (by trap, w, form), then the arms in `arm_order(trap, w, repeat)`, so both forms
+    of a world share an order within a repeat and drift over a long series doesn't fall on one arm. Each run records
+    its `arm_order` and its `position` in the series. `on_run` is for logging as runs finish; a series that stops is
+    restarted whole (RESTART_RULE), never resumed from what `on_run` saved."""
     if not worlds:
         return []
     check_verdict(worlds[0], verdict)
     runs = []
     for repeat in repeats:
         for world in worlds:
-            for arm in arms:
+            order = [arm for arm in arm_order(world["trap"], world["w"], repeat) if arm in arms]
+            for arm in order:
                 result = run(
                     world, arm, repeat, call_turn=call_turn, pause=pause, verdict=verdict, max_reruns=max_reruns
                 )
+                result["arm_order"] = order
+                result["position"] = len(runs)
                 runs.append(result)
                 if on_run is not None:
                     on_run(result)
     return runs
+
+
+def arm_order(trap: int, w: int, repeat: int) -> list[str]:
+    """The arms' order within world (trap, w) at this repeat (review advisory)."""
+    permutation = np.random.default_rng([ARM_ORDER_SEED, int(trap), int(w), int(repeat)]).permutation(len(ARMS))
+    return [ARMS[int(k)] for k in permutation]
 
 
 def pilot(call_turn: CallTurn, **kw: Any) -> dict:
@@ -775,29 +823,52 @@ def _recovery(cell: list[Mapping]) -> dict:
             "rate": _mean([1.0 if r["recovered"] else 0.0 for r in cell])}
 
 
+def _stall_counts(runs: Sequence[Mapping]) -> dict:
+    """Stalls in the counted attempts (by reason), stalls inside voided attempts, faults and reruns."""
+    stalls: Counter[str] = Counter()
+    voided_stalls = 0
+    for r in runs:
+        stalls.update(r["stalls"])
+        voided_stalls += sum(sum(v["stalls"].values()) for v in r.get("voided", ()))
+    return {
+        "runs": len(runs),
+        "stalls": sum(stalls.values()),
+        "stalls_by_reason": dict(sorted(stalls.items())),
+        "stalls_in_voided_attempts": voided_stalls,
+        "faults": sum(r["faults"] for r in runs),
+        "reruns": sum(r["reruns"] for r in runs),
+    }
+
+
+def string_turn_values(runs: Sequence[Mapping]) -> dict[str, int]:
+    """How many `contradiction` and `premise` values arrived as strings (review advisory), over every read call of
+    the counted attempts. The worlds' `named` takes only an integer turn, so these score as not named."""
+    counts = {name: 0 for name in STRING_TURN_FLAGS}
+    for r in runs:
+        for flags in r.get("raw_flags_per_call", ()):
+            for flag in flags:
+                for name, value in flag.items():
+                    if name in counts and isinstance(value, str):
+                        counts[name] += 1
+    return counts
+
+
 def _per_arm(runs: Sequence[Mapping]) -> dict:
     out = {}
     for arm in ARMS:
         mine = [r for r in runs if r["arm"] == arm]
-        stalls: Counter[str] = Counter()
         usage: dict[str, float] = {}
-        voided_stalls = 0
         for r in mine:
-            stalls.update(r["stalls"])
             _add_usage(usage, r["usage"])
-            voided_stalls += sum(sum(v["stalls"].values()) for v in r.get("voided", ()))
         turns = sum(r["turns"] for r in mine)
         calls = sum(r["calls"] for r in mine)
         seconds = sum(r["seconds"] for r in mine)
         out[arm] = {
-            "runs": len(mine),
+            **_stall_counts(mine),
             "turns": turns,  # run turns of the counted attempts; `calls` holds every model call, voids included
             "calls": calls,
-            "stalls": sum(stalls.values()),
-            "stalls_by_reason": dict(sorted(stalls.items())),
-            "stalls_in_voided_attempts": voided_stalls,
-            "faults": sum(r["faults"] for r in mine),
-            "reruns": sum(r["reruns"] for r in mine),
+            "by_form": {form: _stall_counts([r for r in mine if r["form"] == form]) for form in FORMS},
+            "string_turn_values": string_turn_values(mine),
             "usage": usage,
             "seconds": seconds,
             "seconds_per_call": seconds / calls if calls else None,
@@ -805,9 +876,19 @@ def _per_arm(runs: Sequence[Mapping]) -> dict:
     return out
 
 
+def _arm_orders(runs: Sequence[Mapping]) -> list[dict]:
+    """Each (trap, w, repeat)'s arm order, as the series ran it."""
+    orders: dict[tuple[int, int, int], list[str]] = {}
+    for r in runs:
+        if "arm_order" in r:
+            orders.setdefault((r["trap"], r["w"], r["repeat"]), list(r["arm_order"]))
+    return [{"trap": t, "w": w, "repeat": rep, "order": order} for (t, w, rep), order in sorted(orders.items())]
+
+
 def score(runs: Sequence[Mapping]) -> dict:
     """The report: per trap, never pooled, the six primaries with their CIs, recovery, naming beside them, false
-    names, activity, firing and the pilot's size; per arm, stalls, faults, reruns, tokens and wall time."""
+    names, string-valued turn numbers, activity, firing and the pilot's size; per arm, stalls (also per form),
+    faults, reruns, tokens and wall time; the arm orders run, and the restart rule."""
     traps = {}
     for trap in sorted({r["trap"] for r in runs}):
         trap_runs = [r for r in runs if r["trap"] == trap]
@@ -825,6 +906,7 @@ def score(runs: Sequence[Mapping]) -> dict:
             "underpowered": any(p["wider_than_0.15"] for p in prim.values()),
             "naming": _naming(trap_runs, trap),
             "false_names": _false_names(trap_runs),
+            "string_turn_values": {arm: string_turn_values([r for r in trap_runs if r["arm"] == arm]) for arm in ARMS},
             "activity": _by_arm_form(trap_runs, _activity),
             "firing": _by_arm_form(trap_runs, _firing),
             "size": pilot_size(sigma_raw),
@@ -833,6 +915,12 @@ def score(runs: Sequence[Mapping]) -> dict:
         "runs": len(runs),
         "traps": traps,
         "per_arm": _per_arm(runs),
+        "string_turn_values": string_turn_values(runs),
+        "arm_orders": _arm_orders(runs),
+        "arm_order_rule": (
+            f"numpy.random.default_rng([{ARM_ORDER_SEED}, trap, w, repeat]).permutation(3) over R0, R1, R2"
+        ),
+        "restart_rule": RESTART_RULE,
         "bootstrap": {
             "resamples": BOOTSTRAP_RESAMPLES,
             "rng": f"numpy.random.default_rng({BOOTSTRAP_SEED}), fresh per trap, one matrix shared by its six",
