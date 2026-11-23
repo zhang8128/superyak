@@ -63,11 +63,10 @@ def entry_for(state, name, content, verdict="fail", observation=None):
 class TableWorld:
     """A world from a table: state -> [(name, content, next state)]."""
 
-    def __init__(self, table, recovered=(), budget=5, seed=0):
+    def __init__(self, table, recovered=(), budget=5):
         self.table = table
         self.recovered_states = set(recovered)
         self.budget = budget
-        self.seed = seed
         self.steps = []
 
     def options(self, state):
@@ -356,72 +355,99 @@ def test_the_trap_to_flag_map_is_the_contracts():
 # ------------------------------------------------------------ worlds, twins
 
 
-class Bare:
-    def __init__(self, seed):
-        self.seed = seed
+SEED_BASE = 20_261_122  # the fake world half's SEED_BASE
 
 
-def eight_hundred(*, seeds=True, dkw=lambda j: (j % 2, 3, 1), twin_order=lambda j: 37 * j % 100):
+class BareWorld:
+    """A World as the worlds module shapes it, without behaviour."""
+
+    def __init__(self, trap, D, k, w, form):
+        self.trap, self.D, self.k, self.w, self.form = trap, D, k, w, form
+        self.budget = 1
+
+
+def bare_dkw(j):
+    return j % 5, j // 5 % 4, j // 20  # one-to-one over a trap's 100 worlds
+
+
+def eight_hundred(*, dkw=bare_dkw, twin_order=lambda i: 37 * i % 100, make=BareWorld):
+    """400 trapped worlds in order, then their twins in another order, so
+    only (trap, D, k, w) can join them."""
+
     def worlds():
         for trap in (1, 2, 3, 4):
             for j in range(100):
-                d, k, w = dkw(j)
-                yield {"world": Bare(1000 * trap + j if seeds else None), "trap": trap, "D": d, "k": k, "w": w,
-                       "form": "trapped"}
+                yield make(trap, *dkw(j), "trapped")
         for trap in (4, 3, 2, 1):
             for i in range(100):
-                j = twin_order(i)
-                d, k, w = dkw(j)
-                yield {"world": Bare(1000 * trap + j if seeds else None), "trap": trap, "D": d, "k": k, "w": w,
-                       "form": "twin"}
+                yield make(trap, *dkw(twin_order(i)), "twin")
 
-    return types.SimpleNamespace(worlds=worlds)
+    return types.SimpleNamespace(worlds=worlds, SEED_BASE=SEED_BASE)
 
 
-def test_each_trapped_world_joins_the_twin_with_its_trap_D_k_w_and_seed():
+def test_each_trapped_world_joins_the_twin_with_its_trap_D_k_w_never_its_order():
     pairs = t4.collect_worlds(eight_hundred())
     assert sorted(pairs) == [1, 2, 3, 4]
     for trap, joined in pairs.items():
         assert [p.index for p in joined] == list(range(100))
-        assert [p.trapped.seed for p in joined] == [1000 * trap + j for j in range(100)]
-        assert all(p.twin.seed == p.trapped.seed and p.twin is not p.trapped for p in joined)
-        assert all(p.seed == p.trapped.seed and p.D == p.trapped.seed % 2 for p in joined)
+        assert [(p.D, p.k, p.w) for p in joined] == [bare_dkw(j) for j in range(100)]
+        for p in joined:
+            assert (p.trapped.form, p.twin.form) == ("trapped", "twin")
+            assert (p.trapped.trap, p.twin.trap, p.twin.D, p.twin.k, p.twin.w) == (trap, trap, p.D, p.k, p.w)
 
 
-def test_without_seeds_twins_join_on_trap_D_k_w_only_when_that_is_one_to_one():
-    pairs = t4.collect_worlds(eight_hundred(seeds=False, dkw=lambda j: (j, j % 3, j % 5)))
-    assert all(p.D == p.index for joined in pairs.values() for p in joined)
-    with pytest.raises(t4.ContractError, match="one-to-one"):
-        t4.collect_worlds(eight_hundred(seeds=False))
+def test_a_worlds_seed_is_recomputed_as_seed_sequence_of_seed_base_trap_D_k_w():
+    world = t4.read_world(BareWorld(3, 4, 2, 1, "twin"))
+    expected = np.random.SeedSequence([SEED_BASE, 3, 4, 2, 1]).generate_state(8).tolist()
+    assert list(t4.world_seed(eight_hundred(), world)) == expected
+    assert t4.world_seed(types.SimpleNamespace(SEED_BASE=SEED_BASE + 1), world) != tuple(expected)
 
 
-def test_collect_worlds_refuses_anything_but_100_pairs_in_each_of_4_traps():
+class SeedsApart(int):
+    """Compares and hashes as ``alias`` while its own value seeds differently:
+    a twin that joins its trapped world on (trap, D, k, w) without sharing its seed."""
+
+    def __new__(cls, value, alias):
+        number = super().__new__(cls, value)
+        number.alias = alias
+        return number
+
+    def __eq__(self, other):
+        return other == self.alias
+
+    def __hash__(self):
+        return hash(self.alias)
+
+
+def test_the_runner_refuses_a_twin_pair_whose_recomputed_seeds_differ():
+    def make(trap, D, k, w, form):
+        if (trap, D, k, w, form) == (2, 3, 1, 4, "twin"):  # world 88's twin in trap 2
+            D = SeedsApart(7, alias=3)
+        return BareWorld(trap, D, k, w, form)
+
+    with pytest.raises(t4.ContractError, match="recomputed seeds differ"):
+        t4.collect_worlds(eight_hundred(make=make))
+
+
+def test_collect_worlds_refuses_anything_but_100_one_to_one_pairs_in_each_of_4_traps():
     whole = list(eight_hundred().worlds())
-    short = types.SimpleNamespace(worlds=lambda: iter(whole[:-1]))
+
+    def half(worlds):
+        return types.SimpleNamespace(worlds=lambda: iter(worlds), SEED_BASE=SEED_BASE)
+
     with pytest.raises(t4.ContractError, match="799"):
-        t4.collect_worlds(short)
-    doubled = whole[:-1] + [dict(whole[-2])]
+        t4.collect_worlds(half(whole[:-1]))
+    last = whole[-2]
     with pytest.raises(t4.ContractError, match="one-to-one"):
-        t4.collect_worlds(types.SimpleNamespace(worlds=lambda: iter(doubled)))
-    bad_trap = [dict(item, trap=5) if n == 0 else item for n, item in enumerate(whole)]
+        t4.collect_worlds(half(whole[:-1] + [BareWorld(last.trap, last.D, last.k, last.w, "twin")]))
+    with pytest.raises(t4.ContractError, match="one-to-one"):
+        t4.collect_worlds(eight_hundred(dkw=lambda j: (j % 2, 3, 1)))
     with pytest.raises(t4.ContractError, match="trap"):
-        t4.collect_worlds(types.SimpleNamespace(worlds=lambda: iter(bad_trap)))
-    bad_form = [dict(item, form="untrapped") if n == 0 else item for n, item in enumerate(whole)]
+        t4.collect_worlds(half([BareWorld(5, 0, 0, 0, "trapped")] + whole[1:]))
     with pytest.raises(t4.ContractError, match="form"):
-        t4.collect_worlds(types.SimpleNamespace(worlds=lambda: iter(bad_form)))
-
-
-def test_a_world_item_reads_as_a_mapping_a_six_tuple_or_attributes():
-    world = Bare(5)
-    as_map = t4.unpack_item({"world": world, "trap": 2, "D": 1, "k": 2, "w": 3, "form": "twin"})
-    as_tuple = t4.unpack_item((world, 2, 1, 2, 3, "twin"))
-    carrier = types.SimpleNamespace(seed=5, trap=2, D=1, k=2, w=3, form="twin")
-    as_attrs = t4.unpack_item(carrier)
-    for item in (as_map, as_tuple):
-        assert (item.world, item.trap, item.D, item.k, item.w, item.form, item.seed) == (world, 2, 1, 2, 3, "twin", 5)
-    assert (as_attrs.world, as_attrs.trap, as_attrs.form, as_attrs.seed) == (carrier, 2, "twin", 5)
-    with pytest.raises(t4.ContractError):
-        t4.unpack_item((world, 2, 1, 2, "twin"))
+        t4.collect_worlds(half([BareWorld(1, 0, 0, 0, "untrapped")] + whole[1:]))
+    with pytest.raises(t4.ContractError, match=r"\.form"):
+        t4.collect_worlds(half([types.SimpleNamespace(trap=1, D=0, k=0, w=0)] + whole[1:]))
 
 
 # ------------------------------------------------------------------ scoring
@@ -561,20 +587,102 @@ def test_the_cli_refuses_an_empty_fingerprint_and_a_missing_one(tmp_path, capsys
     assert exited.value.code == 2 and not out.exists()
 
 
-def test_a_half_missing_an_export_is_refused(monkeypatch):
-    worlds = types.ModuleType("fake_t4_partial_worlds")
-    worlds.worlds = lambda: iter(())
-    worlds.named = lambda w, r, f: None
-    policies = types.ModuleType("fake_t4_partial_policies")
-    for name in ("fixed", "random", "adaptive_name"):
-        setattr(policies, name, lambda r, o, s: (0, []))
-    monkeypatch.setitem(sys.modules, worlds.__name__, worlds)
-    monkeypatch.setitem(sys.modules, policies.__name__, policies)
-    with pytest.raises(t4.ContractError, match="false_named"):
-        t4.load_halves(worlds.__name__, policies.__name__)
-    worlds.false_named = lambda w, r, f: False
-    with pytest.raises(t4.ContractError, match="adaptive_content"):
-        t4.load_halves(worlds.__name__, policies.__name__)
+def test_the_halves_default_to_the_posted_module_names():
+    args = t4.build_parser().parse_args(
+        ["--worlds-code-hash", "w", "--policies-code-hash", "p", "--fingerprint", "f", "--out", "x.json"])
+    assert (args.worlds_module, args.policies_module) == (
+        "experiments.northstar.test4_worlds", "experiments.northstar.test4_policies")
+
+
+def fake_world_half(name="fake_t4_worlds", fingerprint="fp"):
+    """The world half's shape: worlds() of World objects, named, false_named,
+    fingerprint() and SEED_BASE."""
+    worlds = types.ModuleType(name)
+    worlds.worlds = eight_hundred().worlds
+    worlds.named = lambda world, record, flags_per_call: None
+    worlds.false_named = lambda world, record, flags_per_call: False
+    worlds.fingerprint = lambda: fingerprint
+    worlds.SEED_BASE = SEED_BASE
+    return worlds
+
+
+def fake_policy_half(name="fake_t4_policies"):
+    """The policy half's shape: the four pure functions, POLICIES of them by
+    name, and SEEDS = range(20)."""
+    policies = types.ModuleType(name)
+    for policy in CONTRACT_POLICIES:
+        setattr(policies, policy, planted_policy(policy))
+    policies.POLICIES = {policy: getattr(policies, policy) for policy in CONTRACT_POLICIES}
+    policies.SEEDS = range(20)
+    return policies
+
+
+def install(monkeypatch, *modules):
+    for module in modules:
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    return [module.__name__ for module in modules]
+
+
+def test_halves_in_their_shapes_load_the_four_policies_by_name(monkeypatch):
+    world_half, policy_half = fake_world_half(), fake_policy_half()
+    names = install(monkeypatch, world_half, policy_half)
+    loaded_world_half, policies = t4.load_halves(*names)
+    assert loaded_world_half is world_half
+    assert policies == policy_half.POLICIES and list(policies) == list(CONTRACT_POLICIES)
+
+
+@pytest.mark.parametrize("missing", ["worlds", "named", "false_named", "fingerprint", "SEED_BASE"])
+def test_a_world_half_missing_an_export_is_refused(monkeypatch, missing):
+    world_half = fake_world_half()
+    delattr(world_half, missing)
+    with pytest.raises(t4.ContractError, match=missing):
+        t4.load_halves(*install(monkeypatch, world_half, fake_policy_half()))
+
+
+POLICY_BREAKS = {
+    "no adaptive_content": lambda m: delattr(m, "adaptive_content"),
+    "no POLICIES": lambda m: delattr(m, "POLICIES"),
+    "POLICIES short": lambda m: m.POLICIES.pop("random"),
+    "POLICIES extra": lambda m: m.POLICIES.update(oracle=m.fixed),
+    "POLICIES another function": lambda m: m.POLICIES.update(fixed=m.random),
+    "no SEEDS": lambda m: delattr(m, "SEEDS"),
+    "SEEDS 0 to 18": lambda m: setattr(m, "SEEDS", range(19)),
+    "SEEDS 1 to 20": lambda m: setattr(m, "SEEDS", range(1, 21)),
+}
+
+
+@pytest.mark.parametrize("break_half", POLICY_BREAKS.values(), ids=POLICY_BREAKS.keys())
+def test_a_policy_half_off_its_shape_is_refused(monkeypatch, break_half):
+    policy_half = fake_policy_half()
+    break_half(policy_half)
+    with pytest.raises(t4.ContractError):
+        t4.load_halves(*install(monkeypatch, fake_world_half(), policy_half))
+
+
+def test_check_fingerprint_calls_fingerprint_and_refuses_any_other_value():
+    half = types.SimpleNamespace(fingerprint=lambda: "abc")
+    assert t4.check_fingerprint(half, "abc") == "abc"
+    for other in ("abd", "ABC", "abc "):
+        with pytest.raises(t4.Refused, match="fingerprint"):
+            t4.check_fingerprint(half, other)
+    with pytest.raises(t4.ContractError):
+        t4.check_fingerprint(types.SimpleNamespace(fingerprint=lambda: b"abc"), "abc")
+
+
+def test_stage_a_refuses_a_fingerprint_mismatch_before_reading_a_world(monkeypatch, tmp_path, capsys):
+    world_half = fake_world_half(fingerprint="fp-of-these-worlds")
+    read = []
+    world_half.worlds = lambda: read.append("worlds()") or iter(())
+    names = install(monkeypatch, world_half, fake_policy_half())
+    posted = "ceb09639edbe0c0a2c9c5b3c3c8baa91f40eed31d713f1c74201eaddd8fa065e"
+    with pytest.raises(t4.Refused, match="fingerprint"):
+        t4.run_stage_a(worlds_module=names[0], policies_module=names[1], worlds_code_hash="w",
+                       policies_code_hash="p", worlds_fingerprint=posted)
+    out = tmp_path / "result.json"
+    args = cli_args(out, **{"--worlds-module": names[0], "--policies-module": names[1], "--fingerprint": posted})
+    assert t4.main(args) == 2
+    assert "fp-of-these-worlds" in capsys.readouterr().err
+    assert read == [] and not out.exists()
 
 
 # --------------------------------------------- a planted run of all 800 worlds
@@ -583,14 +691,11 @@ def test_a_half_missing_an_export_is_refused(monkeypatch):
 # policy and seed, so the table decides each run: seeds below a cut recover at
 # turn seed % 3 + 1 and the rest never do (budget 3). A twin's cut is
 # 10 + j % 7; a trapped world's cut is lower by the trap's loss for that policy.
-# D, k and w repeat across 50 worlds of a trap, and the twins come out of
-# worlds() in another order, so only the seed joins a trapped world to its twin.
+# The twins come out of worlds() in another order, so only (trap, D, k, w)
+# joins a trapped world to its twin.
 
 PLANT_BUDGET = 3
-
-
-def plant_seed(trap, j):
-    return 1000 * trap + 7 * j + 3
+PLANTED_FINGERPRINT = "planted-800-worlds"
 
 
 def twin_cut(j):
@@ -611,9 +716,11 @@ def plant_turn(trap, j, form, policy, seed):
 
 
 class PlantedWorld:
+    """A World: .trap, .D, .k, .w, .form and .budget, and the contract's methods."""
+
     def __init__(self, trap, j, form):
         self.trap, self.j, self.form = trap, j, form
-        self.seed = plant_seed(trap, j)
+        self.D, self.k, self.w = bare_dkw(j)
         self.budget = PLANT_BUDGET
 
     @staticmethod
@@ -670,18 +777,15 @@ def planted_policy(name):
 
 def planted_halves():
     worlds = types.ModuleType("fake_t4_planted_worlds")
-    policies = types.ModuleType("fake_t4_planted_policies")
-
-    def item(trap, j, form):
-        return {"world": PlantedWorld(trap, j, form), "trap": trap, "D": j % 2, "k": 3, "w": 1, "form": form}
+    policies = fake_policy_half("fake_t4_planted_policies")
 
     def all_worlds():
         for trap in (1, 2, 3, 4):
             for j in range(100):
-                yield item(trap, j, "trapped")
+                yield PlantedWorld(trap, j, "trapped")
         for trap in (4, 3, 2, 1):
             for i in range(100):
-                yield item(trap, 37 * i % 100, "twin")
+                yield PlantedWorld(trap, 37 * i % 100, "twin")
 
     def named(world, record, flags_per_call):
         # The planted rule names the call just after turn 1, which exists only
@@ -695,8 +799,8 @@ def planted_halves():
         return world.form == "twin" and any(flag in raised for call in flags_per_call for raised in call)
 
     worlds.worlds, worlds.named, worlds.false_named = all_worlds, named, false_named
-    for name in CONTRACT_POLICIES:
-        setattr(policies, name, planted_policy(name))
+    worlds.fingerprint = lambda: PLANTED_FINGERPRINT
+    worlds.SEED_BASE = SEED_BASE
     return worlds, policies
 
 
@@ -709,7 +813,7 @@ def planted(tmp_path_factory):
     try:
         code = t4.main(cli_args(out, **{
             "--worlds-module": worlds.__name__, "--policies-module": policies.__name__,
-            "--worlds-code-hash": "wh", "--policies-code-hash": "ph", "--fingerprint": "fp",
+            "--worlds-code-hash": "wh", "--policies-code-hash": "ph", "--fingerprint": PLANTED_FINGERPRINT,
         }))
     finally:
         del sys.modules[worlds.__name__], sys.modules[policies.__name__]
@@ -746,17 +850,22 @@ def test_planted_every_world_runs_every_policy_on_every_seed(planted):
     assert len(planted["runs"]["rows"]) == 64_000
 
 
-def test_planted_records_what_it_was_given(planted):
-    assert {k: planted["provenance"][k] for k in GIVEN} == {
-        "worlds_code_hash": "wh", "policies_code_hash": "ph", "worlds_fingerprint": "fp"}
-    assert planted["provenance"]["worlds_module"] == "fake_t4_planted_worlds"
+def test_planted_records_what_it_was_given_the_fingerprint_it_read_and_numpy(planted):
+    provenance = planted["provenance"]
+    assert {k: provenance[k] for k in GIVEN} == {
+        "worlds_code_hash": "wh", "policies_code_hash": "ph", "worlds_fingerprint": PLANTED_FINGERPRINT}
+    assert provenance["worlds_fingerprint_computed"] == PLANTED_FINGERPRINT
+    assert provenance["numpy"] == np.__version__
+    assert (provenance["seed_base"], provenance["twin_seeds_confirmed"]) == (SEED_BASE, 400)
+    assert provenance["worlds_module"] == "fake_t4_planted_worlds"
+    assert provenance["policies_module"] == "fake_t4_planted_policies"
     assert (planted["stage"], planted["label"]) == ("A", "argued, checked")
 
 
-def test_planted_worlds_are_listed_in_trapped_order_with_their_seeds(planted):
+def test_planted_worlds_are_listed_in_trapped_order(planted):
     for trap in (1, 2, 3, 4):
         assert planted["worlds"][str(trap)] == [
-            {"index": j, "D": j % 2, "k": 3, "w": 1, "seed": plant_seed(trap, j)} for j in range(100)]
+            dict(zip(("index", "D", "k", "w"), (j, *bare_dkw(j)))) for j in range(100)]
 
 
 def test_planted_trap_effects_are_per_world_over_its_20_paired_seeds(planted):

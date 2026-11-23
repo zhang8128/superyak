@@ -33,13 +33,21 @@ Two policies picking different approaches counts for nothing here: only
 recovery enters the ceiling.
 
 The runner refuses to start without the worlds' code hash, the policies' code
-hash and the 800-world fingerprint. The contract defines no way to compute any
-of them, so the runner records them as given and can't recompute them.
+hash and the 800-world fingerprint, and refuses unless the world half's own
+``fingerprint()`` equals the fingerprint given. The code hashes are recorded as
+given: nothing defines how to compute them.
+
+Interface facts from the halves' authors, beyond the contract: the halves are
+``experiments.northstar.test4_worlds`` and ``experiments.northstar.test4_policies``;
+``worlds()`` yields ``World`` objects carrying ``.trap``, ``.D``, ``.k``, ``.w``,
+``.form`` and ``.budget``; twins join on ``(trap, D, k, w)``; a world's seed is
+``numpy.random.SeedSequence([SEED_BASE, trap, D, k, w])``, which only confirms a
+pairing; ``fingerprint() -> str``; ``named`` answering None (not exposed, or no
+such call) is not counted.
 
 Run from ``engram/``::
 
     python -m experiments.northstar.test4_runner \\
-        --worlds-module <module> --policies-module <module> \\
         --worlds-code-hash <hash> --policies-code-hash <hash> \\
         --fingerprint <800-world fingerprint> --out result.json
 """
@@ -59,6 +67,8 @@ from typing import Any, Callable
 import numpy as np
 
 SPEC_SECTIONS = {"the_contract_stage_a": "f0971788", "stage_a_argued_checked": "e48ce781"}
+DEFAULT_WORLDS_MODULE = "experiments.northstar.test4_worlds"
+DEFAULT_POLICIES_MODULE = "experiments.northstar.test4_policies"
 
 START_STATE = "L0"
 TRAPS = (1, 2, 3, 4)
@@ -92,7 +102,8 @@ VERDICTS = ("pass", "fail")
 SAYS = ("worked", "failed")
 ENTRY_KEYS = ("turn", "state", "name", "content", "verdict", "summary", "observation")
 WORLD_ENTRY_KEYS = frozenset(ENTRY_KEYS) - {"turn"}
-ITEM_FIELDS = ("world", "trap", "D", "k", "w", "form")
+WORLD_FIELDS = ("trap", "D", "k", "w", "form")
+SEED_WORDS = 8  # how much of a recomputed SeedSequence's state confirms a pairing
 RUN_COLUMNS = (
     "trap", "world", "form", "policy", "seed", "recovered", "turns_to_recovery",
     "turns_used", "distinct_contents", "named", "false_named", "flags_per_call",
@@ -111,8 +122,7 @@ class ContractError(Exception):
 
 
 def check_provenance(worlds_code_hash: Any, policies_code_hash: Any, worlds_fingerprint: Any) -> dict[str, str]:
-    """Refuse unless all three are given. The contract defines no computation
-    for any of them, so they are recorded as given, not recomputed."""
+    """Refuse unless all three are given, before importing either half."""
     given = {
         "worlds_code_hash": worlds_code_hash,
         "policies_code_hash": policies_code_hash,
@@ -124,23 +134,45 @@ def check_provenance(worlds_code_hash: Any, policies_code_hash: Any, worlds_fing
     return dict(given)
 
 
+def check_fingerprint(world_half: Any, given: str) -> str:
+    """The world half's own fingerprint() must equal the one given."""
+    computed = world_half.fingerprint()
+    if not isinstance(computed, str):
+        raise ContractError(f"fingerprint() returned {type(computed).__name__}, not a string")
+    if computed != given:
+        raise Refused(f"refusing to run stage A: the worlds' fingerprint() is {computed!r}, not the given {given!r}")
+    return computed
+
+
 # ------------------------------------------------------------------ loading
 
 
 def load_halves(worlds_module: str, policies_module: str) -> tuple[Any, dict[str, Callable]]:
     """Import both halves by name, only now, and check each exports what the
-    contract says it does."""
+    contract and the interface facts say it does."""
     world_half = importlib.import_module(worlds_module)
     policy_half = importlib.import_module(policies_module)
-    for name in ("worlds", "named", "false_named"):
+    for name in ("worlds", "named", "false_named", "fingerprint"):
         if not callable(getattr(world_half, name, None)):
             raise ContractError(f"the world half {worlds_module!r} doesn't export {name}()")
+    if not hasattr(world_half, "SEED_BASE"):
+        raise ContractError(f"the world half {worlds_module!r} doesn't export SEED_BASE")
     policies = {}
     for name in POLICY_NAMES:
         policy = getattr(policy_half, name, None)
         if not callable(policy):
             raise ContractError(f"the policy half {policies_module!r} doesn't export {name}")
         policies[name] = policy
+    # POLICIES and SEEDS only confirm what the contract already fixes: the four
+    # named functions and seeds 0 to 19.
+    exported = getattr(policy_half, "POLICIES", None)
+    if not isinstance(exported, Mapping) or set(exported) != set(POLICY_NAMES) or any(
+        exported[name] is not policies[name] for name in POLICY_NAMES
+    ):
+        raise ContractError(f"the policy half's POLICIES isn't the four named functions by name: {exported!r}")
+    seeds = getattr(policy_half, "SEEDS", None)
+    if seeds is None or list(seeds) != list(POLICY_SEEDS):
+        raise ContractError(f"the policy half's SEEDS is {seeds!r}, not the contract's 0 to 19")
     return world_half, policies
 
 
@@ -152,7 +184,6 @@ class WorldItem:
     k: Any
     w: Any
     form: str
-    seed: Any
 
 
 @dataclass(frozen=True)
@@ -162,57 +193,49 @@ class WorldPair:
     D: Any
     k: Any
     w: Any
-    seed: Any
     trapped: Any
     twin: Any
 
 
-def unpack_item(item: Any) -> WorldItem:
-    """One thing worlds() yields: "every world with its trap (1 to 4), D, k, w
-    and form". Taken as a mapping with those keys, an object carrying them as
-    attributes, or a 6-sequence in that order. The seed is the world's own
-    ``seed`` attribute (or a mapping's "seed"), when it has one."""
-    if isinstance(item, Mapping):
-        missing = [name for name in ITEM_FIELDS if name not in item]
-        if missing:
-            raise ContractError(f"a world from worlds() lacks {missing}")
-        fields = {name: item[name] for name in ITEM_FIELDS}
-        seed = getattr(fields["world"], "seed", None)
-        if seed is None:
-            seed = item.get("seed")
-    elif all(hasattr(item, name) for name in ITEM_FIELDS[1:]) and not isinstance(item, (tuple, list)):
-        fields = {"world": item, **{name: getattr(item, name) for name in ITEM_FIELDS[1:]}}
-        seed = getattr(item, "seed", None)
-    elif isinstance(item, (tuple, list)) and len(item) == len(ITEM_FIELDS):
-        fields = dict(zip(ITEM_FIELDS, item))
-        seed = getattr(fields["world"], "seed", None)
-    else:
-        raise ContractError(f"can't read a world, its trap, D, k, w and form from {type(item).__name__}")
-    trap = fields["trap"]
-    if isinstance(trap, bool) or not isinstance(trap, (int, np.integer)) or int(trap) not in TRAPS:
+def read_world(world: Any) -> WorldItem:
+    """One World from worlds(): its .trap, .D, .k, .w and .form."""
+    missing = [name for name in WORLD_FIELDS if not hasattr(world, name)]
+    if missing:
+        raise ContractError(f"a world from worlds() has no {', '.join('.' + m for m in missing)}")
+    trap = world.trap
+    if isinstance(trap, (bool, np.bool_)) or not isinstance(trap, (int, np.integer)) or int(trap) not in TRAPS:
         raise ContractError(f"a world's trap is {trap!r}; the contract's traps are 1 to 4")
-    if fields["form"] not in FORMS:
-        raise ContractError(f"a world's form is {fields['form']!r}; the contract's are trapped or twin")
-    return WorldItem(fields["world"], int(trap), fields["D"], fields["k"], fields["w"], fields["form"], seed)
+    if world.form not in FORMS:
+        raise ContractError(f"a world's form is {world.form!r}; the contract's are trapped or twin")
+    return WorldItem(world, int(trap), world.D, world.k, world.w, world.form)
+
+
+def world_seed(world_half: Any, item: WorldItem) -> tuple[int, ...]:
+    """The seed the world half builds a world from, recomputed from the world's
+    own attributes: SeedSequence([SEED_BASE, trap, D, k, w])."""
+    world = item.world
+    try:
+        sequence = np.random.SeedSequence([world_half.SEED_BASE, world.trap, world.D, world.k, world.w])
+    except (TypeError, ValueError) as exc:
+        raise ContractError(f"can't recompute the seed of trap {item.trap}, D, k, w {item.D!r}, {item.k!r}, {item.w!r}") from exc
+    return tuple(sequence.generate_state(SEED_WORDS).tolist())
 
 
 def collect_worlds(world_half: Any) -> dict[int, list[WorldPair]]:
-    """Every world from worlds(), each trapped world joined to its twin: the
-    one with the same trap, D, k, w and seed. Refuses anything but 4 traps x
-    100 one-to-one pairs."""
-    items = [unpack_item(item) for item in world_half.worlds()]
+    """Every World from worlds(), each trapped world joined to its twin: the one
+    with the same trap, D, k and w. Never joined on order. Each pair is then
+    confirmed by recomputing both worlds' seeds. Refuses anything but 4 traps x
+    100 one-to-one pairs whose seeds agree."""
+    items = [read_world(world) for world in world_half.worlds()]
     if len(items) != WORLD_COUNT:
         raise ContractError(f"worlds() yielded {len(items)} worlds; stage A needs {WORLD_COUNT}")
-    with_seed = [item.seed is not None for item in items]
-    if any(with_seed) and not all(with_seed):
-        raise ContractError("some worlds carry a seed and some don't, so twins can't be joined by seed")
 
     def key_of(item: WorldItem) -> tuple:
-        key = (item.trap, item.D, item.k, item.w) + ((item.seed,) if with_seed[0] else ())
+        key = (item.trap, item.D, item.k, item.w)
         try:
             hash(key)
         except TypeError as exc:
-            raise ContractError(f"a world's trap, D, k, w and seed can't key a twin: {key!r}") from exc
+            raise ContractError(f"a world's trap, D, k and w can't key a twin: {key!r}") from exc
         return key
 
     groups: dict[tuple, dict[str, list[WorldItem]]] = {}
@@ -221,7 +244,7 @@ def collect_worlds(world_half: Any) -> dict[int, list[WorldPair]]:
     for key, slot in groups.items():
         if len(slot["trapped"]) != 1 or len(slot["twin"]) != 1:
             raise ContractError(
-                f"no one-to-one twin for trap, D, k, w, seed {key!r}: "
+                f"no one-to-one twin for trap, D, k, w {key!r}: "
                 f"{len(slot['trapped'])} trapped, {len(slot['twin'])} twin"
             )
     pairs: dict[int, list[WorldPair]] = {trap: [] for trap in TRAPS}
@@ -230,9 +253,9 @@ def collect_worlds(world_half: Any) -> dict[int, list[WorldPair]]:
             continue
         key = key_of(it)
         twin = groups[key]["twin"][0]
-        pairs[it.trap].append(
-            WorldPair(it.trap, len(pairs[it.trap]), it.D, it.k, it.w, it.seed, it.world, twin.world)
-        )
+        if world_seed(world_half, it) != world_seed(world_half, twin):
+            raise ContractError(f"refusing a twin pair whose recomputed seeds differ: trap, D, k, w {key!r}")
+        pairs[it.trap].append(WorldPair(it.trap, len(pairs[it.trap]), it.D, it.k, it.w, it.world, twin.world))
     for trap in TRAPS:
         if len(pairs[trap]) != WORLDS_PER_TRAP:
             raise ContractError(f"trap {trap} has {len(pairs[trap])} worlds; stage A needs {WORLDS_PER_TRAP}")
@@ -531,14 +554,15 @@ def recovery_summary(runs: Sequence[dict]) -> dict:
 
 def run_stage_a(
     *,
-    worlds_module: str,
-    policies_module: str,
     worlds_code_hash: Any,
     policies_code_hash: Any,
     worlds_fingerprint: Any,
+    worlds_module: str = DEFAULT_WORLDS_MODULE,
+    policies_module: str = DEFAULT_POLICIES_MODULE,
 ) -> dict:
     provenance = check_provenance(worlds_code_hash, policies_code_hash, worlds_fingerprint)
     world_half, policies = load_halves(worlds_module, policies_module)
+    computed_fingerprint = check_fingerprint(world_half, provenance["worlds_fingerprint"])
     pairs = collect_worlds(world_half)
 
     rows: list[dict] = []
@@ -615,7 +639,11 @@ def run_stage_a(
             **provenance,
             "worlds_module": worlds_module,
             "policies_module": policies_module,
-            "fingerprint_check": "given, not recomputed: the contract defines no fingerprint or code hash",
+            "worlds_fingerprint_computed": computed_fingerprint,
+            "fingerprint_check": "the worlds' fingerprint() equals the one given",
+            "code_hash_check": "given, not recomputed: nothing defines how to compute a code hash",
+            "seed_base": world_half.SEED_BASE,
+            "twin_seeds_confirmed": sum(len(pairs[trap]) for trap in TRAPS),
             "numpy": np.__version__,
         },
         "design": {
@@ -637,9 +665,7 @@ def run_stage_a(
             "reads_clause_traps": list(READS_CLAUSE_TRAPS),
         },
         "worlds": {
-            str(trap): [
-                {"index": p.index, "D": p.D, "k": p.k, "w": p.w, "seed": p.seed} for p in pairs[trap]
-            ]
+            str(trap): [{"index": p.index, "D": p.D, "k": p.k, "w": p.w} for p in pairs[trap]]
             for trap in TRAPS
         },
         "ceiling": {str(trap): ceiling[trap] for trap in TRAPS},
@@ -668,15 +694,19 @@ def write_result(result: dict, out: Path) -> None:
     out.write_text(text + "\n")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="North-star test 4, stage A: run and score.")
-    parser.add_argument("--worlds-module", required=True, help="the world half's module name")
-    parser.add_argument("--policies-module", required=True, help="the policy half's module name")
+    parser.add_argument("--worlds-module", default=DEFAULT_WORLDS_MODULE, help="the world half's module name")
+    parser.add_argument("--policies-module", default=DEFAULT_POLICIES_MODULE, help="the policy half's module name")
     parser.add_argument("--worlds-code-hash", required=True)
     parser.add_argument("--policies-code-hash", required=True)
-    parser.add_argument("--fingerprint", required=True, help="the 800-world fingerprint")
+    parser.add_argument("--fingerprint", required=True, help="the 800-world fingerprint; must equal fingerprint()")
     parser.add_argument("--out", required=True, type=Path, help="where the one JSON result goes")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         result = run_stage_a(
             worlds_module=args.worlds_module,
@@ -688,6 +718,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
+    except ContractError as exc:
+        print(f"contract: {exc}", file=sys.stderr)
+        return 3
     write_result(result, args.out)
     print(f"stage A result: {args.out}")
     return 0
