@@ -209,3 +209,46 @@ ms cold and 1,076 ms warm**, against 1,648 and 1,467.
 **What it shows:** at 185 ms, 383 ms saved cold is about 2 round trips, of the 3 the change expected (7 down to 4).
 HTTP/1.1's six connections split the wave. The load is still over 600 ms at Funnel-like latency. Goal 2's measure for a
 signed-in person is the next live "after": a person opening a busy room on their own phone through Funnel.
+
+## A recheck, 2026-11-23, main f44411d0, from Tardis
+
+Taken by Tardis while Serenity, which takes the Mac's readings, is down (Andy: "serenity is down move on without it").
+It's the method of train 1115's after, so the rows compare with it.
+- **The machine and browser:** the same machine, connection and Playwright 1.62.0 as above.
+- **Funnel's pin:** pinned to 208.111.34.11, as before. Public DNS now also gives 208.111.35.209, which wasn't
+  measured.
+
+**First paint:** `uv run --project peer python scripts/first_paint_rounds.py run --label today --rounds 4 --runs 10
+--pin funnel=208.111.34.11 --out docs/measures/data/goal-2-2026-11-23.jsonl`, from 11:32:18Z to 11:33:55Z.
+- That's 160 loads, kept in [`data/goal-2-2026-11-23.jsonl`](data/goal-2-2026-11-23.jsonl) (sha256 `bb6899435110450a…`),
+  and `summary` reads them back.
+- No load failed. A cold load moved 99.8 KB, the median, and a warm one 3.2 KB.
+
+**The sign-in form,** p50 / p95 / max, and loads over 600 ms of 40, beside train 1115's after:
+
+| Path | Cache | after (11-10) | today | first paint today, p50 / p95 |
+|---|---|---|---|---|
+| Funnel | cold | 266 / 354 / 1,104 ms, 1 | 272 / 1,179 / 1,332 ms, 5 | 218 / 760 ms |
+| Funnel | warm | 124 / 155 / 190 ms, 0 | 133 / 195 / 349 ms, 0 | 86 / 112 ms |
+| Tailnet | cold | 103 / 116 / 161 ms, 0 | 105 / 223 / 297 ms, 0 | 80 / 200 ms |
+| Tailnet | warm | 70 / 79 / 290 ms, 0 | 69 / 87 / 136 ms, 0 | 44 / 60 ms |
+
+**The room read:** `scripts/room_read_timing.py --room 1bfd1b03… --runs 20 --limit 100 --pin funnel=208.111.34.11`, as
+the ship `tardis`, from 11:34:21Z to 11:34:41Z. All 40 reads were ok, and each moved 176 KB.
+
+| Path | p50 | p95 | max | TLS p50 | first byte p50 | over 1 s |
+|---|---|---|---|---|---|---|
+| Tailnet | 79 ms | 104 ms | 111 ms | 24 ms | 74 ms | 0 |
+| Funnel | 274 ms | 475 ms | 525 ms | 113 ms | 198 ms | 0 |
+
+**Against goal 2's bars:**
+- **Medians are under both bars on both paths.** First paint is under 600 ms, and the room read under 400 ms.
+- **Funnel's tail isn't.**
+  - **Cold sign-in form:** p95 is 1,179 ms, with 5 of 40 loads over 600 ms, against 1 at train 1115's after.
+  - **Room read:** p95 is 475 ms, over 400 ms, though curl pays TLS on every read (113 ms here), which a browser
+    keeping its connection doesn't.
+- **What it can't say:**
+  - One reading of 40 loads per cell can't tell drift from noise. Train 1115's own before and before2 differed by
+    more than this.
+  - Funnel's second address wasn't measured.
+  - The Mac's own path is still Serenity's to take.
