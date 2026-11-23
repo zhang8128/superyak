@@ -688,3 +688,21 @@ def test_a_gitignore_from_the_template_cannot_keep_memos_out_of_the_vault(tmp_pa
     vault.publish()
     assert blob(tmp_path, f'{OUTBOUND}/coord_a.md') == (MEMO + 'a\n').encode()
     assert blob(tmp_path, f'{OUTBOUND}/coord_b.md') == (MEMO + 'b\n').encode()
+
+
+def test_the_vault_runs_git_with_none_of_the_callers_git_variables(tmp_path, monkeypatch):
+    """The board's fix:vault-git-strips-caller-git-env: a GIT_DIR or GIT_WORK_TREE left set by the caller (a git hook, or
+    a session started inside one) pointed every vault git call at that other repository: create initialized it, and
+    reads listed its index, not the vault's. Git runs with none of the caller's GIT_* variables, as receipt_place._git."""
+    other = tmp_path / 'other'
+    other.mkdir()
+    clean = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    subprocess.run(['git', 'init', '-q', '-b', 'elsewhere', str(other)], check=True, capture_output=True, env=clean)
+    before = sorted(p.name for p in (other / '.git').iterdir())
+    monkeypatch.setenv('GIT_DIR', str(other / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(other))
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
+    assert (tmp_path / 'Station.aDNA.git' / 'HEAD').is_file()
+    assert vault.git('rev-parse', '--absolute-git-dir').stdout.strip() == str((tmp_path / 'clone' / '.git').resolve())
+    assert 'README.md' in vault.listing('ls-files', '-z')
+    assert sorted(p.name for p in (other / '.git').iterdir()) == before  # the caller's repository is untouched
