@@ -8855,8 +8855,11 @@ def test_a_press_begun_before_the_room_drew_doesnt_land_on_it(browser_peer):
             expect(page.locator("#chat-status")).to_have_text("Message saved")  # its redraw is done: the press and click meet one Send
             box.fill("Begun and ended on Send")
             _down(page, SEND)
-            page.evaluate("movingTheRoom(() => scrollBy(0, -40))")  # an arrival's follow, mid-press
-            assert page.evaluate("performance.now() - roomMovedAt < 400")
+            # an arrival's follow, mid-press: the page moved itself, asked in one evaluate (the press began before the
+            # move, so the branch under test doesn't depend on elapsed time; a 400 ms window across two round trips
+            # failed a loaded CI runner on a docs-only head, board fix:ci-flake-press-before-room-drew-400ms)
+            assert page.evaluate("(() => { const before = roomMovedAt; movingTheRoom(() => scrollBy(0, -40));"
+                                 " return roomMovedAt > before; })()")
             _click(page, SEND)
             _sent(store, patient, b, "Begun and ended on Send")
 
