@@ -44,8 +44,9 @@ def _record(record):
     lines = []
     for e in record:
         verdict = e["verdict"] if e["verdict"] is not None else "none (its turn ended before the test ran)"
+        summary = e["summary"] if e["summary"] is not None else "none (its turn ended before it wrote one)"
         lines.append(f"Turn {e['turn']}: tried \"{e['description']}\"\n```diff\n{e['diff']}\n```\n"
-                     f"Verdict from the frozen test: {verdict}. Its summary: {e['summary']}")
+                     f"Verdict from the frozen test: {verdict}. Its summary: {summary}")
     return "The record of earlier turns, oldest first:\n\n" + "\n\n".join(lines)
 
 
@@ -62,7 +63,8 @@ def advice(record, patches, keys, seed):
     index, flags = adaptive_content(policy_record, options, seed)
     tried = sorted({f["repeat"] for f in flags if "repeat" in f})
     repeats = [i for i, k in enumerate(option_keys) if k in tried]
-    text = f"Advice from a bandit that keys patches by what they change, not by their descriptions: try patch {index}."
+    text = (f"Advice from a bandit that keys patches by the file each one produces, not by their descriptions: "
+            f"try patch {index}.")
     if repeats:
         text += " It sees that patch " + ", ".join(map(str, repeats)) + " changes exactly what an earlier turn's patch did."
     return text + " You may ignore this advice."

@@ -58,3 +58,9 @@ def test_the_reader_takes_the_frozen_shape_and_refuses_anything_else():
 def test_an_unknown_arm_is_refused():
     with pytest.raises(ValueError):
         arms.prompt("R3", TASK, PATCHES, RECORD)
+
+
+def test_a_null_summary_renders_plainly_never_as_none():
+    record = [{"turn": 5, "description": "the key", "diff": "-a\n+b", "verdict": None, "summary": None}]
+    text = arms.prompt("R1", TASK, PATCHES, record)
+    assert "Its summary: none (its turn ended before it wrote one)" in text and "Its summary: None" not in text
