@@ -54,8 +54,8 @@ sign-in, and `--unshare-pid` (`tardis/visitor-walk-spec`, approved at 344e425a).
 | Arm | What a turn is given, beside the task and the open patches |
 | --- | --- |
 | **R0** | Nothing: the forgetting baseline |
-| **R1** | The record as it is: each earlier turn's patch description, diff hash, verdict and summary |
-| **R2** | R1, plus stage A's adaptive-by-content policy's choice and flags, shown as advice the turn may ignore |
+| **R1** | The record as it is: each earlier turn's patch description, its diff, its verdict and its summary. It holds no content key, so noticing a repeat is the turn's own work |
+| **R2** | R1, plus stage A's adaptive-by-content policy's choice and flags, computed from the content keys and shown as advice the turn may ignore. That's the structure R2 adds |
 
 - **A turn's output** is one JSON object: `{"choice": <index>, "summary": <text>, "flags": [...]}`, with the flags
   from stage A's contract. Malformed output is a stall, and that turn is spent.
