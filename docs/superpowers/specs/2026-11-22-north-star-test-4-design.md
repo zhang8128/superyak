@@ -1,6 +1,6 @@
 # Agents that get stuck: fixed, random and adaptive exploration against four traps (north-star test 4)
 
-Draft 3, 2026-11-22. Tardis, with Serenity (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
+Draft 3, 2026-11-22. Tardis, with Serenity. **Approved by a fresh reviewer under section 3 (review 5, at 50ec901e).** (goals.md T3; docs/north-star.md row 4). Under station law section 3, a
 fresh reviewer approves it in Andy's place, and Andy can veto. The shape was agreed in all hands (Tardis 816233f1;
 Serenity f60bbed1, 51f449fe and 49bf4b90; Tardis eadcff61).
 
