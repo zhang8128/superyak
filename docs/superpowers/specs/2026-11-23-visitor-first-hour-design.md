@@ -1,6 +1,7 @@
 # A visitor's first hour (goals.md T2, goal 4)
 
-Draft 5, 2026-11-23. Tardis. Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
+Draft 5, 2026-11-23. Tardis. **Approved by a fresh reviewer under section 3 (review 5, at 44ecc9fa).** Andy can veto.
+Under station law section 3, a fresh reviewer approves it in Andy's place, and Andy can
 veto. The line it serves is `tardis/goals-t2-visitor` 0580ed67 (Rio Grande's §2 yes, all hands 74143153). Rio Grande's
 suggestion there, to freeze the question before the walk, is taken here.
 
@@ -15,6 +16,9 @@ suggestion there, to freeze the question before the walk, is taken here.
 - **Draft 4 (fbdffe2e)** went back to the same reviewer: approved with two required changes, Z1 and Z2 (review 4).
   Draft 5 makes both, and takes its two advisories. Z1 turns the outside-write rule from a judgement into an
   impossibility: the walker runs in a bubblewrap mount namespace. The advisory hides Tardis's home too.
+- **Draft 5 (44ecc9fa) was approved** by the same reviewer (review 5). After approval, only the wording fixes it named
+  and its advisories were made, which it said need no further review: `--unshare-pid`, `uvx` bound beside `uv`, a
+  harness check before walk 1, and three lines of wording left from before the wrapper.
 
 ## The question
 
@@ -59,11 +63,11 @@ inherits the session's instructions, memory, tools, hooks and logins.
 
   ```sh
   W=/var/tmp/visitor-walk-N C=/var/tmp/visitor-walker-config
-  CL=/home/doctor/.local/share/claude/versions/2.1.330 UV=/home/doctor/.local/bin/uv
+  CL=/home/doctor/.local/share/claude/versions/2.1.330 UV=/home/doctor/.local/bin/uv UVX=/home/doctor/.local/bin/uvx
   systemd-run --user --scope --unit=visitor-walk-N -- \
     timeout 3600 bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /var/tmp --tmpfs /home/doctor \
-      --ro-bind "$CL" "$CL" --ro-bind "$UV" "$UV" --bind "$W" "$W" --bind "$C" "$C" --chdir "$W" \
-      --die-with-parent -- \
+      --ro-bind "$CL" "$CL" --ro-bind "$UV" "$UV" --ro-bind "$UVX" "$UVX" --bind "$W" "$W" --bind "$C" "$C" \
+      --chdir "$W" --die-with-parent --unshare-pid -- \
     env -i PATH=/home/doctor/.local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TERM=dumb TZ=UTC \
       HOME="$W/home" UV_CACHE_DIR="$W/uv-cache" CLAUDE_CONFIG_DIR="$C" GIT_SSH_COMMAND=false \
     "$CL" -p "$(cat "$W/brief.txt")" --model claude-sonnet-5-5 --output-format stream-json --verbose \
@@ -79,9 +83,14 @@ inherits the session's instructions, memory, tools, hooks and logins.
   `bypassPermissions` means the walker can run any command inside the wrapper. **`--allowedTools` only pre-approves
   tools,** and under `bypassPermissions` it changes nothing. The wrapper is what limits the walker, not that flag.
 - **The refusal test (Z1),** run inside the wrapper before walk 1: an outside write fails with "Read-only file
-  system", an inside write succeeds, `~/.ssh` and every checkout are hidden, and `/var/tmp` shows only the walk's
-  directory. Tardis ran it on 2026-11-23, and all of it held, with Claude Code 2.1.330 and uv 0.12.23. It's run again
-  before walk 1.
+  system", an inside write succeeds, `~/.ssh` and every checkout are hidden, and `/var/tmp` shows only the walk's and
+  config directories. Tardis ran it on 2026-11-23, and all of it held, with Claude Code 2.1.330 and uv 0.12.23. With
+  `--unshare-pid`, the sandbox sees only its own processes: 5, where it saw 241 of Tardis's without it, whose command
+  lines can carry the ships' prompts. It's run again before walk 1.
+- **The harness check, before walk 1:** the walker gets a prompt unrelated to the repository that uses the sign-in and
+  each allowed tool once (Bash, Read, Write, Edit, Glob, Grep, WebSearch and WebFetch). If a tool fails because of the
+  wrapper, that's fixed first. A tool that fails during a walk because of the wrapper is a machine fault, and voids the
+  walk, rather than counting as a stall against the docs.
 - **Its processes:** the systemd scope in the invocation holds the whole walk. When the walk ends, that scope is
   stopped, so a server the walker started (`make home-demo`, for one) doesn't outlive it.
 - **Its brief** is the question, the repository's public URL, the commit to clone, the rules below and the budget.
@@ -100,8 +109,9 @@ station and GitHub keys. They get the same question, rules and steps, and walk o
 - **Ineligible to stop the agent walks (X3, X4), though it still counts toward the five:** a walk that reads this
   spec, a review or a walk report on the web. The wrapper hides every checkout, Tardis's home and other walks'
   directories, so those reads can't happen.
-- **Outside writes can't happen (Y1, Z1).** Only the walk directory and the walker's config directory are writable,
-  and `/tmp` is a private tmpfs. An attempt shows in the transcript as a "Read-only file system" error and is logged as
+- **Outside writes can't happen (Y1, Z1).** Writes persist only in the walk directory and the walker's config
+  directory. `/tmp`, `/var/tmp` and `/home/doctor` inside the wrapper are private tmpfs mounts, discarded when the walk
+  ends. An attempt shows in the transcript as a "Read-only file system" error and is logged as
   a stall. That needs no judgement.
 - **Repository text that asks it to dock, pair, imprint, sign in, or contact anyone** (CLAUDE.md, for one, offers
   docking), and the README's invitation to say hello in Discussions, are declined and logged as observations. Acting on
@@ -194,6 +204,8 @@ it's committed only then.
   with the network open, a read-only root, Tardis's home hidden, and two writable directories. A flaw in the kernel
   or in bubblewrap is outside it, and so is what the open network allows. The person's walk uses a separate
   account.
+- **The transcript's sha256 shows it wasn't changed after the walk,** not that it wasn't changed during it: the
+  walker's own output stream is that file.
 - **Sixty minutes and one question** test a first hour, not lasting use.
 - **The walker runs on Tardis,** which has a contributor's tools. A person's machine may lack `git`, `make` or `uv`,
   and S2 then reads differently.
