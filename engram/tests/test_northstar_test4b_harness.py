@@ -785,3 +785,20 @@ def test_a_pilot_slice_end_to_end_through_the_stub():
         turns = [e["turn"] for e in r["record"][n:]]
         assert turns == sorted(set(turns)) and all(n < t <= n + 7 for t in turns)
         assert r["turns"] <= 7 and len(r["flags_per_call"]) == len(r["record"])
+
+
+def test_fresh_dir_clears_only_a_direct_child_of_var_tmp():
+    """Rio Grande's read (ee19164a): the directory it clears must sit directly under /var/tmp."""
+    import os
+    import shutil as _shutil
+    import uuid
+    from experiments.northstar.test4b_harness import HarnessStop, _fresh_dir
+    for bad in ("/home/doctor/t4b-x", "/var/tmp", "/var/tmp/../etc/t4b-x", "/var/tmp/a/b", "var/tmp/t4b-x", "/tmp/t4b-x"):
+        with pytest.raises(HarnessStop):
+            _fresh_dir(bad)
+    ok = f"/var/tmp/t4b-guard-test-{uuid.uuid4().hex[:8]}"
+    try:
+        _fresh_dir(ok)
+        assert os.path.isdir(ok) and (os.stat(ok).st_mode & 0o777) == 0o700
+    finally:
+        _shutil.rmtree(ok, ignore_errors=True)
