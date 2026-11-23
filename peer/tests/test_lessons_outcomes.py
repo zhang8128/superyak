@@ -222,7 +222,8 @@ def test_outcomes_list_newest_first_with_ids_ship_lesson_and_outcome_and_section
     unknown = {'receipts': 2, 'outcomes': 2, 'helped': 1, 'misled': 0, 'unused': 1}     # a request with no place
     none = {'receipts': 0, 'outcomes': 0, 'helped': 0, 'misled': 0, 'unused': 0}
     assert counts == {'receipts': 2, 'outcomes': 2, 'helped': 1, 'misled': 0, 'unused': 1, 'queries': 2, 'verified_repeats': 1,
-                      'by_place': {'superyak': none, 'other': none, 'unknown': unknown}}
+                      'by_place': {'superyak': none, 'other': none, 'unknown': unknown},
+                      'by_kind': {'words': unknown, 'near': none, 'middle': none, 'far': none}}   # both matched by words
     assert [r['id'] for r in rows] == [two['id'], one['id']] and set(rows[0]) == {
         'id', 'created', 'ship', 'receipt_id', 'lesson_id', 'outcome'}
     done = run_lessons('outcomes', '--data-dir', store.data_dir)
@@ -235,11 +236,15 @@ def test_outcomes_list_newest_first_with_ids_ship_lesson_and_outcome_and_section
         'In Superyak sessions: 0 outcomes on 0 receipts. Helped 0, misled 0, unused 0.',
         'In other sessions: 0 outcomes on 0 receipts. Helped 0, misled 0, unused 0.',
         'Unknown place, including receipts from before this change: 2 outcomes on 2 receipts. Helped 1, misled 0, unused 1.',
-        'Verified repeats are counted over all places: a query keeps no place.']
+        'Verified repeats are counted over all places: a query keeps no place.',
+        'By words, a lesson value found in the turn: 2 receipts, 2 scored, 0 unscored. Helped 1, misled 0, unused 1.',
+        'By angle, under 0.80 rad: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.',
+        'By angle, 0.80 to 0.90 rad: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.',
+        'By angle, 0.90 rad and over: 0 receipts, 0 scored, 0 unscored. Helped 0, misled 0, unused 0.']
     for text in ('Copy a hash', 'Quote a glob', 'zsh expands'):
         assert text not in done.stdout
     limited = lessons.describe_outcomes(*store.lesson_outcomes(limit=1))
-    assert len(limited.splitlines()) == 6 and 'Coverage: 2 outcomes on 2 receipts.' in limited
+    assert len(limited.splitlines()) == 10 and 'Coverage: 2 outcomes on 2 receipts.' in limited
     assert lessons.describe_outcomes([], {**counts, 'queries': 0}) == 'No outcomes on this peer yet.'
     assert 'Verified repeats: 1 in 0 queries (- per 100).' in lessons.describe_outcomes(rows, {**counts, 'queries': 0})
 

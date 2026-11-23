@@ -142,7 +142,7 @@ def test_the_report_splits_receipts_and_outcomes_by_place_and_keeps_its_line(les
         assert sum(group[key] for group in by.values()) == counts[key]
     done = run_lessons('outcomes', '--data-dir', store.data_dir)
     assert done.returncode == 0, done.stderr
-    out = done.stdout.splitlines()
+    out = done.stdout.splitlines()[:-4]                  # the four lines by match kind follow the place split
     assert out[-5].startswith('Coverage: 3 outcomes on 3 receipts. Helped 1, misled 1, unused 1. Verified repeats: 0 in ')
     assert out[-4:] == [
         'In Superyak sessions: 1 outcome on 1 receipt. Helped 1, misled 0, unused 0.',
@@ -182,3 +182,35 @@ def test_a_bad_place_through_the_query_command_writes_no_receipt_and_echoes_noth
     request = {'ship': 'rio-grande', 'command': 'git show 1a2b', 'words_only': True, 'place': SECRET}
     done = run_lessons('query', '--data-dir', store.data_dir, '--runtime-config', config, stdin=json.dumps(request))
     assert places(store) == [] and SECRET not in done.stdout + done.stderr
+
+
+# ---- the split by how a lesson matched (Tardis and Rio Grande, all hands d09d935e) -------------------------------------
+
+def test_the_report_splits_outcomes_by_match_kind_with_unscored_receipts_apart(lessons_station):
+    store, clock, ids, room = laid(lessons_station, HASHES, GLOBS)
+    shown(store, clock, 'git show 1a2b', place='superyak')                   # a words match: no angle
+    with store.transaction() as db:
+        first = db.execute('SELECT id FROM lesson_receipts').fetchone()['id']
+        for rid, angle in (('a' * 32, 0.75), ('b' * 32, 0.80), ('c' * 32, 0.85), ('d' * 32, 0.90), ('e' * 32, 0.95)):
+            db.execute("INSERT INTO lesson_receipts(id, created, ship_id, lesson_id, author_id, angle, place) "
+                       "SELECT ?, created, ship_id, lesson_id, author_id, ?, place FROM lesson_receipts WHERE id = ?",
+                       (rid, angle, first))
+    clock[0] += 60
+    store.lesson_outcome(first, 'helped')
+    store.lesson_outcome('a' * 32, 'unused')
+    store.lesson_outcome('b' * 32, 'helped')                                  # 0.80 falls in the middle band
+    store.lesson_outcome('d' * 32, 'misled')                                  # 0.90 falls in the far band
+    _, counts = store.lesson_outcomes()                                       # c and e stay unscored
+    by = counts['by_kind']
+    assert by == {'words': {'receipts': 1, 'outcomes': 1, 'helped': 1, 'misled': 0, 'unused': 0},
+                  'near': {'receipts': 1, 'outcomes': 1, 'helped': 0, 'misled': 0, 'unused': 1},
+                  'middle': {'receipts': 2, 'outcomes': 1, 'helped': 1, 'misled': 0, 'unused': 0},
+                  'far': {'receipts': 2, 'outcomes': 1, 'helped': 0, 'misled': 1, 'unused': 0}}
+    for key in ('receipts', 'outcomes', 'helped', 'misled', 'unused'):
+        assert sum(group[key] for group in by.values()) == counts[key]
+    out = run_lessons('outcomes', '--data-dir', store.data_dir).stdout.splitlines()
+    assert out[-4:] == [
+        'By words, a lesson value found in the turn: 1 receipt, 1 scored, 0 unscored. Helped 1, misled 0, unused 0.',
+        'By angle, under 0.80 rad: 1 receipt, 1 scored, 0 unscored. Helped 0, misled 0, unused 1.',
+        'By angle, 0.80 to 0.90 rad: 2 receipts, 1 scored, 1 unscored. Helped 1, misled 0, unused 0.',
+        'By angle, 0.90 rad and over: 2 receipts, 1 scored, 1 unscored. Helped 0, misled 1, unused 0.']

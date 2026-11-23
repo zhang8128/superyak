@@ -1076,6 +1076,14 @@ def describe_repeats(rows, counts):
     return '\n'.join(lines)
 
 
+# How a shown lesson matched the turn: by words (one of its error, command or file values found in the turn), or by
+# its claim's angle from the turn, in three bands. A receipt with no angle is a words match.
+KIND_SQL = (('words', 'r.angle IS NULL'), ('near', 'r.angle < 0.80'),
+            ('middle', 'r.angle >= 0.80 AND r.angle < 0.90'), ('far', 'r.angle >= 0.90'))
+KIND_LABELS = (('words', 'By words, a lesson value found in the turn'), ('near', 'By angle, under 0.80 rad'),
+               ('middle', 'By angle, 0.80 to 0.90 rad'), ('far', 'By angle, 0.90 rad and over'))
+
+
 def describe_outcomes(rows, counts):
     """`make lesson-outcomes` (lesson outcomes spec, section 3): newest first, each with its ids, ship, lesson and outcome; no text. The
     counts line is that spec's section 5, over the whole peer, even when the list is cut at its limit."""
@@ -1096,6 +1104,12 @@ def describe_outcomes(rows, counts):
                          f"receipt{'' if g['receipts'] == 1 else 's'}. Helped {g['helped']}, misled {g['misled']}, "
                          f"unused {g['unused']}.")
         lines.append('Verified repeats are counted over all places: a query keeps no place.')
+    if 'by_kind' in counts:  # by how the lesson matched; a helped share is read over scored receipts only
+        for name, label in KIND_LABELS:
+            g = counts['by_kind'][name]
+            lines.append(f"{label}: {g['receipts']} receipt{'' if g['receipts'] == 1 else 's'}, {g['outcomes']} scored, "
+                         f"{g['receipts'] - g['outcomes']} unscored. Helped {g['helped']}, misled {g['misled']}, "
+                         f"unused {g['unused']}.")
     return '\n'.join(lines)
 
 
@@ -1760,6 +1774,12 @@ class Lessons:
                 counts['by_place'][name] = {
                     'receipts': db.execute(f'SELECT count(*) FROM lesson_receipts WHERE {where}', args).fetchone()[0],
                     'outcomes': sum(words.values()), **{word: words.get(word, 0) for word in OUTCOMES}}
+            counts['by_kind'] = {}  # how each receipt's lesson matched (Tardis and Rio Grande, all hands d09d935e)
+            for name, where in KIND_SQL:
+                words = dict(db.execute(f'SELECT o.outcome, count(*) FROM lesson_outcomes o JOIN lesson_receipts r '
+                                        f'ON r.id=o.receipt_id WHERE {where} GROUP BY o.outcome').fetchall())
+                counts['by_kind'][name] = {'receipts': one(f'SELECT count(*) FROM lesson_receipts r WHERE {where}'),
+                                           'outcomes': sum(words.values()), **{word: words.get(word, 0) for word in OUTCOMES}}
         return rows, counts
 
     def _lessons_add_gate(self, db, key, new_ids):

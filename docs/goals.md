@@ -94,4 +94,6 @@ and Andy can veto:
   misleading summary, a map-breaking observation). Fixed, random and adaptive exploration under one budget, scored on
   recovery, not activity.
 - T4 (the floor): CI, partner reads from the bundle, and the README and `two-people.md` kept true at each train.
-- T5 (goal 1): receipts' outcomes within their day. The crossing waits on Andy's allow.
+- T5 (goal 1): receipts' outcomes within their day, and what they show. Measure: the helped share over scored
+  receipts, by how the lesson matched (`make lesson-outcomes`), with unscored receipts counted apart. On 11-23
+  Tardis's 47 were 3 helped: 2 of 6 by words, and 1 of 41 by angle. The crossing waits on Andy's allow.
