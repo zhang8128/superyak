@@ -1,6 +1,6 @@
 # Receipts for lessons shown at a prompt, written later in the same session (goals.md T5, goal 1)
 
-Draft 1, 2026-11-23. Tardis, drafted at Rio Grande's ask (all hands 7d7b2e4d). It's a change to the rail's specs, so
+Draft 2, 2026-11-23 (draft 1 at 49428768). Tardis, drafted at Rio Grande's ask (all hands 7d7b2e4d). It's a change to the rail's specs, so
 under station law section 3 a fresh reviewer approves it in Andy's place, and Andy can veto.
 
 ## Why
@@ -31,22 +31,42 @@ path at all.
    Rio Grande left 14 receipts unscored.
 3. **The prompt path stays write-free,** with its 150 ms unchanged.
 
+## How big the gap is, measured before the design
+
+On Tardis, every session transcript in this project that shows a lesson (one so far, 11-22 to 11-23) was read for the
+hook's own id lines, by the hook event of the record that holds them. Distinct lessons per session:
+- **At a prompt:** 6, of which **5 are Tardis's own** and **1 is another ship's** (Rio Grande's).
+- **At a failed command:** 25, of which 24 are other ships' and 1 is Tardis's own.
+
+So on Tardis **this spec adds about one scoreable receipt a session.** The prompt path shows mostly a ship's own
+lessons, which never carry a receipt (own-lessons spec) and which this spec leaves alone. The Pi's count may differ,
+and it's asked for before any build.
+
 ## What the hook already knows
 
 At every write event, the hook reads its own `Lesson <id> from <ship>` lines back from the session's transcript
-(`transcript_ids`). That covers lessons shown at a prompt too. It also keeps `shown` in its session record for the
-lessons the start and failure paths recorded (`_record`).
+(`transcript_ids`, within `_hook_texts`). **Each such record names the hook event that wrote it:** a prompt's added
+context is an attachment with `hookEvent` = `UserPromptSubmit`. That's on 2.1.312 in the hook's tests, and on 2.1.330
+in this session's own transcript.
 
-So at a later write event in the same session, **the lessons shown at a prompt are the transcript's ids that the
-record's `shown` doesn't hold,** less the asking ship's own lessons, which never carry a receipt (own-lessons spec).
-No new write at the prompt is needed to know them.
+So at a later write event in the same session, **the lessons shown at a prompt are the ids on lines inside
+`UserPromptSubmit` attachments, from a ship other than the asking one,** less the record's `shown` (a lesson the start
+or failure path already receipted and a prompt re-showed after a compaction).
+
+**Draft 1's rule was wrong, and a smoke run showed it.** Draft 1 took every transcript id the record's `shown` didn't
+hold. The hold path (`lessons_hold`) shows lessons in a deny and receipts them through its own query, but records them
+in the holds record, not in `shown`. On the hook's own test rail, with the real hook and hold code, draft 1's rule
+listed a held lesson from another ship as prompt-shown, which would have receipted it twice. The rule above, keyed on
+the record's event, leaves it out.
 
 ## The change
 
 - **(1) At a failed command, the same session's next write point,** the hook adds `prompt_shown` to its request. That
   list is the prompt-shown ids above, cut to `SEEN_MAX` and in transcript order.
-- **(2) The peer writes one receipt for each** id that has no receipt yet for this session and ship, with a new column
-  `path = 'prompt'`. Today's receipts get `path = 'start'` or `'failure'`; those from before this change keep NULL,
+- **(2) The peer writes one receipt for each id it's sent,** with a new column `path = 'prompt'`. **The hook, not the
+  peer, keeps each id once a session:** the receipts table has no session column, so the peer can't tell sessions
+  apart. The hook adds the ids it sent to a `prompt_receipted` list in its session record, under `_record`'s lock, and
+  never sends one twice. A record that can't be written sends nothing, as now. Today's receipts get `path = 'start'` or `'failure'`; those from before this change keep NULL,
   meaning unknown.
   - `angle` is NULL for a prompt receipt, since the prompt answer's match isn't kept, and NULL already means "words".
     So **`path` is what tells a prompt receipt apart.**
@@ -77,8 +97,8 @@ isn't a ship's neglect. Both events exist in Claude Code 2.1.330.
 
 ## Open, for the reviewer to check against the code
 
-1. **Does the hold path** (`lessons_hold`, before a command) record what it shows in `shown`? If it doesn't, its lessons
-   would be miscounted as prompt-shown.
+1. **Answered by the smoke run:** the hold path doesn't record in `shown`, so the rule keys on the record's hook event
+   instead.
 2. **Is the transcript read-back exact enough** to attribute a lesson to a prompt? Or does a lesson shown at a failure
    and then re-shown at a prompt need care?
 3. **`SEEN_MAX`:** is it the right cut for `prompt_shown`?
@@ -87,6 +107,8 @@ isn't a ship's neglect. Both events exist in Claude Code 2.1.330.
 
 ## What this can't fix, said now
 
+- **On Tardis, it's about one receipt a session.** If the Pi's count is as small, the build may not be worth it, and
+  T5 can say plainly that the prompt path shows mostly own lessons.
 - **A session with no failed command never writes its prompt receipts.** The prompt path stays under-measured, by how
   often sessions fail a command, and the option above only counts it.
 - **A prompt receipt is written after the turn.** So its outcome is the session's later judgement, not its judgement at
