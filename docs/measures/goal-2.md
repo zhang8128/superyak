@@ -247,6 +247,10 @@ the ship `tardis`, from 11:34:21Z to 11:34:41Z. All 40 reads were ok, and each m
   - **Cold sign-in form:** p95 is 1,179 ms, with 5 of 40 loads over 600 ms, against 1 at train 1115's after.
   - **Room read:** p95 is 475 ms, over 400 ms, though curl pays TLS on every read (113 ms here), which a browser
     keeping its connection doesn't.
+- **This reading overlapped a train's suite.** Train 1151's peer suite ran on the Pi from about 11:18Z, with the Pi's
+  load average at 3.0 of 4 cores at 11:41Z (Rio Grande, all hands 1f86b34d). The tailnet's cold p95 rose too, from
+  116 to 223 ms, on a path that never touches Funnel. So the tail may be the Pi's load, not the route. A rerun of the
+  cold rounds on a quiet Pi decides it, and goes in below.
 - **What it can't say:**
   - One reading of 40 loads per cell can't tell drift from noise. Train 1115's own before and before2 differed by
     more than this.
