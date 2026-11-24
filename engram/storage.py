@@ -931,9 +931,12 @@ class Storage:
         """Get or create the cold storage database (sibling of main db)."""
         if not hasattr(self, "_cold_conn") or self._cold_conn is None:
             from pathlib import Path
-            cold_path = Path(self.db_path).with_name("cold.db")
+            # An in-memory store's cold store is in memory too: Path(":memory:")'s sibling would be ./cold.db in
+            # whatever the working directory is (fix:memory-store-cold-on-disk).
+            in_memory = str(self.db_path) in (":memory:", "")
+            cold_path = ":memory:" if in_memory else str(Path(self.db_path).with_name("cold.db"))
             self._cold_conn = sqlite3.connect(
-                str(cold_path), check_same_thread=self._check_same_thread
+                cold_path, check_same_thread=self._check_same_thread
             )
             self._cold_conn.row_factory = sqlite3.Row
             self._cold_conn.execute("""

@@ -229,6 +229,19 @@ def test_prune_cleans_up_resonances(seeded):
     assert rows[0] == 0
 
 
+def test_an_in_memory_store_prunes_to_an_in_memory_cold_store(seeded, tmp_path, monkeypatch):
+    """fix:memory-store-cold-on-disk (Tardis, 11-24): a ":memory:" store's cold archive was Path(":memory:")'s sibling,
+    ./cold.db, so this file's prune test left engram/cold.db in every checkout it ran in. Its cold store is in memory
+    too: the episode moves there, and the working directory gets no file."""
+    monkeypatch.chdir(tmp_path)
+    seeded.conn.execute("UPDATE episodes SET decay_strength=0.01, compressed=1 WHERE id='ep-1'")
+    seeded.conn.commit()
+    seeded.prune_decayed(threshold=0.05)
+    assert list(tmp_path.iterdir()) == []
+    cold = seeded._cold_storage().execute("SELECT id, content FROM episodes").fetchall()
+    assert [tuple(r) for r in cold] == [("ep-1", "cats are great")]
+
+
 def test_get_recall_cooccurrences_empty(store):
     """No recall logs = empty co-occurrences."""
     result = store.get_recall_cooccurrences()
