@@ -124,8 +124,43 @@ def test_units_pass_systemd_analyze_verify(tmp_path):
     (probe / 'superyak-verifycheck.service.d').mkdir()
     shutil.move(probe / '50-alerts.conf', probe / 'superyak-verifycheck.service.d' / '50-alerts.conf')
     files = [str(probe / name) for name in INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['superyak-verifycheck.service']]
+    result, ours = _verify(probe, files)
+    assert result.returncode == 0 and ours == [], result.stderr
+
+
+def _verify(probe, files):
+    """systemd-analyze --user verify on `files`, and the lines of its stderr that are about them. A host's own user
+    units can warn too (Ubuntu's /usr/lib/systemd/user/spice-vdagent.service does), which says nothing of ours, so
+    only a line naming the probe's folder or one of these files' names counts."""
     result = subprocess.run(['systemd-analyze', '--user', 'verify', *files], capture_output=True, text=True, timeout=120)
-    assert result.returncode == 0 and result.stderr == '', result.stderr
+    names = {Path(f).name for f in files}
+    ours = [line for line in result.stderr.splitlines() if str(probe) in line or any(n in line for n in names)]
+    return result, ours
+
+
+@pytest.mark.skipif(not VENV_PYTHON.exists() or not shutil.which('systemd-analyze'),
+                    reason='verify fails on the missing %h/superyak/peer/.venv/bin/python away from the station host')
+def test_a_warning_in_one_of_our_units_still_fails_verify(tmp_path):
+    """The control for _verify's filter: an unknown key put in one of our own units is a line about it, so a filter that
+    dropped every line, or kept only the host's, would be caught here."""
+    probe = tmp_path / 'units'
+    shutil.copytree(UNITS, probe)
+    unit = probe / INSTALLED[0]
+    unit.write_text(unit.read_text().replace('[Service]', '[Service]\nNoSuchKeyForTheControl=1', 1))
+    result, ours = _verify(probe, [str(unit)])
+    assert any('NoSuchKeyForTheControl' in line for line in ours), result.stderr
+
+
+def test_the_filter_drops_a_host_units_warning_and_keeps_ours(tmp_path, monkeypatch):
+    """_verify's filter on any host, the Pi's clean one included (Rio Grande, all hands 1ce80542): a faked stderr with one
+    line about a host unit, as Tardis's spice-vdagent gives, and one about ours. Only ours is kept."""
+    probe = tmp_path / 'units'
+    ours_line = f"{probe / INSTALLED[0]}:3: Unknown key 'NoSuchKey' in section [Service], ignoring."
+    host_line = "/usr/lib/systemd/user/spice-vdagent.service:23: Unknown key 'StandardError' in section [Install], ignoring."
+    for stderr, kept in ((host_line + '\n', []), (host_line + '\n' + ours_line + '\n', [ours_line])):
+        monkeypatch.setattr(subprocess, 'run', lambda *a, _e=stderr, **k: subprocess.CompletedProcess(a, 0, '', _e))
+        result, ours = _verify(probe, [str(probe / INSTALLED[0])])
+        assert ours == kept, result.stderr
 
 
 @pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
