@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import hashlib
 import heapq
 import json
 import logging
@@ -182,11 +181,6 @@ class PublisherStore:
                 storage.close()
             except Exception:
                 pass
-
-    def store_digest(self) -> dict:
-        with self.db_path.open("rb") as handle:
-            value = hashlib.file_digest(handle, "sha256").hexdigest()
-        return {"algorithm": "sha256", "value": value}
 
     def record_disclosure(self, event: dict) -> str:
         disclosure_id = str(uuid.uuid4())
