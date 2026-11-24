@@ -79,6 +79,24 @@ def test_crossing_has_reproducible_content_free_receipt(crossing):
     assert content not in json.dumps(receipt)
 
 
+@pytest.mark.parametrize("purpose", ["*", "session-*", "session recall", "private query", "x" * 65, "", "-lead",
+                                     "sess\u00efon", "a/b", None])
+def test_a_purpose_is_an_identifier_and_anything_else_asks_no_one(crossing, purpose):
+    """fix:recall-purpose-identifier (Tardis, 11-04): the purpose reaches every receipt and every publisher's policy,
+    so it's held to NAME, as the receiver is: never a pattern, free text or a 65th character. Nothing is asked."""
+    args, calls, _, _ = crossing
+    result = neighbors.neighbor_arm(**{**args, "purpose": purpose})
+    assert result["diagnostics"][0] == {"code": "INVALID_REQUEST"} and calls == []
+
+
+def test_a_purpose_of_64_identifier_characters_is_a_valid_request(crossing):
+    """The control: 64 identifier characters pass the shape check and reach the policy, which allows only
+    session-recall here, so the answer is the policy's NO_MATCHING_ALLOW, not INVALID_REQUEST."""
+    args, calls, _, _ = crossing
+    result = neighbors.neighbor_arm(**{**args, "purpose": "s" * 64})
+    assert result["diagnostics"][0] == {"code": "NO_MATCHING_ALLOW"} and calls == []
+
+
 @pytest.mark.parametrize("actions", [(), ("read", "inject_context")])
 def test_recall_permission_precedes_query(crossing, actions):
     args, calls, _, _ = crossing

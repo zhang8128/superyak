@@ -69,7 +69,7 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
             or not valid_remote_publishers(remote_publishers)
             or not 1 <= len(publishers) + len(remote_publishers) <= MAX_PUBLISHERS
             or not isinstance(query, str) or not 1 <= len(query) <= 4096
-            or not isinstance(purpose, str) or not 1 <= len(purpose) <= 256
+            or not isinstance(purpose, str) or not NAME.fullmatch(purpose)  # an identifier, never free text
             or type(k) is not int or not 1 <= k <= 5
             or type(timeout_s) not in (int, float) or not math.isfinite(timeout_s)
             or not 0 < timeout_s <= 10):
