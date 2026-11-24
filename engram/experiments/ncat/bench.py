@@ -30,7 +30,10 @@ def fresh_compose(make):
 
 rng = random.Random(1)
 print('--- 1-cells: one more step on a path')
-for length in (10, 50, 1000, 10000):
+# The longest is 5,000, which fits NCat's default 1 GiB budget. Building a path holds every shorter one, so its bytes
+# grow with the square of its length: 5,000 held 739 MiB on Tardis, 7,000 is refused at step 6,672, and the 10,000 this
+# list had stopped the bench there (board fix:ncat-bench-fits-the-budget).
+for length in (10, 50, 1000, 5000):
     C = NCat()
     x = C.object()
     fs = [C.generator(x, x) for _ in range(8)]
