@@ -96,4 +96,8 @@ and Andy can veto:
 - T4 (the floor): CI, partner reads from the bundle, and the README and `two-people.md` kept true at each train.
 - T5 (goal 1): receipts' outcomes within their day, and what they show. Measure: the helped share over scored
   receipts, by how the lesson matched (`make lesson-outcomes`), with unscored receipts counted apart. On 11-23
-  Tardis's 47 were 3 helped: 2 of 6 by words, and 1 of 41 by angle. The crossing waits on Andy's allow.
+  Tardis's 47 were 3 helped: 2 of 6 by words, and 1 of 41 by angle. The prompt path writes no receipt, and it
+  shows almost only a ship's own lessons, which carry none by design: on 11-23, over both ships' three sessions with
+  lessons, 16 of its 17 distinct lessons were own, against 40 of 43 other ships' at failures. So the measured paths
+  are nearly all that other ships' lessons reach. That's a reading, not a finding, and the prompt-receipts spec is
+  closed unbuilt. The crossing waits on Andy's allow.
