@@ -1879,7 +1879,7 @@ def test_a_mark_goes_to_the_room_on_screen_while_another_opens(browser_peer):
             x, y = two_rooms_with_x_open(page, store, owner)
             held = y_opening(page, y)
             page.get_by_role("button", name=re.compile("^Mark this room$")).click()
-            page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.cloud)", arg=x["id"])
+            until(page, lambda: read_room(page, x).get("cloud"), "the mark never landed on room X")  # polled in Python: a promise is truthy
             assert not read_room(page, y).get("cloud")
             release(held)
 
@@ -1906,7 +1906,7 @@ def test_a_bad_escape_in_the_address_while_the_next_room_is_held_still_draws_the
             assert page.evaluate("state.room.title") == drawn
             page.get_by_role("button", name=re.compile("^Mark this room$")).click()
             marked, other = (x, y) if drawn == "Room X" else (y, x)
-            page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.cloud)", arg=marked["id"])
+            until(page, lambda: read_room(page, marked).get("cloud"), "the mark never landed on the drawn room")
             assert not read_room(page, other).get("cloud")
 
 
@@ -1935,7 +1935,7 @@ def test_a_removal_goes_to_the_room_on_screen_while_another_opens(browser_peer):
             held = y_opening(page, y)
             page.get_by_role("button", name=re.compile("^Remove .* from this room")).first.click()
             confirm_remove(page)
-            page.wait_for_function("([id, who]) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !room.member_ids.includes(who))", arg=[x["id"], family])
+            until(page, lambda: family not in read_room(page, x)["member_ids"], "the removal never landed on room X")
             assert family in read_room(page, y)["member_ids"]
             release(held)
 
