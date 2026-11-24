@@ -496,6 +496,25 @@ Why: law section 3 puts a fresh reviewer in Andy's place, so the review has to b
 - [ ] The summary and decisions are posted in the room.
 - [ ] Open questions go to the ships first. Only acts the signed law reserves go to Andy.
 
+## Removing a worktree (a tidy of old branches)
+
+Why: a worktree can hold a record git doesn't keep, and a running unit can depend on its path. `git worktree remove`
+refuses untracked or changed files, but it deletes ignored files without asking (checked on 2026-11-24 in a
+throwaway repository). So the checks come before the removal, never after (Tardis 8ff068d8 and 14af897d; Rio Grande
+0fa1ce1d and 0f83bdd5).
+
+- [ ] Its commit is on origin/main: `git merge-base --is-ancestor <its HEAD> origin/main`. A branch not on main is
+      open work, so leave it for its ship to look at.
+- [ ] `git -C <it> status --porcelain` is empty.
+- [ ] `git -C <it> status --porcelain --ignored` lists only build caches: `.venv`, `__pycache__`, `.pytest_cache`,
+      `node_modules`, `target`, `*.egg-info` and the like. An SDD ledger (`.superpowers/sdd/`), an `engram/cold.db`,
+      a `.engram/` or a run's output is a record. Archive it first, or keep the worktree.
+- [ ] Nothing uses its path: no user unit in `~/.config/systemd/user/`, no crontab entry, no process's cwd or
+      command line, and no link in the station's checkouts names it. On the Pi, units run from a linked checkout.
+- [ ] A worktree outside the scratch folders, such as a deployed copy, is left for a look even when it passes.
+- [ ] Every check is rerun right before each removal, and only `git worktree remove` is used, never `--force` or
+      `rm -rf`. The branches are kept.
+
 ## Running CI for another ship's branch (Tardis)
 
 For a head that travels by Taildrop and is never pushed. A pushed head's GitHub CI already runs every job, so it is
