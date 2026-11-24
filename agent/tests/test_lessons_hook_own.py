@@ -21,7 +21,7 @@ BOUNDARY = json.dumps({'type': 'system', 'subtype': 'compact_boundary', 'isSidec
 @pytest.fixture
 def rail(tmp_path, monkeypatch):
     monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 5.0)
-    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))  # the tests' own git calls only; the hook's read no GIT_*
     return Rail(tmp_path)
 
 

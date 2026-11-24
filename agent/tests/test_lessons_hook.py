@@ -320,8 +320,20 @@ class Rail:
 @pytest.fixture
 def rail(tmp_path, monkeypatch):
     monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 5.0)  # the 150 ms has its own test; a loaded machine mustn't flake here
-    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))  # no repository above the test's folders
+    # Bounds only the tests' own git calls. The hook's (branch(), receipt_place._git) run with no GIT_* variable at all,
+    # so they find a repository above tmp_path if there is one: a test that needs none checks it (outside_a_work_tree)
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
     return Rail(tmp_path)
+
+
+def outside_a_work_tree(path):
+    """Skip unless `path` is outside every git work tree, as the hook's own git sees it: with no GIT_* variable, so a
+    --basetemp inside a checkout can't make a test that wants no branch read the checkout's (board's
+    fix:lessons-hook-rail-fixture-ceiling-dirs, from the fresh Pi reviewer's read of 330b9b4e)."""
+    clean = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    inside = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=path, capture_output=True, env=clean)
+    if inside.returncode == 0:
+        pytest.skip(f'{path} is inside a git work tree with a HEAD, so the hook would find a branch there')
 
 
 def failure(command='ls nowhere', error="Exit code 2\nls: cannot access 'nowhere': No such file or directory", **fields):
@@ -374,6 +386,7 @@ def test_session_start_sends_the_cwd_and_branch_and_limit_3_never_a_prompt(rail)
 def test_session_start_outside_a_repository_sends_no_branch_and_cuts_the_cwd(rail):
     deep = rail.root / ('d' * 120) / ('e' * 120)
     deep.mkdir(parents=True)
+    outside_a_work_tree(deep)
     rail.answers()
     assert rail.run('SessionStart', cwd=str(deep)) is None
     assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(deep)[:200], 'limit': 3, 'seen': [],
