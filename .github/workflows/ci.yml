@@ -12,9 +12,12 @@ permissions:
 jobs:
   peer:
     name: Standalone peer, browser, and package checks
-    # Pinned while ubuntu-latest moves to 26.04: the peer suite ran 35:48 and 36:52 there (main e29b490e, f2aa2f29) against
-    # 23:47 on 24.04 with the same temp in RAM, and the slower runner widened a browser race. Unpin once the cause is
-    # known (board ci:peer-job-slower-on-ubuntu-26).
+    # Pinned to 24.04, the faster runner: in one paired run on 11-24 (45453286248, one commit) the peer suite took 42:23
+    # on 24.04.5 and 46:04 on 26.04.1. Both had 4 cores, 15 GiB, kernel 7.0 azure and Python 3.13.5. The 9% was spread
+    # per test (CPU-bound tests 25-40% slower, timer waits the same), so it's the image or the host drawn, not a test.
+    # The gap was about 50% in November's first runs (35:48 and 36:52 against 23:47). This is the longest job, and on
+    # 26.04 it would leave 14 of its 60 minutes. Unpin when 24.04's retirement is announced, or a second pair shows the
+    # gap gone (board ci:peer-job-slower-on-ubuntu-26).
     runs-on: ubuntu-24.04
     timeout-minutes: 60  # 15 cut the suite at 15m18s on 7d46e2b6; 35 cut it at 96% with 0 failures on 16c41c76, after a slow apt mirror; 45 cut the job on 728b0f64 just after 3,705 passed in 44m20s. Green runs took 24.3, 29.4 and 29.6 min early on; the suite alone took 44.3 min on 728b0f64
     steps:
