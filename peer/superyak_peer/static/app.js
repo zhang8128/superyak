@@ -3068,8 +3068,10 @@ async function createChat(form) {
 }
 async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
-  // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
-  if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
+  // One save at a time: a second submit while saving would send a stale revision and read as a false conflict. And only
+  // for the room the form was drawn for (data-room), as Mark does: state.room and the edit can move without a draw
+  // (board fix:room-acts-check-their-room).
+  if (!room || !edit || edit.roomId !== room.id || form.dataset.room !== room.id || edit.saving) return;
   const who = identityKey(state.me), acts = personActs;
   const body = form.elements.body.value;
   Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
