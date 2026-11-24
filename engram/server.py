@@ -2887,7 +2887,8 @@ def recall(
         lane: Filter to a lane ('personal' or 'work'). Default spans both.
         lighthouse_context: Explicit neighbor context, e.g. 'memory/technical'. Requires receiver opt-in. With none, a
             receiver whose owner set `default_context` crosses with that, to local publishers only.
-        lighthouse_purpose: Purpose checked by both receiver and publisher policies.
+        lighthouse_purpose: Purpose checked by both receiver and publisher policies. An identifier: letters, digits,
+            `-` or `_`, up to 64, starting with a letter or digit. Anything else is INVALID_REQUEST.
     """
     _init()
     # LOG_ONLY_TOOLS: only these go to a log, with a delivered item or sentence's digest in its place
