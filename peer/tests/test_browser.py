@@ -2863,6 +2863,52 @@ def test_a_brief_saved_after_moving_on_names_its_room(browser_peer):
             expect(page.locator(".notice").first).to_have_text("Room X: Room brief saved.")
 
 
+# Board fix:room-acts-check-their-room (Tardis, 11-20): brief and board acts act only on the room their control was drawn
+# for, as Mark does since 128b7cf3. As in Mark's own test, state.room is moved by hand without a draw, the way a draw
+# that fails part way leaves the two apart.
+@pytest.mark.parametrize("edit_moves_too", [False, True])
+def test_a_brief_saved_from_a_form_drawn_for_another_room_saves_nothing(browser_peer, edit_moves_too):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.evaluate("(id) => { state.briefEdit = { roomId: id, body: '', revision: 0 }; }", x["id"])
+            page.evaluate("render()")
+            page.locator("#brief-body").fill("The plan for X")
+            page.evaluate("([room, moveEdit]) => { state.room = { ...state.room, id: room.id, title: room.title };"
+                          " if (moveEdit) state.briefEdit.roomId = room.id; }", [{"id": y["id"], "title": "Room Y"}, edit_moves_too])
+            page.get_by_role("button", name="Save brief").click()
+            reads_settled(page)
+            page.wait_for_timeout(200)
+            assert read_room(page, x).get("brief") is None and read_room(page, y).get("brief") is None
+            # The control: with state.room the form's room again, the same press saves X's brief, so the check can see one.
+            page.evaluate("(id) => { state.room = { ...state.room, id }; state.briefEdit.roomId = id; }", x["id"])
+            page.get_by_role("button", name="Save brief").click()
+            page.wait_for_function("(id) => fetch(`/api/chats/${id}`).then(r => r.json()).then(room => !!room.brief)", arg=x["id"])
+            assert read_room(page, y).get("brief") is None
+
+
+def test_a_board_item_posted_from_a_form_drawn_for_another_room_posts_nothing(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            x, y = two_rooms_with_x_open(page, store, owner)
+            page.locator("#board-key").fill("spec:x")
+            page.locator("#board-title").fill("X's item")
+            page.evaluate("(room) => { state.room = { ...state.room, id: room.id, title: room.title }; }", {"id": y["id"], "title": "Room Y"})
+            page.locator("#board-title").press("Enter")
+            reads_settled(page)
+            page.wait_for_timeout(200)
+            board = lambda room: page.evaluate("(id) => fetch(`/api/chats/${id}/board`).then(r => r.json())", room["id"])
+            keys = lambda room: [i.get("key") for i in (lambda b: b.get("items", []) if isinstance(b, dict) else b)(board(room))]
+            assert "spec:x" not in keys(x) and "spec:x" not in keys(y)
+            # The control: with state.room X again, the same press posts to X, so the check can see an item.
+            page.evaluate("(room) => { state.room = { ...state.room, id: room.id, title: room.title }; }", {"id": x["id"], "title": "Room X"})
+            page.locator("#board-title").press("Enter")
+            page.wait_for_function("(id) => fetch(`/api/chats/${id}/board`).then(r => r.json()).then(b => JSON.stringify(b).includes('spec:x'))", arg=x["id"])
+            assert "spec:x" in keys(x) and "spec:x" not in keys(y)
+
+
 def test_a_board_post_answered_after_moving_on_leaves_the_caret_out_of_the_next_rooms_form(browser_peer):
     store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
     with sync_playwright() as playwright:
