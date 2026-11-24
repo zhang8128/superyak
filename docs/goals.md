@@ -100,4 +100,16 @@ and Andy can veto:
   shows almost only a ship's own lessons, which carry none by design: on 11-23, over both ships' three sessions with
   lessons, 16 of its 17 distinct lessons were own, against 40 of 43 other ships' at failures. So the measured paths
   are nearly all that other ships' lessons reach. That's a reading, not a finding, and the prompt-receipts spec is
-  closed unbuilt. The crossing waits on Andy's allow.
+  closed unbuilt. **At failures, Near is topic retrieval:** `R_MAX` puts about 14 of 28 other ships' lessons in reach
+  of any command about the work, a recipe 1 and a ferry timetable 2 (all hands 2d1d6c50). On 11-24 at 01:20, Tardis
+  had 1 helped of 43 scored by angle and 2 of 6 by words.
+  **The decision rule, fixed on 11-24 before the count moves** (Rio Grande, all hands dcd7fbcf, and Tardis):
+  - **When:** at 100 scored angle receipts across ships, by `make lesson-outcomes` on each ship, summed.
+  - **Words-only:** if angle's helped share is under 5%, and words' is at least 15% over at least 10 scored words
+    receipts, failures become words-only under a section 3 spec.
+  - **Near stays:** if angle's is 5% or more, Near stays, and it's named as topic retrieval.
+  - **Neither helps:** if both are under their bars, the rail's matching is revisited as a whole.
+  - **Too few words:** if words have fewer than 10 scored receipts by then, the count waits for them.
+  - **Until then:** each ship scores its receipts in the turn they arrive. A receipt shown in another session stays
+    unscored, since only that session saw it.
+  The crossing waits on Andy's allow.
