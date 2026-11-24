@@ -690,6 +690,12 @@ def test_a_gitignore_from_the_template_cannot_keep_memos_out_of_the_vault(tmp_pa
     assert blob(tmp_path, f'{OUTBOUND}/coord_b.md') == (MEMO + 'b\n').encode()
 
 
+def _tree_bytes(root):
+    """Every path under `root` with its bytes (None for a folder), so a write into an existing file such as `config` shows,
+    not only a new or removed name (the fresh Pi reviewer of 8821284a, all hands be3565a6)."""
+    return {str(path.relative_to(root)): None if path.is_dir() else path.read_bytes() for path in sorted(root.rglob('*'))}
+
+
 def test_the_vault_runs_git_with_none_of_the_callers_git_variables(tmp_path, monkeypatch):
     """The board's fix:vault-git-strips-caller-git-env: a GIT_DIR or GIT_WORK_TREE left set by the caller (a git hook, or
     a session started inside one) pointed every vault git call at that other repository: create initialized it, and
@@ -698,11 +704,11 @@ def test_the_vault_runs_git_with_none_of_the_callers_git_variables(tmp_path, mon
     other.mkdir()
     clean = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     subprocess.run(['git', 'init', '-q', '-b', 'elsewhere', str(other)], check=True, capture_output=True, env=clean)
-    before = sorted(p.name for p in (other / '.git').iterdir())
+    before = _tree_bytes(other / '.git')
     monkeypatch.setenv('GIT_DIR', str(other / '.git'))
     monkeypatch.setenv('GIT_WORK_TREE', str(other))
     vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
     assert (tmp_path / 'Station.aDNA.git' / 'HEAD').is_file()
     assert vault.git('rev-parse', '--absolute-git-dir').stdout.strip() == str((tmp_path / 'clone' / '.git').resolve())
     assert 'README.md' in vault.listing('ls-files', '-z')
-    assert sorted(p.name for p in (other / '.git').iterdir()) == before  # the caller's repository is untouched
+    assert _tree_bytes(other / '.git') == before  # the caller's repository is untouched, byte for byte
