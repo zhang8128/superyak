@@ -20,7 +20,13 @@ RESULTS = frozenset({'success', 'protocol', 'timeout', 'exit-code', 'signal', 'c
 STATUS = re.compile(r'[0-9]{1,3}|[A-Z0-9+]{1,16}')
 EXIT_CODES = frozenset({'exited', 'killed', 'dumped'})
 KILLED = frozenset({'signal', 'core-dump', 'oom-kill'})
-TIMER_UNITS = {'superyak-backup.service': 'the nightly backup', 'superyak-restore-test.service': 'the monthly restore test'}
+TIMER_UNITS = {  # a timer's oneshot: it isn't restarted, so a --monitor alert says the run failed, then what follows
+    'superyak-backup.service': ('the nightly backup', 'The earlier copies are kept.'),
+    'superyak-restore-test.service': ('the monthly restore test', 'The earlier copies are kept.'),
+    'superyak-imprint-sweep.service': ('the hourly imprint sweep', 'Its timer runs it again at the next hour.'),
+    'superyak-lessons-index.service': ('the lessons index', 'Its timer runs it again within a minute.'),
+}
+BACKUP_UNITS = frozenset({'superyak-backup.service', 'superyak-restore-test.service'})  # REASONS are their exit codes
 ALERT_FILE = re.compile(r'([0-9a-f]{12})\.json')
 KINDS = ('stopped', 'down', 'failed')
 KEPT_DAYS = 30
@@ -52,7 +58,7 @@ def systemd_fields(environ, monitor):
 
 
 def kind_for(unit, monitor):
-    """S11: ExecStopPost= gives stopped; --monitor gives failed for the backup and restore-test units, down otherwise."""
+    """S11: ExecStopPost= gives stopped; --monitor gives failed for a timer's oneshot (TIMER_UNITS), down otherwise."""
     if not monitor:
         return 'stopped'
     return 'failed' if unit in TIMER_UNITS else 'down'
@@ -67,10 +73,11 @@ def _local(at, fmt='%H:%M on %Y-%m-%d'):
 
 
 def failure_reason(alert):
-    """S11: the reason from the exit code (Error handling), or the words for a systemd result."""
+    """S11: the reason from the exit code (Error handling, the backup's and the restore test's own codes), or the words
+    for a systemd result."""
     result, status = alert['result'], alert['exit_status']
     if result == 'exit-code' and status and status.isdigit():
-        return REASONS.get(int(status), SEE_LOG)
+        return REASONS.get(int(status), SEE_LOG) if alert['unit'] in BACKUP_UNITS else SEE_LOG
     if result == 'timeout':
         return 'it ran past its time limit'
     if result in KILLED:
@@ -96,7 +103,8 @@ def render(alert):
     elif alert['kind'] == 'down':
         line = f'Station alert: {name} is down since {when}: systemd stopped restarting it ({alert["result"]}). {log}'
     else:
-        line = f'Station alert: {TIMER_UNITS[unit]} failed at {when}: {failure_reason(alert)}. The earlier copies are kept. {log}'
+        job, then = TIMER_UNITS[unit]
+        line = f'Station alert: {job} failed at {when}: {failure_reason(alert)}. {then} {log}'
     return safe_line(line, LINE_LIMIT)
 
 

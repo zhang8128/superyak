@@ -145,6 +145,25 @@ def test_failed_backup_and_restore_runs_name_their_reason(tmp_path, monkeypatch,
     assert f': {reason}. The earlier copies are kept. Log on the Pi: journalctl --user-unit {unit} --since ' in failed['text']
 
 
+
+@pytest.mark.parametrize('unit, name, again', [
+    ('superyak-imprint-sweep.service', 'the hourly imprint sweep', 'Its timer runs it again at the next hour.'),
+    ('superyak-lessons-index.service', 'the lessons index', 'Its timer runs it again within a minute.'),
+])
+def test_a_timer_job_s_failure_says_the_run_failed_never_that_systemd_gave_up(tmp_path, monkeypatch, unit, name, again):
+    """fix:oneshot-alert-says-restarts (the fresh reader on f5d32f5a, all hands c5e901ea): a timer's oneshot isn't
+    restarted, so its --monitor alert says the run failed and when its timer runs it again, never "systemd stopped
+    restarting it" nor the backup's "The earlier copies are kept". An exit code reads as the backup's own words only for
+    the backup and the restore test: 12 from either of these is "see the log", not "the live database may be damaged"."""
+    data = tmp_path / 'lighthouse'
+    data.mkdir(mode=0o700)
+    under_systemd(monkeypatch, monitor=True, service_result='exit-code', exit_code='exited', exit_status='12')
+    assert alert(data, unit, '--monitor') == 0
+    [(_, failed)] = files(data)
+    assert failed['kind'] == 'failed'
+    assert failed['text'].startswith(f'Station alert: {name} failed at {local(failed["at"])}: see the log. {again} Log on the Pi: ')
+    assert 'restarting' not in failed['text'] and 'copies' not in failed['text'] and 'damaged' not in failed['text']
+
 def test_alert_lines_hold_no_log_lines_mentions_or_unchecked_values(tmp_path, monkeypatch):
     """R12: invalid units are refused with nothing queued; an unknown result becomes unknown; a secret in the environment
     reaches neither the file nor the text; no at sign and no newline."""
