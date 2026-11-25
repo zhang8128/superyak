@@ -3829,6 +3829,27 @@ def test_an_admin_read_refused_after_the_home_said_admin_reads_as_not_admin_now(
         expect(page.get_by_role("heading", name="This home didn't open")).to_be_visible()
         assert not errors, errors
 
+
+def test_a_late_admin_read_refused_reads_the_same_and_an_ended_session_still_signs_in(browser_peer):
+    """The fresh reader's two nits on 47a0415c: when /api/me says participant and /api/home says admin, the admin read
+    goes out late (api(path), awaited inside the catch) and its 403 reads as not admin now too; and a 401 from an admin
+    read is an ended session, never lost rights, so it signs in again."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+        def me_says_participant(route):
+            answer = route.fetch()
+            route.fulfill(response=answer, json={**answer.json(), "is_admin": False})
+        page.route("**/api/me", lambda route: me_says_participant(route) if route.request.method == "GET" else route.continue_())
+        page.route("**/api/accounts", lambda route: route.fulfill(status=403, json={"detail": "Only an admin can do that."}))
+        page.goto(browser_peer["base_url"] + "/#connections")
+        page.reload()
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Account support")).to_have_count(0)
+        page.unroute("**/api/me")
+        page.unroute("**/api/accounts")
+        page.route("**/api/accounts", lambda route: route.fulfill(status=401, json={"detail": "Sign in again."}))
+        page.reload()
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+
 def test_attachment_stays_selected_through_upload_and_public_release(browser_peer):
     """Break caught: uploading a file resets unsaved text or omits the selected release file."""
     with sync_playwright() as playwright:
