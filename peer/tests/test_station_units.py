@@ -60,8 +60,8 @@ EXPECTED = {
         'Service': {'Type': 'oneshot', 'TimeoutStartSec': '1min',
                     'ExecStart': f'{PYTHON} station-alert --data-dir {DATA} --unit %i --monitor'},
     },
-    'superyak-lessons-index.service': {  # first rail section 4; LimitDATA, since the Pi has no memory cgroup
-        'Unit': {'OnFailure': 'superyak-alert@%n.service'},
+    'superyak-lessons-index.service': {  # first rail section 4; LimitDATA, since the Pi has no memory cgroup; its alert is 50-on-failure.conf's
+        'Unit': {},
         'Service': {'Type': 'oneshot', 'WorkingDirectory': '%h/superyak/peer', 'EnvironmentFile': '%h/.config/superyak/lessons.env',
                     'ExecStart': '%h/superyak/peer/.venv/bin/python -I -m superyak_peer.lessons index --data-dir ${SUPERYAK_LESSONS_DATA}',
                     'Nice': '10', 'TimeoutStartSec': '5min', 'LimitDATA': '512M'},
@@ -91,6 +91,10 @@ EXPECTED = {
         'Unit': {'OnFailure': 'superyak-alert@%n.service'},
         'Service': {'ExecStopPost': f'-{PYTHON} station-alert --data-dir {DATA} --unit %n'},
     },
+    '50-on-failure.conf': {  # a timer's oneshot: 50-alerts.conf's ExecStopPost would start Python after every run, and its
+        # failure line says systemd restarts the unit, which isn't so for a oneshot (alerts.py:57-61; the fresh reader on f5d32f5a)
+        'Unit': {'OnFailure': 'superyak-alert@%n.service'},
+    },
 }
 
 
@@ -105,9 +109,19 @@ def sections(name):
 def test_units_say_what_the_spec_says():
     """R16: the timers (OnCalendar, Persistent=true, WantedBy=timers.target), the oneshots (OnFailure=, no Restart=),
     the alert template (%i, no OnFailure= of its own) and the drop-in (ExecStopPost=- with -I) are exactly S8's and S9's."""
-    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['50-alerts.conf'])
+    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['50-alerts.conf', '50-on-failure.conf'])
     for name, expected in EXPECTED.items():
         assert sections(name) == expected, name
+
+
+def test_only_a_station_unit_names_the_station_s_alert():
+    """The alert template is a station unit (make station-units; station-alert writes into the station's own data), so a
+    unit every peer installs names it only through a drop-in, installed where the template is. On Tardis the lessons
+    index named it in its base unit, with no template there, so a failing index alerted nobody (all hands f74dce95)."""
+    peers = [path for path in UNITS.iterdir() if path.suffix in ('.service', '.timer') and path.name not in INSTALLED]
+    assert {path.name for path in peers} == set(LESSONS_UNITS + FEDERATION_UNITS)
+    for path in peers:
+        assert 'superyak-alert@' not in path.read_text(), path.name
 
 
 VENV_PYTHON = Path.home() / 'superyak' / 'peer' / '.venv' / 'bin' / 'python'
@@ -123,6 +137,7 @@ def test_units_pass_systemd_analyze_verify(tmp_path):
     (probe / 'superyak-verifycheck.service').write_text('[Unit]\nDescription=Throwaway unit for the drop-in\n\n[Service]\nExecStart=/bin/true\n')
     (probe / 'superyak-verifycheck.service.d').mkdir()
     shutil.move(probe / '50-alerts.conf', probe / 'superyak-verifycheck.service.d' / '50-alerts.conf')
+    shutil.move(probe / '50-on-failure.conf', probe / 'superyak-verifycheck.service.d' / '50-on-failure.conf')
     files = [str(probe / name) for name in INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['superyak-verifycheck.service']]
     result, ours = _verify(probe, files)
     assert result.returncode == 0 and ours == [], result.stderr
@@ -175,6 +190,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
                 'superyak-ship-serenity-bricks', 'superyak-federate', 'superyak-federation-listen']  # the last two: plan SF10
     for service in services:
         (units / f'{service}.service').write_text('[Service]\nExecStart=/bin/true\n')
+    (units / 'superyak-lessons-index.service').write_text('[Service]\nType=oneshot\nExecStart=/bin/true\n')  # make lessons-units ran first
     andys = units / 'superyak-door.service.d' / '10-andy.conf'
     andys.parent.mkdir(mode=0o700)          # an existing directory keeps its mode (review N2)
     andys.write_text('[Service]\nNice=5\n')
@@ -203,6 +219,9 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
         assert stat.S_IMODE((units / name).stat().st_mode) == 0o644
     for service in services:
         assert (units / f'{service}.service.d' / '50-alerts.conf').read_bytes() == (UNITS / '50-alerts.conf').read_bytes()
+    oneshot = units / 'superyak-lessons-index.service.d' / '50-on-failure.conf'
+    assert oneshot.read_bytes() == (UNITS / '50-on-failure.conf').read_bytes() and stat.S_IMODE(oneshot.stat().st_mode) == 0o644
+    assert not (units / 'superyak-lessons-index.service.d' / '50-alerts.conf').exists()
     assert stat.S_IMODE(andys.parent.stat().st_mode) == 0o700
     assert {path: path.read_bytes() for path in contents} == contents      # R16: no existing unit or drop-in is edited
     assert calls.read_text().splitlines() == ['--user daemon-reload',
@@ -220,6 +239,9 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
         '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-alert@*',
         '--user daemon-reload']
     assert not (home / '.config').exists()
+    (units / 'superyak-lessons-index.service').unlink()     # a station without the lessons index: no drop-in for it
+    assert make('station-units').returncode == 0 and not (units / 'superyak-lessons-index.service.d').exists()
+    assert make('station-units-remove').returncode == 0
 
 
 @pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service', 'superyak-imprint-sweep.service',
@@ -315,12 +337,20 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
     written = home / '.config' / 'superyak' / 'lessons.env'
     assert written.read_text() == f'SUPERYAK_LESSONS_DATA={data}\n' and stat.S_IMODE(written.stat().st_mode) == 0o600
     assert calls.read_text().splitlines() == ['--user daemon-reload', '--user enable --now superyak-lessons-index.timer']
+    assert not (units / 'superyak-lessons-index.service.d').exists()     # no station alert here, so no OnFailure naming it
     calls.unlink()
     removed = make('lessons-units-remove')
     assert removed.returncode == 0, removed.stderr
     assert sorted(path.name for path in units.iterdir()) == ['superyak-lighthouse.service'] and not written.exists()
     assert calls.read_text().splitlines() == ['--user disable --now superyak-lessons-index.timer', '--user stop superyak-lessons-index.service',
                                               '--user reset-failed superyak-lessons-index.service', '--user daemon-reload']
+    template = units / 'superyak-alert@.service'                         # the station: make station-units ran first
+    template.write_bytes((UNITS / 'superyak-alert@.service').read_bytes())
+    assert make('lessons-units').returncode == 0
+    oneshot = units / 'superyak-lessons-index.service.d' / '50-on-failure.conf'
+    assert oneshot.read_bytes() == (UNITS / '50-on-failure.conf').read_bytes() and stat.S_IMODE(oneshot.stat().st_mode) == 0o644
+    assert make('lessons-units-remove').returncode == 0
+    assert sorted(str(path.relative_to(units)) for path in units.rglob('*')) == ['superyak-alert@.service', 'superyak-lighthouse.service']
 
 
 @pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')

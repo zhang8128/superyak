@@ -1,6 +1,5 @@
 [Unit]
 Description=Superyak lessons index: the lessons room's chain into lessons-index.bin (first rail, section 4)
-OnFailure=superyak-alert@%n.service
 
 [Service]
 Type=oneshot

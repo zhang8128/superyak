@@ -583,6 +583,8 @@ lessons-units:
 	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(LESSONS_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
+	@# a failure alert only where the station's alert template is: a peer without it has nothing to name
+	if [ -f "$(SYSTEMD_USER)/superyak-alert@.service" ]; then d="$(SYSTEMD_USER)/superyak-lessons-index.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-on-failure.conf "$$d/50-on-failure.conf" || exit 1; fi
 	test -d "$(HOME)/.config/superyak" || install -d -m 700 "$(HOME)/.config/superyak"
 	printf 'SUPERYAK_LESSONS_DATA=%s\n' "$$(cd "$(LESSONS_DATA)" && pwd)" > "$(HOME)/.config/superyak/lessons.env"
 	chmod 600 "$(HOME)/.config/superyak/lessons.env"
@@ -594,6 +596,7 @@ lessons-units-remove:
 	-systemctl --user stop superyak-lessons-index.service
 	-systemctl --user reset-failed superyak-lessons-index.service
 	for unit in $(LESSONS_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
+	d="$(SYSTEMD_USER)/superyak-lessons-index.service.d"; if [ -d "$$d" ]; then rm -f "$$d/50-on-failure.conf"; rmdir "$$d" 2>/dev/null || true; fi
 	rm -f "$(HOME)/.config/superyak/lessons.env"
 	systemctl --user daemon-reload
 
@@ -610,6 +613,7 @@ station-units:
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(STATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	for service in $(ALERTED_SERVICES); do d="$(SYSTEMD_USER)/$$service.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-alerts.conf "$$d/50-alerts.conf" || exit 1; done
+	if [ -f "$(SYSTEMD_USER)/superyak-lessons-index.service" ]; then d="$(SYSTEMD_USER)/superyak-lessons-index.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-on-failure.conf "$$d/50-on-failure.conf" || exit 1; fi
 	systemctl --user daemon-reload
 	systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer
 
@@ -619,6 +623,7 @@ station-units-remove:
 	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service 'superyak-alert@*'
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
+	d="$(SYSTEMD_USER)/superyak-lessons-index.service.d"; if [ -d "$$d" ]; then rm -f "$$d/50-on-failure.conf"; rmdir "$$d" 2>/dev/null || true; fi
 	systemctl --user daemon-reload
 
 # The Pi is always on and is the station: its embedder keeps the model loaded and loads it at start, so a lighthouse
