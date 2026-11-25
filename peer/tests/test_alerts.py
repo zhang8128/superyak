@@ -145,6 +145,25 @@ def test_failed_backup_and_restore_runs_name_their_reason(tmp_path, monkeypatch,
     assert f': {reason}. The earlier copies are kept. Log on the Pi: journalctl --user-unit {unit} --since ' in failed['text']
 
 
+
+@pytest.mark.parametrize('unit, name, again', [
+    ('superyak-imprint-sweep.service', 'the hourly imprint sweep', 'Its timer runs it again at the next hour.'),
+    ('superyak-lessons-index.service', 'the lessons index', 'Its timer runs it again in about a minute.'),
+])
+def test_a_timer_job_s_failure_says_the_run_failed_never_that_systemd_gave_up(tmp_path, monkeypatch, unit, name, again):
+    """fix:oneshot-alert-says-restarts (the fresh reader on f5d32f5a, all hands c5e901ea): a timer's oneshot isn't
+    restarted, so its --monitor alert says the run failed and when its timer runs it again, never "systemd stopped
+    restarting it" nor the backup's "The earlier copies are kept". An exit code reads as the backup's own words only for
+    the backup and the restore test: 12 from either of these is "see the log", not "the live database may be damaged"."""
+    data = tmp_path / 'lighthouse'
+    data.mkdir(mode=0o700)
+    under_systemd(monkeypatch, monitor=True, service_result='exit-code', exit_code='exited', exit_status='12')
+    assert alert(data, unit, '--monitor') == 0
+    [(_, failed)] = files(data)
+    assert failed['kind'] == 'failed'
+    assert failed['text'].startswith(f'Station alert: {name} failed at {local(failed["at"])}: see the log. {again} Log on the Pi: ')
+    assert 'restarting' not in failed['text'] and 'copies' not in failed['text'] and 'damaged' not in failed['text']
+
 def test_alert_lines_hold_no_log_lines_mentions_or_unchecked_values(tmp_path, monkeypatch):
     """R12: invalid units are refused with nothing queued; an unknown result becomes unknown; a secret in the environment
     reaches neither the file nor the text; no at sign and no newline."""
@@ -209,6 +228,15 @@ def test_stopped_alerts_are_held_back_and_back_off_per_unit(tmp_path, utc):
     assert posted == [0, 30, 90, 210, 450, 810, 1170]                                        # windows of 30, 60, 120, 240, 360, 360
     assert [m for m in posted if m < 480] == [0, 30, 90, 210, 450]                           # overnight: 5 lines, not 16
 
+
+
+def test_a_failing_timer_job_meets_the_daily_backstop_not_the_stop_window(tmp_path):
+    """The fresh reader on 0f1a2329: failed shares down's backstop (6 a day per unit, then held), never the stopped
+    window. The lessons index runs every minute, so one failing for a day posts 6 lines, the first 6, and its timer's
+    next runs are held, not windowed to one line in 30 minutes."""
+    queue, index = tmp_path / 'alerts', 'superyak-lessons-index.service'
+    runs = [alerts.record(queue, index, 'failed', CRASH, T0 + minute * 60) for minute in range(7)]
+    assert [one is not None for one in runs] == [True] * 6 + [False]
 
 def test_the_lock_fallback_queues_anyway(tmp_path):
     """R11: with alerts/.lock held by another process, the alert is queued after 5 s, without the rate record: a
