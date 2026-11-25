@@ -131,22 +131,65 @@ def browser_peer(tmp_path, request, monkeypatch):
     thread.join(timeout=10)
 
 
+def _watch_console(context):
+    """The console's lines and uncaught errors of every page the context opens, for _evidence_on_failure."""
+    lines = []
+
+    def attach(page):
+        page.on("console", lambda message: lines.append(f"{message.type}: {message.text}"))
+        page.on("pageerror", lambda error: lines.append(f"pageerror: {error}"))
+    context.on("page", attach)
+    return lines
+
+
+@contextmanager
+def _evidence_on_failure(context):
+    """A browser test that fails inside signed_in_browser or signed_out_browser leaves what its pages showed under
+    ARTIFACTS (CI uploads it from a failed run): each open page's full screenshot and visible text, and the console's
+    lines, named by PYTEST_CURRENT_TEST. A run that passes or skips writes nothing. Each save is tried alone, so evidence
+    that can't be taken never hides the test's own error. No trace: it would hold the throwaway home's session cookies,
+    and a failed run's upload is public for 7 days (Tardis, all hands c30e9df1). A context opened with browser.new_context
+    outside these two managers keeps nothing."""
+    console = _watch_console(context)
+    try:
+        yield
+    except (GeneratorExit, pytest.skip.Exception):
+        raise
+    except BaseException:
+        test = re.sub(r" \((setup|call|teardown)\)$", "", os.environ.get("PYTEST_CURRENT_TEST", "unknown")).split("::")[-1]
+        stem = ARTIFACTS / ("failed-" + re.sub(r"[^A-Za-z0-9_.]+", "-", test).strip("-")[:120])
+        for number, page in enumerate(context.pages):
+            for save in (lambda: page.screenshot(path=f"{stem}-page{number}.png", full_page=True, timeout=5000),
+                         lambda: Path(f"{stem}-page{number}.txt").write_text(page.inner_text("body", timeout=5000))):
+                try:
+                    save()
+                except Exception:  # noqa: BLE001 - evidence is best effort; the test's own error is what's raised
+                    pass
+        if console:
+            try:
+                Path(f"{stem}-console.txt").write_text("\n".join(console[-500:]) + "\n")
+            except OSError:
+                pass
+        raise
+
+
 @contextmanager
 def signed_in_browser(playwright, peer, username, *, viewport=None, touch=False):
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(viewport=viewport or {"width": 1440, "height": 960},
                                   **({"has_touch": True, "is_mobile": True} if touch else {}))
-    page = context.new_page()
-    page.goto(peer["base_url"] + "/")
-    expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
-    page.get_by_label("Username", exact=True).fill(username)
-    page.get_by_label("Password", exact=True).fill(peer["password"])
-    page.get_by_role("button", name="Sign in").click()
-    expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
-    page.evaluate("scrollTo(0, 0)")
-    page.wait_for_timeout(100)
     try:
-        yield page, context
+        with _evidence_on_failure(context):
+            page = context.new_page()
+            page.goto(peer["base_url"] + "/")
+            expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill(username)
+            page.get_by_label("Password", exact=True).fill(peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.evaluate("scrollTo(0, 0)")
+            page.wait_for_timeout(100)
+            yield page, context
     finally:
         context.close()
         browser.close()
@@ -167,7 +210,8 @@ def signed_out_browser(playwright, *, viewport=None):
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(viewport=viewport or {"width": 1200, "height": 900})
     try:
-        yield context.new_page()
+        with _evidence_on_failure(context):
+            yield context.new_page()
     finally:
         context.close()
         browser.close()
@@ -10204,3 +10248,39 @@ def test_a_signed_in_person_who_doesnt_run_the_home_reads_home_not_peer(browser_
         _no_peer_word(page, 'a room they own')
         go_to(page, 'Connections')  # the pairing page, where "peer" is used: it says what one is
         expect(page.get_by_text('A peer is another home this one exchanges with.', exact=False)).to_be_visible()
+
+
+def test_a_failing_browser_test_leaves_what_its_page_showed_and_a_green_one_leaves_nothing(browser_peer, monkeypatch, tmp_path):
+    """CI run 45646287391's "element is not stable" left no evidence, so it could only be guessed at (all hands 9faf0d29,
+    Tardis's shape in c30e9df1). A test that fails inside signed_in_browser or signed_out_browser leaves, under
+    ARTIFACTS and named by the test, each open page's full screenshot and visible text, and the console's lines; a test
+    that passes, or skips, leaves nothing."""
+    import sys
+    kept = tmp_path / "evidence"   # browser_peer's homes are in tmp_path itself
+    kept.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "ARTIFACTS", kept)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_browser.py::test_one_that_fails[a case] (call)")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.evaluate("console.log('a green line')")
+        with pytest.raises(pytest.skip.Exception), signed_out_browser(playwright) as page:
+            pytest.skip("a skip is no failure")
+        assert list(kept.iterdir()) == []
+        with pytest.raises(AssertionError, match="the test failing"):
+            with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+                page.evaluate("console.log('a line the evidence keeps')")
+                assert False, "the test failing"
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_browser.py::test_another (call)")
+        with pytest.raises(AssertionError, match="signed out, failing"):
+            with signed_out_browser(playwright) as page:
+                page.goto(browser_peer["base_url"] + "/")
+                expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+                assert False, "signed out, failing"
+    one, other = "failed-test_one_that_fails-a-case", "failed-test_another"
+    assert sorted(path.name for path in kept.iterdir()) == sorted(
+        f"{stem}-{part}" for stem in (one, other) for part in ("console.txt", "page0.png", "page0.txt"))
+    assert all((kept / f"{stem}-page0.png").read_bytes().startswith(b"\x89PNG") for stem in (one, other))
+    assert "Your home" in (kept / f"{one}-page0.txt").read_text()
+    assert "log: a line the evidence keeps" in (kept / f"{one}-console.txt").read_text()
+    assert "a green line" not in (kept / f"{one}-console.txt").read_text()      # the green context's own lines went with it
+    assert "Sign in to this home" in (kept / f"{other}-page0.txt").read_text()
