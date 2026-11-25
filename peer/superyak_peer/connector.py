@@ -226,7 +226,7 @@ class Connector:
         request = _encoded(body)
         return _b64(request) + '.' + _b64(_tag(self._connector_key, b'pending', request))
 
-    def pending_request(self, fragment, callback, resource):
+    def pending_checked(self, fragment, callback, resource):
         """The sign-in's first checks, before any password counts: the fragment's tag (compare_digest, under the label
         `pending`), its payload exactly as sign_pending encodes one, its age (PENDING_SECONDS from `at`), and then the
         request checked again from its own values as /authorize did: a known client, the configured callback, the
@@ -262,11 +262,19 @@ class Connector:
             raise invalid
         if age >= PENDING_SECONDS:
             raise OAuthError(400, 'request_expired')
+        return body | {'key': hashlib.sha256(tag).hexdigest()}
+
+    def pending_request(self, fragment, callback, resource):
+        """pending_checked, then its client read: a known client, and its `client_name` on the request."""
+        return self.pending_with_client(self.pending_checked(fragment, callback, resource), callback)
+
+    def pending_with_client(self, checked, callback):
+        """The one store read of pending_request (check_client takes the gate), for a caller that runs it in a lane."""
         try:
-            known = self.check_client(body['client_id'], body['redirect_uri'], callback)
+            known = self.check_client(checked['client_id'], checked['redirect_uri'], callback)
         except OAuthError:
-            raise invalid from None
-        return body | {'key': hashlib.sha256(tag).hexdigest(), 'client_name': known['name']}
+            raise OAuthError(400, 'invalid_request') from None
+        return checked | {'client_name': known['name']}
 
     def _rebind_refused(self, db, request, csrf):
         """A refusal for signing in on a request that is decided, or already signed in without the token the page holds

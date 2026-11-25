@@ -817,7 +817,42 @@ def test_the_sign_in_waits_in_the_lane_api_login_uses(home, monkeypatch):
         '/authorize/signin', json={'request': a_fragment(home, state='st-2'), 'username': 'sam@example.org',
                                    'password': 'wrong'})
     sign_in(home, 'forged.request', password='wrong')
-    assert used == [('public', 'pending_sign_in'), ('tailnet', 'pending_sign_in')]
+    assert used == [('public', 'client_then_sign_in'), ('tailnet', 'client_then_sign_in')]  # the client read, then the sign-in
+
+
+def test_a_full_lane_refuses_a_sign_in_before_any_store_read(home, monkeypatch):
+    """Breakout 77c6e4: a full public lane answers the connector's sign-in at once, paused, before the request's own
+    checks, so a flood meets the pause and never the store. A forged request gets the same 429. The control: with the
+    lane free, the same request is answered by the password check."""
+    person(home)
+    fragment = a_fragment(home)
+    store, lane = home.store, home.app.state.sign_in_lanes.public
+    real_check, real_sign_in = store.check_client, store.pending_sign_in
+    monkeypatch.setattr(lane, 'inside', lane.size + lane.queue)
+    monkeypatch.setattr(store, 'check_client', lambda *a, **k: pytest.fail('a full lane read the client'))
+    monkeypatch.setattr(store, 'pending_sign_in', lambda *a, **k: pytest.fail('a full lane checked a password'))
+    for request in (fragment, 'forged.request'):
+        refused = sign_in(home, request, password='wrong')
+        assert (refused.status_code, refused.json()) == (429, {'error': 'too_many_attempts'})
+    monkeypatch.setattr(lane, 'inside', 0)
+    monkeypatch.setattr(store, 'check_client', real_check)
+    monkeypatch.setattr(store, 'pending_sign_in', real_sign_in)
+    assert sign_in(home, fragment, password='wrong').status_code == 401
+
+
+def test_the_client_read_runs_in_the_lanes_slot(home, monkeypatch):
+    """Breakout 77c6e4, variant 2: the sign-in's one store read before the password, the client's, runs in the slot the
+    lane counts, so a flood's store reads are bounded by the lane's size. A forged request reads nothing."""
+    person(home)
+    store, lane, seen = home.store, home.app.state.sign_in_lanes.public, []
+    real = store.check_client
+    monkeypatch.setattr(store, 'check_client', lambda *a, **k: (seen.append(lane.inside), real(*a, **k))[1])
+    fragment = a_fragment(home)  # /authorize's own read comes before the sign-in, out of any lane
+    seen.clear()
+    sign_in(home, fragment, password='wrong')
+    assert seen == [1]
+    seen.clear()
+    assert sign_in(home, 'forged.request', password='wrong').status_code == 400 and seen == []
 
 
 def test_a_sign_in_that_lands_during_anothers_password_check_keeps_the_request(home, monkeypatch):

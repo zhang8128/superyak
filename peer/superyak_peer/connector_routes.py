@@ -196,8 +196,11 @@ def install(app, public_origin, callback):
     async def signin(request: Request):
         """The consent page's first post: {request, username, password}. Its identity is in its body (the signed
         request and the password), so it can't refuse before reading it; the event-loop guard lists it as ANONYMOUS
-        for that reason. The request is checked off the lane, so a forged one takes no sign-in slot and counts no
-        attempt; the password is checked in the lane /api/login uses, counted as it counts."""
+        for that reason. In order (breakout 77c6e4): the lane /api/login uses is chosen, and a full one refuses at
+        once, paused, before any of the request's own checks; then the request's tag and shape are checked with no
+        store, so a forged one takes no sign-in slot and counts no attempt; then the client's read and the password
+        run in the lane's slot, counted as /api/login counts. So a flood meets the pause, and its store reads are
+        bounded by the lane's slots."""
         if not on_public_origin(request):
             return JSONResponse({'error': 'Not found'}, 404)
         raw = await request.body()
@@ -210,12 +213,18 @@ def install(app, public_origin, callback):
         if not isinstance(data, dict):
             return JSONResponse({'error': 'invalid_request'}, 400)
         try:
-            pending = await run_in_threadpool(store.pending_request, data.get('request'), callback, public_origin + '/mcp')
             username = data.get('username')
             lane, public, device = await request.app.state.sign_in_lane(request, username)
-            view = await lane.run(store.pending_sign_in, pending, username, data.get('password'),
-                                  request.client.host if request.client else 'unknown', public=public, device=device,
-                                  csrf=data.get('csrf'))
+            if lane.full():  # a full lane refuses before the request's own checks, which take no slot (breakout 77c6e4)
+                await lane.refuse()
+            # the tag and shape, with no store read, off the loop as every store call is (test_event_loop)
+            checked = await run_in_threadpool(store.pending_checked, data.get('request'), callback, public_origin + '/mcp')
+
+            def client_then_sign_in():  # the client read, then the sign-in, both in the lane's slot (variant 2, breakout 77c6e4)
+                return store.pending_sign_in(store.pending_with_client(checked, callback), username, data.get('password'),
+                                             request.client.host if request.client else 'unknown', public=public,
+                                             device=device, csrf=data.get('csrf'))
+            view = await lane.run(client_then_sign_in)
         except OAuthError as refused:
             return JSONResponse({'error': refused.error}, refused.status)
         except Problem as refused:  # the lane full, or a username that isn't text

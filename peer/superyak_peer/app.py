@@ -315,6 +315,15 @@ class SignInLane:
     def refused(self):
         return Problem(429, 'Too many sign-ins at once; try again shortly')
 
+    def full(self):
+        """Whether run() would refuse now. It takes no slot, so a caller may ask before its own checks."""
+        return self.inside >= self.size + self.queue
+
+    async def refuse(self):
+        """A full lane's refusal, paused as run()'s is, for a caller that sheds before its own work: the connector's
+        sign-in asks full() before its request's checks, so a flood meets the pause, not the store."""
+        await self._refuse()
+
     async def _refuse(self):
         if self.pause > 0 and self.held < self.held_max:
             self.held += 1  # only the event loop changes it
