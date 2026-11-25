@@ -2,7 +2,7 @@
 id: before-work
 title: Before starting a piece of work
 when: claim
-version: 2
+version: 3
 owner: ships of this repository
 see: docs/checklists.md#before-starting-a-piece-of-work
 ---
@@ -13,3 +13,4 @@ see: docs/checklists.md#before-starting-a-piece-of-work
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - [ ] Say who will notice when it's done.
 - [ ] Size the review to the risk: full re-check rounds for safety code (authority, permissions, the public route, a person's data); anything else gets one review, with follow-ups on the board.
+- [ ] For safety code, write each guard's test against its removal first, and watch it fail before calling the guard pinned.
