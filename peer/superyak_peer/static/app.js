@@ -2111,12 +2111,22 @@ async function loadData() {
     });
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
+    // A 403 from an admin read after /api/home said admin: the rights went between the two reads. This load draws the
+    // home as it now is for this person, with no admin section on empty lists, and the next load reads the rights
+    // afresh (fix:admin-read-403-reads-as-not-admin-now). Losing admin loses super admin too.
+    const lost = new Set();
     const adminAnswer = async (flag, path, read) => {
       if (!home.user[flag]) return [];
-      if (!read) return api(path);
-      const answer = await read;
-      if ("error" in answer) throw answer.error;
-      return answer.value;
+      try {
+        if (!read) return await api(path);
+        const answer = await read;
+        if ("error" in answer) throw answer.error;
+        return answer.value;
+      } catch (error) {
+        if (error.status !== 403) throw error;
+        lost.add(flag);
+        return [];
+      }
     };
     const [activePairs, accounts, connections, roleChanges, accessRequestList] = await Promise.all([
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -2135,7 +2145,9 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints, connector: connector.on, connectorNotice: connector.notice });
+    const rights = lost.has("is_admin") ? { is_admin: false, is_super_admin: false } : lost.has("is_super_admin") ? { is_super_admin: false } : {};
+    if (lost.size) announce("Your admin rights changed while this page opened; it shows what you can do now.");
+    Object.assign(state, { me: { ...user, ...home.user, ...rights }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints, connector: connector.on, connectorNotice: connector.notice });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
