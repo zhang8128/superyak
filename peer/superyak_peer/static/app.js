@@ -435,7 +435,7 @@ function editorState(layer, active) {
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<span class="badge active">Active release</span>${unsaved}<span class="state-note">Latest sharing details unavailable</span>`;
   }
-  if (!active) return `<span class="badge draft">Private draft</span>${unsaved}<span class="state-note">Sharing is off on this peer</span>`;
+  if (!active) return `<span class="badge draft">Private draft</span>${unsaved}<span class="state-note">Sharing is off on this home</span>`;
   const unpublished = active.draft_version !== layer.version;
   return `<span class="badge active">Active · version ${active.draft_version}</span>${unsaved}${unpublished ? '<span class="badge draft">Unpublished changes</span>' : '<span class="state-note">Draft and active release match</span>'}`;
 }
@@ -443,14 +443,14 @@ function editorState(layer, active) {
 function revisionHistory() {
   if (state.revisionsOf !== state.selectedLayerId) return `<p class="meta">This layer's release history isn't loaded yet. If it stays like this, open the layer again.</p>`;
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
-  return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
+  return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">From home ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
 
 function activePanel(layer, active) {
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
-    return `<div class="active-panel unavailable"><h3>Active release details are unavailable</h3><p>The peer still reports an active release. Its current audience and controls could not be loaded, so no change is being claimed.</p></div>`;
+    return `<div class="active-panel unavailable"><h3>Active release details are unavailable</h3><p>This home still reports an active release. Its current audience and controls could not be loaded, so no change is being claimed.</p></div>`;
   }
-  if (!active) return `<div class="active-panel"><h3>Sharing is off on this peer</h3><p>No other account can open your saved draft. Preview a concrete saved version before turning it on.</p></div>`;
+  if (!active) return `<div class="active-panel"><h3>Sharing is off on this home</h3><p>No other account can open your saved draft. Preview a concrete saved version before turning it on.</p></div>`;
   const publicLink = `/public/?layer=${pathPart(layer.id)}`;
   const routeControls = [
     ...(active.audience_users || []).map((id) => `<button class="button ghost" data-action="revoke-route" data-route-kind="person" data-id="${escapeHtml(id)}">Stop sharing directly with ${escapeHtml(contactName(id))}</button>`),
@@ -484,7 +484,7 @@ async function createSpace(form) {
 
 function withdrawDialog() {
   if (!state.confirmWithdraw) return "";
-  return `<dialog aria-labelledby="withdraw-title"><div class="dialog-body"><h2 id="withdraw-title">Stop every active route?</h2><p>This stops access on this peer for named people, spaces, and the public link. Remote hosts must acknowledge withdrawal before their hosted access stops; offline hosts may still show it. Existing copies cannot be erased. Your private draft and release history remain.</p><div class="button-row"><button class="button danger" data-action="confirm-withdraw">Yes, stop all sharing</button><button class="button secondary" data-action="close-dialog">Keep sharing on</button></div></div></dialog>`;
+  return `<dialog aria-labelledby="withdraw-title"><div class="dialog-body"><h2 id="withdraw-title">Stop every active route?</h2><p>This stops access on this home for named people, spaces, and the public link. Remote hosts must acknowledge withdrawal before their hosted access stops; offline hosts may still show it. Existing copies cannot be erased. Your private draft and release history remain.</p><div class="button-row"><button class="button danger" data-action="confirm-withdraw">Yes, stop all sharing</button><button class="button secondary" data-action="close-dialog">Keep sharing on</button></div></div></dialog>`;
 }
 
 function shipChoices(layer) {
@@ -552,13 +552,13 @@ function sharedOwnerName(layer) {
   const local = state.contacts.find((contact) => contact.id === layer.owner_id);
   if (local) return local.name;
   const remote = state.contacts.find((contact) => contact.remote && `${contact.peer_id}:${contact.user_id}` === layer.owner_id);
-  return remote?.name || "Account on this peer";
+  return remote?.name || (String(layer.owner_id).includes(":") ? "An account on another home" : "An account on this home");
 }
 
 function sharedAttribution(layer) {
   if (!layer.owner_id) return `<p class="meta">This release is available through its public route; account attribution is not included.</p>`;
   const origin = layer.origin || (String(layer.owner_id).includes(":") ? String(layer.owner_id).split(":", 1)[0] : state.me.peer_id);
-  return `<div class="attribution"><strong>Shared by ${escapeHtml(sharedOwnerName(layer))}</strong><span>Owner account ${escapeHtml(layer.owner_id)}</span><span>Origin peer ${escapeHtml(origin)}</span></div>`;
+  return `<div class="attribution"><strong>Shared by ${escapeHtml(sharedOwnerName(layer))}</strong><span>Owner account ${escapeHtml(layer.owner_id)}</span><span>From home ${escapeHtml(origin)}</span></div>`;
 }
 
 function sharedAttachments(layer) {
@@ -1254,7 +1254,7 @@ function roomDetail(room) {
   if (ask && (ask.roomId !== room.id || roomDrawn !== room.id || (ask.kind === "clear" ? !room.cloud?.mine || room.origin : !removable(ask.id)))) state.roomAsk = null;
   return `<section><p class="eyebrow">${room.origin ? "Received room" : "Room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" data-room="${escapeHtml(room.id)}" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>${newMessagesButton(room)}
     ${replaced ? `<div class="composer composer-replaced">${composerNote()}${roomReachLine()}<p class="meta">This room was replaced by a newer linked room; post in the room that continues it.</p>${draft.body ? `<p class="meta">Your unsent text, to copy there:</p><pre class="draft-kept">${escapeHtml(draft.body)}</pre>` : ""}</div>` : `<form class="composer" id="message-form" data-room="${escapeHtml(room.id)}">${composerNote()}<p class="meta composer-to" id="composer-to">${escapeHtml(composerTo(room))}</p><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" aria-describedby="composer-to" maxlength="20000" placeholder="Write a message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p>${roomReachLine()}</form>`}
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this home and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => removeControl(room, id)).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1440,16 +1440,16 @@ function deliveryDescription(delivery) {
   const unknown = delivery.status === "failed" && !waitsForPull(delivery) ? "; remote acknowledgement unknown" : "";
   if (delivery.status === "withdrawn") return "Canceled obsolete queued content; this is not a remote acknowledgement";
   if (withdrawal) {
-    if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s peer. Existing copies may remain.`;
+    if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s home. Existing copies may remain.`;
     const shown = deliveryState(delivery);
     const waiting = delivery.status === "pending" && delivery.peer_mode !== "pull" ? "" : ` — ${shown[0].toLowerCase()}${shown.slice(1)}${unknown}`;
-    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${waiting}.`;
+    return `Access stopped here; waiting for ${person}'s home to acknowledge withdrawal${waiting}.`;
   }
   return `${deliveryState(delivery)}${delivery.status === "failed" && !waitsForPull(delivery) ? " — remote acknowledgement unknown" : ""}`;
 }
 
 function deliveryOperation(action) {
-  return { "layer.release": "Share update", "layer.withdraw": "Remove update access", "room.roster": "Share chat", "room.message": "Send message", "room.reply": "Send reply", "room.withdraw": "Remove chat access" }[action] || "Peer delivery";
+  return { "layer.release": "Share update", "layer.withdraw": "Remove update access", "room.roster": "Share chat", "room.message": "Send message", "room.reply": "Send reply", "room.withdraw": "Remove chat access" }[action] || "Delivery";
 }
 
 function deliveryCard(delivery) {
@@ -1765,7 +1765,7 @@ function lessonsLine(preview) {
 
 function connectionsView() {
   const statuses = state.sync.deliveries || [];
-  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Pair a peer by typing the code its own screen shows. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
+  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">A peer is another home this one exchanges with. Pair one by typing the code its own screen shows. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
@@ -2003,7 +2003,7 @@ function profileDialog() {
 
 function reauthDialog() {
   if (!state.reauth || !state.me) return "";
-  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your home.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
 }
 
 async function renderPublic() {
@@ -2939,7 +2939,7 @@ async function confirmWithdraw() {
   try {
     await api(`/api/layers/${pathPart(layer.id)}/withdraw`, { method: "POST", json: {} });
     state.confirmWithdraw = false;
-    await refresh("Sharing is off on this peer. Remote withdrawal requires acknowledgement; check delivery below.");
+    await refresh("Sharing is off on this home. Remote withdrawal requires acknowledgement; check delivery below.");
   } catch (error) {
     setFlash(`${error.message} The current release may still be active.`, true);
     render();
