@@ -334,7 +334,7 @@ class SignInLane:
         raise self.refused()
 
     async def run(self, call, *args, **kwargs):
-        if self.inside >= self.size + self.queue:
+        if self.full():  # the one test for a full lane, which the connector's sign-in also asks first
             await self._refuse()
         self.inside += 1  # only the event loop changes it
         try:

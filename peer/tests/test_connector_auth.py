@@ -840,6 +840,27 @@ def test_a_full_lane_refuses_a_sign_in_before_any_store_read(home, monkeypatch):
     assert sign_in(home, fragment, password='wrong').status_code == 401
 
 
+def test_a_full_lanes_early_refusal_is_paused_as_run_s_is(home, monkeypatch):
+    """Breakout 77c6e4 (the fresh reviewer's fourth point on 4accc73c): the sign-in's early refusal goes through the lane's
+    pause, so a flood meets it before the store. `raise lane.refused()` in refuse()'s place would answer at once and fail
+    this, and so would the early branch deleted, for the forged request, which then never reaches run() (the second
+    reviewer's point on c9705b7a). The control: with held_max refusals already paused, each is answered at once."""
+    import time
+    person(home)
+    fragment, lane = a_fragment(home), home.app.state.sign_in_lanes.public
+    monkeypatch.setattr(lane, 'inside', lane.size + lane.queue)
+    monkeypatch.setattr(lane, 'pause', 0.3)
+    for request in (fragment, 'forged.request'):
+        began = time.monotonic()
+        assert sign_in(home, request, password='wrong').status_code == 429
+        assert time.monotonic() - began >= 0.3, request
+    monkeypatch.setattr(lane, 'held', lane.held_max)
+    for request in (fragment, 'forged.request'):
+        began = time.monotonic()
+        assert sign_in(home, request, password='wrong').status_code == 429
+        assert time.monotonic() - began < 0.3, request
+
+
 def test_the_client_read_runs_in_the_lanes_slot(home, monkeypatch):
     """Breakout 77c6e4, variant 2: the sign-in's one store read before the password, the client's, runs in the slot the
     lane counts, so a flood's store reads are bounded by the lane's size. A forged request reads nothing."""

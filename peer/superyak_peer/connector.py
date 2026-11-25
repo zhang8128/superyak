@@ -226,13 +226,14 @@ class Connector:
         request = _encoded(body)
         return _b64(request) + '.' + _b64(_tag(self._connector_key, b'pending', request))
 
-    def pending_checked(self, fragment, callback, resource):
-        """The sign-in's first checks, before any password counts: the fragment's tag (compare_digest, under the label
-        `pending`), its payload exactly as sign_pending encodes one, its age (PENDING_SECONDS from `at`), and then the
-        request checked again from its own values as /authorize did: a known client, the configured callback, the
-        canonical resource, scopes within SCOPES. So the key vouches only for what the home re-derives (Task 4's
-        re-check, S2). Returns the request with `key`, the SHA-256 of its tag, and the client's `client_name`. A
-        refusal raises OAuthError: 400 invalid_request, or 400 request_expired."""
+    def pending_checked(self, fragment, resource):
+        """The sign-in's first checks, with no store read, before any password counts: the fragment's tag
+        (compare_digest, under the label `pending`), its payload exactly as sign_pending encodes one, its age
+        (PENDING_SECONDS from `at`), and the request checked again from its own values as /authorize did: the canonical
+        resource and scopes within SCOPES. So the key vouches only for what the home re-derives (Task 4's re-check, S2).
+        The known client and the configured callback are pending_with_client's, which reads the store, so the sign-in
+        runs it in its lane's slot (breakout 77c6e4). Returns the request with `key`, the SHA-256 of its tag. A refusal
+        raises OAuthError: 400 invalid_request, or 400 request_expired."""
         invalid = OAuthError(400, 'invalid_request')
         if not isinstance(fragment, str) or len(fragment) > 4096:
             raise invalid
@@ -266,7 +267,7 @@ class Connector:
 
     def pending_request(self, fragment, callback, resource):
         """pending_checked, then its client read: a known client, and its `client_name` on the request."""
-        return self.pending_with_client(self.pending_checked(fragment, callback, resource), callback)
+        return self.pending_with_client(self.pending_checked(fragment, resource), callback)
 
     def pending_with_client(self, checked, callback):
         """The one store read of pending_request (check_client takes the gate), for a caller that runs it in a lane."""
