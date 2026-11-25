@@ -218,7 +218,7 @@ def install(app, public_origin, callback):
             if lane.full():  # a full lane refuses before the request's own checks, which take no slot (breakout 77c6e4)
                 await lane.refuse()
             # the tag and shape, with no store read, off the loop as every store call is (test_event_loop)
-            checked = await run_in_threadpool(store.pending_checked, data.get('request'), callback, public_origin + '/mcp')
+            checked = await run_in_threadpool(store.pending_checked, data.get('request'), public_origin + '/mcp')
 
             def client_then_sign_in():  # the client read, then the sign-in, both in the lane's slot (variant 2, breakout 77c6e4)
                 return store.pending_sign_in(store.pending_with_client(checked, callback), username, data.get('password'),

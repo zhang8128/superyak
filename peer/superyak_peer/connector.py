@@ -226,7 +226,7 @@ class Connector:
         request = _encoded(body)
         return _b64(request) + '.' + _b64(_tag(self._connector_key, b'pending', request))
 
-    def pending_checked(self, fragment, callback, resource):
+    def pending_checked(self, fragment, resource):
         """The sign-in's first checks, with no store read, before any password counts: the fragment's tag
         (compare_digest, under the label `pending`), its payload exactly as sign_pending encodes one, its age
         (PENDING_SECONDS from `at`), and the request checked again from its own values as /authorize did: the canonical
@@ -267,7 +267,7 @@ class Connector:
 
     def pending_request(self, fragment, callback, resource):
         """pending_checked, then its client read: a known client, and its `client_name` on the request."""
-        return self.pending_with_client(self.pending_checked(fragment, callback, resource), callback)
+        return self.pending_with_client(self.pending_checked(fragment, resource), callback)
 
     def pending_with_client(self, checked, callback):
         """The one store read of pending_request (check_client takes the gate), for a caller that runs it in a lane."""
