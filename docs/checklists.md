@@ -590,8 +590,9 @@ ranking on outcomes (Tardis, all hands 53713a1d, with no receipts yet, so to rev
 it fire.
 
 - [ ] Retract the weakest trigger, not the narrowest claim. In order: one whose trigger values nothing would ever
-      contain; then one whose mistake a test or guard now makes impossible; then one that only restates a checklist
-      line.
+      contain, and that no receipt shows fired, since a lesson also matches by its claim's angle (Tardis's 8990ae49
+      fired once with only a dead path, 2026-11-25); then one whose mistake a test or guard now makes impossible; then
+      one that only restates a checklist line.
 - [ ] Measure "unfired" in other ships' queries, never in days. With no readers, days would retire everything.
 - [ ] A retraction is final for that text. A lesson comes back only reworded, so read it again before retracting.
 
