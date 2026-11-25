@@ -38,10 +38,23 @@ jobs:
       # The suite's temp in RAM: on Tardis at 8eff27e0 it took 3 h 13 min with its temp on disk, and reached 82% in about 29 min
       # with it on tmpfs, so there it waits on disk syncs. pytest keeps every test's dir until the session ends, which
       # filled the Pi's 8 GB /dev/shm and failed the imprint route's 4 GiB free floor, so only a failed test's dir is kept.
-      - run: mkdir -p "$TMPDIR" && df -h /dev/shm && make check-peer && df -h /dev/shm
+      # A browser test that fails inside signed_in_browser or signed_out_browser leaves each open page's screenshot and
+      # visible text, and its console's lines, under SUPERYAK_TEST_ARTIFACTS (test_browser.py, _evidence_on_failure);
+      # a failed or timed-out run uploads them, beside the few screenshots passing tests take there. Throwaway test homes
+      # only (keys made per test), and no trace, since a trace would hold session cookies and the upload is public for 7
+      # days (run 45646287391's "not stable" left nothing to read; all hands c30e9df1).
+      - run: mkdir -p "$TMPDIR" "$SUPERYAK_TEST_ARTIFACTS" && df -h /dev/shm && make check-peer && df -h /dev/shm
         env:
           TMPDIR: /dev/shm/peer-tmp
           PYTEST_ADDOPTS: --basetemp=/dev/shm/pytest-peer -o tmp_path_retention_policy=failed
+          SUPERYAK_TEST_ARTIFACTS: ${{ runner.temp }}/browser-evidence
+      - if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence
+          path: ${{ runner.temp }}/browser-evidence
+          retention-days: 7
+          if-no-files-found: ignore
 
   atlas:
     name: Atlas workbench tests and offline demo
