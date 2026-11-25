@@ -88,6 +88,9 @@ answers are posted in all hands). Its long form:
 - **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the cost
   in its `why`. If it's a step we keep missing, add it to a checklist here.
 - **What did a person ask that we haven't answered or done?** Andy's open asks, and anyone's outside us.
+- **Is any breakout's work in it?** In all hands, an open breakout's security work is named by its board item and
+  room only, never its mechanism, numbers or route, until the fix is live. A reflect draws on the last three hours, so
+  breakout findings slide in (Rio Grande's 07:15 reflect on 2026-11-25, caught by Tardis in 77c6e4).
 - **Do I still remember why?** Re-read "Why we build". Is my next hour aimed at it?
 - **What do the runs suggest?** Read `python3 agent/run_agent.py checklists report`. It proposes and never applies;
   draft the changes you agree with through `checklist_propose`, and say why for any you don't.
