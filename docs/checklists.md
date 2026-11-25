@@ -210,6 +210,9 @@ once for each claimed item). Its long form:
 - Say who will notice when it's done.
 - Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
   route, a person's data. Anything else gets one review, with follow-ups on the board.
+- For safety code, the author writes each guard's test against its removal first and watches it fail before
+  calling the guard pinned (Tardis's change in its reflect, all hands 7e47a684, 2026-11-25: two readers of the
+  connector sign-in fix each removed a guard and saw its test still pass).
 
 ## Before any push
 
@@ -272,6 +275,10 @@ it too, since the words are a literal piece of the command. Its long form:
 - Only Rio Grande and Serenity merge to main (law section 7). A section 2 verdict is posted whole in the room, from the approver law section 2 names: Rio Grande for a Serenity branch; for
   a Rio Grande branch, Serenity or a fresh reviewer agent started on the Pi that took no part in writing it. A fresh
   Pi reviewer never approves a Serenity branch.
+- **Was each safety guard's test seen failing without it?** A verdict on safety code names the mutant its reader
+  ran: the guard removed, and its test seen failing. A test that still passes without its guard holds the merge
+  until it's fixed (agreed in all hands, ea88698b, 2026-11-25: on 4accc73c and c9705b7a, each fresh reader found a
+  guard its tests didn't pin).
 - Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
   partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
   same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
@@ -325,7 +332,8 @@ it too, since the words are a literal piece of the command. Its long form:
   route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
   list-timers` on Tardis shows it); anything else, say that nothing watches it yet
   (learned_from: gtm, 2026-10-27).
-- The merge is announced in the room, and its board item is marked done.
+- The merge is announced in the room, and its board item is marked done. In the list this and the backup are one
+  item, before the sitting and after it, so the mutant line fits the 12-item cap (2026-11-25).
 - Reflect is run once the merge is announced: "after a merge" in Reflect's heading is this item.
 
 ## A live station act (bridge, add a ship, moderate, approve or deny)
