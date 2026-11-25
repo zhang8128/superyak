@@ -91,7 +91,8 @@ EXPECTED = {
         'Unit': {'OnFailure': 'superyak-alert@%n.service'},
         'Service': {'ExecStopPost': f'-{PYTHON} station-alert --data-dir {DATA} --unit %n'},
     },
-    '50-on-failure.conf': {  # a timer's oneshot: 50-alerts.conf's ExecStopPost would alert after every run
+    '50-on-failure.conf': {  # a timer's oneshot: 50-alerts.conf's ExecStopPost would start Python after every run, and its
+        # failure line says systemd restarts the unit, which isn't so for a oneshot (alerts.py:57-61; the fresh reader on f5d32f5a)
         'Unit': {'OnFailure': 'superyak-alert@%n.service'},
     },
 }
@@ -238,6 +239,9 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
         '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-alert@*',
         '--user daemon-reload']
     assert not (home / '.config').exists()
+    (units / 'superyak-lessons-index.service').unlink()     # a station without the lessons index: no drop-in for it
+    assert make('station-units').returncode == 0 and not (units / 'superyak-lessons-index.service.d').exists()
+    assert make('station-units-remove').returncode == 0
 
 
 @pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service', 'superyak-imprint-sweep.service',
