@@ -148,7 +148,7 @@ def test_failed_backup_and_restore_runs_name_their_reason(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize('unit, name, again', [
     ('superyak-imprint-sweep.service', 'the hourly imprint sweep', 'Its timer runs it again at the next hour.'),
-    ('superyak-lessons-index.service', 'the lessons index', 'Its timer runs it again within a minute.'),
+    ('superyak-lessons-index.service', 'the lessons index', 'Its timer runs it again in about a minute.'),
 ])
 def test_a_timer_job_s_failure_says_the_run_failed_never_that_systemd_gave_up(tmp_path, monkeypatch, unit, name, again):
     """fix:oneshot-alert-says-restarts (the fresh reader on f5d32f5a, all hands c5e901ea): a timer's oneshot isn't
@@ -228,6 +228,15 @@ def test_stopped_alerts_are_held_back_and_back_off_per_unit(tmp_path, utc):
     assert posted == [0, 30, 90, 210, 450, 810, 1170]                                        # windows of 30, 60, 120, 240, 360, 360
     assert [m for m in posted if m < 480] == [0, 30, 90, 210, 450]                           # overnight: 5 lines, not 16
 
+
+
+def test_a_failing_timer_job_meets_the_daily_backstop_not_the_stop_window(tmp_path):
+    """The fresh reader on 0f1a2329: failed shares down's backstop (6 a day per unit, then held), never the stopped
+    window. The lessons index runs every minute, so one failing for a day posts 6 lines, the first 6, and its timer's
+    next runs are held, not windowed to one line in 30 minutes."""
+    queue, index = tmp_path / 'alerts', 'superyak-lessons-index.service'
+    runs = [alerts.record(queue, index, 'failed', CRASH, T0 + minute * 60) for minute in range(7)]
+    assert [one is not None for one in runs] == [True] * 6 + [False]
 
 def test_the_lock_fallback_queues_anyway(tmp_path):
     """R11: with alerts/.lock held by another process, the alert is queued after 5 s, without the rate record: a

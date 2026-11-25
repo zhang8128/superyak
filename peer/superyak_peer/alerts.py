@@ -24,7 +24,7 @@ TIMER_UNITS = {  # a timer's oneshot: it isn't restarted, so a --monitor alert s
     'superyak-backup.service': ('the nightly backup', 'The earlier copies are kept.'),
     'superyak-restore-test.service': ('the monthly restore test', 'The earlier copies are kept.'),
     'superyak-imprint-sweep.service': ('the hourly imprint sweep', 'Its timer runs it again at the next hour.'),
-    'superyak-lessons-index.service': ('the lessons index', 'Its timer runs it again within a minute.'),
+    'superyak-lessons-index.service': ('the lessons index', 'Its timer runs it again in about a minute.'),
 }
 BACKUP_UNITS = frozenset({'superyak-backup.service', 'superyak-restore-test.service'})  # REASONS are their exit codes
 ALERT_FILE = re.compile(r'([0-9a-f]{12})\.json')
