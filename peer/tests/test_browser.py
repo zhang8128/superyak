@@ -4178,7 +4178,7 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
 
             page.goto(browser_peer["base_url"] + f"/#chats/{room_id}")
             expect(page.get_by_role("heading", name="First audience")).to_be_visible()
-            expect(page.get_by_text("Removing someone stops access on this peer")).to_be_visible()
+            expect(page.get_by_text("Removing someone stops access on this home")).to_be_visible()
             page.get_by_role("button", name="Remove Sam Family from this room").click()
             confirm_remove(page)
             expect(page.get_by_text("Sam Family no longer has access on this home; remote removal requires acknowledgement")).to_be_visible()
@@ -4383,7 +4383,7 @@ def test_durable_name_corrections_shared_attribution_and_complete_revision(brows
             family.get_by_text("Attributed update", exact=True).click()
             expect(family.get_by_text("Shared by Alex Rivera", exact=False)).to_be_visible()
             expect(family.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()
-            expect(family.get_by_text(f"Origin peer {peer_id}", exact=True)).to_be_visible()
+            expect(family.get_by_text(f"From home {peer_id}", exact=True)).to_be_visible()
 
 
 def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(browser_peer):
@@ -4728,7 +4728,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             offline[0] = True
             page.get_by_role('button', name='Stop all sharing').click()
             page.get_by_role('button', name='Yes, stop all sharing').click()
-            expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's peer to acknowledge withdrawal.", exact=False)).to_be_visible()
+            expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's home to acknowledge withdrawal.", exact=False)).to_be_visible()
             assert remote.shared_layers(recipient)
             page.get_by_role('button', name='Check delivery now').click()
             # federation pull spec §8: a failed row reads "Retrying", with the peer's next attempt
@@ -4756,7 +4756,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             page.get_by_label('Message', exact=True).fill('Unsent room text')
             page.get_by_role('button', name='Remove Casey Delivery from this room').click()
             confirm_remove(page)
-            expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's peer to acknowledge withdrawal.", exact=False)).to_be_visible()
+            expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's home to acknowledge withdrawal.", exact=False)).to_be_visible()
             assert remote.list_rooms(recipient)
             page.get_by_role('button', name='Check delivery now').click()
             expect(page.get_by_text('Remote withdrawal acknowledged', exact=False)).to_be_visible()
@@ -10155,3 +10155,52 @@ def test_a_long_name_with_no_spaces_never_pushes_connections_sideways_on_a_phone
         expect(page.get_by_text("L" * 200).first).to_be_visible()
         width = page.evaluate("document.documentElement.clientWidth")
         assert page.evaluate("document.scrollingElement.scrollWidth") <= width
+
+
+def _no_peer_word(page, where):
+    """The page's visible text (innerText, so an id or data attribute saying peer is no failure) holds no "peer"."""
+    text = page.evaluate("document.body.innerText")
+    found = [text[max(0, m.start() - 40):m.end() + 40].replace("\n", " ") for m in re.finditer(r"\bpeers?\b", text, re.I)]
+    assert not found, f"{where}: {found}"
+
+
+def test_a_signed_in_person_who_doesnt_run_the_home_reads_home_not_peer(browser_peer):
+    """fix:signed-in-peer-word (all hands e466fd6f, Tardis's points in 4008d5ac): text a person who doesn't run the home
+    can see says "home", the product's word. "peer" stays on Connections, the pairing page (its "Show my peer card" is
+    CLAUDE.md's), which says what one is. The walk, as the patient (not an admin): Your home; their own draft, which
+    isn't shared; one of their releases, its history entry open, and its stop-all dialog; a layer the doctor shared with them; a room they own
+    with a member; and Connections' definition. A page outside this walk isn't covered by it. No title, body or name seeded here says peer, so only the app's own words can fail it."""
+    store = browser_peer['app'].state.store
+    patient, family, doctor = (browser_peer['users'][name]['id'] for name in ('patient', 'family', 'doctor'))
+    store.create_layer(patient, {'title': 'Kept to myself', 'body': 'Only my own words'})
+    shared = store.create_layer(patient, {'title': 'For my family', 'body': 'Words for them', 'audience_users': [family]})
+    store.activate_layer(patient, shared['id'], 1)
+    visit = store.create_layer(doctor, {'title': 'Visit notes', 'body': 'What we talked about', 'audience_users': [patient]})
+    store.activate_layer(doctor, visit['id'], 1)
+    room = store.create_room(patient, 'Care chat', [family])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        _no_peer_word(page, 'Your home')
+        go_to(page, 'My sharing layers')
+        page.get_by_text('Kept to myself', exact=True).first.click()
+        expect(page.get_by_label('Layer title')).to_have_value('Kept to myself')
+        _no_peer_word(page, 'a draft that is not shared')
+        go_to(page, 'My sharing layers')
+        page.get_by_text('For my family', exact=True).first.click()
+        expect(page.get_by_label('Layer title')).to_have_value('For my family')
+        page.get_by_text('Release 1 · draft version 1', exact=True).click()  # innerText skips a closed <details>
+        expect(page.get_by_text('Words for them', exact=True).last).to_be_visible()
+        _no_peer_word(page, 'a release, its history open')
+        page.get_by_role('button', name='Stop all sharing').click()
+        expect(page.get_by_role('dialog')).to_be_visible()
+        _no_peer_word(page, 'the stop-all dialog')
+        page.keyboard.press('Escape')
+        go_to(page, 'Shared spaces')
+        page.get_by_text('Visit notes', exact=True).first.click()
+        expect(page.get_by_text('What we talked about')).to_be_visible()
+        _no_peer_word(page, "a layer the doctor shared")
+        page.goto(f"{browser_peer['base_url']}/#chats/{room['id']}")
+        expect(page.get_by_role('heading', name='Care chat', exact=True)).to_be_visible()
+        expect(page.get_by_text('Removing someone stops access', exact=False)).to_be_visible()  # the owner's line is drawn
+        _no_peer_word(page, 'a room they own')
+        go_to(page, 'Connections')  # the pairing page, where "peer" is used: it says what one is
+        expect(page.get_by_text('A peer is another home this one exchanges with.', exact=False)).to_be_visible()
