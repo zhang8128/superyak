@@ -3803,6 +3803,53 @@ def test_the_admin_reads_count_by_the_home_not_by_me(browser_peer, username, say
         assert not errors, errors
 
 
+
+@pytest.mark.parametrize("refused", ["/api/accounts", "/api/access-requests"])
+def test_an_admin_read_refused_after_the_home_said_admin_reads_as_not_admin_now(browser_peer, refused):
+    """fix:admin-read-403-reads-as-not-admin-now: /api/home says admin, then an admin read answers 403, as when the rights
+    were taken between the two. The home opens as a participant's, with no admin section drawn on empty lists, rather
+    than "This home didn't open" with the refusal's words. The next load reads the rights afresh."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+        expect(page.get_by_role("link", name="Connections", exact=True)).to_be_visible()
+        page.route(f"**{refused}", lambda route: route.fulfill(status=403, json={"detail": "Only an admin can do that."}))
+        errors = []
+        page.on("pageerror", lambda error: errors.append(error))
+        page.goto(browser_peer["base_url"] + "/#connections")
+        page.reload()
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="This home didn't open")).to_have_count(0)
+        for admin_only in ("Account support", "Access requests", "Pair another peer"):
+            expect(page.get_by_role("heading", name=admin_only)).to_have_count(0)
+        expect(page.get_by_text("The local account owner manages peer pairing.", exact=False)).to_be_visible()
+        page.unroute(f"**{refused}")
+        page.reload()                                       # the rights are read afresh, and here they still hold
+        expect(page.get_by_role("heading", name="Account support")).to_be_visible()
+        page.route(f"**{refused}", lambda route: route.fulfill(status=500, json={"detail": "The accounts could not be read."}))
+        page.reload()                                       # only a refusal reads as lost rights: a failed read still says so
+        expect(page.get_by_role("heading", name="This home didn't open")).to_be_visible()
+        assert not errors, errors
+
+
+def test_a_late_admin_read_refused_reads_the_same_and_an_ended_session_still_signs_in(browser_peer):
+    """The fresh reader's two nits on 47a0415c: when /api/me says participant and /api/home says admin, the admin read
+    goes out late (api(path), awaited inside the catch) and its 403 reads as not admin now too; and a 401 from an admin
+    read is an ended session, never lost rights, so it signs in again."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+        def me_says_participant(route):
+            answer = route.fetch()
+            route.fulfill(response=answer, json={**answer.json(), "is_admin": False})
+        page.route("**/api/me", lambda route: me_says_participant(route) if route.request.method == "GET" else route.continue_())
+        page.route("**/api/accounts", lambda route: route.fulfill(status=403, json={"detail": "Only an admin can do that."}))
+        page.goto(browser_peer["base_url"] + "/#connections")
+        page.reload()
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Account support")).to_have_count(0)
+        page.unroute("**/api/me")
+        page.unroute("**/api/accounts")
+        page.route("**/api/accounts", lambda route: route.fulfill(status=401, json={"detail": "Sign in again."}))
+        page.reload()
+        expect(page.get_by_role("heading", name="Sign in to this home")).to_be_visible()
+
 def test_attachment_stays_selected_through_upload_and_public_release(browser_peer):
     """Break caught: uploading a file resets unsaved text or omits the selected release file."""
     with sync_playwright() as playwright:
