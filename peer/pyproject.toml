@@ -46,6 +46,7 @@ only-include = [
     "scripts/source_bundle.py",
     "scripts/two_peer_check.py",
     "systemd/50-alerts.conf",
+    "systemd/50-on-failure.conf",
     "systemd/superyak-alert@.service",
     "systemd/superyak-backup.service",
     "systemd/superyak-backup.timer",
