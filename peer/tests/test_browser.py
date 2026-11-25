@@ -4732,7 +4732,7 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             assert remote.shared_layers(recipient)
             page.get_by_role('button', name='Check delivery now').click()
             # federation pull spec §8: a failed row reads "Retrying", with the peer's next attempt
-            expect(page.get_by_text("peer to acknowledge withdrawal — retrying, next attempt", exact=False)).to_be_visible()
+            expect(page.get_by_text("home to acknowledge withdrawal — retrying, next attempt", exact=False)).to_be_visible()
             expect(page.get_by_text('remote acknowledgement unknown', exact=False)).to_be_visible()
             page.get_by_label('What do you want to share?').fill('Unsaved retained during delivery refresh')
             incoming = remote.create_layer(recipient, {'title':'New incoming update', 'audience_users':[back['id']]})
