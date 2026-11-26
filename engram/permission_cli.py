@@ -112,8 +112,38 @@ def _now() -> int:
     return int(time.time())
 
 
+def _runtime_memory_home() -> Path | None:
+    """runtime.json's `memory_home`, the home superyak-runtime gives every Engram process it starts (scripts/runtime.py
+    sets ENGRAM_HOME from it), or None when the file or a usable value is missing. Only that key is read."""
+    try:
+        value = json.loads((Path.home() / ".config" / "superyak" / "runtime.json").read_text()).get("memory_home")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(value).expanduser() if isinstance(value, str) and value else None
+
+
+def _home_and_source() -> tuple[Path, str]:
+    """The Engram home and where it came from: ENGRAM_HOME, else runtime.json's memory_home. Neither refuses: the ledger
+    is never made beside this code, in a checkout or a plugin cache an update replaces
+    (fix:engram-permissions-default-home, all hands bdecc17a and 72db4540)."""
+    named = os.environ.get("ENGRAM_HOME")
+    if named:
+        return Path(named), "ENGRAM_HOME"
+    runtime = _runtime_memory_home()
+    if runtime is not None:
+        return runtime, "runtime.json's memory_home"
+    raise RuleError("5.5 storage", "no Engram home is named: set ENGRAM_HOME, or memory_home in "
+                    "~/.config/superyak/runtime.json as superyak-runtime does; nothing was written")
+
+
 def _home() -> Path:
-    return Path(os.environ.get("ENGRAM_HOME") or Path(__file__).resolve().parent)
+    return _home_and_source()[0]
+
+
+def _where() -> str:
+    """The line every yes shows: the ledger it writes, and where its home came from."""
+    home, source = _home_and_source()
+    return f"ledger: {ledger_path(home)} (home from {source})"
 
 
 def _when(text: str) -> int:
@@ -282,7 +312,7 @@ def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: 
     replaces the acts' own words (a proposal's, with who filed it)."""
     state = led.state()
     words = words or " ".join(_words(state, act) for act in acts)
-    change = "\n".join([_change(act) for act in acts] + notes)
+    change = "\n".join([_change(act) for act in acts] + notes + [_where()])
     if not confirm(words, change):
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
@@ -411,7 +441,7 @@ def _init(args) -> int:
     owner = "person:" + login
     words = (f"Create a ledger owned by {owner}. You become its owner and its only admin, and a person on it, "
              f"with the home place {home_of(owner)}.")
-    change = f"change: create the ledger file {path}\n  owner: {owner}\n  home: {home_of(owner)}"
+    change = f"change: create the ledger file {path}\n  owner: {owner}\n  home: {home_of(owner)}\n{_where()}"
     if not confirm(words, change):
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
@@ -1204,6 +1234,7 @@ def _migrate(args) -> int:
               for h in lacking]
     lines += notes
     lines.append(f"  every row it will migrate: {plan_path}")
+    lines.append(_where())
     words = (f"Migrate today's shares into a new permissions ledger owned by {owner}: {len(migrated)} shares become "
              f"members of {len(counts)} collections, each opened to its audience by one allow inside {home}; "
              f"{len(unmatched)} shares cannot be matched to their source and stay as they are.")
