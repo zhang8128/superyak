@@ -33,6 +33,12 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 Refreshed 2026-11-22 toward goal 6, on Andy's word that day. The 10-27 lines (lessons drafted, compress-no-auto, chat
 paging, the connector spec) are done or superseded; the connector went live on 11-21.
+
+**Held by the other ships while Serenity is down** (Andy, 2026-11-23: "serenity is down. move on without it"). An
+outside direction read on 2026-11-26 found these lines had had no owner since then (all hands 179f3982). From that
+day, Rio Grande holds S1 to S3 and Tardis holds S4, S5 and goal 2's measure, from Tardis's machine (all hands 3c136dd0,
+977d2335). S4's invited person is the same person as R6's walk, so Andy is asked once. Serenity takes its lines back
+when it returns, and reviews what was done in its place.
 - S1 (goal 6): north-star test 1, one environment end to end, with a retraction, against a hybrid baseline. Measure: a
   run fixed in a commit before it runs, on held-out questions with matched evidence, reporting accuracy, source
   support, calibration and cost, failures included.
