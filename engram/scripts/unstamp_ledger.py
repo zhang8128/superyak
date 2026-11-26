@@ -23,7 +23,11 @@ from permission_ledger import MARKER, Ledger, LedgerUnreadable, ledger_path  # n
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    home = Path(argv[0]) if argv else permission_cli._home()
+    try:
+        home = Path(argv[0]) if argv else permission_cli._home()
+    except permission_cli.RuleError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
     path = ledger_path(home)
     try:
         led = Ledger.open_read_only(home)

@@ -112,26 +112,62 @@ def _now() -> int:
     return int(time.time())
 
 
+RUNTIME_CONFIG_BYTES = 16_384   # scripts/runtime.py's MAX_CONFIG_BYTES
+
+
 def _runtime_memory_home() -> Path | None:
     """runtime.json's `memory_home`, the home superyak-runtime gives every Engram process it starts (scripts/runtime.py
-    sets ENGRAM_HOME from it), or None when the file or a usable value is missing. Only that key is read."""
+    sets ENGRAM_HOME from it), or None. It takes only what runtime.py's own reader takes (scripts/runtime.py:38-87): a
+    regular file of at most 16,384 bytes, opened non-blocking so a FIFO can't hang it, holding a JSON object whose
+    memory_home is an absolute path to an existing folder, never a relative one, which would be read from wherever the
+    command runs. Only that key is read."""
+    import stat
+    path = Path.home() / ".config" / "superyak" / "runtime.json"
     try:
-        value = json.loads((Path.home() / ".config" / "superyak" / "runtime.json").read_text()).get("memory_home")
-    except (OSError, ValueError, AttributeError):
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+    except OSError:
         return None
-    return Path(value).expanduser() if isinstance(value, str) and value else None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        content = b""
+        while chunk := os.read(fd, RUNTIME_CONFIG_BYTES + 1 - len(content)):
+            content += chunk
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(content) > RUNTIME_CONFIG_BYTES:
+        return None
+    try:
+        raw = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    value = raw.get("memory_home") if isinstance(raw, dict) else None
+    if not isinstance(value, str) or not value or not Path(value).is_absolute() or not Path(value).is_dir():
+        return None
+    return Path(value)
+
+
+_RESOLVED: list[tuple[Path, str]] | None = None   # while main() runs a command, that command's one home; else None
 
 
 def _home_and_source() -> tuple[Path, str]:
     """The Engram home and where it came from: ENGRAM_HOME, else runtime.json's memory_home. Neither refuses: the ledger
     is never made beside this code, in a checkout or a plugin cache an update replaces
-    (fix:engram-permissions-default-home, all hands bdecc17a and 72db4540)."""
+    (fix:engram-permissions-default-home, all hands bdecc17a and 72db4540). One command resolves it once, so the
+    ledger its yes names is the one it opens and writes, even if runtime.json changes meanwhile. Only inside main(): a
+    caller that imports this module (scripts/unstamp_ledger.py) resolves afresh each time, never another command's
+    home (Tardis, all hands bff06c16)."""
+    if _RESOLVED:
+        return _RESOLVED[0]
     named = os.environ.get("ENGRAM_HOME")
-    if named:
-        return Path(named), "ENGRAM_HOME"
-    runtime = _runtime_memory_home()
-    if runtime is not None:
-        return runtime, "runtime.json's memory_home"
+    runtime = None if named else _runtime_memory_home()
+    found = (Path(named), "ENGRAM_HOME") if named else (runtime, "runtime.json's memory_home") if runtime else None
+    if found is not None:
+        if _RESOLVED is not None:
+            _RESOLVED.append(found)
+        return found
     raise RuleError("5.5 storage", "no Engram home is named: set ENGRAM_HOME, or memory_home in "
                     "~/.config/superyak/runtime.json as superyak-runtime does; nothing was written")
 
@@ -1667,6 +1703,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _RESOLVED
+    _RESOLVED = []                        # this command resolves its home once; outside main() nothing is kept
+    try:
+        return _main(argv)
+    finally:
+        _RESOLVED = None
+
+
+def _main(argv: list[str] | None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

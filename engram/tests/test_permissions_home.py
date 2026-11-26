@@ -25,6 +25,9 @@ def bare_run(tmp_path, monkeypatch):
 
 
 def _runtime_config(tmp_path, memory_home):
+    """runtime.json as superyak-runtime reads it: memory_home is an existing absolute folder (scripts/runtime.py:79-87)."""
+    if Path(memory_home).is_absolute():
+        Path(memory_home).mkdir(parents=True, exist_ok=True)
     config = tmp_path / "person" / ".config" / "superyak" / "runtime.json"
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({"default_instance": "rio-grande", "embedder_socket": "/nowhere.sock",
@@ -53,7 +56,8 @@ def test_with_no_engram_home_it_takes_the_runtime_s_memory_home_and_says_so_at_t
     assert "home from runtime.json's memory_home" in fake_tty.shown()
     fake_tty.answer_the_printed_code()
     assert main(["person", "add", "jenn"]) == 0                # a writing act finds the same ledger, and says so
-    assert fake_tty.shown().count(f"ledger: {ledger_path(memory_home)}") == 2
+    line = f"ledger: {ledger_path(memory_home)} (home from runtime.json's memory_home)"
+    assert fake_tty.shown().count(line) == 2                    # init's yes and the writing act's, each whole
 
 
 def test_engram_home_wins_over_the_runtime_s_and_the_yes_says_which(bare_run, fake_tty, monkeypatch):
@@ -66,13 +70,16 @@ def test_engram_home_wins_over_the_runtime_s_and_the_yes_says_which(bare_run, fa
     assert "home from ENGRAM_HOME" in fake_tty.shown()
 
 
-@pytest.mark.parametrize("config", ['{"memory_home": ""}', '{"memory_home": 7}', "not json", '["memory_home"]'])
+@pytest.mark.parametrize("config", ['{"memory_home": ""}', '{"memory_home": 7}', "not json", '["memory_home"]',
+                                    '{"memory_home": "rel-home"}', '{"memory_home": "~/mem"}',
+                                    '{"memory_home": "/no/such/folder"}', '{"memory_home": "/x"}' + " " * 20_000])
 def test_a_runtime_config_without_a_usable_memory_home_names_no_home(bare_run, fake_tty, capsys, config):
     path = _runtime_config(bare_run, "unused")
     path.write_text(config)
     fake_tty.answer_the_printed_code()
     assert main(["init"]) == 1 and "ENGRAM_HOME" in capsys.readouterr().err
     assert fake_tty.shown() == ""
+    assert not (Path.cwd() / "rel-home").exists()               # a relative home is never taken from the folder it runs in
 
 
 def test_a_writing_act_with_a_home_that_holds_no_ledger_still_refuses_and_makes_none(bare_run, fake_tty, capsys):
@@ -83,3 +90,63 @@ def test_a_writing_act_with_a_home_that_holds_no_ledger_still_refuses_and_makes_
     fake_tty.answer_the_printed_code()
     assert main(["person", "add", "jenn"]) == 1
     assert "no ledger" in capsys.readouterr().err and not ledger_path(memory_home).exists()
+
+
+
+def test_a_runtime_config_that_is_not_a_regular_file_names_no_home_and_never_waits(bare_run):
+    """runtime.py's own reader opens it non-blocking and reads only a regular file (scripts/runtime.py:40-63): a FIFO in
+    its place must not hang the CLI (the fresh reader's NO on 5e904c2e)."""
+    import os
+    config = bare_run / "person" / ".config" / "superyak" / "runtime.json"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config)
+    import threading
+    answer = []
+    reader = threading.Thread(target=lambda: answer.append(permission_cli._runtime_memory_home()), daemon=True)
+    reader.start()
+    reader.join(5)                                              # a blocking read would hang here: fail, don't wait
+    if reader.is_alive():
+        os.close(os.open(config, os.O_WRONLY | os.O_NONBLOCK))  # free the stuck reader, then fail
+        reader.join(5)
+        pytest.fail("reading a FIFO runtime.json blocked")
+    assert answer == [None]
+
+
+def test_one_command_resolves_its_home_once_so_the_yes_names_the_ledger_it_writes(bare_run, fake_tty, monkeypatch):
+    """The fresh reader's NO on 5e904c2e: _ledger() and the yes's line each resolved the home, so runtime.json rewritten
+    between them showed one ledger at the yes and wrote another. One command resolves it once."""
+    first, second = bare_run / "first", bare_run / "second"
+    for home in (first, second):
+        home.mkdir()
+    _runtime_config(bare_run, first)
+    fake_tty.answer_the_printed_code()
+    assert main(["init"]) == 0
+    calls = []
+    real = permission_cli._runtime_memory_home
+
+    def moving():
+        calls.append(1)
+        return first if len(calls) == 1 else second              # as if runtime.json were rewritten mid-command
+    monkeypatch.setattr(permission_cli, "_runtime_memory_home", moving)
+    fake_tty.answer_the_printed_code()
+    assert main(["person", "add", "jenn"]) == 0
+    assert len(calls) == 1 and str(ledger_path(second)) not in fake_tty.shown() and not ledger_path(second).exists()
+    monkeypatch.setattr(permission_cli, "_runtime_memory_home", real)
+
+
+
+def test_each_command_resolves_its_own_home_and_a_caller_outside_main_keeps_none(tmp_path, monkeypatch, fake_tty):
+    """Tardis (all hands bff06c16): the home is kept only while main() runs one command. Two commands in one process
+    resolve separately, and a caller that imports this module, as scripts/unstamp_ledger.py does, never gets an earlier
+    command's home (it did: test_5_unstamp_is_the_way_back_and_asks_the_persons_yes read a stale one)."""
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
+    first, second = tmp_path / "first", tmp_path / "second"
+    monkeypatch.setenv("ENGRAM_HOME", str(first))
+    fake_tty.answer_the_printed_code()
+    assert main(["init"]) == 0
+    monkeypatch.setenv("ENGRAM_HOME", str(second))
+    assert permission_cli._home() == second                    # outside main(): afresh, not the first command's
+    fake_tty.answer_the_printed_code()
+    assert main(["init"]) == 0                                 # the second command: its own home
+    assert ledger_path(first).is_file() and ledger_path(second).is_file()
+    assert permission_cli._RESOLVED is None

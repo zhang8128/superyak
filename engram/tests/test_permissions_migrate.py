@@ -9,7 +9,7 @@ import pytest
 
 import permission_cli
 from permission_cli import main
-from permission_ledger import PUBLISHED_HOUSE, Ledger, houses
+from permission_ledger import ledger_path, PUBLISHED_HOUSE, Ledger, houses
 from permissions import Layer, Use, decide, required_layers
 from sharing import share as share_memory
 from storage import Storage
@@ -217,6 +217,7 @@ def placements(home):
 
 def test_u13_shares_become_one_collection_and_one_allow_per_legacy_audience(legacy_home, fake_tty):
     fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    assert f"ledger: {ledger_path(legacy_home)} (home from ENGRAM_HOME)" in fake_tty.shown()   # its yes names the ledger
     s = Ledger.open(legacy_home).state()
     assert set(s.collections) == {"collection:andy/legacy-commons", "collection:andy/legacy-group-team",
                                   "collection:andy/legacy-group-lab"}
