@@ -112,8 +112,76 @@ def _now() -> int:
     return int(time.time())
 
 
+RUNTIME_CONFIG_BYTES = 16_384   # scripts/runtime.py's MAX_CONFIG_BYTES
+
+
+def _runtime_memory_home() -> Path | None:
+    """runtime.json's `memory_home`, the home superyak-runtime gives every Engram process it starts (scripts/runtime.py
+    sets ENGRAM_HOME from it), or None. It reads the file as runtime.py's own reader does (scripts/runtime.py:38-87): a
+    regular file of at most 16,384 bytes, opened non-blocking so a FIFO can't hang it, holding a JSON object whose
+    memory_home is an absolute path to an existing folder, never a relative one, which would be read from wherever the
+    command runs. Only that key is read: runtime.py also checks default_instance and embedder_socket, and this doesn't."""
+    import stat
+    path = Path.home() / ".config" / "superyak" / "runtime.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        content = b""
+        while chunk := os.read(fd, RUNTIME_CONFIG_BYTES + 1 - len(content)):
+            content += chunk
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(content) > RUNTIME_CONFIG_BYTES:
+        return None
+    try:
+        raw = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    value = raw.get("memory_home") if isinstance(raw, dict) else None
+    if not isinstance(value, str) or not value or not Path(value).is_absolute() or not Path(value).is_dir():
+        return None
+    return Path(value)
+
+
+_RESOLVED: list[tuple[Path, str]] | None = None   # while main() runs a command, that command's one home; else None
+
+
+def _home_and_source() -> tuple[Path, str]:
+    """The Engram home and where it came from: ENGRAM_HOME, else runtime.json's memory_home. Neither refuses: the ledger
+    is never made beside this code, in a checkout or a plugin cache an update replaces
+    (fix:engram-permissions-default-home, all hands bdecc17a and 72db4540). One command resolves it once, so the
+    ledger its yes names is the one it opens and writes, even if runtime.json changes meanwhile. Only inside main(): a
+    caller that imports this module (scripts/unstamp_ledger.py) resolves afresh each time, never another command's
+    home (Tardis, all hands bff06c16)."""
+    if _RESOLVED:
+        return _RESOLVED[0]
+    named = os.environ.get("ENGRAM_HOME")
+    if named and not Path(named).is_absolute():   # "." run from engram/ would be a ledger beside the code (Tardis, 1575bf23)
+        raise RuleError("5.5 storage", f"ENGRAM_HOME must be an absolute path, not {named!r}; nothing was written")
+    runtime = None if named else _runtime_memory_home()
+    found = (Path(named), "ENGRAM_HOME") if named else (runtime, "runtime.json's memory_home") if runtime else None
+    if found is not None:
+        if _RESOLVED is not None:
+            _RESOLVED.append(found)
+        return found
+    raise RuleError("5.5 storage", "no Engram home is named: set ENGRAM_HOME, or memory_home in "
+                    "~/.config/superyak/runtime.json as superyak-runtime does; nothing was written")
+
+
 def _home() -> Path:
-    return Path(os.environ.get("ENGRAM_HOME") or Path(__file__).resolve().parent)
+    return _home_and_source()[0]
+
+
+def _where() -> str:
+    """The line every yes shows: the ledger it writes, and where its home came from."""
+    home, source = _home_and_source()
+    return f"ledger: {ledger_path(home)} (home from {source})"
 
 
 def _when(text: str) -> int:
@@ -282,7 +350,7 @@ def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: 
     replaces the acts' own words (a proposal's, with who filed it)."""
     state = led.state()
     words = words or " ".join(_words(state, act) for act in acts)
-    change = "\n".join([_change(act) for act in acts] + notes)
+    change = "\n".join([_change(act) for act in acts] + notes + [_where()])
     if not confirm(words, change):
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
@@ -411,7 +479,7 @@ def _init(args) -> int:
     owner = "person:" + login
     words = (f"Create a ledger owned by {owner}. You become its owner and its only admin, and a person on it, "
              f"with the home place {home_of(owner)}.")
-    change = f"change: create the ledger file {path}\n  owner: {owner}\n  home: {home_of(owner)}"
+    change = f"change: create the ledger file {path}\n  owner: {owner}\n  home: {home_of(owner)}\n{_where()}"
     if not confirm(words, change):
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
@@ -1204,6 +1272,7 @@ def _migrate(args) -> int:
               for h in lacking]
     lines += notes
     lines.append(f"  every row it will migrate: {plan_path}")
+    lines.append(_where())
     words = (f"Migrate today's shares into a new permissions ledger owned by {owner}: {len(migrated)} shares become "
              f"members of {len(counts)} collections, each opened to its audience by one allow inside {home}; "
              f"{len(unmatched)} shares cannot be matched to their source and stay as they are.")
@@ -1636,6 +1705,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _RESOLVED
+    _RESOLVED = []                        # this command resolves its home once; outside main() nothing is kept
+    try:
+        return _main(argv)
+    finally:
+        _RESOLVED = None
+
+
+def _main(argv: list[str] | None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
