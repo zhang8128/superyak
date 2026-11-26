@@ -162,6 +162,8 @@ def _home_and_source() -> tuple[Path, str]:
     if _RESOLVED:
         return _RESOLVED[0]
     named = os.environ.get("ENGRAM_HOME")
+    if named and not Path(named).is_absolute():   # "." run from engram/ would be a ledger beside the code (Tardis, 1575bf23)
+        raise RuleError("5.5 storage", f"ENGRAM_HOME must be an absolute path, not {named!r}; nothing was written")
     runtime = None if named else _runtime_memory_home()
     found = (Path(named), "ENGRAM_HOME") if named else (runtime, "runtime.json's memory_home") if runtime else None
     if found is not None:

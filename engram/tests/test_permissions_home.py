@@ -194,3 +194,19 @@ def test_unstamp_with_no_home_named_refuses_without_a_traceback(bare_run, capsys
         sys.path.remove(scripts)
     assert unstamp_ledger.main([]) == 1
     assert capsys.readouterr().err.startswith("refused: ")
+
+
+@pytest.mark.parametrize("value", [".", "rel-home"])
+def test_a_relative_engram_home_refuses_and_makes_nothing_where_the_command_runs(bare_run, fake_tty, capsys,
+                                                                               monkeypatch, value):
+    """Tardis's finding on a9fab0f1 (all hands 1575bf23): ENGRAM_HOME was taken as given, so "." run from engram/ put
+    the ledger beside the code, the bug by the other door. It's held to an absolute path as runtime.json's value is
+    (every runtime and test sets it absolute). A folder that doesn't exist yet stays allowed: init makes it on a
+    person's first run, and a writing act already refuses where no ledger is."""
+    here = bare_run / "here"
+    (here / "rel-home").mkdir(parents=True)
+    monkeypatch.chdir(here)
+    monkeypatch.setenv("ENGRAM_HOME", value)
+    fake_tty.answer_the_printed_code()
+    assert main(["init"]) == 1 and "absolute" in capsys.readouterr().err
+    assert fake_tty.shown() == "" and not list(here.rglob("permissions.db"))
