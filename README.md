@@ -68,7 +68,8 @@ Open http://127.0.0.1:7435. The demo opens as Alex, a fictional patient, without
 machine. The terminal says where the demo keeps its fictional accounts' passwords (you don't need them), and the `INFO`
 lines after it are normal. If it says the port is in use, run `make home-demo HOME_PORT=8080` and open that port
 instead. The demo listens only on this machine: on a remote one, such as a lab server, forward the port from your
-laptop first (`ssh -L 7435:127.0.0.1:7435 <server>`) and open the same address there. Then try the story:
+laptop first (`ssh -L 7435:127.0.0.1:7435 <server>`, with your `HOME_PORT` in place of both 7435s if you set one) and
+open the same address on the laptop. Then try the story:
 
 1. Open **My private notes**, which holds a fictional lab result. Add a line and click **Save private draft**. No other
    account can open it. (The app calls a note a layer, and a home a peer.)
