@@ -2164,13 +2164,14 @@ def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatc
     finally:
         compiler.close()
 
-    # Bounded by its 100 ms deadline and batched (64 point probes would take 640 ms). Whether it reaches a cell inside
+    # Batched: no point probe (the count pins it; a point-probe path that kept its deadline would stop near 32 of them,
+    # about 320 ms). The deadline itself is pinned by the tests that drive the clock. Whether it reaches a cell inside
     # 100 ms depends on the machine's load: mid-suite on the Pi it came back truncated with none (train 1173,
     # fix:category-compile-100ms-budget-flake), so cells are checked with the clock frozen below (as :2133 does),
     # which no load can run out (the reader's nit on 3b6c06e8).
     assert point_probes == 0
-    # 64 point probes would take 640 ms. Mid-suite on the Pi a stall took this 100 ms compile to 0.239 s (train 1174;
-    # timed apart under load 12, compile was 36-63 ms and close 0-1 ms), so the bound leaves room for one.
+    # Mid-suite on the Pi a full GC pause took this 100 ms compile to 0.239 s (train 1174; a gc.callbacks probe found a
+    # 236 ms generation-2 collection inside this test), so the bound leaves room for one.
     assert time.monotonic() - started < 0.5
 
     frozen = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
@@ -2216,3 +2217,42 @@ def test_wall_time_is_checked_during_word_tokenization(store, monkeypatch):
     assert token_checks >= 2
     assert result.cells == ()
     assert result.truncated
+
+
+
+@pytest.mark.parametrize("expire_at", [2, 3], ids=["in-the-batch-loop", "after-the-last-batch"])
+def test_active_ids_gives_up_at_its_deadline_and_the_compile_says_truncated(store, monkeypatch, expire_at):
+    """test:active-ids-deadline-raise (the fresh reader on b2d66327): no test reached _active_ids's own deadline checks,
+    one per batch and one after the last (category_compile.py:1095, :1106). 300 seeds are two batches of 256, so
+    three checks: the clock runs out only inside the first _active_ids call, at the second batch's check or at the
+    last one. Without the batch check there are only one, and without the last there are only two, so the expiry
+    never comes and the compile finishes."""
+    drafts = tuple(CellDraft(f"seed-{index:03d}", 0, "seed") for index in range(300))
+    _root(store, *drafts)
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=500))
+    real = compiler._active_ids
+    inside, checks, calls = [False], [0], [0]
+
+    def watched(*args):
+        calls[0] += 1
+        inside[0] = calls[0] == 1
+        try:
+            return real(*args)
+        finally:
+            inside[0] = False
+
+    def expired(_deadline):
+        if not inside[0]:
+            return False
+        checks[0] += 1
+        return checks[0] >= expire_at
+    monkeypatch.setattr(compiler, "_active_ids", watched)
+    monkeypatch.setattr(compiler, "_expired", expired)
+    # The SQL progress handler checks the deadline too (category_compile.py:279), inside each batch's query, so with it
+    # on, these counts would reach the expiry without _active_ids's own checks. Off here, only those two raises count.
+    monkeypatch.setattr("category_compile._SQL_PROGRESS_OPCODES", 10**9)
+    try:
+        result = compiler.compile("root", None, tuple(draft.id for draft in drafts), 0)
+    finally:
+        compiler.close()
+    assert checks[0] == expire_at and result.cells == () and result.truncated
