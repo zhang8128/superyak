@@ -2164,9 +2164,19 @@ def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatc
     finally:
         compiler.close()
 
+    # Bounded by its 100 ms deadline and batched (64 point probes would take 640 ms). Whether it reaches a cell inside
+    # 100 ms depends on the machine's load: mid-suite on the Pi it came back truncated with none (train 1173,
+    # fix:category-compile-100ms-budget-flake), so cells are checked under the compiler's largest budget below.
     assert point_probes == 0
-    assert result.cells
     assert time.monotonic() - started < 0.2
+
+    roomy = CategoryCompiler(store, CompileBudget(wall_time_ms=500))   # _MAX_WALL_TIME_MS
+    monkeypatch.setattr(roomy, "_is_active", slow_point_probe)
+    try:
+        result = roomy.compile("root", None, tuple(draft.id for draft in drafts), 0)
+    finally:
+        roomy.close()
+    assert point_probes == 0 and result.cells                         # the batched path still yields the seeds' cells
 
 
 def test_wall_time_is_checked_during_word_tokenization(store, monkeypatch):
