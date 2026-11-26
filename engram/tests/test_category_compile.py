@@ -2164,9 +2164,23 @@ def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatc
     finally:
         compiler.close()
 
+    # Bounded by its 100 ms deadline and batched (64 point probes would take 640 ms). Whether it reaches a cell inside
+    # 100 ms depends on the machine's load: mid-suite on the Pi it came back truncated with none (train 1173,
+    # fix:category-compile-100ms-budget-flake), so cells are checked with the clock frozen below (as :2133 does),
+    # which no load can run out (the reader's nit on 3b6c06e8).
     assert point_probes == 0
-    assert result.cells
-    assert time.monotonic() - started < 0.2
+    # 64 point probes would take 640 ms. Mid-suite on the Pi a stall took this 100 ms compile to 0.239 s (train 1174;
+    # timed apart under load 12, compile was 36-63 ms and close 0-1 ms), so the bound leaves room for one.
+    assert time.monotonic() - started < 0.5
+
+    frozen = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
+    monkeypatch.setattr(frozen, "_is_active", slow_point_probe)
+    monkeypatch.setattr("category_compile.time.monotonic_ns", lambda: 0)   # the deadline never comes, whatever the load
+    try:
+        result = frozen.compile("root", None, tuple(draft.id for draft in drafts), 0)
+    finally:
+        frozen.close()
+    assert point_probes == 0 and result.cells and not result.truncated  # the batched path yields the seeds' cells
 
 
 def test_wall_time_is_checked_during_word_tokenization(store, monkeypatch):
