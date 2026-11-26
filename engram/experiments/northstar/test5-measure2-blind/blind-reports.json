@@ -1,0 +1,101 @@
+{
+  "N1": {
+    "matched": [
+      {
+        "source_id": "t-lean-copy-a-1",
+        "by": "by url",
+        "snapshot": {"algorithm": "sha-256", "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"},
+        "record_id": "pi-lean-a-1"
+      }
+    ],
+    "unclear": [],
+    "through_chain": [
+      {"record_id": "T-lean-copy-a", "verdict": "reached through its chain"}
+    ],
+    "impact": [
+      {
+        "record_id": "T-lean-copy-a",
+        "verdict": "cites a retracted source",
+        "path": ["t-lean-copy-a-1", "T-lean-copy-a"]
+      },
+      {
+        "record_id": "T-lean-a",
+        "verdict": "supported by an impacted item",
+        "path": ["t-lean-copy-a-1", "T-lean-copy-a", "T-lean-rel-a", "T-lean-a"]
+      }
+    ],
+    "corrected": [],
+    "outcome": "reported"
+  },
+  "N2": {
+    "matched": [
+      {
+        "source_id": "t-pub-doi-a-1",
+        "by": "by title",
+        "snapshot": {"algorithm": "sha-256", "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"},
+        "record_id": "pi-pub-doi-a-1"
+      }
+    ],
+    "unclear": [],
+    "through_chain": [],
+    "impact": [
+      {
+        "record_id": "T-pub-doi-a",
+        "verdict": "cites a retracted source",
+        "path": ["t-pub-doi-a-1", "T-pub-doi-a"]
+      }
+    ],
+    "corrected": [],
+    "outcome": "reported"
+  },
+  "N3": {
+    "matched": [],
+    "unclear": [],
+    "through_chain": [],
+    "impact": [],
+    "corrected": [],
+    "outcome": "no impact"
+  },
+  "N4": {
+    "matched": [
+      {
+        "source_id": "t-copied-a-1",
+        "by": "by url",
+        "snapshot": {"algorithm": "sha-256", "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"},
+        "record_id": "pi-copied-a-1"
+      }
+    ],
+    "unclear": [],
+    "through_chain": [
+      {"record_id": "T-copied-a", "verdict": "reached through its chain"}
+    ],
+    "impact": [],
+    "corrected": [
+      {"record_id": "T-copied-a", "verdict": "built on the corrected record"}
+    ],
+    "outcome": "reported"
+  },
+  "N5": {
+    "matched": [
+      {
+        "source_id": "t-copied-a-1",
+        "by": "by url",
+        "snapshot": {"algorithm": "sha-256", "value": "860a0c9095bb092136c2d414e1177f72f326178522211c51f4337520881efd2d"},
+        "record_id": "pi-copied-a-1"
+      }
+    ],
+    "unclear": [],
+    "through_chain": [
+      {"record_id": "T-copied-a", "verdict": "reached through its chain"}
+    ],
+    "impact": [
+      {
+        "record_id": "T-copied-a",
+        "verdict": "cites a retracted source",
+        "path": ["t-copied-a-1", "T-copied-a"]
+      }
+    ],
+    "corrected": [],
+    "outcome": "reported"
+  }
+}
