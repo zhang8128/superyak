@@ -1213,6 +1213,7 @@ def test_a_lesson_never_kicks_a_ship_and_the_kick_never_hides_one_from_the_sessi
     store, clock, ids, room = lessons_station
     rio = ids['rio-grande']
     assert store.unread(rio, 'session', 30, breakouts=True)['messages'] == []   # the session's cursor, before anything
+    assert store.unread(rio, 'rio-grande-kick', 30)['messages'] == []   # and the kick's: a new one starts at the newest
     with pytest.raises(Problem, match='mentions no one'):
         store.send_message(ids['tardis'], room, 'x1', lesson_body(claim='Ask @rio-grande first.'))
     first = store.send_message(ids['tardis'], room, 'c1', lesson_body())['id']

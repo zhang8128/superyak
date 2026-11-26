@@ -244,6 +244,7 @@ def test_a_watchers_cursor_never_sets_where_a_new_session_starts(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
     say(clients[0], room, 'a', 'read by the last session')
     advance(serenity, unread(serenity, cursor='session-one')['messages'][-1]['event_id'], cursor='session-one')
+    assert unread(serenity, cursor='serenity-kick')['messages'] == []   # the kick starts at the newest (below)
     for n in range(3):
         say(clients[0], room, f'gap{n}', f'arrived while no session ran {n}')
     advance(serenity, unread(serenity, cursor='serenity-kick')['messages'][-1]['event_id'], cursor='serenity-kick')
@@ -251,9 +252,26 @@ def test_a_watchers_cursor_never_sets_where_a_new_session_starts(env):
         'arrived while no session ran 0', 'arrived while no session ran 1', 'arrived while no session ran 2']
 
 
+
+def test_a_new_watchers_cursor_starts_at_the_newest_message_and_replays_nothing(env):
+    """fix:kick-replay-on-fresh-start: a new `<ship>-kick` started where the ship's sessions read furthest, so on a ship
+    whose sessions were far behind, its first start paged through everything since, hundreds of station reads, waking
+    for mentions its session would read anyway. The kick wakes a session on what's new, and a session reads its own
+    unread when it starts, so a new watcher starts at the newest message. A session's cursor is unchanged."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'read by the last session')
+    advance(serenity, unread(serenity, cursor='session-one')['messages'][-1]['event_id'], cursor='session-one')
+    for n in range(5):
+        say(clients[0], room, f'behind{n}', f'arrived after that session {n}')
+    assert unread(serenity, cursor='serenity-kick')['messages'] == []          # nothing replayed
+    say(clients[0], room, 'now', 'arrived after the kick started')
+    assert [m['body'] for m in unread(serenity, cursor='serenity-kick')['messages']] == ['arrived after the kick started']
+    assert [m['body'] for m in unread(serenity, cursor='session-two')['messages']][:1] == ['arrived after that session 0']
+
 def test_a_ship_with_only_a_watchers_cursor_still_starts_new_sessions_without_replaying_history(env):
     """Passes on the old code too: it guards the fallback, failing if a watcher-only ship started at the epoch."""
     app, clients, users, clock, ship, serenity, room = setup(env)
+    assert unread(serenity, cursor='serenity-kick')['messages'] == []
     for n in range(3):
         say(clients[0], room, f'old{n}', f'old {n}')
     advance(serenity, unread(serenity, cursor='serenity-kick')['messages'][-1]['event_id'], cursor='serenity-kick')

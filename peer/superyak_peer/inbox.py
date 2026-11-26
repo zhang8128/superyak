@@ -128,6 +128,11 @@ class Inbox:
                              (actor, '%' + WATCHER_SUFFIX)).fetchone()
         furthest = session or furthest
         start = furthest['position'] if furthest else db.execute("SELECT value FROM inbox_meta WHERE key='epoch'").fetchone()[0]
+        if name.endswith(WATCHER_SUFFIX):
+            # A new watcher wakes a session on what's new, and a session reads its own unread when it starts, so it
+            # starts at the newest message: from a session far behind, its first start paged through everything since
+            # (fix:kick-replay-on-fresh-start). What it keeps as the ship's furthest is unchanged.
+            start = max(start, db.execute('SELECT COALESCE(MAX(id), 0) FROM events').fetchone()[0])
         keep = furthest['name'] if furthest else None
         db.execute('DELETE FROM read_cursors WHERE ship_id=? AND updated<? AND name IS NOT ?', (actor, now - CURSOR_IDLE_DAYS * 86400, keep))
         over = db.execute('SELECT count(*) FROM read_cursors WHERE ship_id=?', (actor,)).fetchone()[0] - CURSORS_PER_SHIP + 1
