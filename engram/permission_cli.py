@@ -117,10 +117,10 @@ RUNTIME_CONFIG_BYTES = 16_384   # scripts/runtime.py's MAX_CONFIG_BYTES
 
 def _runtime_memory_home() -> Path | None:
     """runtime.json's `memory_home`, the home superyak-runtime gives every Engram process it starts (scripts/runtime.py
-    sets ENGRAM_HOME from it), or None. It takes only what runtime.py's own reader takes (scripts/runtime.py:38-87): a
+    sets ENGRAM_HOME from it), or None. It reads the file as runtime.py's own reader does (scripts/runtime.py:38-87): a
     regular file of at most 16,384 bytes, opened non-blocking so a FIFO can't hang it, holding a JSON object whose
     memory_home is an absolute path to an existing folder, never a relative one, which would be read from wherever the
-    command runs. Only that key is read."""
+    command runs. Only that key is read: runtime.py also checks default_instance and embedder_socket, and this doesn't."""
     import stat
     path = Path.home() / ".config" / "superyak" / "runtime.json"
     try:

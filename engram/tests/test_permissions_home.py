@@ -150,3 +150,47 @@ def test_each_command_resolves_its_own_home_and_a_caller_outside_main_keeps_none
     assert main(["init"]) == 0                                 # the second command: its own home
     assert ledger_path(first).is_file() and ledger_path(second).is_file()
     assert permission_cli._RESOLVED is None
+
+
+
+@pytest.mark.parametrize("value", ["rel-home", ".", "~/mem"])
+def test_a_memory_home_that_is_not_absolute_names_no_home_even_where_that_folder_exists(bare_run, fake_tty, capsys,
+                                                                                      monkeypatch, value):
+    """The fresh reader's second NO (on 3299be61): each case must exist as a folder, so only the absolute-path rule
+    refuses it. "." would make the folder the command runs in the home, the bug itself, and "~" is never expanded,
+    as runtime.py doesn't (scripts/runtime.py:83-84)."""
+    here = bare_run / "here"
+    (here / "rel-home").mkdir(parents=True)
+    (bare_run / "person" / "mem").mkdir()
+    monkeypatch.chdir(here)
+    path = _runtime_config(bare_run, "unused")
+    path.write_text(json.dumps({"memory_home": value}))
+    assert permission_cli._runtime_memory_home() is None
+    fake_tty.answer_the_printed_code()
+    assert main(["init"]) == 1 and fake_tty.shown() == ""
+    assert not list(here.rglob("permissions.db")) and not (bare_run / "person" / "mem" / ".engram").exists()
+
+
+def test_a_runtime_config_past_its_size_limit_names_no_home_though_its_folder_exists(bare_run):
+    """runtime.py reads at most 16,384 bytes (MAX_CONFIG_BYTES): one byte more, with memory_home an existing absolute
+    folder, names no home; at the limit it does."""
+    memory_home = bare_run / "memories"
+    path = _runtime_config(bare_run, memory_home)
+    body = json.dumps({"memory_home": str(memory_home)})
+    path.write_text(body + " " * (permission_cli.RUNTIME_CONFIG_BYTES - len(body)))
+    assert permission_cli._runtime_memory_home() == memory_home
+    path.write_text(body + " " * (permission_cli.RUNTIME_CONFIG_BYTES - len(body) + 1))
+    assert permission_cli._runtime_memory_home() is None
+
+
+def test_unstamp_with_no_home_named_refuses_without_a_traceback(bare_run, capsys):
+    """scripts/unstamp_ledger.py called _home() bare, so no home named ended in a RuleError traceback."""
+    import sys
+    scripts = str(Path(permission_cli.__file__).resolve().parent / "scripts")
+    sys.path.insert(0, scripts)
+    try:
+        import unstamp_ledger
+    finally:
+        sys.path.remove(scripts)
+    assert unstamp_ledger.main([]) == 1
+    assert capsys.readouterr().err.startswith("refused: ")
