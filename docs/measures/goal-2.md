@@ -297,3 +297,45 @@ address pinned as a third path**, `funnel2`.
   which address a visitor gets, and how often each is slow.
 - **What it can't say:** two readings, 70 minutes apart, from one machine, through one home connection. The slow
   address may be slow from Tardis's network only, or at this hour. A reading from another network would tell.
+
+## Funnel's slow address, rechecked, 2026-11-27, main c539b357, from Tardis
+
+**When and how:** taken by Tardis, which holds goal 2's measurement while the Mac's ship is out (goals.md). It's on the
+same machine and browser as the rows above: Playwright 1.62.0, headless Chromium 151.0.7922.34. The pins are the two
+Funnel addresses recorded above. The Pi's load wasn't recorded for this run, and none of today's trains was running.
+- **The room read:** `room_read_timing.py --room <all hands> --runs 20 --pin funnel-a=208.111.34.11 --pin
+  funnel-b=208.111.35.209`, from 09:53:15Z for 29.5 s. All 60 reads were ok.
+- **First paint:** `first_paint_timing.py --runs 30`, with the same two pins, cold from 09:54:14Z to 09:55:10Z, then
+  `--warm` to 09:55:56Z. That's 180 loads, none failed.
+
+**The room read,** all hands, 100 messages, as the ship `tardis`:
+
+| Path | p50 | p95 | max | TLS p50 | first byte p50 | over 1 s |
+|---|---|---|---|---|---|---|
+| Tailnet | 72 ms | 92 ms | 98 ms | 25 ms | 69 ms | 0 |
+| Funnel, 208.111.34.11 | 233 ms | 258 ms | 305 ms | 108 ms | 184 ms | 0 |
+| Funnel, 208.111.35.209 | 233 ms | 256 ms | 262 ms | 106 ms | 184 ms | 0 |
+
+**First paint and the sign-in form,** p50 / p95 / max, 30 loads per path:
+
+| Path | Cache | first paint | sign-in form | first byte p50 | over 600 ms (paint, form) |
+|---|---|---|---|---|---|
+| Tailnet | cold | 72 / 92 / 192 ms | 102 / 118 / 238 ms | 23 ms | 0, 0 |
+| Funnel, 208.111.34.11 | cold | 220 / 308 / 440 ms | 273 / 368 / 601 ms | 129 ms | 0, 1 |
+| Funnel, 208.111.35.209 | cold | 214 / 244 / 252 ms | 271 / 306 / 416 ms | 131 ms | 0, 0 |
+| Tailnet | warm | 42 / 92 / 160 ms | 70 / 105 / 203 ms | 4 ms | 0, 0 |
+| Funnel, 208.111.34.11 | warm | 80 / 92 / 108 ms | 126 / 138 / 157 ms | 32 ms | 0, 0 |
+| Funnel, 208.111.35.209 | warm | 80 / 100 / 160 ms | 124 / 142 / 193 ms | 31 ms | 0, 0 |
+
+A cold load transfers 100.2 KB in 7 requests, and a warm one 3.2 KB.
+
+**What it shows:**
+- **Both bars are met on every path today, for a signed-out visitor.** The room read's worst p50 is 233 ms, against 400.
+  The cold form's worst p95 is 368 ms, against 600, with one load of 30 at 601 ms.
+- **208.111.34.11 is no longer the slow route.** On 11-23's quiet Pi, its room read p50 was 412 ms and its cold form p95
+  about 1.3 s. Today it matches 208.111.35.209 to within a few milliseconds.
+- Nothing in Superyak changed Funnel's path between the two runs. So the cause is Tailscale's route, which came back on
+  its own. The question to Tailscale stays open in case it comes back.
+
+**What this doesn't measure:** a signed-in person's first paint or room read (see 11-12's row, from Rio Grande); the
+Mac's own path; headless Chromium, not a person's browser; and the station while ships post and watchers poll.
