@@ -14,16 +14,19 @@ class _Node:
     pass
 
 
-def _cycle_with_a_watch():
+def _old_cycle_with_a_watch():
+    """A reference cycle aged into the oldest generation before it's dropped, so only a full collection frees it:
+    a young-only pass, ``gc.collect(0)``, leaves it alive."""
     a, b = _Node(), _Node()
     a.other, b.other = b, a          # a reference cycle: only the cyclic collector frees it
+    gc.collect()                     # still referenced, so it survives and is promoted to the oldest generation
     return weakref.ref(a)
 
 
-def test_it_collects_before_the_span_so_old_garbage_cant_pause_inside_it():
+def test_it_runs_a_full_collection_before_the_span():
     gc.disable()
     try:
-        watch = _cycle_with_a_watch()
+        watch = _old_cycle_with_a_watch()
         assert watch() is not None   # the cycle is still alive with the collector off
         with held_gc():
             assert watch() is None   # freed on entry, before the timed span begins
@@ -51,6 +54,16 @@ def test_a_collector_already_off_stays_off():
         with held_gc():
             assert not gc.isenabled()
         assert not gc.isenabled()    # it restores what it found, never forces the collector on
+    finally:
+        gc.enable()
+
+
+def test_an_off_collector_stays_off_even_if_the_span_turned_it_on():
+    gc.disable()
+    try:
+        with held_gc():
+            gc.enable()
+        assert not gc.isenabled()
     finally:
         gc.enable()
 
