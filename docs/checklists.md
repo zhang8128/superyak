@@ -214,10 +214,10 @@ once for each claimed item). Its long form:
   calling the guard pinned (Tardis's change in its reflect, all hands 7e47a684, 2026-11-25: two readers of the
   connector sign-in fix each removed a guard and saw its test still pass).
 - Before writing a rule, name whose act it binds. A rule that would stop or delay Andy's act (pairing, an approval, a
-  sign-in) is restated to bind our own act; his act stays his, with every limit CLAUDE.md keeps on it (Rio Grande, all hands 10e636f2, 2026-11-27: a draft rule for the atlas
-  crossing would have stopped any peer being paired or listed, gating Andy's pairing and the lessons rail; restated
-  to bind the ships' own sends, it kept both. Andy, 2026-11-13, in CLAUDE.md: a ship doesn't add a rule that gates
-  him).
+  sign-in) is restated to bind our own act; his act stays his, with every limit CLAUDE.md keeps on it (Rio Grande,
+  all hands 10e636f2, 2026-11-27: a draft rule for the atlas crossing would have stopped any peer being paired or
+  listed, gating Andy's pairing and the lessons rail; restated to bind the ships' own sends, it kept both. Andy,
+  2026-11-13, in CLAUDE.md: a ship doesn't add a rule that gates him).
 - Before a fix's first draft, list every frozen artifact, caller and policy it would touch, and read each one in the
   record, not in the spec that describes it (Tardis, all hands 2dbbaf23, 2026-11-27: amendment 5's three NOs came
   from spec lines taken as fact, such as "the policy is written in the run's commit" for publications already
