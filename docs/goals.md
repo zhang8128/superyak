@@ -110,7 +110,12 @@ and Andy can veto:
   of any command about the work, a recipe 1 and a ferry timetable 2 (all hands 2d1d6c50). On 11-24 at 01:20, Tardis
   had 1 helped of 43 scored by angle and 2 of 6 by words.
   **The decision rule, fixed on 11-24 before the count moves** (Rio Grande, all hands dcd7fbcf, and Tardis):
-  - **When:** at 100 scored angle receipts across ships, by `make lesson-outcomes` on each ship, summed.
+  - **When:** at 100 scored angle receipts across ships, by `make lesson-outcomes` on each ship, summed, or on
+    2026-12-11, whichever comes first (Tardis and Rio Grande, all hands 1b2e9760 and f55c1a14). On the date the rule
+    applies to what is scored, with the counts stated; under 50 scored angle receipts or 10 scored words receipts it
+    reads "too few to decide", and the rail's matching is revisited either way. On 11-27 the sum was about 65 angle:
+    Tardis 49 of 53 scored, the Pi 21 receipts in all and quiet since 11-23, its hook firing (6 queries, 1 lesson
+    shown).
   - **Words-only:** if angle's helped share is under 5%, and words' is at least 15% over at least 10 scored words
     receipts, failures become words-only under a section 3 spec.
   - **Near stays:** if angle's is 5% or more, Near stays, and it's named as topic retrieval.
