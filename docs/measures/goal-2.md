@@ -334,8 +334,9 @@ A cold load transfers 100.2 KB in 7 requests, and a warm one 3.2 KB.
   The cold form's worst p95 is 368 ms, against 600, with one load of 30 at 601 ms.
 - **208.111.34.11 is no longer the slow route.** On 11-23's quiet Pi, its room read p50 was 412 ms and its cold form p95
   about 1.3 s. Today it matches 208.111.35.209 to within a few milliseconds.
-- Nothing in Superyak changed Funnel's path between the two runs. So the cause is Tailscale's route, which came back on
-  its own. The question to Tailscale stays open in case it comes back.
+- **My reading, not checked:** the difference was Tailscale's route. No Superyak train between the two runs touched
+  Funnel's setup, and the two addresses differ only in the route to them. If 208.111.34.11 slows again, the question to
+  Tailscale is still the one to ask.
 
 **What this doesn't measure:** a signed-in person's first paint or room read (see 11-12's row, from Rio Grande); the
 Mac's own path; headless Chromium, not a person's browser; and the station while ships post and watchers poll.
