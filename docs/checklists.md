@@ -213,8 +213,8 @@ once for each claimed item). Its long form:
 - For safety code, the author writes each guard's test against its removal first and watches it fail before
   calling the guard pinned (Tardis's change in its reflect, all hands 7e47a684, 2026-11-25: two readers of the
   connector sign-in fix each removed a guard and saw its test still pass).
-- Before writing a rule, name whose act it binds. A rule that would bind Andy's act (pairing, an approval, a sign-in)
-  is restated to bind our own act instead (Rio Grande, all hands 10e636f2, 2026-11-27: a draft rule for the atlas
+- Before writing a rule, name whose act it binds. A rule that would stop or delay Andy's act (pairing, an approval, a
+  sign-in) is restated to bind our own act; his act stays his, with every limit CLAUDE.md keeps on it (Rio Grande, all hands 10e636f2, 2026-11-27: a draft rule for the atlas
   crossing would have stopped any peer being paired or listed, gating Andy's pairing and the lessons rail; restated
   to bind the ships' own sends, it kept both. Andy, 2026-11-13, in CLAUDE.md: a ship doesn't add a rule that gates
   him).
