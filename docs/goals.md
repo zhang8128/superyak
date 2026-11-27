@@ -115,8 +115,8 @@ and Andy can veto:
     2026-12-11, whichever comes first (Tardis and Rio Grande, all hands 1b2e9760 and f55c1a14). On the date the rule
     applies to what is scored, with the counts stated; under 50 scored angle receipts or 10 scored words receipts it
     reads "too few to decide", and the rail's matching is revisited either way. On 11-27 the scored angle receipts
-    summed to 58: Tardis 49 of 53 scored, the Pi 9 of 21, quiet since 11-23 with its hook firing (6 queries, 1 lesson
-    shown).
+    summed to 58: Tardis 49 of 53 by angle (its `make lesson-outcomes` at 04:55, all hands 1b2e9760; by words 6 of 6
+    besides), the Pi 9 of 21 (at 05:08), quiet since 11-23 with its hook firing (6 queries, 1 lesson shown).
   - **Words-only:** if angle's helped share is under 5%, and words' is at least 15% over at least 10 scored words
     receipts, failures become words-only under a section 3 spec.
   - **Near stays:** if angle's is 5% or more, Near stays, and it's named as topic retrieval.
