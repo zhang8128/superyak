@@ -36,7 +36,7 @@ paging, the connector spec) are done or superseded; the connector went live on 1
 
 **Held by the other ships while Serenity is down** (Andy, 2026-11-23: "serenity is down. move on without it"). An
 outside direction read on 2026-11-26 found these lines had had no owner since then (all hands 179f3982). From that
-day, Rio Grande holds S1 to S3 and Tardis holds S4, S5 and goal 2's measure, from Tardis's machine (all hands 3c136dd0,
+day, Rio Grande holds S1 to S3 and Tardis holds S4, S5 and goal 2's measurement, taken from Tardis's machine while the Mac's is out (all hands 3c136dd0,
 977d2335). S4's invited person is the same person as R6's walk, so Andy is asked once. Serenity takes its lines back
 when it returns, and reviews what was done in its place.
 - S1 (goal 6): north-star test 1, one environment end to end, with a retraction, against a hybrid baseline. Measure: a
@@ -109,18 +109,20 @@ and Andy can veto:
   closed unbuilt. **At failures, Near is topic retrieval:** `R_MAX` puts about 14 of 28 other ships' lessons in reach
   of any command about the work, a recipe 1 and a ferry timetable 2 (all hands 2d1d6c50). On 11-24 at 01:20, Tardis
   had 1 helped of 43 scored by angle and 2 of 6 by words.
-  **The decision rule, fixed on 11-24 before the count moves** (Rio Grande, all hands dcd7fbcf, and Tardis):
+  **The decision rule, fixed on 11-24 before the count moves** (Rio Grande, all hands dcd7fbcf, and Tardis), its
+  "When" given a date on 11-27 (all hands 1b2e9760):
   - **When:** at 100 scored angle receipts across ships, by `make lesson-outcomes` on each ship, summed, or on
     2026-12-11, whichever comes first (Tardis and Rio Grande, all hands 1b2e9760 and f55c1a14). On the date the rule
     applies to what is scored, with the counts stated; under 50 scored angle receipts or 10 scored words receipts it
-    reads "too few to decide", and the rail's matching is revisited either way. On 11-27 the sum was about 65 angle:
-    Tardis 49 of 53 scored, the Pi 21 receipts in all and quiet since 11-23, its hook firing (6 queries, 1 lesson
+    reads "too few to decide", and the rail's matching is revisited either way. On 11-27 the scored angle receipts
+    summed to 58: Tardis 49 of 53 scored, the Pi 9 of 21, quiet since 11-23 with its hook firing (6 queries, 1 lesson
     shown).
   - **Words-only:** if angle's helped share is under 5%, and words' is at least 15% over at least 10 scored words
     receipts, failures become words-only under a section 3 spec.
   - **Near stays:** if angle's is 5% or more, Near stays, and it's named as topic retrieval.
   - **Neither helps:** if both are under their bars, the rail's matching is revisited as a whole.
-  - **Too few words:** if words have fewer than 10 scored receipts by then, the count waits for them.
+  - **Too few words:** if words have fewer than 10 scored receipts by then, the count waits for them, until
+    2026-12-11.
   - **Until then:** each ship scores its receipts in the turn they arrive. A receipt shown in another session stays
     unscored, since only that session saw it.
   The crossing waits on Andy's allow.
