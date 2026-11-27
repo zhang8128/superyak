@@ -179,6 +179,15 @@ def route_open(monkeypatch):
 
 
 @pytest.fixture
+def hold_gc():
+    """Opt-in: the collector held still over the test (tests/gc_hold.py says when to take it)."""
+    from tests.gc_hold import held_gc
+
+    with held_gc():
+        yield
+
+
+@pytest.fixture
 def route_closed():
     """`imprint_filter.ROUTE_OPEN` as it ships: what every test here has unless
     it takes `route_open`. Named by the tests that depend on it."""

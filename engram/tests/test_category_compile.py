@@ -2143,7 +2143,7 @@ def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store, mon
     assert seed.hashed is False
 
 
-def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatch):
+def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatch, hold_gc):
     drafts = tuple(CellDraft(f"seed-{index:03d}", 0, "seed") for index in range(64))
     _root(store, *drafts)
     compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
@@ -2171,7 +2171,9 @@ def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatc
     # which no load can run out (the reader's nit on 3b6c06e8).
     assert point_probes == 0
     # Mid-suite on the Pi a full GC pause took this 100 ms compile to 0.239 s (train 1174; a gc.callbacks probe found a
-    # 236 ms generation-2 collection inside this test), so the bound leaves room for one.
+    # 236 ms generation-2 collection inside this test). hold_gc now keeps any pass out of the span, and the bound
+    # still leaves room for load: it separates a compile that keeps its deadline (~100 ms) from one that doesn't
+    # (64 probes, ~640 ms).
     assert time.monotonic() - started < 0.5
 
     frozen = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
